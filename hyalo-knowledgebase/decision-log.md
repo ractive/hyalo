@@ -130,3 +130,21 @@ The old `--path` flag is retired. Both flags are always relative to `--dir` and 
 **Decision:** The link object includes `path` — the file path relative to `--dir` that the link resolves to, or `null` for broken links. The raw `target` field preserves the original text as written.
 
 **Why:** AI agents work with file paths, not Obsidian note names. `[[My Note]]` is meaningless to an agent — it needs `notes/my-note.md` to open the file. Both fields are needed: `path` for navigation, `target` for display and search/replace in the source file.
+
+## DEC-020: Frontmatter-Only Tags — No Inline `#tag` Support (2026-03-20)
+
+**Decision:** Tag commands only read and write the `tags` property in YAML frontmatter. Inline `#tags` in the markdown body are not extracted, searched, or modified.
+
+**Why:** Frontmatter tags are structured data — a YAML list that can be reliably parsed, added to, and removed from. Inline `#tags` are embedded in prose, making extraction ambiguous (code blocks, URLs, headings with `#`) and modification risky (could corrupt surrounding text). Frontmatter tags are also what Obsidian uses for programmatic tag management. If inline tag extraction is needed later, it can be added as a separate read-only feature.
+
+## DEC-021: Tasks Are File-Scoped Only (2026-03-20)
+
+**Decision:** All task commands (`tasks`, `task read`, `task toggle`, `task set-status`) require `--file`. No vault-wide task listing or searching.
+
+**Why:** Tasks live in the markdown body, so vault-wide task search requires reading the full content of every file — not just frontmatter. Without an index, this is O(n) full-file reads per invocation. For an AI agent, "what tasks are in this file?" is the actionable question. Vault-wide task queries ("all incomplete tasks across the project") belong in the indexing iteration.
+
+## DEC-022: Tags Support Vault-Wide Operations Without Index (2026-03-20)
+
+**Decision:** Tag commands (`tags`, `tag find`, `tag add`, `tag remove`) support vault-wide and glob-scoped operations without requiring an index. They scan all matching files on each invocation.
+
+**Why:** Tags live in frontmatter, which is at most ~8KB per file and can be read without buffering the body. The existing `read_frontmatter` streaming reader stops at the closing `---`. For a 1000-file vault, this means reading ~8MB of data at most — well within acceptable latency. Pre-filtering optimizations (byte-level `tags:` search before YAML parse) can be explored if benchmarks show need. This is fundamentally different from vault-wide task search (DEC-021), which requires reading entire file contents.
