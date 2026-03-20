@@ -127,58 +127,58 @@ Implement the naive approach first (sequential `read_frontmatter` for each file)
 ## Tasks
 
 ### Tag Format & Validation
-[x] Implement tag name validation (allowed chars, must have non-numeric character)
-[x] Implement nested tag matching (`inbox` matches `inbox/processing`)
-[x] Case-insensitive comparison
-[x] Unit tests for validation (valid tags, numeric-only rejection, allowed special chars)
-[x] Unit tests for nested matching
+- [x] Implement tag name validation (allowed chars, must have non-numeric character)
+- [x] Implement nested tag matching (`inbox` matches `inbox/processing`)
+- [x] Case-insensitive comparison
+- [x] Unit tests for validation (valid tags, numeric-only rejection, allowed special chars)
+- [x] Unit tests for nested matching
 
 ### Tag Extraction
-[x] Extract `tags` property from frontmatter as `Vec<String>`
-[x] Handle edge cases: missing `tags` key, `tags` as scalar string vs list, empty list
-[x] Unit tests for tag extraction
+- [x] Extract `tags` property from frontmatter as `Vec<String>`
+- [x] Handle edge cases: missing `tags` key, `tags` as scalar string vs list, empty list
+- [x] Unit tests for tag extraction
 
 ### Commands
-[x] `tags` command — aggregate unique tags with counts across matched files
-[x] `tag find` command — list files containing a specific tag (with nested matching)
-[x] `tag add` command — add tag to frontmatter, create `tags` property if needed, validate tag name, support `--file` and `--glob`
-[x] `tag remove` command — remove tag from frontmatter, remove empty `tags` property, support `--file` and `--glob`
-[x] Wire up CLI in main.rs with clap subcommands
+- [x] `tags` command — aggregate unique tags with counts across matched files
+- [x] `tag find` command — list files containing a specific tag (with nested matching)
+- [x] `tag add` command — add tag to frontmatter, create `tags` property if needed, validate tag name, support `--file` and `--glob`
+- [x] `tag remove` command — remove tag from frontmatter, remove empty `tags` property, support `--file` and `--glob`
+- [x] Wire up CLI in main.rs with clap subcommands
 
 ### Testing
-[x] Unit tests for tag add/remove logic
-[x] E2E tests for `tags` (all files, with `--glob`, with `--file`)
-[x] E2E tests for `tag find` (exact match, nested match, no match, with `--glob`)
-[x] E2E tests for `tag add` (single file, glob pattern, idempotent behavior, invalid tag name rejection)
-[x] E2E tests for `tag remove` (single file, glob pattern, already-absent tag)
-[x] E2E tests for edge cases (no frontmatter, empty tags list, tags as string)
-[x] E2E tests for case-insensitive matching
+- [x] Unit tests for tag add/remove logic
+- [x] E2E tests for `tags` (all files, with `--glob`, with `--file`)
+- [x] E2E tests for `tag find` (exact match, nested match, no match, with `--glob`)
+- [x] E2E tests for `tag add` (single file, glob pattern, idempotent behavior, invalid tag name rejection)
+- [x] E2E tests for `tag remove` (single file, glob pattern, already-absent tag)
+- [x] E2E tests for edge cases (no frontmatter, empty tags list, tags as string)
+- [x] E2E tests for case-insensitive matching
 
 ### Performance Exploration
-[] Benchmark naive approach on a synthetic vault (1000+ files)
-[] Research `grep-searcher` / `grep-regex` crates for pre-filtering feasibility
-[x] Implement optimization if benchmark shows need, otherwise document as acceptable — existing `read_frontmatter` already streams and stops at closing `---`; deferred until benchmarks indicate need
+- [ ] Benchmark naive approach on a synthetic vault (1000+ files)
+- [ ] Research `grep-searcher` / `grep-regex` crates for pre-filtering feasibility
+- [x] Implement optimization if benchmark shows need, otherwise document as acceptable — existing `read_frontmatter` already streams and stops at closing `---`; deferred until benchmarks indicate need
 
 ### Quality Gates
-[x] `cargo fmt`
-[x] `cargo clippy --workspace --all-targets -- -D warnings`
-[x] `cargo test --workspace`
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`
 
 ### Dogfooding
-[x] `hyalo tags --dir hyalo-knowledgebase` — list all tags in the knowledgebase (21 unique tags found)
-[x] `hyalo tag find --name iteration --dir hyalo-knowledgebase` — find iteration files (4 files found)
-[] `hyalo tag add --name plan --glob "iterations/*.md" --dir hyalo-knowledgebase` — batch tag (skipped: would modify knowledgebase files)
+- [x] `hyalo tags --dir hyalo-knowledgebase` — list all tags in the knowledgebase (21 unique tags found)
+- [x] `hyalo tag find --name iteration --dir hyalo-knowledgebase` — find iteration files (4 files found)
+- [ ] `hyalo tag add --name plan --glob "iterations/*.md" --dir hyalo-knowledgebase` — batch tag (skipped: would modify knowledgebase files)
 
 ## Acceptance Criteria
 
-1. [x] `hyalo tags` lists all unique tags with counts across all files
-2. [x] `hyalo tags --glob PATTERN` filters to matching files
-3. [x] `hyalo tag find --name TAG` lists files containing the tag
-4. [x] `hyalo tag find --name inbox` matches files tagged `inbox/processing` (nested matching)
-5. [x] `hyalo tag add --name TAG --file FILE` adds tag to frontmatter
-6. [x] `hyalo tag add` rejects invalid tag names with helpful error
-7. [x] `hyalo tag add --name TAG --glob PATTERN` batch-adds tag to matching files
-8. [x] `hyalo tag remove --name TAG --glob PATTERN` batch-removes tag
-9. [x] Idempotent: adding existing tag or removing absent tag is a no-op
-10. [x] Tag matching is case-insensitive
-11. [x] All quality gates pass: `cargo fmt && cargo clippy && cargo test`
+- [x] `hyalo tags` lists all unique tags with counts across all files
+- [x] `hyalo tags --glob PATTERN` filters to matching files
+- [x] `hyalo tag find --name TAG` lists files containing the tag
+- [x] `hyalo tag find --name inbox` matches files tagged `inbox/processing` (nested matching)
+- [x] `hyalo tag add --name TAG --file FILE` adds tag to frontmatter
+- [x] `hyalo tag add` rejects invalid tag names with helpful error
+- [x] `hyalo tag add --name TAG --glob PATTERN` batch-adds tag to matching files
+- [x] `hyalo tag remove --name TAG --glob PATTERN` batch-removes tag
+- [x] Idempotent: adding existing tag or removing absent tag is a no-op
+- [x] Tag matching is case-insensitive
+- [x] All quality gates pass: `cargo fmt && cargo clippy && cargo test`

@@ -24,7 +24,7 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
     }
 
     for ch in name.chars() {
-        if !ch.is_alphanumeric() && ch != '_' && ch != '-' && ch != '/' {
+        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '/' {
             return Err(format!(
                 "invalid character '{ch}' in tag name; allowed: letters, digits, _, -, /"
             ));
@@ -106,18 +106,23 @@ pub fn tags_list(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    // Aggregate case-insensitively: use lowercase key, preserve first-seen casing for display
+    let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
 
     for (full_path, _) in &files {
         let props = frontmatter::read_frontmatter(full_path)?;
         for tag in extract_tags(&props) {
-            *counts.entry(tag).or_insert(0) += 1;
+            let key = tag.to_ascii_lowercase();
+            counts
+                .entry(key)
+                .and_modify(|entry| entry.1 += 1)
+                .or_insert((tag, 1));
         }
     }
 
     let tags_json: Vec<serde_json::Value> = counts
         .into_iter()
-        .map(|(name, count)| json!({"name": name, "count": count}))
+        .map(|(_, (name, count))| json!({"name": name, "count": count}))
         .collect();
 
     let total = tags_json.len();
