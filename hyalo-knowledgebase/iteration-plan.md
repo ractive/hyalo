@@ -16,11 +16,13 @@ The foundation. Parse YAML frontmatter, infer types, implement property commands
 
 **Commands:** `properties`, `property:read`, `property:set`, `property:remove`
 
-## Iteration 2 — Wikilink Parser & Link Graph
+## Iteration 2 — Wikilink Parser & Link Commands
 
-Parse `[[wikilinks]]` and `![[embeds]]`. Navigate the knowledge graph.
+Parse `[[wikilinks]]`, `![[embeds]]`, and `[markdown](links)`. Custom streaming scanner for line-by-line processing. File index with Obsidian shortest-path resolution.
 
-**Commands:** `links`, `backlinks`, `unresolved`, `orphans`, `deadends`
+**Commands:** `links`, `unresolved`
+
+**Deferred to Indexing:** `backlinks`, `orphans`, `deadends` (require full vault scan per call)
 
 ## Iteration 3 — Tags & Tasks
 
@@ -49,6 +51,8 @@ Heading extraction, output formats (JSON, text, tree), CLI ergonomics.
 ## Later — Indexing
 
 SQLite or similar index for properties, tags, and links. Incremental updates based on file mtime. Triggered when file scanning becomes a bottleneck on large vaults.
+
+**Deferred commands from iteration 2:** `backlinks`, `orphans`, `deadends` — these require full vault scans and benefit most from indexing.
 
 ## Dependencies
 

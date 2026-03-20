@@ -87,7 +87,7 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
 }
 
 /// Get the relative path of a file from a directory, using forward slashes on all platforms.
-fn relative_path(dir: &Path, file: &Path) -> String {
+pub fn relative_path(dir: &Path, file: &Path) -> String {
     let raw = file
         .strip_prefix(dir)
         .map(|p| p.to_string_lossy().to_string())

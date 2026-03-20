@@ -72,3 +72,33 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 **Decision:** All relative paths in output and glob matching use forward slashes (`/`), even on Windows.
 
 **Why:** `std::path::Path::to_string_lossy()` uses `\` on Windows, which breaks glob patterns and produces inconsistent JSON output across platforms. Forward slashes work on all OSes.
+
+## DEC-011: Custom Streaming Scanner over pulldown-cmark (2026-03-20)
+
+**Decision:** Implement a custom line-by-line streaming scanner instead of using `pulldown-cmark` or another markdown parser.
+
+**Why:** Streams line by line with only one line buffered at a time. Supports early abort via callback pattern (`ScanAction::Stop`). No full-body buffering. Reusable for links, tags, and tasks across iterations 2-4. We fully control Obsidian-specific syntax handling (`[[wikilinks]]`, `![[embeds]]`, `%%comments%%`). No external dependency.
+
+## DEC-012: Callback-Based Scanner with ScanAction (2026-03-20)
+
+**Decision:** The scanner uses a visitor/callback pattern where the caller provides a closure. The closure returns `ScanAction::Continue` or `ScanAction::Stop` to control flow.
+
+**Why:** Keeps the scanner generic — different extraction tasks (links, tags, tasks) provide different visitors. Early abort is useful for queries like "find the first N matches" without scanning entire files.
+
+## DEC-013: Defer backlinks/orphans/deadends to Indexing (2026-03-20)
+
+**Decision:** `backlinks`, `orphans`, and `deadends` commands are deferred to the indexing iteration, not included in iteration 2.
+
+**Why:** These commands require scanning all files in the vault per invocation. Without an index, they would be O(n²) — each call walks every file. The indexing iteration will provide SQLite-backed lookups that make these queries efficient.
+
+## DEC-014: Obsidian Shortest-Path Resolution (2026-03-20)
+
+**Decision:** `[[foo]]` resolves to the `.md` file named `foo` with the shortest relative path from the vault root.
+
+**Why:** This matches Obsidian's default resolution behavior. Path-qualified links (`[[sub/foo]]`) use exact match. Case-insensitive to match Obsidian behavior.
+
+## DEC-015: %%comments%% Deferred as Known Limitation (2026-03-20)
+
+**Decision:** Obsidian `%%comment%%` blocks are not yet handled by the scanner. Links inside comments will be incorrectly extracted.
+
+**Why:** Adding comment tracking is straightforward (similar to fenced code block tracking) but wasn't needed for the initial link implementation. Documented as a known limitation. Can be added to the scanner in a future iteration since we control all the code.
