@@ -7,6 +7,7 @@ use crate::links;
 use crate::output::{CommandOutcome, Format};
 
 /// Filter for link resolution status.
+#[derive(Clone, Copy)]
 pub enum LinkFilter {
     /// Return all links.
     All,
@@ -27,12 +28,22 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
 
     let link_values: Vec<serde_json::Value> = extracted
         .iter()
-        .filter(|link| match filter {
-            LinkFilter::All => true,
-            LinkFilter::Resolved => discovery::resolve_target(dir, &link.target).is_some(),
-            LinkFilter::Unresolved => discovery::resolve_target(dir, &link.target).is_none(),
+        .map(|link| {
+            let resolved = discovery::resolve_target(dir, &link.target);
+            (link, resolved)
         })
-        .map(|link| link_to_json(link, dir))
+        .filter(|(_, resolved)| match filter {
+            LinkFilter::All => true,
+            LinkFilter::Resolved => resolved.is_some(),
+            LinkFilter::Unresolved => resolved.is_none(),
+        })
+        .map(|(link, resolved)| {
+            json!({
+                "target": link.target,
+                "path": resolved,
+                "label": link.label,
+            })
+        })
         .collect();
     let result = json!({
         "path": rel_path,
@@ -42,15 +53,6 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
     )))
-}
-
-fn link_to_json(link: &links::Link, dir: &Path) -> serde_json::Value {
-    let resolved = discovery::resolve_target(dir, &link.target);
-    json!({
-        "target": link.target,
-        "path": resolved,
-        "label": link.label,
-    })
 }
 
 fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {

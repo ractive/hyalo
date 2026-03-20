@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use globset::{Glob, GlobMatcher};
+use globset::Glob;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
@@ -81,7 +81,7 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
     let mut matched = Vec::new();
     for file in files {
         let rel = relative_path(dir, file);
-        if glob_matches(&glob, &rel) {
+        if glob.is_match(&rel) {
             matched.push((file.clone(), rel));
         }
     }
@@ -96,11 +96,6 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
         .unwrap_or_else(|_| file.to_string_lossy().to_string());
     // Normalize to forward slashes for consistent output and glob matching on Windows.
     raw.replace('\\', "/")
-}
-
-/// Check if a relative path matches a glob pattern.
-fn glob_matches(glob: &GlobMatcher, rel_path: &str) -> bool {
-    glob.is_match(rel_path)
 }
 
 /// Errors specific to file resolution.

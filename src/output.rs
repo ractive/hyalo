@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use serde_json::json;
 
 /// Output format.
@@ -60,13 +62,13 @@ pub fn format_error(
         Format::Text => {
             let mut msg = format!("Error: {error}");
             if let Some(p) = path {
-                msg.push_str(&format!("\n  path: {p}"));
+                let _ = write!(msg, "\n  path: {p}");
             }
             if let Some(h) = hint {
-                msg.push_str(&format!("\n  hint: {h}"));
+                let _ = write!(msg, "\n  hint: {h}");
             }
             if let Some(c) = cause {
-                msg.push_str(&format!("\n  cause: {c}"));
+                let _ = write!(msg, "\n  cause: {c}");
             }
             msg
         }
