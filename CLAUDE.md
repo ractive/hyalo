@@ -24,6 +24,8 @@ Make the code unit testable. Add tests if feasible. Add e2e tests for all comman
 
 Performance is key. Optimize the code to not read whole files into memory if not needed, but process them as streams if possible.
 
+It must be compatible with Windows, Linux and macos.
+
 Before committing or creating a PR, run **in this order** and fix all issues:
 1. `cargo fmt`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
