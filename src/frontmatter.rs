@@ -84,6 +84,42 @@ pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
     read_frontmatter_from_reader(reader)
 }
 
+/// Skip past frontmatter in a buffered reader. Returns the number of lines consumed
+/// (including the opening and closing `---` delimiters). Returns 0 if no frontmatter is present.
+/// The reader is left positioned at the first line after the closing `---`.
+pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<usize> {
+    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
+    if first_line.trim() != "---" {
+        return Ok(0);
+    }
+
+    let mut line_count = 1; // count the opening `---`
+    let mut total_bytes = 0;
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        let n = reader.read_line(&mut buf).context("failed to read line")?;
+        if n == 0 {
+            break; // EOF without closing delimiter
+        }
+        line_count += 1;
+        let trimmed = buf.trim_end_matches(['\n', '\r']);
+        if trimmed.trim() == "---" {
+            break;
+        }
+        total_bytes += n;
+        if line_count - 1 > MAX_FRONTMATTER_LINES || total_bytes > MAX_FRONTMATTER_BYTES {
+            anyhow::bail!(
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+            );
+        }
+    }
+
+    Ok(line_count)
+}
+
 /// Parse frontmatter from any buffered reader. Stops reading after the closing `---`.
 /// Bails out if the frontmatter exceeds a reasonable size (100 lines / 8 KB) to avoid
 /// buffering an entire file when the closing delimiter is missing.

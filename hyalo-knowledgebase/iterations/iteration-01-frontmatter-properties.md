@@ -1,13 +1,13 @@
 ---
-title: "Iteration 1 — Frontmatter Parser & Property Commands"
-type: iteration
-date: 2026-03-20
-status: in-progress
 branch: iter-1/frontmatter-properties
+date: 2026-03-20
+status: completed
 tags:
-  - iteration
-  - frontmatter
-  - properties
+- iteration
+- frontmatter
+- properties
+title: Iteration 1 — Frontmatter Parser & Property Commands
+type: iteration
 ---
 
 # Iteration 1 — Frontmatter Parser & Property Commands

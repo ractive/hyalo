@@ -3,7 +3,7 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
-use hyalo::commands::properties;
+use hyalo::commands::{links as link_commands, properties};
 use hyalo::output::{CommandOutcome, Format};
 
 #[derive(Parser)]
@@ -37,6 +37,18 @@ enum Commands {
     Property {
         #[command(subcommand)]
         action: PropertyAction,
+    },
+    /// List outgoing links from files
+    Links {
+        /// File path (relative to --dir)
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// List links that don't resolve to any file
+    Unresolved {
+        /// File path (relative to --dir)
+        #[arg(long)]
+        path: Option<String>,
     },
 }
 
@@ -109,6 +121,10 @@ fn main() {
                 properties::property_remove(dir, name, path, format)
             }
         },
+        Commands::Links { ref path } => link_commands::links(dir, path.as_deref(), format),
+        Commands::Unresolved { ref path } => {
+            link_commands::unresolved(dir, path.as_deref(), format)
+        }
     };
 
     match result {
