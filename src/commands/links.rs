@@ -3,7 +3,6 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::discovery::{self, FileResolveError};
-use crate::graph::FileIndex;
 use crate::links;
 use crate::output::{CommandOutcome, Format};
 
@@ -24,23 +23,16 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
 
-    let files = discovery::discover_files(dir)?;
-    let rel_paths: Vec<String> = files
-        .iter()
-        .map(|f| discovery::relative_path(dir, f))
-        .collect();
-    let index = FileIndex::from_paths(&rel_paths);
-
     let extracted = links::extract_links_from_file(&full_path)?;
 
     let link_values: Vec<serde_json::Value> = extracted
         .iter()
         .filter(|link| match filter {
             LinkFilter::All => true,
-            LinkFilter::Resolved => index.resolve_target(&link.target).is_some(),
-            LinkFilter::Unresolved => index.resolve_target(&link.target).is_none(),
+            LinkFilter::Resolved => discovery::resolve_target(dir, &link.target).is_some(),
+            LinkFilter::Unresolved => discovery::resolve_target(dir, &link.target).is_none(),
         })
-        .map(|link| link_to_json(link, &index))
+        .map(|link| link_to_json(link, dir))
         .collect();
     let result = json!({
         "path": rel_path,
@@ -52,8 +44,8 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
     )))
 }
 
-fn link_to_json(link: &links::Link, index: &FileIndex) -> serde_json::Value {
-    let resolved = index.resolve_target(&link.target);
+fn link_to_json(link: &links::Link, dir: &Path) -> serde_json::Value {
+    let resolved = discovery::resolve_target(dir, &link.target);
     json!({
         "target": link.target,
         "path": resolved,
