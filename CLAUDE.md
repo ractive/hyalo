@@ -14,14 +14,14 @@ Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-
 - Always name `iteration-NN-slug.md` — no standalone plan files
 - Frontmatter must include: `title`, `type: iteration`, `date`, `tags`, `status`, `branch`
 - Status lifecycle: `planned` → `in-progress` → `completed` → `superseded`
-- Add tasks as markdown checkboxes `[] Task 1` (without preceding - or number to generate a list)
+- Add tasks as markdown checkboxes `- [ ] Task 1` (without a  number)
 - Mark tasks as completed only after verifying that they were done
 
 # Rust
 
 ## Language Server
 Use the rust-analyzer-lsp language server plugin for code intelligence: analyzing code, finding references, go-to-definition, checking clippy warnings.
-Be aware that it takes some time for changed files to be indexed again.
+Run "cargo check" before using it to update its indexes, after changing *.rs files.
 
 ## Code Quality Gates
 Make the code unit testable. Add tests if feasible. Add e2e tests for all commands/subcommands.

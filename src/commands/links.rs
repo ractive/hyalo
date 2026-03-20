@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde_json::json;
 use std::path::Path;
 
-use crate::discovery::{self, FileResolveError};
+use crate::commands::resolve_error_to_outcome;
+use crate::discovery;
 use crate::links;
 use crate::output::{CommandOutcome, Format};
 
@@ -55,33 +56,27 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
     )))
 }
 
-fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
-    match err {
-        FileResolveError::MissingExtension { path, hint } => {
-            CommandOutcome::UserError(crate::output::format_error(
-                format,
-                "file not found",
-                Some(&path),
-                Some(&format!("did you mean {hint}?")),
-                None,
-            ))
-        }
-        FileResolveError::NotFound { path } => CommandOutcome::UserError(
-            crate::output::format_error(format, "file not found", Some(&path), None, None),
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     fn setup_vault() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note-a.md"),
-            "---\ntitle: A\n---\nSee [[note-b]] and [[nonexistent]]\n",
+            md!(r#"
+---
+title: A
+---
+See [[note-b]] and [[nonexistent]]
+"#),
         )
         .unwrap();
         fs::write(

@@ -184,6 +184,12 @@ fn strip_inline_code(line: &str) -> Cow<'_, str> {
 mod tests {
     use super::*;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     fn collect_lines(input: &str) -> Vec<(String, usize)> {
         let mut result = Vec::new();
         scan_reader(input.as_bytes(), |text, line| {
@@ -196,7 +202,12 @@ mod tests {
 
     #[test]
     fn skips_frontmatter() {
-        let input = "---\ntitle: Test\n---\nHello world\n";
+        let input = md!(r#"
+---
+title: Test
+---
+Hello world
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].0, "Hello world");
@@ -205,7 +216,10 @@ mod tests {
 
     #[test]
     fn no_frontmatter() {
-        let input = "Hello world\nSecond line\n";
+        let input = md!(r#"
+Hello world
+Second line
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Hello world");
@@ -216,7 +230,13 @@ mod tests {
 
     #[test]
     fn skips_backtick_fenced_code_block() {
-        let input = "Before\n```\ncode line\n```\nAfter\n";
+        let input = md!(r#"
+Before
+```
+code line
+```
+After
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -225,7 +245,13 @@ mod tests {
 
     #[test]
     fn skips_tilde_fenced_code_block() {
-        let input = "Before\n~~~\ncode line\n~~~\nAfter\n";
+        let input = md!(r#"
+Before
+~~~
+code line
+~~~
+After
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -234,7 +260,13 @@ mod tests {
 
     #[test]
     fn fenced_code_with_info_string() {
-        let input = "Before\n```rust\nlet x = 1;\n```\nAfter\n";
+        let input = md!(r#"
+Before
+```rust
+let x = 1;
+```
+After
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -244,7 +276,15 @@ mod tests {
     #[test]
     fn fence_requires_matching_char_and_count() {
         // Opening with 4 backticks, closing needs >= 4
-        let input = "Before\n````\ncode\n```\nstill code\n````\nAfter\n";
+        let input = md!(r#"
+Before
+````
+code
+```
+still code
+````
+After
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -253,7 +293,15 @@ mod tests {
 
     #[test]
     fn tilde_fence_not_closed_by_backticks() {
-        let input = "Before\n~~~\ncode\n```\nstill code\n~~~\nAfter\n";
+        let input = md!(r#"
+Before
+~~~
+code
+```
+still code
+~~~
+After
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -280,7 +328,12 @@ mod tests {
 
     #[test]
     fn early_abort_with_stop() {
-        let input = "Line 1\nLine 2\nLine 3\nLine 4\n";
+        let input = md!(r#"
+Line 1
+Line 2
+Line 3
+Line 4
+"#);
         let mut result = Vec::new();
         scan_reader(input.as_bytes(), |text, line| {
             result.push((text.to_string(), line));
@@ -296,7 +349,15 @@ mod tests {
 
     #[test]
     fn line_numbers_accurate_with_frontmatter() {
-        let input = "---\ntitle: T\ntags:\n  - a\n---\nLine 6\nLine 7\n";
+        let input = md!(r#"
+---
+title: T
+tags:
+  - a
+---
+Line 6
+Line 7
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines[0].1, 6);
         assert_eq!(lines[1].1, 7);
@@ -304,7 +365,14 @@ mod tests {
 
     #[test]
     fn line_numbers_accurate_with_code_block() {
-        let input = "Line 1\n```\nskipped\nskipped\n```\nLine 6\n";
+        let input = md!(r#"
+Line 1
+```
+skipped
+skipped
+```
+Line 6
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines[0], ("Line 1".to_string(), 1));
         assert_eq!(lines[1], ("Line 6".to_string(), 6));
@@ -336,7 +404,7 @@ mod tests {
 
     #[test]
     fn crlf_line_endings() {
-        let input = "Line 1\r\nLine 2\r\n";
+        let input = "Line 1\r\nLine 2\r\n"; // CRLF: \r\n cannot be represented in raw strings portably
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Line 1");
@@ -345,7 +413,12 @@ mod tests {
 
     #[test]
     fn first_line_is_code_fence() {
-        let input = "```\n[[not a link]]\n```\nAfter\n";
+        let input = md!(r#"
+```
+[[not a link]]
+```
+After
+"#);
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].0, "After");

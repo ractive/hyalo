@@ -1,12 +1,21 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
 #[test]
 fn set_new_property() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Existing\n---\n# Body\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Existing
+---
+# Body
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -39,7 +48,12 @@ fn set_overwrite_property() {
     write_md(
         tmp.path(),
         "note.md",
-        "---\ntitle: Old Title\n---\n# Body\n",
+        md!(r#"
+---
+title: Old Title
+---
+# Body
+"#),
     );
 
     let output = hyalo()
@@ -95,7 +109,15 @@ fn set_creates_frontmatter() {
 #[test]
 fn set_infers_number_type() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Test\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Test
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -114,7 +136,15 @@ fn set_infers_number_type() {
 #[test]
 fn set_infers_bool_type() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Test\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Test
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -133,7 +163,15 @@ fn set_infers_bool_type() {
 #[test]
 fn set_infers_date_type() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Test\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Test
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -159,7 +197,15 @@ fn set_infers_date_type() {
 #[test]
 fn set_explicit_type() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Test\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Test
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -179,9 +225,18 @@ fn set_explicit_type() {
 #[test]
 fn set_preserves_body() {
     let tmp = TempDir::new().unwrap();
-    let body = "# My Heading\n\nSome paragraph content.\n\n- Item 1\n- Item 2\n";
-    let content = format!("---\ntitle: Test\n---\n{body}");
-    write_md(tmp.path(), "note.md", &content);
+    let content = md!(r#"
+---
+title: Test
+---
+# My Heading
+
+Some paragraph content.
+
+- Item 1
+- Item 2
+"#);
+    write_md(tmp.path(), "note.md", content);
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -205,7 +260,13 @@ fn set_preserves_other_properties() {
     write_md(
         tmp.path(),
         "note.md",
-        "---\ntitle: Keep Me\nstatus: draft\n---\n# Body\n",
+        md!(r#"
+---
+title: Keep Me
+status: draft
+---
+# Body
+"#),
     );
 
     let output = hyalo()

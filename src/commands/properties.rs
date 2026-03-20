@@ -1,11 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
-use crate::discovery::{self, FileResolveError};
-use crate::frontmatter::{self, Document};
+use crate::commands::{FilesOrOutcome, collect_files, resolve_error_to_outcome};
+use crate::discovery;
+use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
 /// List all properties across all files, or properties of a single file / glob match.
@@ -19,12 +18,17 @@ pub fn properties(dir: &Path, path: Option<&str>, format: Format) -> Result<Comm
 
 /// List all unique property names across all `.md` files.
 fn properties_all(dir: &Path, format: Format) -> Result<CommandOutcome> {
-    let files = discovery::discover_files(dir)?;
+    let files = collect_files(dir, None, None, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
 
     // Aggregate: name -> (type, count)
-    let mut agg: BTreeMap<String, (String, usize)> = BTreeMap::new();
+    let mut agg: std::collections::BTreeMap<String, (String, usize)> =
+        std::collections::BTreeMap::new();
 
-    for file in &files {
+    for (file, _) in &files {
         let props = frontmatter::read_frontmatter(file)?;
         for (key, value) in &props {
             agg.entry(key.clone())
@@ -74,22 +78,14 @@ fn properties_single(dir: &Path, path_arg: &str, format: Format) -> Result<Comma
 
 /// List properties of files matching a glob pattern.
 fn properties_glob(dir: &Path, pattern: &str, format: Format) -> Result<CommandOutcome> {
-    let files = discovery::discover_files(dir)?;
-    let matched = discovery::match_glob(dir, &files, pattern)?;
-
-    if matched.is_empty() {
-        let out = crate::output::format_error(
-            format,
-            "no files match pattern",
-            Some(pattern),
-            None,
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
-    }
+    let files = collect_files(dir, None, Some(pattern), format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
 
     let mut results = Vec::new();
-    for (full_path, rel_path) in &matched {
+    for (full_path, rel_path) in &files {
         let props = frontmatter::read_frontmatter(full_path)?;
 
         let prop_map: serde_json::Map<String, serde_json::Value> = props
@@ -155,18 +151,13 @@ pub fn property_set(
         Err(outcome) => return Ok(outcome),
     };
 
-    let content = fs::read_to_string(&full_path)
-        .with_context(|| format!("failed to read {}", full_path.display()))?;
-    let mut doc = Document::parse(&content)?;
-
     let value = frontmatter::parse_value(raw_value, forced_type)?;
     let typ = frontmatter::infer_type(&value);
     let json_val = frontmatter::yaml_to_json(&value);
-    doc.set_property(name.to_owned(), value);
 
-    let serialized = doc.serialize()?;
-    fs::write(&full_path, serialized)
-        .with_context(|| format!("failed to write {}", full_path.display()))?;
+    let mut props = frontmatter::read_frontmatter(&full_path)?;
+    props.insert(name.to_owned(), value);
+    frontmatter::write_frontmatter(&full_path, &props)?;
 
     let result = json!({"name": name, "value": json_val, "type": typ});
 
@@ -187,14 +178,10 @@ pub fn property_remove(
         Err(outcome) => return Ok(outcome),
     };
 
-    let content = fs::read_to_string(&full_path)
-        .with_context(|| format!("failed to read {}", full_path.display()))?;
-    let mut doc = Document::parse(&content)?;
+    let mut props = frontmatter::read_frontmatter(&full_path)?;
 
-    if doc.remove_property(name).is_some() {
-        let serialized = doc.serialize()?;
-        fs::write(&full_path, serialized)
-            .with_context(|| format!("failed to write {}", full_path.display()))?;
+    if props.remove(name).is_some() {
+        frontmatter::write_frontmatter(&full_path, &props)?;
         let result = json!({"removed": name, "path": rel_path});
         Ok(CommandOutcome::Success(crate::output::format_success(
             format, &result,
@@ -218,33 +205,32 @@ fn resolve_or_error(
     }
 }
 
-fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
-    match err {
-        FileResolveError::MissingExtension { path, hint } => {
-            CommandOutcome::UserError(crate::output::format_error(
-                format,
-                "file not found",
-                Some(&path),
-                Some(&format!("did you mean {hint}?")),
-                None,
-            ))
-        }
-        FileResolveError::NotFound { path } => CommandOutcome::UserError(
-            crate::output::format_error(format, "file not found", Some(&path), None, None),
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     fn setup_dir() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            "---\ntitle: Test\nstatus: draft\npriority: 3\ntags:\n  - rust\n  - cli\n---\n# Hello\n",
+            md!(r#"
+---
+title: Test
+status: draft
+priority: 3
+tags:
+  - rust
+  - cli
+---
+# Hello
+"#),
         )
         .unwrap();
         fs::write(tmp.path().join("empty.md"), "No frontmatter here.\n").unwrap();
@@ -397,5 +383,58 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("empty.md")).unwrap();
         assert!(content.starts_with("---\n"));
+    }
+
+    #[test]
+    fn property_set_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = md!(r#"
+# Heading
+
+Body content.
+"#);
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+title: Test
+---
+"#)
+            .to_owned()
+                + body,
+        )
+        .unwrap();
+
+        property_set(tmp.path(), "status", "done", None, "note.md", Format::Json).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    #[test]
+    fn property_remove_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = md!(r#"
+# Heading
+
+Body content.
+"#);
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+title: Test
+status: draft
+---
+"#)
+            .to_owned()
+                + body,
+        )
+        .unwrap();
+
+        property_remove(tmp.path(), "status", "note.md", Format::Json).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains(body), "body was corrupted:\n{content}");
     }
 }
