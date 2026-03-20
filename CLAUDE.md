@@ -20,6 +20,10 @@ Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-
 Use the rust-analyzer LSP plugin for code intelligence: analyzing code, finding references, go-to-definition, checking clippy warnings.
 
 ## Code Quality Gates
+Make the code unit testable. Add tests if feasible. Add e2e tests for all commands/subcommands.
+
+Performance is key. Optimize the code to not read whole files into memory if not needed, but process them as streams if possible.
+
 Before committing or creating a PR, run **in this order** and fix all issues:
 1. `cargo fmt`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
