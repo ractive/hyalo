@@ -33,6 +33,9 @@ where
     let mut line_num: usize = 0;
     let mut buf = String::new();
 
+    // Track fenced code block state — declared early so it's in scope for the first-line check
+    let mut fence: Option<(char, usize)> = None; // (fence_char, fence_count)
+
     // Read first line to check for frontmatter
     buf.clear();
     let n = reader.read_line(&mut buf).context("failed to read line")?;
@@ -44,17 +47,18 @@ where
     let trimmed = buf.trim_end_matches(['\n', '\r']);
     let fm_lines = frontmatter::skip_frontmatter(&mut reader, trimmed)?;
     if fm_lines == 0 {
-        // First line is not frontmatter, process it
-        let cleaned = strip_inline_code(trimmed);
-        if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
-            return Ok(());
+        // First line is not frontmatter — check if it opens a code fence
+        if let Some(f) = detect_opening_fence(trimmed) {
+            fence = Some(f);
+        } else {
+            let cleaned = strip_inline_code(trimmed);
+            if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
+                return Ok(());
+            }
         }
     } else {
         line_num = fm_lines;
     }
-
-    // Track fenced code block state
-    let mut fence: Option<(char, usize)> = None; // (fence_char, fence_count)
 
     loop {
         buf.clear();
@@ -337,6 +341,14 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Line 1");
         assert_eq!(lines[1].0, "Line 2");
+    }
+
+    #[test]
+    fn first_line_is_code_fence() {
+        let input = "```\n[[not a link]]\n```\nAfter\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].0, "After");
     }
 
     #[test]

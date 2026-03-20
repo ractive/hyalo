@@ -102,7 +102,9 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
         buf.clear();
         let n = reader.read_line(&mut buf).context("failed to read line")?;
         if n == 0 {
-            break; // EOF without closing delimiter
+            anyhow::bail!(
+                "unclosed frontmatter: file starts with `---` but no closing `---` was found"
+            );
         }
         line_count += 1;
         let trimmed = buf.trim_end_matches(['\n', '\r']);

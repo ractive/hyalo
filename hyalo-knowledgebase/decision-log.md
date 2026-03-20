@@ -91,11 +91,11 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 
 **Why:** These commands require scanning all files in the vault per invocation. Without an index, they would be O(n²) — each call walks every file. The indexing iteration will provide SQLite-backed lookups that make these queries efficient.
 
-## DEC-014: Obsidian Shortest-Path Resolution (2026-03-20)
+## DEC-014: Simple Direct Link Resolution (2026-03-20)
 
-**Decision:** `[[foo]]` resolves to the `.md` file named `foo` with the shortest relative path from the vault root.
+**Decision:** `[[foo]]` resolves via direct filesystem probes: check `foo` then `foo.md` relative to the vault root. No shortest-path search, no case-insensitive matching. Path-qualified links (`[[sub/foo]]`) use exact match.
 
-**Why:** This matches Obsidian's default resolution behavior. Path-qualified links (`[[sub/foo]]`) use exact match. Case-insensitive to match Obsidian behavior.
+**Why:** Keeps resolution simple and predictable for the initial implementation. Full Obsidian-style shortest-path and case-insensitive resolution is deferred to the indexing iteration.
 
 ## DEC-015: %%comments%% Deferred as Known Limitation (2026-03-20)
 
