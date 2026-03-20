@@ -39,9 +39,9 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
         })
         .map(|(link, resolved)| {
             json!({
-                "target": link.target,
+                "target": &link.target,
                 "path": resolved,
-                "label": link.label,
+                "label": &link.label,
             })
         })
         .collect();

@@ -126,8 +126,14 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
         return None;
     }
 
-    if dir.join(target).is_file() {
-        return Some(target.to_owned());
+    // Reject path traversal attempts
+    let target = target.replace('\\', "/");
+    if target.starts_with('/') || target.contains("..") || Path::new(&target).is_absolute() {
+        return None;
+    }
+
+    if dir.join(&target).is_file() {
+        return Some(target.clone());
     }
 
     if !target.ends_with(".md") {
@@ -329,6 +335,15 @@ mod tests {
     fn resolve_target_empty_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(resolve_target(tmp.path(), ""), None);
+    }
+
+    #[test]
+    fn resolve_target_rejects_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note.md"]);
+        assert_eq!(resolve_target(tmp.path(), "../note"), None);
+        assert_eq!(resolve_target(tmp.path(), "sub/../../note"), None);
+        assert_eq!(resolve_target(tmp.path(), "/etc/passwd"), None);
     }
 
     #[test]

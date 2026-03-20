@@ -18,9 +18,9 @@ The foundation. Parse YAML frontmatter, infer types, implement property commands
 
 ## Iteration 2 — Wikilink Parser & Link Commands
 
-Parse `[[wikilinks]]`, `![[embeds]]`, and `[markdown](links)`. Custom streaming scanner for line-by-line processing. File index with Obsidian shortest-path resolution.
+Parse `[[wikilinks]]`, `![[embeds]]`, and `[markdown](links)`. Custom streaming scanner for line-by-line processing. Simple direct link resolution via filesystem probes.
 
-**Commands:** `links`, `unresolved`
+**Commands:** `links` (with `--resolved`/`--unresolved` filter flags)
 
 **Deferred to Indexing:** `backlinks`, `orphans`, `deadends` (require full vault scan per call)
 

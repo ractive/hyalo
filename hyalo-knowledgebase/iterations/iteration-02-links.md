@@ -2,7 +2,7 @@
 title: "Iteration 2 — Wikilink Parser & Link Commands"
 type: iteration
 date: 2026-03-20
-status: in-progress
+status: completed
 branch: iter-2/wikilink-parser-link-commands
 tags:
   - iteration
@@ -19,11 +19,8 @@ Parse `[[wikilinks]]`, `![[embeds]]`, and `[markdown](links)` from markdown file
 ## CLI Interface
 
 ```sh
-# Outgoing links from a file (or all files)
-hyalo links [--path <file.md>] [--format json|text]
-
-# Links that don't resolve to any file
-hyalo unresolved [--path <file.md>] [--format json|text]
+# Outgoing links from a file
+hyalo links --file <file.md> [--resolved|--unresolved] [--format json|text]
 ```
 
 ## New Modules
@@ -36,13 +33,9 @@ Reusable line-by-line streaming scanner. Skips frontmatter, fenced code blocks, 
 
 Uses scanner to extract links from text segments. Handles wikilinks (`[[Note]]`, `[[Note|Display]]`, `[[Note#Heading]]`, `[[Note#^block-id]]`), embeds (`![[Note]]`), and markdown links (`[text](note.md)`). Skips external links (http/https/mailto).
 
-### `src/graph.rs` — Link Resolution
-
-File index maps lowercased stems to relative paths. Resolves link targets using Obsidian shortest-path resolution. Path-qualified names use exact match.
-
 ### `src/commands/links.rs` — Command Implementations
 
-Two commands: `links` (outgoing links) and `unresolved` (broken links). Both support single file or vault-wide scanning.
+Single command `links` with optional `--resolved`/`--unresolved` filter flags. Requires `--file` (no vault-wide mode). Link resolution uses simple direct path probes via `discovery::resolve_target`.
 
 ## Tasks
 
@@ -61,23 +54,21 @@ Two commands: `links` (outgoing links) and `unresolved` (broken links). Both sup
 - [x] Track line numbers for all links
 
 ### Link Resolution
-- [x] Build file index from vault directory
-- [x] Resolve simple stems (Obsidian shortest-path)
+- [x] Resolve targets via direct filesystem probes (`target` and `target.md`)
 - [x] Resolve path-qualified targets
-- [x] Case-insensitive resolution
+- [x] Path traversal protection in `resolve_target`
 
 ### Commands
-- [x] `links` command — single file and vault-wide
-- [x] `unresolved` command — single file and vault-wide
+- [x] `links` command — single file with `--file`, `--resolved`/`--unresolved` filter flags
 - [x] Wire up CLI in main.rs
 
 ### Testing
 - [x] Unit tests for scanner (14 tests)
 - [x] Unit tests for link extraction (14 tests)
-- [x] Unit tests for graph resolution (8 tests)
+- [x] Unit tests for link resolution
 - [x] Unit tests for commands (7 tests)
 - [x] E2E tests for `links` command (9 tests)
-- [x] E2E tests for `unresolved` command (4 tests)
+- [x] E2E tests for `links --unresolved`
 
 ### Quality Gates
 - [x] `cargo fmt`

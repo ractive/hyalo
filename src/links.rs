@@ -51,7 +51,9 @@ fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
         }
 
         // Check for markdown link: [text](target)
+        // Skip if preceded by `!` — that's image syntax: ![alt](img.png)
         if bytes[i] == b'['
+            && (i == 0 || bytes[i - 1] != b'!')
             && let Some((link, end)) = try_parse_markdown_link_at(text, i)
         {
             out.push(link);
@@ -100,6 +102,11 @@ pub fn parse_wikilink(inner: &str) -> Option<Link> {
 
     // Strip fragment (heading/block ref) — not surfaced in output
     let target = strip_fragment(target_part);
+
+    // Fragment-only links like [[#heading]] are same-file heading links, not file links
+    if target.is_empty() {
+        return None;
+    }
 
     Some(Link {
         target: target.to_string(),
@@ -154,6 +161,11 @@ pub fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<Link> {
 
     // Strip fragment (heading/block ref) — not surfaced in output
     let target = strip_fragment(target_raw);
+
+    // Fragment-only links like [text](#heading) are same-file heading links, not file links
+    if target.is_empty() {
+        return None;
+    }
 
     Some(Link {
         target: target.to_string(),
@@ -363,8 +375,22 @@ mod tests {
 
     #[test]
     fn wikilink_only_fragment() {
-        // [[#heading]] — target_part before # is empty string
-        let link = parse_wikilink("#heading").unwrap();
-        assert_eq!(link.target, ""); // strip_fragment returns "" for "#heading"
+        // [[#heading]] — same-file heading link, not a file link
+        assert!(parse_wikilink("#heading").is_none());
+    }
+
+    #[test]
+    fn markdown_link_only_fragment() {
+        // [text](#heading) — same-file heading link, not a file link
+        assert!(parse_markdown_link("text", "#heading").is_none());
+    }
+
+    #[test]
+    fn markdown_image_skipped() {
+        let text = "![alt text](image.png) and [[real link]]";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "real link");
     }
 }
