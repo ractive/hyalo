@@ -117,48 +117,48 @@ pub struct Task {
 ## Tasks
 
 ### Task Parsing
-[] Implement task line regex/pattern matching: `- [C] text`
-[] Extract tasks from a file using the streaming scanner
-[] Handle indented tasks (nested lists)
-[] Unit tests for task parsing (various status chars, indentation, edge cases)
+- [ ] Implement task line regex/pattern matching: `- [C] text`
+- [ ] Extract tasks from a file using the streaming scanner
+- [ ] Handle indented tasks (nested lists)
+- [ ] Unit tests for task parsing (various status chars, indentation, edge cases)
 
 ### Task Mutation
-[] Implement in-place line editing: read file, modify target line, write back
-[] `toggle`: `[ ]` → `[x]`, `[x]`/`[X]` → `[ ]`, custom → `[x]`
-[] `set-status`: replace status character
-[] Validate that target line is actually a task before mutation
-[] Unit tests for mutation logic
+- [ ] Implement in-place line editing: read file, modify target line, write back
+- [ ] `toggle`: `[ ]` → `[x]`, `[x]`/`[X]` → `[ ]`, custom → `[x]`
+- [ ] `set-status`: replace status character
+- [ ] Validate that target line is actually a task before mutation
+- [ ] Unit tests for mutation logic
 
 ### Commands
-[] `tasks` command — list tasks with optional filters (`--done`, `--todo`, `--status`)
-[] `task read` command — show single task by file + line
-[] `task toggle` command — toggle completion state
-[] `task set-status` command — set custom status character
-[] Wire up CLI in main.rs with clap subcommands
-[] Validate filter flag mutual exclusivity
+- [ ] `tasks` command — list tasks with optional filters (`--done`, `--todo`, `--status`)
+- [ ] `task read` command — show single task by file + line
+- [ ] `task toggle` command — toggle completion state
+- [ ] `task set-status` command — set custom status character
+- [ ] Wire up CLI in main.rs with clap subcommands
+- [ ] Validate filter flag mutual exclusivity
 
 ### Testing
-[] E2E tests for `tasks --file` (all tasks, `--done`, `--todo`, `--status`)
-[] E2E tests for `task read` (valid line, non-task line, out-of-range line)
-[] E2E tests for `task toggle` (incomplete → done, done → incomplete, custom → done)
-[] E2E tests for `task set-status`
-[] E2E tests for error cases (missing `--file`, invalid line number, line is not a task)
+- [ ] E2E tests for `tasks --file` (all tasks, `--done`, `--todo`, `--status`)
+- [ ] E2E tests for `task read` (valid line, non-task line, out-of-range line)
+- [ ] E2E tests for `task toggle` (incomplete → done, done → incomplete, custom → done)
+- [ ] E2E tests for `task set-status`
+- [ ] E2E tests for error cases (missing `--file`, invalid line number, line is not a task)
 
 ### Quality Gates
-[] `cargo fmt`
-[] `cargo clippy --workspace --all-targets -- -D warnings`
-[] `cargo test --workspace`
+- [ ] `cargo fmt`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
+- [ ] `cargo test --workspace`
 
 ### Dogfooding
-[] `hyalo tasks --file iterations/iteration-01-frontmatter-properties.md --dir hyalo-knowledgebase` — list tasks in iteration 1
-[] `hyalo task read --file iterations/iteration-01-frontmatter-properties.md --line 43 --dir hyalo-knowledgebase`
+- [ ] `hyalo tasks --file iterations/iteration-01-frontmatter-properties.md --dir hyalo-knowledgebase` — list tasks in iteration 1
+- [ ] `hyalo task read --file iterations/iteration-01-frontmatter-properties.md --line 43 --dir hyalo-knowledgebase`
 
 ## Acceptance Criteria
 
-1. [] `hyalo tasks --file FILE` lists all tasks with line, status, text, done
-2. [] `--done`, `--todo`, `--status CHAR` filters work correctly and are mutually exclusive
-3. [] `hyalo task read --file FILE --line N` shows task details
-4. [] `hyalo task toggle --file FILE --line N` toggles completion state
-5. [] `hyalo task set-status --file FILE --line N --status CHAR` sets custom status
-6. [] Non-task lines return user error with helpful hint
-7. [] All quality gates pass: `cargo fmt && cargo clippy && cargo test`
+- [ ] `hyalo tasks --file FILE` lists all tasks with line, status, text, done
+- [ ] `--done`, `--todo`, `--status CHAR` filters work correctly and are mutually exclusive
+- [ ] `hyalo task read --file FILE --line N` shows task details
+- [ ] `hyalo task toggle --file FILE --line N` toggles completion state
+- [ ] `hyalo task set-status --file FILE --line N --status CHAR` sets custom status
+- [ ] Non-task lines return user error with helpful hint
+- [ ] All quality gates pass: `cargo fmt && cargo clippy && cargo test`
