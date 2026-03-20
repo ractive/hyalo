@@ -1,0 +1,5 @@
+**/target
+.env
+.obsidian
+.claude/memory
+.claude/agent-memory
