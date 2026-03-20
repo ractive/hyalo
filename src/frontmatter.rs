@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_yaml::Value;
+use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -27,7 +27,7 @@ impl Document {
 
         let properties: BTreeMap<String, Value> = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
-                serde_yaml::from_str(yaml).context("failed to parse YAML frontmatter")?
+                serde_yaml_ng::from_str(yaml).context("failed to parse YAML frontmatter")?
             }
             _ => BTreeMap::new(),
         };
@@ -45,7 +45,7 @@ impl Document {
         if !self.properties.is_empty() {
             out.push_str("---\n");
             let yaml =
-                serde_yaml::to_string(&self.properties).context("failed to serialize YAML")?;
+                serde_yaml_ng::to_string(&self.properties).context("failed to serialize YAML")?;
             out.push_str(&yaml);
             // serde_yaml adds a trailing newline, but let's ensure
             if !yaml.ends_with('\n') {
@@ -77,14 +77,18 @@ impl Document {
 /// Read only the YAML frontmatter from a file, stopping as soon as the closing `---` is found.
 /// The body is never read into memory. Use this for read-only property operations.
 pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
-    let file =
-        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     read_frontmatter_from_reader(reader)
 }
 
 /// Parse frontmatter from any buffered reader. Stops reading after the closing `---`.
+/// Bails out if the frontmatter exceeds a reasonable size (100 lines / 8 KB) to avoid
+/// buffering an entire file when the closing delimiter is missing.
 fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String, Value>> {
+    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
     let mut lines = reader.lines();
 
     // First line must be `---`
@@ -94,10 +98,17 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
     }
 
     let mut yaml = String::new();
+    let mut line_count = 0;
     for line in lines {
         let line = line.context("failed to read line")?;
         if line.trim() == "---" {
             break;
+        }
+        line_count += 1;
+        if line_count > MAX_FRONTMATTER_LINES || yaml.len() + line.len() > MAX_FRONTMATTER_BYTES {
+            anyhow::bail!(
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+            );
         }
         yaml.push_str(&line);
         yaml.push('\n');
@@ -107,7 +118,7 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         return Ok(BTreeMap::new());
     }
 
-    serde_yaml::from_str(&yaml).context("failed to parse YAML frontmatter")
+    serde_yaml_ng::from_str(&yaml).context("failed to parse YAML frontmatter")
 }
 
 /// Extract frontmatter YAML string and the body from a markdown document.
@@ -242,7 +253,7 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
                 Ok(Value::Number(i.into()))
             } else {
                 let f: f64 = raw.parse().context("value is not a valid number")?;
-                Ok(Value::Number(serde_yaml::Number::from(f)))
+                Ok(Value::Number(serde_yaml_ng::Number::from(f)))
             }
         }
         Some("checkbox") => {
@@ -283,9 +294,11 @@ fn infer_value(raw: &str) -> Value {
     if let Ok(i) = raw.parse::<i64>() {
         return Value::Number(i.into());
     }
-    // Try float
-    if let Ok(f) = raw.parse::<f64>() {
-        return Value::Number(serde_yaml::Number::from(f));
+    // Try float (reject NaN/inf which parse successfully but aren't useful property values)
+    if let Ok(f) = raw.parse::<f64>()
+        && f.is_finite()
+    {
+        return Value::Number(serde_yaml_ng::Number::from(f));
     }
     // Try bool
     match raw {
@@ -518,7 +531,8 @@ mod tests {
 
     #[test]
     fn streaming_matches_full_parse() {
-        let content = "---\ntitle: Test\npriority: 5\ntags:\n  - a\n  - b\n---\n# Heading\n\nBody.\n";
+        let content =
+            "---\ntitle: Test\npriority: 5\ntags:\n  - a\n  - b\n---\n# Heading\n\nBody.\n";
         let doc = Document::parse(content).unwrap();
         let streamed = read_frontmatter_from_reader(content.as_bytes()).unwrap();
         assert_eq!(doc.properties(), &streamed);

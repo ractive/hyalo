@@ -6,10 +6,10 @@ use std::path::Path;
 
 use crate::discovery::{self, FileResolveError};
 use crate::frontmatter::{self, Document};
-use crate::output::Format;
+use crate::output::{CommandOutcome, Format};
 
 /// List all properties across all files, or properties of a single file / glob match.
-pub fn properties(dir: &Path, path: Option<&str>, format: Format) -> Result<(String, i32)> {
+pub fn properties(dir: &Path, path: Option<&str>, format: Format) -> Result<CommandOutcome> {
     match path {
         Some(p) if discovery::is_glob(p) => properties_glob(dir, p, format),
         Some(p) => properties_single(dir, p, format),
@@ -18,7 +18,7 @@ pub fn properties(dir: &Path, path: Option<&str>, format: Format) -> Result<(Str
 }
 
 /// List all unique property names across all `.md` files.
-fn properties_all(dir: &Path, format: Format) -> Result<(String, i32)> {
+fn properties_all(dir: &Path, format: Format) -> Result<CommandOutcome> {
     let files = discovery::discover_files(dir)?;
 
     // Aggregate: name -> (type, count)
@@ -27,10 +27,9 @@ fn properties_all(dir: &Path, format: Format) -> Result<(String, i32)> {
     for file in &files {
         let props = frontmatter::read_frontmatter(file)?;
         for (key, value) in &props {
-            let typ = frontmatter::infer_type(value).to_owned();
-            let entry = agg.entry(key.clone()).or_insert_with(|| (typ.clone(), 0));
-            entry.1 += 1;
-            // If types differ across files, keep the first seen
+            agg.entry(key.clone())
+                .and_modify(|entry| entry.1 += 1)
+                .or_insert_with(|| (frontmatter::infer_type(value).to_owned(), 1));
         }
     }
 
@@ -39,28 +38,17 @@ fn properties_all(dir: &Path, format: Format) -> Result<(String, i32)> {
         .map(|(name, (typ, count))| json!({"name": name, "type": typ, "count": count}))
         .collect();
 
-    Ok((crate::output::format_success(format, &json!(result)), 0))
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format,
+        &json!(result),
+    )))
 }
 
 /// List properties of a single file.
-fn properties_single(dir: &Path, path_arg: &str, format: Format) -> Result<(String, i32)> {
+fn properties_single(dir: &Path, path_arg: &str, format: Format) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match discovery::resolve_file(dir, path_arg) {
         Ok(r) => r,
-        Err(FileResolveError::MissingExtension { path, hint }) => {
-            let out = crate::output::format_error(
-                format,
-                "file not found",
-                Some(&path),
-                Some(&format!("did you mean {hint}?")),
-                None,
-            );
-            return Ok((out, 1));
-        }
-        Err(FileResolveError::NotFound { path }) => {
-            let out =
-                crate::output::format_error(format, "file not found", Some(&path), None, None);
-            return Ok((out, 1));
-        }
+        Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
 
     let props = frontmatter::read_frontmatter(&full_path)?;
@@ -79,11 +67,13 @@ fn properties_single(dir: &Path, path_arg: &str, format: Format) -> Result<(Stri
         "properties": prop_map,
     });
 
-    Ok((crate::output::format_success(format, &result), 0))
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format, &result,
+    )))
 }
 
 /// List properties of files matching a glob pattern.
-fn properties_glob(dir: &Path, pattern: &str, format: Format) -> Result<(String, i32)> {
+fn properties_glob(dir: &Path, pattern: &str, format: Format) -> Result<CommandOutcome> {
     let files = discovery::discover_files(dir)?;
     let matched = discovery::match_glob(dir, &files, pattern)?;
 
@@ -95,7 +85,7 @@ fn properties_glob(dir: &Path, pattern: &str, format: Format) -> Result<(String,
             None,
             None,
         );
-        return Ok((out, 1));
+        return Ok(CommandOutcome::UserError(out));
     }
 
     let mut results = Vec::new();
@@ -117,7 +107,10 @@ fn properties_glob(dir: &Path, pattern: &str, format: Format) -> Result<(String,
         }));
     }
 
-    Ok((crate::output::format_success(format, &json!(results)), 0))
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format,
+        &json!(results),
+    )))
 }
 
 /// Read a single property from a file.
@@ -126,31 +119,25 @@ pub fn property_read(
     name: &str,
     path_arg: &str,
     format: Format,
-) -> Result<(String, i32)> {
+) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match resolve_or_error(dir, path_arg, format) {
         Ok(r) => r,
-        Err(output) => return Ok(output),
+        Err(outcome) => return Ok(outcome),
     };
 
     let props = frontmatter::read_frontmatter(&full_path)?;
 
-    match props.get(name) {
-        Some(value) => {
-            let typ = frontmatter::infer_type(value);
-            let json_val = frontmatter::yaml_to_json(value);
-            let result = json!({"name": name, "value": json_val, "type": typ});
-            Ok((crate::output::format_success(format, &result), 0))
-        }
-        None => {
-            let out = crate::output::format_error(
-                format,
-                "property not found",
-                Some(&rel_path),
-                None,
-                None,
-            );
-            Ok((out, 1))
-        }
+    if let Some(value) = props.get(name) {
+        let typ = frontmatter::infer_type(value);
+        let json_val = frontmatter::yaml_to_json(value);
+        let result = json!({"name": name, "value": json_val, "type": typ});
+        Ok(CommandOutcome::Success(crate::output::format_success(
+            format, &result,
+        )))
+    } else {
+        let out =
+            crate::output::format_error(format, "property not found", Some(&rel_path), None, None);
+        Ok(CommandOutcome::UserError(out))
     }
 }
 
@@ -162,10 +149,10 @@ pub fn property_set(
     forced_type: Option<&str>,
     path_arg: &str,
     format: Format,
-) -> Result<(String, i32)> {
+) -> Result<CommandOutcome> {
     let (full_path, _rel_path) = match resolve_or_error(dir, path_arg, format) {
         Ok(r) => r,
-        Err(output) => return Ok(output),
+        Err(outcome) => return Ok(outcome),
     };
 
     let content = fs::read_to_string(&full_path)
@@ -173,19 +160,19 @@ pub fn property_set(
     let mut doc = Document::parse(&content)?;
 
     let value = frontmatter::parse_value(raw_value, forced_type)?;
+    let typ = frontmatter::infer_type(&value);
+    let json_val = frontmatter::yaml_to_json(&value);
     doc.set_property(name.to_owned(), value);
 
     let serialized = doc.serialize()?;
     fs::write(&full_path, serialized)
         .with_context(|| format!("failed to write {}", full_path.display()))?;
 
-    // Output the new value
-    let new_value = doc.get_property(name).expect("just set this property");
-    let typ = frontmatter::infer_type(new_value);
-    let json_val = frontmatter::yaml_to_json(new_value);
     let result = json!({"name": name, "value": json_val, "type": typ});
 
-    Ok((crate::output::format_success(format, &result), 0))
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format, &result,
+    )))
 }
 
 /// Remove a property from a file.
@@ -194,59 +181,57 @@ pub fn property_remove(
     name: &str,
     path_arg: &str,
     format: Format,
-) -> Result<(String, i32)> {
+) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match resolve_or_error(dir, path_arg, format) {
         Ok(r) => r,
-        Err(output) => return Ok(output),
+        Err(outcome) => return Ok(outcome),
     };
 
     let content = fs::read_to_string(&full_path)
         .with_context(|| format!("failed to read {}", full_path.display()))?;
     let mut doc = Document::parse(&content)?;
 
-    match doc.remove_property(name) {
-        Some(_) => {
-            let serialized = doc.serialize()?;
-            fs::write(&full_path, serialized)
-                .with_context(|| format!("failed to write {}", full_path.display()))?;
-            let result = json!({"removed": name, "path": rel_path});
-            Ok((crate::output::format_success(format, &result), 0))
-        }
-        None => {
-            let out = crate::output::format_error(
-                format,
-                "property not found",
-                Some(&rel_path),
-                None,
-                None,
-            );
-            Ok((out, 1))
-        }
+    if doc.remove_property(name).is_some() {
+        let serialized = doc.serialize()?;
+        fs::write(&full_path, serialized)
+            .with_context(|| format!("failed to write {}", full_path.display()))?;
+        let result = json!({"removed": name, "path": rel_path});
+        Ok(CommandOutcome::Success(crate::output::format_success(
+            format, &result,
+        )))
+    } else {
+        let out =
+            crate::output::format_error(format, "property not found", Some(&rel_path), None, None);
+        Ok(CommandOutcome::UserError(out))
     }
 }
 
-/// Helper to resolve a file path or produce an error output tuple.
+/// Helper to resolve a file path or produce a user error outcome.
 fn resolve_or_error(
     dir: &Path,
     path_arg: &str,
     format: Format,
-) -> Result<(std::path::PathBuf, String), (String, i32)> {
+) -> Result<(std::path::PathBuf, String), CommandOutcome> {
     match discovery::resolve_file(dir, path_arg) {
         Ok(r) => Ok(r),
-        Err(FileResolveError::MissingExtension { path, hint }) => Err((
-            crate::output::format_error(
+        Err(e) => Err(resolve_error_to_outcome(e, format)),
+    }
+}
+
+fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
+    match err {
+        FileResolveError::MissingExtension { path, hint } => {
+            CommandOutcome::UserError(crate::output::format_error(
                 format,
                 "file not found",
                 Some(&path),
                 Some(&format!("did you mean {hint}?")),
                 None,
-            ),
-            1,
-        )),
-        Err(FileResolveError::NotFound { path }) => Err((
+            ))
+        }
+        FileResolveError::NotFound { path } => CommandOutcome::UserError(
             crate::output::format_error(format, "file not found", Some(&path), None, None),
-            1,
-        )),
+        ),
     }
 }
 
@@ -266,11 +251,19 @@ mod tests {
         tmp
     }
 
+    /// Extract the output string from a CommandOutcome.
+    fn unwrap_output(outcome: CommandOutcome) -> (String, bool) {
+        match outcome {
+            CommandOutcome::Success(s) => (s, true),
+            CommandOutcome::UserError(s) => (s, false),
+        }
+    }
+
     #[test]
     fn properties_all_aggregates() {
         let tmp = setup_dir();
-        let (out, code) = properties(tmp.path(), None, Format::Json).unwrap();
-        assert_eq!(code, 0);
+        let (out, ok) = unwrap_output(properties(tmp.path(), None, Format::Json).unwrap());
+        assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         assert!(!parsed.is_empty());
         let names: Vec<&str> = parsed.iter().map(|v| v["name"].as_str().unwrap()).collect();
@@ -281,8 +274,9 @@ mod tests {
     #[test]
     fn properties_single_file() {
         let tmp = setup_dir();
-        let (out, code) = properties(tmp.path(), Some("note.md"), Format::Json).unwrap();
-        assert_eq!(code, 0);
+        let (out, ok) =
+            unwrap_output(properties(tmp.path(), Some("note.md"), Format::Json).unwrap());
+        assert!(ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["path"], "note.md");
         assert_eq!(parsed["properties"]["priority"]["type"], "number");
@@ -292,8 +286,9 @@ mod tests {
     #[test]
     fn property_read_existing() {
         let tmp = setup_dir();
-        let (out, code) = property_read(tmp.path(), "status", "note.md", Format::Json).unwrap();
-        assert_eq!(code, 0);
+        let (out, ok) =
+            unwrap_output(property_read(tmp.path(), "status", "note.md", Format::Json).unwrap());
+        assert!(ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["value"], "draft");
         assert_eq!(parsed["type"], "text");
@@ -302,9 +297,10 @@ mod tests {
     #[test]
     fn property_read_missing() {
         let tmp = setup_dir();
-        let (out, code) =
-            property_read(tmp.path(), "nonexistent", "note.md", Format::Json).unwrap();
-        assert_eq!(code, 1);
+        let (out, ok) = unwrap_output(
+            property_read(tmp.path(), "nonexistent", "note.md", Format::Json).unwrap(),
+        );
+        assert!(!ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["error"], "property not found");
     }
@@ -312,14 +308,16 @@ mod tests {
     #[test]
     fn property_set_new() {
         let tmp = setup_dir();
-        let (out, code) =
-            property_set(tmp.path(), "author", "Alice", None, "note.md", Format::Json).unwrap();
-        assert_eq!(code, 0);
+        let (out, ok) = unwrap_output(
+            property_set(tmp.path(), "author", "Alice", None, "note.md", Format::Json).unwrap(),
+        );
+        assert!(ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["value"], "Alice");
 
         // Verify it persisted
-        let (out2, _) = property_read(tmp.path(), "author", "note.md", Format::Json).unwrap();
+        let (out2, _) =
+            unwrap_output(property_read(tmp.path(), "author", "note.md", Format::Json).unwrap());
         let p2: serde_json::Value = serde_json::from_str(&out2).unwrap();
         assert_eq!(p2["value"], "Alice");
     }
@@ -327,16 +325,18 @@ mod tests {
     #[test]
     fn property_set_with_type() {
         let tmp = setup_dir();
-        let (out, code) = property_set(
-            tmp.path(),
-            "count",
-            "42",
-            Some("text"),
-            "note.md",
-            Format::Json,
-        )
-        .unwrap();
-        assert_eq!(code, 0);
+        let (out, ok) = unwrap_output(
+            property_set(
+                tmp.path(),
+                "count",
+                "42",
+                Some("text"),
+                "note.md",
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert!(ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["type"], "text");
         assert_eq!(parsed["value"], "42");
@@ -345,29 +345,33 @@ mod tests {
     #[test]
     fn property_remove_existing() {
         let tmp = setup_dir();
-        let (out, code) = property_remove(tmp.path(), "status", "note.md", Format::Json).unwrap();
-        assert_eq!(code, 0);
+        let (out, ok) =
+            unwrap_output(property_remove(tmp.path(), "status", "note.md", Format::Json).unwrap());
+        assert!(ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["removed"], "status");
 
         // Verify it's gone
-        let (_, code2) = property_read(tmp.path(), "status", "note.md", Format::Json).unwrap();
-        assert_eq!(code2, 1);
+        let (_, ok2) =
+            unwrap_output(property_read(tmp.path(), "status", "note.md", Format::Json).unwrap());
+        assert!(!ok2);
     }
 
     #[test]
     fn property_remove_missing() {
         let tmp = setup_dir();
-        let (_, code) =
-            property_remove(tmp.path(), "nonexistent", "note.md", Format::Json).unwrap();
-        assert_eq!(code, 1);
+        let (_, ok) = unwrap_output(
+            property_remove(tmp.path(), "nonexistent", "note.md", Format::Json).unwrap(),
+        );
+        assert!(!ok);
     }
 
     #[test]
     fn file_not_found_error() {
         let tmp = setup_dir();
-        let (out, code) = property_read(tmp.path(), "x", "nope.md", Format::Json).unwrap();
-        assert_eq!(code, 1);
+        let (out, ok) =
+            unwrap_output(property_read(tmp.path(), "x", "nope.md", Format::Json).unwrap());
+        assert!(!ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["error"], "file not found");
     }
@@ -375,8 +379,9 @@ mod tests {
     #[test]
     fn missing_extension_hint() {
         let tmp = setup_dir();
-        let (out, code) = property_read(tmp.path(), "x", "note", Format::Json).unwrap();
-        assert_eq!(code, 1);
+        let (out, ok) =
+            unwrap_output(property_read(tmp.path(), "x", "note", Format::Json).unwrap());
+        assert!(!ok);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["error"], "file not found");
         assert!(parsed["hint"].as_str().unwrap().contains("note.md"));
@@ -385,9 +390,10 @@ mod tests {
     #[test]
     fn property_set_creates_frontmatter() {
         let tmp = setup_dir();
-        let (_, code) =
-            property_set(tmp.path(), "status", "new", None, "empty.md", Format::Json).unwrap();
-        assert_eq!(code, 0);
+        let (_, ok) = unwrap_output(
+            property_set(tmp.path(), "status", "new", None, "empty.md", Format::Json).unwrap(),
+        );
+        assert!(ok);
 
         let content = fs::read_to_string(tmp.path().join("empty.md")).unwrap();
         assert!(content.starts_with("---\n"));
