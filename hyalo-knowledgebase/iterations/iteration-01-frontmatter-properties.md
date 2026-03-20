@@ -2,7 +2,7 @@
 title: "Iteration 1 — Frontmatter Parser & Property Commands"
 type: iteration
 date: 2026-03-20
-status: planned
+status: in-progress
 branch: iter-1/frontmatter-properties
 tags:
   - iteration
@@ -43,90 +43,106 @@ See [[decision-log]] for cross-cutting design decisions (CLI style, `--dir`, `--
 ## Tasks
 
 ### Crate & CLI Setup
-- [ ] Set up clap with subcommands: `properties`, `property read`, `property set`, `property remove`
-- [ ] Add `--dir` global option (default `.`)
-- [ ] Add `--path` option for file/glob targeting
-- [ ] Add `--format` option (json, yaml, text) with json as default
-- [ ] Add `--name`, `--value`, `--type` options for property subcommands
+- [x] Set up clap with subcommands: `properties`, `property read`, `property set`, `property remove`
+- [x] Add `--dir` global option (default `.`)
+- [x] Add `--path` option for file/glob targeting
+- [x] Add `--format` option (json, text) with json as default
+- [x] Add `--name`, `--value`, `--type` options for property subcommands
 
 ### Frontmatter Parser
-- [ ] Add `serde_yaml` dependency
-- [ ] Extract YAML frontmatter from between `---` delimiters
-- [ ] Parse into a `BTreeMap<String, serde_yaml::Value>` (preserves key order)
-- [ ] Infer property type from YAML value: text, number, checkbox, date, datetime, list
-- [ ] Handle edge cases: no frontmatter, empty frontmatter, JSON frontmatter
-- [ ] Preserve non-frontmatter content when writing back
+- [x] Add `serde_yaml_ng` dependency (replaces deprecated `serde_yaml`)
+- [x] Extract YAML frontmatter from between `---` delimiters
+- [x] Parse into a `BTreeMap<String, Value>` (preserves key order)
+- [x] Infer property type from YAML value: text, number, checkbox, date, datetime, list
+- [x] Handle edge cases: no frontmatter, empty frontmatter, unclosed frontmatter (error)
+- [x] Preserve non-frontmatter content when writing back
+- [x] Streaming reader (`read_frontmatter`) for read-only ops — stops at closing `---`, never reads body
+- [x] Line/byte budget on streaming reader to prevent buffering entire file on missing closer
 
 ### File Discovery
-- [ ] Walk directory tree recursively, collecting `*.md` files
-- [ ] Support `--path` as exact file path or glob pattern
-- [ ] Respect `.gitignore` patterns (use `ignore` crate)
-- [ ] Skip hidden directories (`.obsidian/`, `.git/`, etc.)
+- [x] Walk directory tree recursively, collecting `*.md` files
+- [x] Support `--path` as exact file path or glob pattern
+- [x] Respect `.gitignore` patterns (use `ignore` crate)
+- [x] Skip hidden directories (`.obsidian/`, `.git/`, etc.)
+- [x] Reject path traversal (`..`, absolute paths) to sandbox operations under `--dir`
+- [x] Normalize path separators to forward slashes (cross-platform)
 
 ### Property Commands
-- [ ] `properties` — list all properties of a file (or aggregate across files)
-- [ ] `property read` — read a single named property, output its value
-- [ ] `property set` — set a property value with type inference or explicit `--type`
-- [ ] `property remove` — remove a property from frontmatter
-- [ ] Preserve existing YAML formatting: don't rewrite untouched properties
-- [ ] Create frontmatter block if file has none (for `property set`)
+- [x] `properties` — list all properties of a file (or aggregate across files)
+- [x] `property read` — read a single named property, output its value
+- [x] `property set` — set a property value with type inference or explicit `--type`
+- [x] `property remove` — remove a property from frontmatter
+- [x] Create frontmatter block if file has none (for `property set`)
+- [x] `CommandOutcome` enum for clean success/user-error separation (no magic exit codes)
 
 ### Output Formatting
-- [ ] JSON output (default): structured, machine-readable
-- [ ] YAML output: frontmatter-style
-- [ ] Text output: human-readable key: value pairs
+- [x] JSON output (default): structured, machine-readable
+- [x] Text output: human-readable key: value pairs
 
 ### Unit Tests (in-module `#[cfg(test)]`)
-- [ ] Frontmatter extraction: valid, missing, empty, malformed, JSON-in-YAML
-- [ ] Type inference: text, number, bool, date, datetime, list
-- [ ] Property set: add new, overwrite existing, create frontmatter if absent
-- [ ] Property remove: existing key, missing key (no-op), last key (empty frontmatter)
-- [ ] Roundtrip: set then read returns same value; body content preserved
+- [x] Frontmatter extraction: valid, missing, empty, malformed/unclosed
+- [x] Type inference: text, number, bool, date, datetime, list
+- [x] Property set: add new, overwrite existing, create frontmatter if absent
+- [x] Property remove: existing key, missing key (no-op), last key (empty frontmatter)
+- [x] Roundtrip: set then read returns same value; body content preserved
+- [x] Streaming reader parity with full parse
+- [x] Path traversal rejection
 
 ### E2E Tests (`tests/` directory, `assert_cmd` + `tempfile`)
-- [ ] `hyalo properties --path file.md` — reads all properties as JSON
-- [ ] `hyalo property read --name <key> --path file.md` — outputs value
-- [ ] `hyalo property read` — missing property returns exit code 1
-- [ ] `hyalo property set --name <key> --value <val> --path file.md` — mutates file correctly
-- [ ] `hyalo property set` on file without frontmatter — creates frontmatter
-- [ ] `hyalo property remove --name <key> --path file.md` — removes property, body intact
-- [ ] `hyalo properties` (no --path) — aggregates across all .md files in --dir
-- [ ] `--format json` / `--format yaml` / `--format text` output validation
-- [ ] Error cases: nonexistent file, nonexistent dir, invalid YAML
+- [x] `hyalo properties --path file.md` — reads all properties as JSON
+- [x] `hyalo property read --name <key> --path file.md` — outputs value
+- [x] `hyalo property read` — missing property returns exit code 1
+- [x] `hyalo property set --name <key> --value <val> --path file.md` — mutates file correctly
+- [x] `hyalo property set` on file without frontmatter — creates frontmatter
+- [x] `hyalo property remove --name <key> --path file.md` — removes property, body intact
+- [x] `hyalo properties` (no --path) — aggregates across all .md files in --dir
+- [x] `--format json` / `--format text` output validation
+- [x] Error cases: nonexistent file, nonexistent dir, invalid YAML, missing .md extension
 - [ ] Smoke test: run against `hyalo-knowledgebase/` files
 
 ### Quality Gates
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`
 
 ## Acceptance Criteria
 
-1. `hyalo properties --path file.md --format json` outputs all frontmatter properties with inferred types
-2. `hyalo property read --name status --path file.md` outputs the value of a single property
-3. `hyalo property set --name status --value done --path file.md` updates the property in-place without disturbing other content
-4. `hyalo property remove --name status --path file.md` removes the property
-5. `hyalo properties --format json` aggregates properties across all `.md` files in the root
-6. All commands exit with appropriate codes (0 success, 1 not found, 2 error)
-7. Dogfooding: hyalo can read its own knowledgebase files' frontmatter correctly
+1. [x] `hyalo properties --path file.md --format json` outputs all frontmatter properties with inferred types
+2. [x] `hyalo property read --name status --path file.md` outputs the value of a single property
+3. [x] `hyalo property set --name status --value done --path file.md` updates the property in-place without disturbing other content
+4. [x] `hyalo property remove --name status --path file.md` removes the property
+5. [x] `hyalo properties --format json` aggregates properties across all `.md` files in the root
+6. [x] All commands exit with appropriate codes (0 success, 1 not found, 2 error)
+7. [ ] Dogfooding: hyalo can read its own knowledgebase files' frontmatter correctly
 
 ## Dependencies (Crates)
 
-- `clap` (already present) — CLI parsing
-- `serde` + `serde_yaml` — YAML frontmatter
-- `serde_json` (already present) — JSON output
+- `clap` — CLI parsing
+- `serde` + `serde_yaml_ng` — YAML frontmatter (replaced deprecated `serde_yaml`)
+- `serde_json` — JSON output
 - `ignore` — gitignore-aware file walking
 - `anyhow` — error handling
-- `glob` or `globset` — path matching
+- `globset` — path matching
 
 ### Dev Dependencies
 - `assert_cmd` — run binary in tests, assert on stdout/stderr/exit code
 - `predicates` — fluent assertions for assert_cmd
 - `tempfile` — per-test temp directories (no shared fixtures)
 
+## Learnings & Review Findings
+
+### Code Review (2026-03-20)
+- **`serde_yaml` is deprecated.** Migrated to `serde_yaml_ng` 0.10 — actively maintained community fork, drop-in API replacement. Avoid `serde_yml` (RUSTSEC-2025-0068, unsound).
+- **Unclosed frontmatter is dangerous for mutations.** If `Document::parse` silently treats unclosed `---` as "no frontmatter", then `property set` writes a new block on top, corrupting the file. Now errors on unclosed frontmatter.
+- **Streaming vs full parse must agree on semantics.** `read_frontmatter` (streaming, read-only) and `Document::parse` (full, for mutations) had different behavior on missing closers. Now both treat it as an error condition.
+- **Path traversal was unguarded.** `resolve_file` allowed `../` and absolute paths to escape `--dir`. Now rejects them.
+- **Windows path separators break glob matching.** `to_string_lossy()` uses `\` on Windows. Must normalize to `/` for consistent glob matching and output.
+- **`NaN`/`inf` parse as valid f64.** Must explicitly check `is_finite()` in both inference and forced-type paths.
+- **`CommandOutcome` is cleaner than `(String, i32)`.** Enum makes success vs user-error intent explicit, eliminates magic numbers.
+
 ## Notes
 
-- **Formatting preservation: not needed.** serde_yaml rewrites the full frontmatter on set/remove. Obsidian itself does the same. Keeps iteration 1 simple.
+- **Formatting preservation: not needed.** serde_yaml_ng rewrites the full frontmatter on set/remove. Obsidian itself does the same. Keeps iteration 1 simple.
 - YAML frontmatter in Obsidian is always flat (no nested objects) — we can rely on this
 - Internal links in property values (`"[[Note]]"`) are just strings for now — link parsing comes in iteration 2
 - The `tags` property is a list type but has special semantics — tag aggregation comes in iteration 3
