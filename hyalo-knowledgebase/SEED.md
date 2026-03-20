@@ -1,4 +1,4 @@
-❯ We want to build a CLI tool to manage md files. The md files should be compatible with obsidian. We need to epxlore what this compatibility means. I don't want to
+❯ We want to build a CLI tool to manage md files. The md files should be compatible with obsidian. We need to explore what this compatibility means. I don't want to
 implement any functionality that manages obsidian or features of obsidian (like the vaults, file history, bookmarks, daily notes etc.), but keep compatibility of the md
 files and also esp. of their frontmatter. Worth exploring:
 - https://obsidian.md/help/obsidian-flavored-markdown
@@ -66,6 +66,6 @@ task file=Recipe line=8 status=-  # → [-]
 
 Keep this initial pitch already in the hyalo-knowledgebase so that we can iterate on it later.
 
-Go through the documentation of obsidian to get a better picture and document the importan things. Then let's discuss how we plan the iterations, what features make
+Go through the documentation of obsidian to get a better picture and document the important things. Then let's discuss how we plan the iterations, what features make
 sense, what is needed for which feature etc.
 At a later stage, let's discuss how he can speed up searching documents based on properties etc. by introducing kind of an index.

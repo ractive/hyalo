@@ -22,8 +22,10 @@ impl Document {
     }
 
     /// Parse a markdown document, extracting YAML frontmatter if present.
+    /// Returns an error if the file starts with `---` but has no closing delimiter,
+    /// which would cause corruption on write (a new frontmatter block on top of an unclosed one).
     pub fn parse(content: &str) -> Result<Self> {
-        let (yaml_str, body) = extract_frontmatter(content);
+        let (yaml_str, body) = extract_frontmatter(content)?;
 
         let properties: BTreeMap<String, Value> = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
@@ -122,11 +124,13 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
 }
 
 /// Extract frontmatter YAML string and the body from a markdown document.
-/// Returns (Some(yaml_content), body) if frontmatter is found, (None, full_content) otherwise.
-fn extract_frontmatter(content: &str) -> (Option<&str>, &str) {
+/// Returns `Ok((Some(yaml_content), body))` if frontmatter is found,
+/// `Ok((None, full_content))` if no frontmatter is present, or an error if the file
+/// starts with `---` but has no closing delimiter (which would cause corruption on write).
+fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
     // Frontmatter must start with `---` on the very first line
     if !content.starts_with("---") {
-        return (None, content);
+        return Ok((None, content));
     }
 
     let after_opening = &content[3..];
@@ -137,9 +141,9 @@ fn extract_frontmatter(content: &str) -> (Option<&str>, &str) {
         rest
     } else if after_opening.is_empty() {
         // File is exactly `---` with nothing after
-        return (None, content);
+        return Ok((None, content));
     } else {
-        return (None, content);
+        return Ok((None, content));
     };
 
     // Find the closing `---`
@@ -154,10 +158,12 @@ fn extract_frontmatter(content: &str) -> (Option<&str>, &str) {
         } else {
             rest
         };
-        (Some(yaml), body)
+        Ok((Some(yaml), body))
     } else {
-        // No closing delimiter found — treat entire content as body (no frontmatter)
-        (None, content)
+        // Opening `---` found but no closing delimiter — this is malformed frontmatter.
+        // Returning an error prevents mutation commands from corrupting the file by
+        // writing a new frontmatter block on top of the unclosed one.
+        anyhow::bail!("unclosed frontmatter: file starts with `---` but no closing `---` was found")
     }
 }
 
@@ -253,6 +259,7 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
                 Ok(Value::Number(i.into()))
             } else {
                 let f: f64 = raw.parse().context("value is not a valid number")?;
+                anyhow::ensure!(f.is_finite(), "value is not a finite number");
                 Ok(Value::Number(serde_yaml_ng::Number::from(f)))
             }
         }
@@ -378,11 +385,10 @@ mod tests {
 
     #[test]
     fn parse_malformed_frontmatter() {
-        // Missing closing delimiter — treated as no frontmatter
+        // Missing closing delimiter — now returns an error to prevent corruption on write
         let content = "---\ntitle: Broken\nNo closing delimiter.\n";
-        let doc = Document::parse(content).unwrap();
-        assert!(doc.properties().is_empty());
-        assert_eq!(doc.body(), content);
+        let err = Document::parse(content).unwrap_err();
+        assert!(err.to_string().contains("unclosed frontmatter"));
     }
 
     #[test]

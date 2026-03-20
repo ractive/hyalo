@@ -65,13 +65,14 @@ fn remove_preserves_body() {
     let content = format!("---\ntitle: Test\nstatus: draft\n---\n{body}");
     write_md(tmp.path(), "note.md", &content);
 
-    hyalo()
+    let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "property", "remove", "--name", "status", "--path", "note.md",
         ])
         .output()
         .unwrap();
+    assert!(output.status.success());
 
     let file_content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(file_content.contains("# Heading"));
@@ -87,13 +88,14 @@ fn remove_preserves_other_properties() {
         "---\ntitle: Keep\nstatus: draft\npriority: 5\n---\n# Body\n",
     );
 
-    hyalo()
+    let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "property", "remove", "--name", "status", "--path", "note.md",
         ])
         .output()
         .unwrap();
+    assert!(output.status.success());
 
     // title should still be there
     let read_title = hyalo()
