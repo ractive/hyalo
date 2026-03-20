@@ -3,7 +3,7 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
-use hyalo::commands::{links as link_commands, properties};
+use hyalo::commands::{links as link_commands, properties, tags as tag_commands};
 use hyalo::output::{CommandOutcome, Format};
 
 #[derive(Parser)]
@@ -49,6 +49,60 @@ enum Commands {
         /// Only show links that resolve to a file
         #[arg(long, conflicts_with = "unresolved")]
         resolved: bool,
+    },
+    /// List all unique tags with occurrence counts across matched files
+    Tags {
+        /// Specific file (relative to --dir)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern (relative to --dir)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Inspect or modify tags
+    Tag {
+        #[command(subcommand)]
+        action: TagAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TagAction {
+    /// Find files containing a specific tag (supports nested matching)
+    Find {
+        /// Tag name to search for
+        #[arg(long)]
+        name: String,
+        /// Specific file (relative to --dir)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern (relative to --dir)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Add a tag to file(s) frontmatter
+    Add {
+        /// Tag name to add
+        #[arg(long)]
+        name: String,
+        /// Specific file (relative to --dir)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern (relative to --dir)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Remove a tag from file(s) frontmatter
+    Remove {
+        /// Tag name to remove
+        #[arg(long)]
+        name: String,
+        /// Specific file (relative to --dir)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern (relative to --dir)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
     },
 }
 
@@ -135,6 +189,26 @@ fn main() {
             };
             link_commands::links(dir, file, filter, format)
         }
+        Commands::Tags { ref file, ref glob } => {
+            tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
+        }
+        Commands::Tag { action } => match action {
+            TagAction::Find {
+                ref name,
+                ref file,
+                ref glob,
+            } => tag_commands::tag_find(dir, name, file.as_deref(), glob.as_deref(), format),
+            TagAction::Add {
+                ref name,
+                ref file,
+                ref glob,
+            } => tag_commands::tag_add(dir, name, file.as_deref(), glob.as_deref(), format),
+            TagAction::Remove {
+                ref name,
+                ref file,
+                ref glob,
+            } => tag_commands::tag_remove(dir, name, file.as_deref(), glob.as_deref(), format),
+        },
     };
 
     match result {

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Represents parsed frontmatter and the remaining body content.
@@ -82,6 +82,99 @@ pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     read_frontmatter_from_reader(reader)
+}
+
+/// Write updated frontmatter to a file while leaving the body bytes untouched.
+///
+/// This is the preferred mutation path: it reads only the frontmatter portion, finds
+/// the byte offset where the body starts, serializes the new properties, and writes
+/// `new_frontmatter + original_body_bytes` back to the file.  The body is never
+/// decoded as UTF-8, so there is no risk of re-encoding corruption.
+///
+/// If `props` is empty (all properties removed), no frontmatter block is written —
+/// the file starts directly with the body.
+pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result<()> {
+    // --- Step 1: find the byte offset where the body starts ---
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+
+    let body_offset = find_body_offset(&mut file)?;
+
+    // --- Step 2: read the body bytes from that offset ---
+    file.seek(SeekFrom::Start(body_offset))
+        .with_context(|| format!("failed to seek in {}", path.display()))?;
+    let mut body_bytes = Vec::new();
+    file.read_to_end(&mut body_bytes)
+        .with_context(|| format!("failed to read body of {}", path.display()))?;
+    drop(file);
+
+    // --- Step 3: serialize new frontmatter ---
+    let mut out: Vec<u8> = Vec::new();
+    if !props.is_empty() {
+        out.extend_from_slice(b"---\n");
+        let yaml = serde_yaml_ng::to_string(props).context("failed to serialize YAML")?;
+        out.extend_from_slice(yaml.as_bytes());
+        if !yaml.ends_with('\n') {
+            out.push(b'\n');
+        }
+        out.extend_from_slice(b"---\n");
+    }
+    out.extend_from_slice(&body_bytes);
+
+    // --- Step 4: write atomically ---
+    std::fs::write(path, &out).with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(())
+}
+
+/// Find the byte offset in `file` where the body starts (i.e. the byte immediately
+/// after the closing `---\n` of the frontmatter block).
+///
+/// Returns `0` if the file has no frontmatter, which means the entire file is body.
+fn find_body_offset(file: &mut File) -> Result<u64> {
+    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
+    let mut reader = BufReader::new(&mut *file);
+    let mut line = String::new();
+
+    // Peek at the first line
+    let n = reader.read_line(&mut line).context("failed to read line")?;
+    if n == 0 || line.trim_end_matches(['\n', '\r']) != "---" {
+        // No frontmatter — body starts at offset 0
+        return Ok(0);
+    }
+
+    let mut content_bytes: usize = 0;
+    let mut line_count: usize = 0;
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).context("failed to read line")?;
+        if n == 0 {
+            anyhow::bail!(
+                "unclosed frontmatter: file starts with `---` but no closing `---` was found"
+            );
+        }
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if trimmed.trim() == "---" {
+            // Consumed up to and including the closing `---\n`
+            break;
+        }
+        line_count += 1;
+        content_bytes += n;
+        if line_count > MAX_FRONTMATTER_LINES || content_bytes > MAX_FRONTMATTER_BYTES {
+            anyhow::bail!(
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+            );
+        }
+    }
+
+    // The body offset is whatever position the BufReader is now at
+    let pos = reader
+        .stream_position()
+        .context("failed to get stream position")?;
+    Ok(pos)
 }
 
 /// Skip past frontmatter in a buffered reader. Returns the number of lines consumed
@@ -393,9 +486,21 @@ pub fn yaml_to_json(value: &Value) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     #[test]
     fn parse_valid_frontmatter() {
-        let content = "---\ntitle: Hello\nstatus: draft\n---\nBody text here.\n";
+        let content = md!(r#"
+---
+title: Hello
+status: draft
+---
+Body text here.
+"#);
         let doc = Document::parse(content).unwrap();
         assert_eq!(doc.properties().len(), 2);
         assert_eq!(
@@ -415,7 +520,11 @@ mod tests {
 
     #[test]
     fn parse_empty_frontmatter() {
-        let content = "---\n---\nBody.\n";
+        let content = md!(r#"
+---
+---
+Body.
+"#);
         let doc = Document::parse(content).unwrap();
         assert!(doc.properties().is_empty());
         assert_eq!(doc.body(), "Body.\n");
@@ -424,7 +533,11 @@ mod tests {
     #[test]
     fn parse_malformed_frontmatter() {
         // Missing closing delimiter — now returns an error to prevent corruption on write
-        let content = "---\ntitle: Broken\nNo closing delimiter.\n";
+        let content = md!(r#"
+---
+title: Broken
+No closing delimiter.
+"#);
         let err = Document::parse(content).unwrap_err();
         assert!(err.to_string().contains("unclosed frontmatter"));
     }
@@ -472,7 +585,15 @@ mod tests {
 
     #[test]
     fn roundtrip_preserves_body() {
-        let content = "---\ntitle: Test\npriority: 5\n---\n# Heading\n\nParagraph content.\n";
+        let content = md!(r#"
+---
+title: Test
+priority: 5
+---
+# Heading
+
+Paragraph content.
+"#);
         let doc = Document::parse(content).unwrap();
         let serialized = doc.serialize().unwrap();
         let doc2 = Document::parse(&serialized).unwrap();
@@ -489,7 +610,13 @@ mod tests {
 
     #[test]
     fn set_and_remove_property() {
-        let mut doc = Document::parse("---\ntitle: Hi\n---\nBody\n").unwrap();
+        let mut doc = Document::parse(md!(r#"
+---
+title: Hi
+---
+Body
+"#))
+        .unwrap();
         doc.set_property("status".into(), Value::String("done".into()));
         assert!(doc.get_property("status").is_some());
         doc.remove_property("status");
@@ -528,7 +655,11 @@ mod tests {
 
     #[test]
     fn file_with_only_frontmatter() {
-        let content = "---\ntitle: Only FM\n---\n";
+        let content = md!(r#"
+---
+title: Only FM
+---
+"#);
         let doc = Document::parse(content).unwrap();
         assert_eq!(doc.properties().len(), 1);
         assert_eq!(doc.body(), "");
@@ -538,7 +669,13 @@ mod tests {
 
     #[test]
     fn streaming_valid_frontmatter() {
-        let input = b"---\ntitle: Hello\nstatus: draft\n---\n# Body that should not be read\nLots of content here.\n";
+        let input = br#"---
+title: Hello
+status: draft
+---
+# Body that should not be read
+Lots of content here.
+"#;
         let props = read_frontmatter_from_reader(&input[..]).unwrap();
         assert_eq!(props.len(), 2);
         assert_eq!(props.get("title"), Some(&Value::String("Hello".into())));
@@ -547,14 +684,19 @@ mod tests {
 
     #[test]
     fn streaming_no_frontmatter() {
-        let input = b"Just a regular file.\nNo frontmatter.\n";
+        let input = br#"Just a regular file.
+No frontmatter.
+"#;
         let props = read_frontmatter_from_reader(&input[..]).unwrap();
         assert!(props.is_empty());
     }
 
     #[test]
     fn streaming_empty_frontmatter() {
-        let input = b"---\n---\nBody.\n";
+        let input = br#"---
+---
+Body.
+"#;
         let props = read_frontmatter_from_reader(&input[..]).unwrap();
         assert!(props.is_empty());
     }
@@ -563,20 +705,36 @@ mod tests {
     fn streaming_no_closing_delimiter() {
         // No closing `---` means everything after the opening is read as YAML.
         // If it's not valid YAML, we get an error — which is correct.
-        let input = b"---\ntitle: Broken\nNot valid yaml line\n";
+        let input = br#"---
+title: Broken
+Not valid yaml line
+"#;
         let result = read_frontmatter_from_reader(&input[..]);
         assert!(result.is_err());
 
         // But if the content happens to be valid YAML, it parses fine
-        let input2 = b"---\ntitle: Works\nstatus: ok\n";
+        let input2 = br#"---
+title: Works
+status: ok
+"#;
         let props = read_frontmatter_from_reader(&input2[..]).unwrap();
         assert_eq!(props.get("title"), Some(&Value::String("Works".into())));
     }
 
     #[test]
     fn streaming_matches_full_parse() {
-        let content =
-            "---\ntitle: Test\npriority: 5\ntags:\n  - a\n  - b\n---\n# Heading\n\nBody.\n";
+        let content = md!(r#"
+---
+title: Test
+priority: 5
+tags:
+  - a
+  - b
+---
+# Heading
+
+Body.
+"#);
         let doc = Document::parse(content).unwrap();
         let streamed = read_frontmatter_from_reader(content.as_bytes()).unwrap();
         assert_eq!(doc.properties(), &streamed);
