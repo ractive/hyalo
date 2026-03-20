@@ -16,6 +16,23 @@ pub fn write_md(dir: &Path, relative_path: &str, content: &str) {
     fs::write(full, content).unwrap();
 }
 
+/// Write a markdown file with YAML frontmatter containing the given tags.
+/// Used by tag-related tests and any future tests that need pre-tagged files.
+#[allow(dead_code)]
+pub fn write_tagged(dir: &Path, name: &str, tags: &[&str]) {
+    let tags_yaml = if tags.is_empty() {
+        "tags: []\n".to_owned()
+    } else {
+        let items: String = tags.iter().map(|t| format!("  - {t}\n")).collect();
+        format!("tags:\n{items}")
+    };
+    write_md(
+        dir,
+        name,
+        &format!("---\ntitle: {name}\n{tags_yaml}---\n# Body\n"),
+    );
+}
+
 /// Returns a sample markdown document with YAML frontmatter containing various property types.
 #[allow(dead_code)]
 pub fn sample_frontmatter() -> &'static str {

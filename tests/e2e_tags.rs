@@ -1,25 +1,7 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo, write_md, write_tagged};
 use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn write_tagged(dir: &std::path::Path, name: &str, tags: &[&str]) {
-    let tags_yaml = if tags.is_empty() {
-        "tags: []\n".to_owned()
-    } else {
-        let items: String = tags.iter().map(|t| format!("  - {t}\n")).collect();
-        format!("tags:\n{items}")
-    };
-    write_md(
-        dir,
-        name,
-        &format!("---\ntitle: {name}\n{tags_yaml}---\n# Body\n"),
-    );
-}
 
 // ---------------------------------------------------------------------------
 // `hyalo tags` — list all unique tags with counts
@@ -699,4 +681,54 @@ fn tags_glob_no_match() {
 
     // Should exit with error status (user error: no files match pattern)
     assert!(!output.status.success());
+}
+
+// ---------------------------------------------------------------------------
+// Mutation commands require --file or --glob
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_add_without_file_or_glob_is_user_error() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["existing"]);
+
+    // Omit both --file and --glob → must be a user error (exit 1)
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tag", "add", "--name", "new-tag"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("--file") || stderr.contains("--glob"),
+        "expected hint about --file/--glob in stderr: {stderr}"
+    );
+    // File must be untouched
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(!content.contains("new-tag"));
+}
+
+#[test]
+fn tag_remove_without_file_or_glob_is_user_error() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["rust"]);
+
+    // Omit both --file and --glob → must be a user error (exit 1)
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tag", "remove", "--name", "rust"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("--file") || stderr.contains("--glob"),
+        "expected hint about --file/--glob in stderr: {stderr}"
+    );
+    // Tag must still be present
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(content.contains("rust"));
 }

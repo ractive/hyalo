@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Represents parsed frontmatter and the remaining body content.
@@ -82,6 +82,99 @@ pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     read_frontmatter_from_reader(reader)
+}
+
+/// Write updated frontmatter to a file while leaving the body bytes untouched.
+///
+/// This is the preferred mutation path: it reads only the frontmatter portion, finds
+/// the byte offset where the body starts, serializes the new properties, and writes
+/// `new_frontmatter + original_body_bytes` back to the file.  The body is never
+/// decoded as UTF-8, so there is no risk of re-encoding corruption.
+///
+/// If `props` is empty (all properties removed), no frontmatter block is written —
+/// the file starts directly with the body.
+pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result<()> {
+    // --- Step 1: find the byte offset where the body starts ---
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+
+    let body_offset = find_body_offset(&mut file)?;
+
+    // --- Step 2: read the body bytes from that offset ---
+    file.seek(SeekFrom::Start(body_offset))
+        .with_context(|| format!("failed to seek in {}", path.display()))?;
+    let mut body_bytes = Vec::new();
+    file.read_to_end(&mut body_bytes)
+        .with_context(|| format!("failed to read body of {}", path.display()))?;
+    drop(file);
+
+    // --- Step 3: serialize new frontmatter ---
+    let mut out: Vec<u8> = Vec::new();
+    if !props.is_empty() {
+        out.extend_from_slice(b"---\n");
+        let yaml = serde_yaml_ng::to_string(props).context("failed to serialize YAML")?;
+        out.extend_from_slice(yaml.as_bytes());
+        if !yaml.ends_with('\n') {
+            out.push(b'\n');
+        }
+        out.extend_from_slice(b"---\n");
+    }
+    out.extend_from_slice(&body_bytes);
+
+    // --- Step 4: write atomically ---
+    std::fs::write(path, &out).with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(())
+}
+
+/// Find the byte offset in `file` where the body starts (i.e. the byte immediately
+/// after the closing `---\n` of the frontmatter block).
+///
+/// Returns `0` if the file has no frontmatter, which means the entire file is body.
+fn find_body_offset(file: &mut File) -> Result<u64> {
+    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
+    let mut reader = BufReader::new(&mut *file);
+    let mut line = String::new();
+
+    // Peek at the first line
+    let n = reader.read_line(&mut line).context("failed to read line")?;
+    if n == 0 || line.trim_end_matches(['\n', '\r']) != "---" {
+        // No frontmatter — body starts at offset 0
+        return Ok(0);
+    }
+
+    let mut content_bytes: usize = 0;
+    let mut line_count: usize = 0;
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).context("failed to read line")?;
+        if n == 0 {
+            anyhow::bail!(
+                "unclosed frontmatter: file starts with `---` but no closing `---` was found"
+            );
+        }
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if trimmed.trim() == "---" {
+            // Consumed up to and including the closing `---\n`
+            break;
+        }
+        line_count += 1;
+        content_bytes += n;
+        if line_count > MAX_FRONTMATTER_LINES || content_bytes > MAX_FRONTMATTER_BYTES {
+            anyhow::bail!(
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+            );
+        }
+    }
+
+    // The body offset is whatever position the BufReader is now at
+    let pos = reader
+        .stream_position()
+        .context("failed to get stream position")?;
+    Ok(pos)
 }
 
 /// Skip past frontmatter in a buffered reader. Returns the number of lines consumed

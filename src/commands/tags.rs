@@ -1,12 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::json;
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
-use crate::discovery::{self, FileResolveError};
-use crate::frontmatter::{self, Document};
+use crate::commands::{FilesOrOutcome, collect_files};
+use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
 // ---------------------------------------------------------------------------
@@ -48,10 +47,14 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
 
 /// Returns true if `tag` matches the query under Obsidian's nested tag rules.
 /// A tag matches if it equals the query or starts with `query/` (case-insensitive).
+///
+/// Uses byte-level ASCII comparison — safe because tag names are validated to only
+/// contain ASCII characters (letters, digits, `_`, `-`, `/`).
 pub fn tag_matches(tag: &str, query: &str) -> bool {
-    let tag_lower = tag.to_lowercase();
-    let query_lower = query.to_lowercase();
-    tag_lower == query_lower || tag_lower.starts_with(&format!("{query_lower}/"))
+    tag.eq_ignore_ascii_case(query)
+        || (tag.len() > query.len()
+            && tag.as_bytes()[query.len()] == b'/'
+            && tag[..query.len()].eq_ignore_ascii_case(query))
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +188,20 @@ pub fn tag_add(
         return Ok(CommandOutcome::UserError(out));
     }
 
+    // Mutation commands require --file or --glob to avoid accidentally touching every file
+    if file.is_none() && glob.is_none() {
+        let out = crate::output::format_error(
+            format,
+            "tag add requires --file or --glob",
+            None,
+            Some(
+                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
+            ),
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
     let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
@@ -195,12 +212,10 @@ pub fn tag_add(
     let mut skipped: Vec<String> = Vec::new();
 
     for (full_path, rel_path) in &files {
-        let content = fs::read_to_string(full_path)
-            .with_context(|| format!("failed to read {}", full_path.display()))?;
-        let mut doc = Document::parse(&content)?;
-
-        let tags = extract_tags(doc.properties());
-        let already_has = tags.iter().any(|t| t.to_lowercase() == name.to_lowercase());
+        // Read frontmatter only for the idempotency check
+        let props = frontmatter::read_frontmatter(full_path)?;
+        let tags = extract_tags(&props);
+        let already_has = tags.iter().any(|t| t.eq_ignore_ascii_case(name));
 
         if already_has {
             skipped.push(rel_path.clone());
@@ -209,12 +224,9 @@ pub fn tag_add(
             let mut new_tags = tags;
             new_tags.push(name.to_owned());
             let yaml_list = Value::Sequence(new_tags.into_iter().map(Value::String).collect());
-            doc.set_property("tags".to_owned(), yaml_list);
-
-            let serialized = doc.serialize()?;
-            fs::write(full_path, serialized)
-                .with_context(|| format!("failed to write {}", full_path.display()))?;
-
+            let mut new_props = props;
+            new_props.insert("tags".to_owned(), yaml_list);
+            frontmatter::write_frontmatter(full_path, &new_props)?;
             modified.push(rel_path.clone());
         }
     }
@@ -243,6 +255,20 @@ pub fn tag_remove(
     glob: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
+    // Mutation commands require --file or --glob to avoid accidentally touching every file
+    if file.is_none() && glob.is_none() {
+        let out = crate::output::format_error(
+            format,
+            "tag remove requires --file or --glob",
+            None,
+            Some(
+                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
+            ),
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
     let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
@@ -253,15 +279,12 @@ pub fn tag_remove(
     let mut skipped: Vec<String> = Vec::new();
 
     for (full_path, rel_path) in &files {
-        let content = fs::read_to_string(full_path)
-            .with_context(|| format!("failed to read {}", full_path.display()))?;
-        let mut doc = Document::parse(&content)?;
-
-        let tags = extract_tags(doc.properties());
-        let name_lower = name.to_lowercase();
+        // Read frontmatter only
+        let props = frontmatter::read_frontmatter(full_path)?;
+        let tags = extract_tags(&props);
         let new_tags: Vec<String> = tags
             .iter()
-            .filter(|t| t.to_lowercase() != name_lower)
+            .filter(|t| !t.eq_ignore_ascii_case(name))
             .cloned()
             .collect();
 
@@ -269,17 +292,14 @@ pub fn tag_remove(
             // Tag was not present — idempotent skip
             skipped.push(rel_path.clone());
         } else {
+            let mut new_props = props;
             if new_tags.is_empty() {
-                doc.remove_property("tags");
+                new_props.remove("tags");
             } else {
                 let yaml_list = Value::Sequence(new_tags.into_iter().map(Value::String).collect());
-                doc.set_property("tags".to_owned(), yaml_list);
+                new_props.insert("tags".to_owned(), yaml_list);
             }
-
-            let serialized = doc.serialize()?;
-            fs::write(full_path, serialized)
-                .with_context(|| format!("failed to write {}", full_path.display()))?;
-
+            frontmatter::write_frontmatter(full_path, &new_props)?;
             modified.push(rel_path.clone());
         }
     }
@@ -295,89 +315,6 @@ pub fn tag_remove(
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
     )))
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-enum FilesOrOutcome {
-    Files(Vec<(std::path::PathBuf, String)>),
-    Outcome(CommandOutcome),
-}
-
-/// Resolve the set of files to operate on based on --file / --glob / all.
-/// Returns an error outcome for user errors (file not found, no glob matches).
-fn collect_files(
-    dir: &Path,
-    file: Option<&str>,
-    glob: Option<&str>,
-    format: Format,
-) -> Result<FilesOrOutcome> {
-    match (file, glob) {
-        (Some(f), None) => {
-            let resolved = match discovery::resolve_file(dir, f) {
-                Ok(r) => r,
-                Err(e) => return Ok(FilesOrOutcome::Outcome(resolve_error_to_outcome(e, format))),
-            };
-            Ok(FilesOrOutcome::Files(vec![resolved]))
-        }
-        (None, Some(pattern)) => {
-            let all = discovery::discover_files(dir)?;
-            let matched = discovery::match_glob(dir, &all, pattern)?;
-            if matched.is_empty() {
-                let out = crate::output::format_error(
-                    format,
-                    "no files match pattern",
-                    Some(pattern),
-                    None,
-                    None,
-                );
-                return Ok(FilesOrOutcome::Outcome(CommandOutcome::UserError(out)));
-            }
-            Ok(FilesOrOutcome::Files(matched))
-        }
-        (None, None) => {
-            // Operate on all .md files
-            let all = discovery::discover_files(dir)?;
-            let with_rel: Vec<(std::path::PathBuf, String)> = all
-                .into_iter()
-                .map(|p| {
-                    let rel = discovery::relative_path(dir, &p);
-                    (p, rel)
-                })
-                .collect();
-            Ok(FilesOrOutcome::Files(with_rel))
-        }
-        (Some(_), Some(_)) => {
-            // Clap enforces mutual exclusivity; this branch is unreachable in practice
-            let out = crate::output::format_error(
-                format,
-                "--file and --glob are mutually exclusive",
-                None,
-                None,
-                None,
-            );
-            Ok(FilesOrOutcome::Outcome(CommandOutcome::UserError(out)))
-        }
-    }
-}
-
-fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
-    match err {
-        FileResolveError::MissingExtension { path, hint } => {
-            CommandOutcome::UserError(crate::output::format_error(
-                format,
-                "file not found",
-                Some(&path),
-                Some(&format!("did you mean {hint}?")),
-                None,
-            ))
-        }
-        FileResolveError::NotFound { path } => CommandOutcome::UserError(
-            crate::output::format_error(format, "file not found", Some(&path), None, None),
-        ),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +575,16 @@ mod tests {
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
+    #[test]
+    fn tag_add_requires_file_or_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: Note\n---\n").unwrap();
+
+        // Neither --file nor --glob → user error
+        let outcome = tag_add(tmp.path(), "rust", None, None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
     // --- tag_remove command ---
 
     #[test]
@@ -696,5 +643,59 @@ mod tests {
         assert!(!content.contains("tags:"));
         // title should still be present
         assert!(content.contains("title:"));
+    }
+
+    #[test]
+    fn tag_remove_requires_file_or_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntags:\n  - rust\n---\n").unwrap();
+
+        // Neither --file nor --glob → user error
+        let outcome = tag_remove(tmp.path(), "rust", None, None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    // --- body preservation ---
+
+    #[test]
+    fn tag_add_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = "# Heading\n\nSome content with [[wikilinks]] and more text.\n";
+        fs::write(
+            tmp.path().join("note.md"),
+            format!("---\ntitle: Note\n---\n{body}"),
+        )
+        .unwrap();
+
+        tag_add(tmp.path(), "rust", Some("note.md"), None, Format::Json).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    #[test]
+    fn tag_remove_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = "# Heading\n\nSome content.\n";
+        fs::write(
+            tmp.path().join("note.md"),
+            format!("---\ntags:\n  - rust\n  - cli\n---\n{body}"),
+        )
+        .unwrap();
+
+        tag_remove(tmp.path(), "rust", Some("note.md"), None, Format::Json).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    // --- discover_files used by tags_list (read-only) still works without file/glob ---
+
+    #[test]
+    fn tags_list_no_file_or_glob_reads_all() {
+        let tmp = setup_vault();
+        // tags_list (read-only) still accepts no --file/--glob
+        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::Success(_)));
     }
 }
