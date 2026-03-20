@@ -10,14 +10,30 @@ use hyalo::output::{CommandOutcome, Format};
 #[command(
     name = "hyalo",
     version,
-    about = "CLI for managing Obsidian-compatible markdown files"
+    about = "CLI tool for reading and modifying YAML frontmatter and [[wikilinks]] in Obsidian-compatible markdown files",
+    long_about = "Hyalo is a CLI tool for reading and modifying YAML frontmatter and [[wikilinks]] \
+        in Obsidian-compatible markdown (.md) files.\n\n\
+        SCOPE: Hyalo operates on a directory of .md files. It can query and mutate frontmatter \
+        properties and tags, and inspect wikilink resolution.\n\n\
+        PATH RESOLUTION: All --file and --glob paths are relative to --dir (defaults to \".\"). \
+        Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
+        OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
+        Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
+        COMMANDS: Use 'properties'/'tags' to list across files. Use 'property'/'tag' for single-item mutations. \
+        Use 'links' to inspect wikilink targets.",
+    after_help = "EXAMPLES:\n  \
+        List all properties:        hyalo properties --glob '**/*.md'\n  \
+        Set a property:             hyalo property set --name status --value done --file notes/todo.md\n  \
+        List tags with counts:      hyalo tags\n  \
+        Find files by tag:          hyalo tag find --name project/backend\n  \
+        Find broken wikilinks:      hyalo links --file index.md --unresolved"
 )]
 struct Cli {
-    /// Base directory (default: current directory)
+    /// Root directory for resolving all --file and --glob paths. Defaults to current directory
     #[arg(long, global = true, default_value = ".")]
     dir: PathBuf,
 
-    /// Output format: json or text
+    /// Output format: "json" (structured, default) or "text" (human-readable). Applies to both stdout and stderr
     #[arg(long, global = true, default_value = "json")]
     format: String,
 
@@ -27,39 +43,75 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List properties of files
+    /// List all frontmatter properties across matched files (read-only, no side effects)
+    #[command(
+        long_about = "List all frontmatter properties across matched files.\n\n\
+            INPUT: Reads .md files matching --glob (or all .md files under --dir if omitted).\n\
+            OUTPUT: For each file, emits every YAML frontmatter key-value pair with its inferred type.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to discover what properties exist, audit frontmatter, or find files with specific metadata."
+    )]
     Properties {
-        /// Glob pattern (relative to --dir)
+        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md'). Omit to scan all .md files
         #[arg(long)]
         glob: Option<String>,
     },
-    /// Read, set, or remove a single property
+    /// Read, set, or remove a single frontmatter property on one file
+    #[command(
+        long_about = "Read, set, or remove a single frontmatter property on one file.\n\n\
+        Subcommands: read, set, remove. Each operates on exactly one property in one file.\n\
+        USE 'read' to get a value, 'set' to create/overwrite, 'remove' to delete.\n\
+        SIDE EFFECTS: 'set' and 'remove' modify the file on disk. 'read' is read-only."
+    )]
     Property {
         #[command(subcommand)]
         action: PropertyAction,
     },
-    /// List outgoing links from a file
+    /// List outgoing [[wikilinks]] from a file and their resolution status (read-only)
+    #[command(
+        long_about = "List outgoing [[wikilinks]] from a file and their resolution status.\n\n\
+            INPUT: A single markdown file (--file).\n\
+            OUTPUT: Each [[wikilink]] found in the file body, with a boolean indicating whether \
+            the link target resolves to an existing .md file under --dir.\n\
+            FILTERS: --unresolved returns only broken links. --resolved returns only valid links. \
+            Without either flag, returns all links.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to find broken links, audit cross-references, or build a link graph."
+    )]
     Links {
-        /// File path (relative to --dir)
+        /// Markdown file to scan for [[wikilinks]]
         #[arg(long)]
         file: String,
-        /// Only show links that don't resolve to any file
+        /// Filter: only return links whose target file does NOT exist (broken links)
         #[arg(long, conflicts_with = "resolved")]
         unresolved: bool,
-        /// Only show links that resolve to a file
+        /// Filter: only return links whose target file exists
         #[arg(long, conflicts_with = "unresolved")]
         resolved: bool,
     },
-    /// List all unique tags with occurrence counts across matched files
+    /// List all unique tags with per-tag file counts across matched files (read-only)
+    #[command(
+        long_about = "List all unique tags with per-tag file counts across matched files.\n\n\
+            INPUT: Reads the 'tags' field from YAML frontmatter in matched files.\n\
+            OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy."
+    )]
     Tags {
-        /// Specific file (relative to --dir)
+        /// Scan only this file instead of all files
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern (relative to --dir)
+        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
     },
-    /// Inspect or modify tags
+    /// Find, add, or remove tags in file frontmatter
+    #[command(long_about = "Find, add, or remove tags in file frontmatter.\n\n\
+        Subcommands: find, add, remove.\n\
+        NESTED TAG MATCHING: Tag names can be hierarchical (e.g. 'project/backend'). \
+        Searching for a parent tag like 'project' matches all children ('project/backend', 'project/frontend').\n\
+        SIDE EFFECTS: 'add' and 'remove' modify files on disk. 'find' is read-only.")]
     Tag {
         #[command(subcommand)]
         action: TagAction,
@@ -68,39 +120,58 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum TagAction {
-    /// Find files containing a specific tag (supports nested matching)
+    /// Find files containing a specific tag (read-only, supports nested tag matching)
+    #[command(long_about = "Find files containing a specific tag.\n\n\
+            INPUT: A tag name and optionally a file scope (--file or --glob).\n\
+            OUTPUT: List of files whose frontmatter 'tags' contain the given tag.\n\
+            NESTED MATCHING: Searching for 'project' also matches 'project/backend', \
+            'project/frontend', etc. Exact match on 'project/backend' does NOT match 'project'.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to find all files with a given tag or tag prefix.")]
     Find {
-        /// Tag name to search for
+        /// Tag name or prefix to search for (e.g. 'status', 'project/backend')
         #[arg(long)]
         name: String,
-        /// Specific file (relative to --dir)
+        /// Search only in this file
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern (relative to --dir)
+        /// Glob pattern to limit which files to search (e.g. 'docs/**/*.md')
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
     },
-    /// Add a tag to file(s) frontmatter
+    /// Add a tag to file(s) frontmatter (mutates files on disk)
+    #[command(long_about = "Add a tag to file(s) frontmatter.\n\n\
+            INPUT: A tag name and target file(s) via --file or --glob.\n\
+            BEHAVIOR: Appends the tag to the 'tags' list in YAML frontmatter. \
+            Creates the 'tags' field if it doesn't exist. Idempotent: skips files that already have the tag.\n\
+            SIDE EFFECTS: Modifies matched files on disk.\n\
+            USE WHEN: You need to categorize or label files by adding a tag.")]
     Add {
-        /// Tag name to add
+        /// Tag name to add (e.g. 'reviewed', 'project/backend')
         #[arg(long)]
         name: String,
-        /// Specific file (relative to --dir)
+        /// Add the tag to this single file
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern (relative to --dir)
+        /// Glob pattern to select multiple files to tag
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
     },
-    /// Remove a tag from file(s) frontmatter
+    /// Remove a tag from file(s) frontmatter (mutates files on disk)
+    #[command(long_about = "Remove a tag from file(s) frontmatter.\n\n\
+            INPUT: A tag name and target file(s) via --file or --glob.\n\
+            BEHAVIOR: Removes the exact tag from the 'tags' list. \
+            Reports an error if the tag is not present in a file.\n\
+            SIDE EFFECTS: Modifies matched files on disk.\n\
+            USE WHEN: You need to un-tag or re-categorize files.")]
     Remove {
-        /// Tag name to remove
+        /// Tag name to remove (must match exactly)
         #[arg(long)]
         name: String,
-        /// Specific file (relative to --dir)
+        /// Remove the tag from this single file
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern (relative to --dir)
+        /// Glob pattern to select multiple files to untag
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
     },
@@ -108,36 +179,56 @@ enum TagAction {
 
 #[derive(Subcommand)]
 enum PropertyAction {
-    /// Read a property value
+    /// Read a single frontmatter property value from a file (read-only)
+    #[command(
+        long_about = "Read a single frontmatter property value from a file.\n\n\
+            INPUT: A property name (--name) and file path (--file).\n\
+            OUTPUT: The property's value and inferred type.\n\
+            ERROR: Returns an error if the file has no frontmatter or the property does not exist.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
     Read {
-        /// Property name
+        /// Frontmatter property name to read (e.g. 'title', 'status', 'date')
         #[arg(long)]
         name: String,
-        /// File path (relative to --dir)
+        /// Markdown file to read from (relative to --dir)
         #[arg(long)]
         file: String,
     },
-    /// Set a property value
+    /// Set (create or overwrite) a frontmatter property (mutates file on disk)
+    #[command(long_about = "Set (create or overwrite) a frontmatter property.\n\n\
+            INPUT: Property name (--name), value (--value), optional type (--type), and file (--file).\n\
+            BEHAVIOR: Creates the property if absent, overwrites if present. \
+            Creates YAML frontmatter if the file has none.\n\
+            TYPE INFERENCE: Without --type, the value type is auto-detected: \
+            'true'/'false' → checkbox, '2024-01-15' → date, '42' → number, comma-separated → list, else text. \
+            Use --type to override (one of: text, number, checkbox, date, datetime, list).\n\
+            SIDE EFFECTS: Modifies the file on disk.")]
     Set {
-        /// Property name
+        /// Property name to create or overwrite (e.g. 'status', 'priority')
         #[arg(long)]
         name: String,
-        /// Property value
+        /// Value to assign (interpreted according to --type or auto-detected)
         #[arg(long)]
         value: String,
-        /// Force type: text, number, checkbox, date, datetime, list
+        /// Force value type instead of auto-detecting. One of: text, number, checkbox, date, datetime, list
         #[arg(long = "type")]
         prop_type: Option<String>,
-        /// File path (relative to --dir)
+        /// Markdown file to modify (relative to --dir)
         #[arg(long)]
         file: String,
     },
-    /// Remove a property
+    /// Remove a frontmatter property from a file (mutates file on disk)
+    #[command(long_about = "Remove a frontmatter property from a file.\n\n\
+            INPUT: Property name (--name) and file path (--file).\n\
+            BEHAVIOR: Deletes the named key from YAML frontmatter.\n\
+            ERROR: Returns an error if the property does not exist.\n\
+            SIDE EFFECTS: Modifies the file on disk.")]
     Remove {
-        /// Property name
+        /// Property name to delete from frontmatter
         #[arg(long)]
         name: String,
-        /// File path (relative to --dir)
+        /// Markdown file to modify (relative to --dir)
         #[arg(long)]
         file: String,
     },
