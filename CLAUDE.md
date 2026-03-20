@@ -1,3 +1,6 @@
+# Agents
+Delegate the work to agents whenever possible
+
 # Documentation
 
 Keep all documentation in `./hyalo-knowledgebase/` as `*.md` markdown files with YAML frontmatter (text, numbers, checkboxes, dates, lists). Use it as your second brain:
@@ -11,7 +14,7 @@ Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-
 - Always name `iteration-NN-slug.md` — no standalone plan files
 - Frontmatter must include: `title`, `type: iteration`, `date`, `tags`, `status`, `branch`
 - Status lifecycle: `planned` → `in-progress` → `completed` → `superseded`
-- Add tasks as markdown checkboxes `[] Task 1`
+- Add tasks as markdown checkboxes `[] Task 1` (without preceding - or number to generate a list)
 - Mark tasks as completed only after verifying that they were done
 
 # Rust
