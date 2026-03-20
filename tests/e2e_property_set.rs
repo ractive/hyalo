@@ -164,15 +164,7 @@ fn set_explicit_type() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property",
-            "set",
-            "--name",
-            "code",
-            "--value",
-            "42",
-            "--type",
-            "text",
-            "--path",
+            "property", "set", "--name", "code", "--value", "42", "--type", "text", "--path",
             "note.md",
         ])
         .output()

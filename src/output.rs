@@ -7,6 +7,16 @@ pub enum Format {
     Text,
 }
 
+/// Result of a command execution: either success (exit 0) or a user-facing error (exit 1).
+/// Internal/unexpected errors are represented by `anyhow::Error` at the call site.
+#[derive(Debug)]
+pub enum CommandOutcome {
+    /// Successful operation — output goes to stdout.
+    Success(String),
+    /// User error (file not found, property missing, etc.) — output goes to stderr.
+    UserError(String),
+}
+
 impl Format {
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {

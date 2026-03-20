@@ -33,18 +33,10 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
     let normalized = normalize_path(path_arg);
 
     if !normalized.ends_with(".md") {
-        // Check if adding .md would work
-        let with_ext = format!("{normalized}.md");
-        let full = dir.join(&with_ext);
-        if full.is_file() {
-            return Err(FileResolveError::MissingExtension {
-                path: normalized,
-                hint: with_ext,
-            });
-        }
+        let hint = format!("{normalized}.md");
         return Err(FileResolveError::MissingExtension {
-            path: normalized.clone(),
-            hint: format!("{normalized}.md"),
+            path: normalized,
+            hint,
         });
     }
 
@@ -108,7 +100,9 @@ impl std::fmt::Display for FileResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound { path } => write!(f, "file not found: {path}"),
-            Self::MissingExtension { path, .. } => write!(f, "file not found: {path}"),
+            Self::MissingExtension { path, hint } => {
+                write!(f, "file not found: {path} (did you mean {hint}?)")
+            }
         }
     }
 }

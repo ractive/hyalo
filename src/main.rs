@@ -4,7 +4,7 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 use hyalo::commands::properties;
-use hyalo::output::Format;
+use hyalo::output::{CommandOutcome, Format};
 
 #[derive(Parser)]
 #[command(
@@ -112,13 +112,12 @@ fn main() {
     };
 
     match result {
-        Ok((output, exit_code)) => {
-            if exit_code == 0 {
-                println!("{output}");
-            } else {
-                eprintln!("{output}");
-            }
-            process::exit(exit_code);
+        Ok(CommandOutcome::Success(output)) => {
+            println!("{output}");
+        }
+        Ok(CommandOutcome::UserError(output)) => {
+            eprintln!("{output}");
+            process::exit(1);
         }
         Err(e) => {
             let msg = hyalo::output::format_error(
@@ -126,7 +125,10 @@ fn main() {
                 &e.to_string(),
                 None,
                 None,
-                e.chain().nth(1).map(|s| s.to_string()).as_deref(),
+                e.chain()
+                    .nth(1)
+                    .map(std::string::ToString::to_string)
+                    .as_deref(),
             );
             eprintln!("{msg}");
             process::exit(2);
