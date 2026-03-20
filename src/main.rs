@@ -43,12 +43,12 @@ enum Commands {
         /// File path (relative to --dir)
         #[arg(long)]
         file: String,
-    },
-    /// List links that don't resolve to any file
-    Unresolved {
-        /// File path (relative to --dir)
-        #[arg(long)]
-        file: String,
+        /// Only show links that don't resolve to any file
+        #[arg(long, conflicts_with = "resolved")]
+        unresolved: bool,
+        /// Only show links that resolve to a file
+        #[arg(long, conflicts_with = "unresolved")]
+        resolved: bool,
     },
 }
 
@@ -121,8 +121,20 @@ fn main() {
                 properties::property_remove(dir, name, file, format)
             }
         },
-        Commands::Links { ref file } => link_commands::links(dir, file, format),
-        Commands::Unresolved { ref file } => link_commands::unresolved(dir, file, format),
+        Commands::Links {
+            ref file,
+            unresolved,
+            resolved,
+        } => {
+            let filter = if unresolved {
+                link_commands::LinkFilter::Unresolved
+            } else if resolved {
+                link_commands::LinkFilter::Resolved
+            } else {
+                link_commands::LinkFilter::All
+            };
+            link_commands::links(dir, file, filter, format)
+        }
     };
 
     match result {

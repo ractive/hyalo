@@ -161,14 +161,14 @@ fn links_without_file_flag_fails() {
         .stderr(predicates::str::contains("--file"));
 }
 
-// --- unresolved command ---
+// --- links --unresolved flag ---
 
 #[test]
-fn unresolved_single_file() {
+fn links_unresolved_single_file() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["unresolved", "--file", "note-a.md"])
+        .args(["links", "--file", "note-a.md", "--unresolved"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -189,37 +189,75 @@ fn unresolved_single_file() {
 }
 
 #[test]
-fn unresolved_text_format() {
+fn links_unresolved_text_format() {
     let tmp = setup_vault();
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
         .args(["--format", "text"])
-        .args(["unresolved", "--file", "note-a.md"])
+        .args(["links", "--file", "note-a.md", "--unresolved"])
         .assert()
         .success()
         .stdout(predicates::str::contains("target=nonexistent"));
 }
 
 #[test]
-fn unresolved_file_not_found() {
+fn links_unresolved_file_not_found() {
     let tmp = setup_vault();
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["unresolved", "--file", "nope.md"])
+        .args(["links", "--file", "nope.md", "--unresolved"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("file not found"));
 }
 
+// --- links --resolved flag ---
+
 #[test]
-fn unresolved_without_file_flag_fails() {
+fn links_resolved_single_file() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "note-a.md", "--resolved"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let links = parsed["links"].as_array().unwrap();
+
+    let targets: Vec<&str> = links
+        .iter()
+        .map(|l| l["target"].as_str().unwrap())
+        .collect();
+    assert!(targets.contains(&"note-b"));
+    assert!(!targets.contains(&"nonexistent"));
+    assert!(!targets.contains(&"image.png"));
+    // All resolved links have non-null path
+    for link in links {
+        assert!(!link["path"].is_null());
+    }
+}
+
+#[test]
+fn links_resolved_text_format() {
     let tmp = setup_vault();
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["unresolved"])
+        .args(["--format", "text"])
+        .args(["links", "--file", "note-a.md", "--resolved"])
         .assert()
-        .failure()
-        .stderr(predicates::str::contains("--file"));
+        .success()
+        .stdout(predicates::str::contains("target=note-b"));
+}
+
+#[test]
+fn links_resolved_and_unresolved_conflict() {
+    let tmp = setup_vault();
+    hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "note-a.md", "--resolved", "--unresolved"])
+        .assert()
+        .failure();
 }
 
 // --- edge-case / error-path e2e tests ---
