@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde_json::json;
 use std::path::Path;
 
-use crate::discovery::{self, FileResolveError};
+use crate::commands::resolve_error_to_outcome;
+use crate::discovery;
 use crate::links;
 use crate::output::{CommandOutcome, Format};
 
@@ -53,23 +54,6 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
     )))
-}
-
-fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
-    match err {
-        FileResolveError::MissingExtension { path, hint } => {
-            CommandOutcome::UserError(crate::output::format_error(
-                format,
-                "file not found",
-                Some(&path),
-                Some(&format!("did you mean {hint}?")),
-                None,
-            ))
-        }
-        FileResolveError::NotFound { path } => CommandOutcome::UserError(
-            crate::output::format_error(format, "file not found", Some(&path), None, None),
-        ),
-    }
 }
 
 #[cfg(test)]
