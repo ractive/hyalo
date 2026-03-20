@@ -11,7 +11,7 @@ fn set_new_property() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "author", "--value", "Alice", "--path", "note.md",
+            "property", "set", "--name", "author", "--value", "Alice", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -25,7 +25,7 @@ fn set_new_property() {
     // Verify the property is persisted by reading it back
     let read_output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "author", "--path", "note.md"])
+        .args(["property", "read", "--name", "author", "--file", "note.md"])
         .output()
         .unwrap();
     assert!(read_output.status.success());
@@ -51,7 +51,7 @@ fn set_overwrite_property() {
             "title",
             "--value",
             "New Title",
-            "--path",
+            "--file",
             "note.md",
         ])
         .output()
@@ -64,7 +64,7 @@ fn set_overwrite_property() {
     // Verify it persisted
     let read_output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "note.md"])
+        .args(["property", "read", "--name", "title", "--file", "note.md"])
         .output()
         .unwrap();
     let read_json: serde_json::Value = serde_json::from_slice(&read_output.stdout).unwrap();
@@ -79,7 +79,7 @@ fn set_creates_frontmatter() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "status", "--value", "new", "--path", "plain.md",
+            "property", "set", "--name", "status", "--value", "new", "--file", "plain.md",
         ])
         .output()
         .unwrap();
@@ -100,7 +100,7 @@ fn set_infers_number_type() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "count", "--value", "42", "--path", "note.md",
+            "property", "set", "--name", "count", "--value", "42", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -119,7 +119,7 @@ fn set_infers_bool_type() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "draft", "--value", "true", "--path", "note.md",
+            "property", "set", "--name", "draft", "--value", "true", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -144,7 +144,7 @@ fn set_infers_date_type() {
             "due",
             "--value",
             "2026-03-20",
-            "--path",
+            "--file",
             "note.md",
         ])
         .output()
@@ -164,7 +164,7 @@ fn set_explicit_type() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "code", "--value", "42", "--type", "text", "--path",
+            "property", "set", "--name", "code", "--value", "42", "--type", "text", "--file",
             "note.md",
         ])
         .output()
@@ -186,7 +186,7 @@ fn set_preserves_body() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "author", "--value", "Bob", "--path", "note.md",
+            "property", "set", "--name", "author", "--value", "Bob", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -211,7 +211,7 @@ fn set_preserves_other_properties() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "set", "--name", "author", "--value", "Eve", "--path", "note.md",
+            "property", "set", "--name", "author", "--value", "Eve", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -220,7 +220,7 @@ fn set_preserves_other_properties() {
     // Verify original properties still exist
     let read_title = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "note.md"])
+        .args(["property", "read", "--name", "title", "--file", "note.md"])
         .output()
         .unwrap();
     let title_json: serde_json::Value = serde_json::from_slice(&read_title.stdout).unwrap();
@@ -228,7 +228,7 @@ fn set_preserves_other_properties() {
 
     let read_status = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "status", "--path", "note.md"])
+        .args(["property", "read", "--name", "status", "--file", "note.md"])
         .output()
         .unwrap();
     let status_json: serde_json::Value = serde_json::from_slice(&read_status.stdout).unwrap();

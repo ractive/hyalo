@@ -21,11 +21,11 @@ tags:
 
 **Why:** Self-contained tool. No application state, no config files to manage. Just point at a directory.
 
-## DEC-003: `--path` for File Targeting (2026-03-20)
+## DEC-003: ~~`--path` for File Targeting~~ (2026-03-20) — SUPERSEDED by DEC-018
 
-**Decision:** Single `--path` flag for all file targeting. Always relative to `--dir`. Always requires `.md` extension. Accepts globs for multi-file commands (`--path "research/*.md"`). No fuzzy wikilink-style name resolution.
+**Decision:** ~~Single `--path` flag for all file targeting.~~ Replaced by `--file` (single file) and `--glob` (pattern). See [[decision-log#DEC-018]].
 
-**Why:** AI agents work with exact file paths. Fuzzy resolution adds complexity and ambiguity. Leading `./` is tolerated and normalized. Missing `.md` triggers a helpful error with a hint.
+The following still applies: always relative to `--dir`, always requires `.md` extension, no fuzzy wikilink-style name resolution. Leading `./` is tolerated and normalized. Missing `.md` triggers a helpful error with a hint.
 
 ## DEC-004: Output Formats — JSON Default, Text for Humans (2026-03-20)
 
@@ -115,11 +115,15 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 
 **Why:** Fields like `style`, `line`, `is_embed`, `heading`, `block_ref` are parser internals. An AI agent needs to know where a link points and what it's called, not how the syntax was written. Start minimal, add fields later only when a concrete use case emerges.
 
-## DEC-018: `--file` Instead of `--path` for Single-File Commands (2026-03-20)
+## DEC-018: `--file` and `--glob` as the Two File-Targeting Flags (2026-03-20)
 
-**Decision:** Link commands use `--file` (required, exactly one file) instead of `--path` (optional, supports globs).
+**Decision:** All commands use exactly one of two flags for file targeting:
+- `--file` — exactly one file (e.g. `property read --file note.md`, `links --file note.md`)
+- `--glob` — a glob pattern matching multiple files (e.g. `properties --glob "research/*.md"`)
 
-**Why:** `--path` on `properties` supports globs for multi-file queries, which makes sense there. For `links` and `unresolved`, multi-file output adds complexity without value. `--file` signals "exactly one file" and avoids confusion with the glob-capable `--path`.
+The old `--path` flag is retired. Both flags are always relative to `--dir` and require `.md` extension.
+
+**Why:** `--path` was ambiguous — it could mean a single file, a directory, or a glob pattern depending on context. `--file` signals "exactly one file" and `--glob` signals "pattern matching multiple files". This is self-documenting and consistent with conventions in tools like ripgrep and fd. Supersedes the original DEC-003 `--path` convention.
 
 ## DEC-019: Link Targets Must Be Resolved Paths (2026-03-20)
 

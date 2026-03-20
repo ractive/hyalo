@@ -10,7 +10,7 @@ fn read_text_property() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "note.md"])
+        .args(["property", "read", "--name", "title", "--file", "note.md"])
         .output()
         .unwrap();
 
@@ -29,7 +29,7 @@ fn read_number_property() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "read", "--name", "priority", "--path", "note.md",
+            "property", "read", "--name", "priority", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -48,7 +48,7 @@ fn read_bool_property() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "draft", "--path", "note.md"])
+        .args(["property", "read", "--name", "draft", "--file", "note.md"])
         .output()
         .unwrap();
 
@@ -66,7 +66,7 @@ fn read_date_property() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "created", "--path", "note.md"])
+        .args(["property", "read", "--name", "created", "--file", "note.md"])
         .output()
         .unwrap();
 
@@ -84,7 +84,7 @@ fn read_datetime_property() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "updated", "--path", "note.md"])
+        .args(["property", "read", "--name", "updated", "--file", "note.md"])
         .output()
         .unwrap();
 
@@ -102,7 +102,7 @@ fn read_list_property() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "tags", "--path", "note.md"])
+        .args(["property", "read", "--name", "tags", "--file", "note.md"])
         .output()
         .unwrap();
 
@@ -128,7 +128,7 @@ fn read_missing_property() {
             "read",
             "--name",
             "nonexistent",
-            "--path",
+            "--file",
             "note.md",
         ])
         .output()
@@ -151,7 +151,7 @@ fn read_missing_file() {
             "read",
             "--name",
             "title",
-            "--path",
+            "--file",
             "nonexistent.md",
         ])
         .output()
@@ -170,7 +170,7 @@ fn read_missing_extension_hint() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "note"])
+        .args(["property", "read", "--name", "title", "--file", "note"])
         .output()
         .unwrap();
 
@@ -197,7 +197,7 @@ fn read_text_format() {
             "read",
             "--name",
             "title",
-            "--path",
+            "--file",
             "note.md",
         ])
         .output()
