@@ -183,13 +183,14 @@ fn set_preserves_body() {
     let content = format!("---\ntitle: Test\n---\n{body}");
     write_md(tmp.path(), "note.md", &content);
 
-    hyalo()
+    let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "property", "set", "--name", "author", "--value", "Bob", "--path", "note.md",
         ])
         .output()
         .unwrap();
+    assert!(output.status.success());
 
     let file_content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(file_content.contains("# My Heading"));
@@ -207,13 +208,14 @@ fn set_preserves_other_properties() {
         "---\ntitle: Keep Me\nstatus: draft\n---\n# Body\n",
     );
 
-    hyalo()
+    let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "property", "set", "--name", "author", "--value", "Eve", "--path", "note.md",
         ])
         .output()
         .unwrap();
+    assert!(output.status.success());
 
     // Verify original properties still exist
     let read_title = hyalo()

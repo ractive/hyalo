@@ -18,14 +18,14 @@ Parse YAML frontmatter from markdown files, infer property types, and provide CL
 
 ## CLI Interface
 
-Target root directory is passed as a positional arg or defaults to `.`:
+Target root directory is controlled by a global `--dir` option (default `.`):
 
 ```sh
 # List all properties across files
-hyalo properties [--path <glob>] [--format json|yaml|text]
+hyalo properties [--path <glob>] [--format json|text]
 
 # Read all properties of a file
-hyalo properties --path path/to/file.md [--format json|yaml|text]
+hyalo properties --path path/to/file.md [--format json|text]
 
 # Read a single property
 hyalo property read --name status --path path/to/file.md

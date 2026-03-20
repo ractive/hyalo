@@ -29,8 +29,11 @@ fn error_nonexistent_file() {
 
 #[test]
 fn error_nonexistent_dir() {
+    let tmp = TempDir::new().unwrap();
+    let nonexistent = tmp.path().join("does_not_exist");
+
     let output = hyalo()
-        .args(["--dir", "/tmp/hyalo_nonexistent_dir_e2e_test"])
+        .args(["--dir", nonexistent.to_str().unwrap()])
         .args(["properties"])
         .output()
         .unwrap();

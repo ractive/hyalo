@@ -28,9 +28,19 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// Resolve a path argument relative to `--dir`. Verifies it exists and is `.md`.
-/// Returns the canonical path and the normalized relative path (for display).
+/// Returns the full path under `dir` and the normalized relative path (for display).
+/// Rejects absolute paths and `..` segments to prevent escaping the base directory.
 pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), FileResolveError> {
     let normalized = normalize_path(path_arg);
+
+    // Reject path traversal attempts
+    if normalized.starts_with('/')
+        || normalized.starts_with('\\')
+        || normalized.contains("..")
+        || Path::new(&normalized).is_absolute()
+    {
+        return Err(FileResolveError::NotFound { path: normalized });
+    }
 
     if !normalized.ends_with(".md") {
         let hint = format!("{normalized}.md");
@@ -42,17 +52,16 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
     let full = dir.join(&normalized);
     if !full.is_file() {
-        // Check without .md hint
         return Err(FileResolveError::NotFound { path: normalized });
     }
 
     Ok((full, normalized))
 }
 
-/// Normalize a path argument: strip leading `./`, normalize separators.
+/// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
 fn normalize_path(path: &str) -> String {
     let p = path.strip_prefix("./").unwrap_or(path);
-    p.to_owned()
+    p.replace('\\', "/")
 }
 
 /// Check if a path argument contains glob characters.
@@ -77,11 +86,14 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
     Ok(matched)
 }
 
-/// Get the relative path of a file from a directory.
+/// Get the relative path of a file from a directory, using forward slashes on all platforms.
 fn relative_path(dir: &Path, file: &Path) -> String {
-    file.strip_prefix(dir)
+    let raw = file
+        .strip_prefix(dir)
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| file.to_string_lossy().to_string())
+        .unwrap_or_else(|_| file.to_string_lossy().to_string());
+    // Normalize to forward slashes for consistent output and glob matching on Windows.
+    raw.replace('\\', "/")
 }
 
 /// Check if a relative path matches a glob pattern.
@@ -188,6 +200,30 @@ mod tests {
             }
             other => panic!("expected MissingExtension, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_file_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "").unwrap();
+
+        // Absolute path
+        assert!(matches!(
+            resolve_file(tmp.path(), "/etc/passwd.md"),
+            Err(FileResolveError::NotFound { .. })
+        ));
+
+        // Parent directory traversal
+        assert!(matches!(
+            resolve_file(tmp.path(), "../secret.md"),
+            Err(FileResolveError::NotFound { .. })
+        ));
+
+        // Embedded traversal
+        assert!(matches!(
+            resolve_file(tmp.path(), "sub/../../../etc/passwd.md"),
+            Err(FileResolveError::NotFound { .. })
+        ));
     }
 
     #[test]
