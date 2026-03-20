@@ -15,7 +15,7 @@ fn remove_existing_property() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "remove", "--name", "status", "--path", "note.md",
+            "property", "remove", "--name", "status", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -28,7 +28,7 @@ fn remove_existing_property() {
     // Verify it's gone
     let read_output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "status", "--path", "note.md"])
+        .args(["property", "read", "--name", "status", "--file", "note.md"])
         .output()
         .unwrap();
     assert_eq!(read_output.status.code(), Some(1));
@@ -46,7 +46,7 @@ fn remove_missing_property() {
             "remove",
             "--name",
             "nonexistent",
-            "--path",
+            "--file",
             "note.md",
         ])
         .output()
@@ -68,7 +68,7 @@ fn remove_preserves_body() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "remove", "--name", "status", "--path", "note.md",
+            "property", "remove", "--name", "status", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -91,7 +91,7 @@ fn remove_preserves_other_properties() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "remove", "--name", "status", "--path", "note.md",
+            "property", "remove", "--name", "status", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -100,7 +100,7 @@ fn remove_preserves_other_properties() {
     // title should still be there
     let read_title = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "note.md"])
+        .args(["property", "read", "--name", "title", "--file", "note.md"])
         .output()
         .unwrap();
     assert!(read_title.status.success());
@@ -111,7 +111,7 @@ fn remove_preserves_other_properties() {
     let read_priority = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "property", "read", "--name", "priority", "--path", "note.md",
+            "property", "read", "--name", "priority", "--file", "note.md",
         ])
         .output()
         .unwrap();
@@ -136,7 +136,7 @@ fn remove_last_property() {
             "remove",
             "--name",
             "only_prop",
-            "--path",
+            "--file",
             "note.md",
         ])
         .output()
@@ -147,7 +147,7 @@ fn remove_last_property() {
     // File should still be readable and have no properties
     let props_output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--path", "note.md"])
+        .args(["properties", "--glob", "note.md"])
         .output()
         .unwrap();
     assert!(props_output.status.success());

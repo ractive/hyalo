@@ -10,7 +10,7 @@ fn properties_single_file() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--path", "file.md"])
+        .args(["properties", "--glob", "file.md"])
         .output()
         .unwrap();
 
@@ -73,7 +73,7 @@ fn properties_with_glob() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--path", "sub/*.md"])
+        .args(["properties", "--glob", "sub/*.md"])
         .output()
         .unwrap();
 
@@ -117,7 +117,7 @@ fn properties_text_format() {
             "--format",
             "text",
             "properties",
-            "--path",
+            "--glob",
             "note.md",
         ])
         .output()
@@ -137,7 +137,7 @@ fn properties_file_without_frontmatter() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--path", "plain.md"])
+        .args(["properties", "--glob", "plain.md"])
         .output()
         .unwrap();
 

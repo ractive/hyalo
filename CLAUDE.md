@@ -20,7 +20,8 @@ Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-
 # Rust
 
 ## Language Server
-Use the rust-analyzer LSP plugin for code intelligence: analyzing code, finding references, go-to-definition, checking clippy warnings.
+Use the rust-analyzer-lsp language server plugin for code intelligence: analyzing code, finding references, go-to-definition, checking clippy warnings.
+Be aware that it takes some time for changed files to be indexed again.
 
 ## Code Quality Gates
 Make the code unit testable. Add tests if feasible. Add e2e tests for all commands/subcommands.

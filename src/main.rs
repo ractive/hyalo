@@ -29,9 +29,9 @@ struct Cli {
 enum Commands {
     /// List properties of files
     Properties {
-        /// File path or glob pattern (relative to --dir)
+        /// Glob pattern (relative to --dir)
         #[arg(long)]
-        path: Option<String>,
+        glob: Option<String>,
     },
     /// Read, set, or remove a single property
     Property {
@@ -61,7 +61,7 @@ enum PropertyAction {
         name: String,
         /// File path (relative to --dir)
         #[arg(long)]
-        path: String,
+        file: String,
     },
     /// Set a property value
     Set {
@@ -76,7 +76,7 @@ enum PropertyAction {
         prop_type: Option<String>,
         /// File path (relative to --dir)
         #[arg(long)]
-        path: String,
+        file: String,
     },
     /// Remove a property
     Remove {
@@ -85,7 +85,7 @@ enum PropertyAction {
         name: String,
         /// File path (relative to --dir)
         #[arg(long)]
-        path: String,
+        file: String,
     },
 }
 
@@ -106,19 +106,19 @@ fn main() {
     let dir = &cli.dir;
 
     let result = match cli.command {
-        Commands::Properties { ref path } => properties::properties(dir, path.as_deref(), format),
+        Commands::Properties { ref glob } => properties::properties(dir, glob.as_deref(), format),
         Commands::Property { action } => match action {
-            PropertyAction::Read { ref name, ref path } => {
-                properties::property_read(dir, name, path, format)
+            PropertyAction::Read { ref name, ref file } => {
+                properties::property_read(dir, name, file, format)
             }
             PropertyAction::Set {
                 ref name,
                 ref value,
                 ref prop_type,
-                ref path,
-            } => properties::property_set(dir, name, value, prop_type.as_deref(), path, format),
-            PropertyAction::Remove { ref name, ref path } => {
-                properties::property_remove(dir, name, path, format)
+                ref file,
+            } => properties::property_set(dir, name, value, prop_type.as_deref(), file, format),
+            PropertyAction::Remove { ref name, ref file } => {
+                properties::property_remove(dir, name, file, format)
             }
         },
         Commands::Links { ref file } => link_commands::links(dir, file, format),
