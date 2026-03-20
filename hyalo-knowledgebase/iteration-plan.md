@@ -54,6 +54,8 @@ SQLite or similar index for properties, tags, and links. Incremental updates bas
 
 **Deferred commands from iteration 2:** `backlinks`, `orphans`, `deadends` — these require full vault scans and benefit most from indexing.
 
+**Deferred from iteration 2:** Obsidian shortest-path resolution (`[[foo]]` matching `sub/foo.md`). Currently link resolution requires explicit paths; shortest-path lookup can be added once an index exists.
+
 ## Dependencies
 
 ```

@@ -121,6 +121,28 @@ impl std::fmt::Display for FileResolveError {
 
 impl std::error::Error for FileResolveError {}
 
+/// Resolve a link target to a file path relative to the vault root.
+/// Tries the target as-is, then with `.md` appended.
+/// Returns the relative path if the file exists, or None.
+pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
+    if target.is_empty() {
+        return None;
+    }
+
+    if dir.join(target).is_file() {
+        return Some(target.to_owned());
+    }
+
+    if !target.ends_with(".md") {
+        let with_ext = format!("{target}.md");
+        if dir.join(&with_ext).is_file() {
+            return Some(with_ext);
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +254,84 @@ mod tests {
         assert!(is_glob("notes/**/*.md"));
         assert!(is_glob("note[123].md"));
         assert!(!is_glob("notes/file.md"));
+    }
+
+    fn make_files(dir: &Path, paths: &[&str]) {
+        for path in paths {
+            let full = dir.join(path);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, "").unwrap();
+        }
+    }
+
+    #[test]
+    fn resolve_target_stem_appends_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "note"),
+            Some("note.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_explicit_md_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "note.md"),
+            Some("note.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_subpath_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "sub/other"),
+            Some("sub/other.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_subpath_with_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "sub/other.md"),
+            Some("sub/other.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_bare_stem_does_not_match_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        assert_eq!(resolve_target(tmp.path(), "other"), None);
+    }
+
+    #[test]
+    fn resolve_target_nonexistent_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_target(tmp.path(), "nonexistent"), None);
+    }
+
+    #[test]
+    fn resolve_target_empty_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_target(tmp.path(), ""), None);
+    }
+
+    #[test]
+    fn resolve_target_non_md_file_exact_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["image.png"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "image.png"),
+            Some("image.png".to_owned())
+        );
     }
 }
