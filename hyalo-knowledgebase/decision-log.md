@@ -102,3 +102,27 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 **Decision:** Obsidian `%%comment%%` blocks are not yet handled by the scanner. Links inside comments will be incorrectly extracted.
 
 **Why:** Adding comment tracking is straightforward (similar to fenced code block tracking) but wasn't needed for the initial link implementation. Documented as a known limitation. Can be added to the scanner in a future iteration since we control all the code.
+
+## DEC-016: Single-File Only for `links` and `unresolved` Commands (2026-03-20)
+
+**Decision:** Both `links` and `unresolved` require exactly one file via `--file`. No vault-wide mode, no glob support.
+
+**Why:** AI agents work on one file at a time. Vault-wide link dumps are expensive (full directory walk + every file read) and produce bulk data that's hard to act on. If the agent needs links from multiple files, it calls the command per file. Bulk graph operations (backlinks, orphans) belong in a future indexed command.
+
+## DEC-017: Minimal Link Object — target, path, label (2026-03-20)
+
+**Decision:** The link output object contains only three fields: `target` (raw text as written), `path` (resolved file path or null), `label` (display text or null).
+
+**Why:** Fields like `style`, `line`, `is_embed`, `heading`, `block_ref` are parser internals. An AI agent needs to know where a link points and what it's called, not how the syntax was written. Start minimal, add fields later only when a concrete use case emerges.
+
+## DEC-018: `--file` Instead of `--path` for Single-File Commands (2026-03-20)
+
+**Decision:** Link commands use `--file` (required, exactly one file) instead of `--path` (optional, supports globs).
+
+**Why:** `--path` on `properties` supports globs for multi-file queries, which makes sense there. For `links` and `unresolved`, multi-file output adds complexity without value. `--file` signals "exactly one file" and avoids confusion with the glob-capable `--path`.
+
+## DEC-019: Link Targets Must Be Resolved Paths (2026-03-20)
+
+**Decision:** The link object includes `path` — the file path relative to `--dir` that the link resolves to, or `null` for broken links. The raw `target` field preserves the original text as written.
+
+**Why:** AI agents work with file paths, not Obsidian note names. `[[My Note]]` is meaningless to an agent — it needs `notes/my-note.md` to open the file. Both fields are needed: `path` for navigation, `target` for display and search/replace in the source file.

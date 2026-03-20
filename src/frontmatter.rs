@@ -579,4 +579,88 @@ mod tests {
         let streamed = read_frontmatter_from_reader(content.as_bytes()).unwrap();
         assert_eq!(doc.properties(), &streamed);
     }
+
+    // --- Budget boundary tests for skip_frontmatter ---
+
+    fn make_frontmatter_with_n_lines(n: usize) -> String {
+        // Each content line is "k: v\n" (6 bytes). The closing --- is appended.
+        let mut s = String::from("---\n");
+        for i in 0..n {
+            s.push_str(&format!("k{i}: v\n"));
+        }
+        s.push_str("---\n");
+        s
+    }
+
+    #[test]
+    fn streaming_budget_boundary_lines_at_limit() {
+        // Exactly 100 content lines — must succeed
+        let input = make_frontmatter_with_n_lines(100);
+        let mut reader = input.as_bytes();
+        // Read and discard the opening "---\n" line, then call skip_frontmatter
+        let mut first_line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
+        let first = first_line.trim_end_matches(['\n', '\r']);
+        let result = skip_frontmatter(&mut reader, first);
+        assert!(
+            result.is_ok(),
+            "100 content lines should succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn streaming_budget_boundary_lines_over_limit() {
+        // 101 content lines — must error
+        let input = make_frontmatter_with_n_lines(101);
+        let mut reader = input.as_bytes();
+        let mut first_line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
+        let first = first_line.trim_end_matches(['\n', '\r']);
+        let result = skip_frontmatter(&mut reader, first);
+        assert!(result.is_err(), "101 content lines should fail");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("frontmatter too large")
+        );
+    }
+
+    #[test]
+    fn streaming_budget_boundary_bytes_at_limit() {
+        // Build frontmatter whose content is just under or equal to 8192 bytes.
+        // skip_frontmatter counts raw bytes from read_line (including \n).
+        // Use a single long line of exactly 8192 bytes (including the \n).
+        // "x: " (3 bytes) + value + "\n" = 8192 → value = 8188 bytes of 'a'
+        let value = "a".repeat(8188);
+        let input = format!("---\nx: {value}\n---\n");
+        let mut reader = input.as_bytes();
+        let mut first_line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
+        let first = first_line.trim_end_matches(['\n', '\r']);
+        let result = skip_frontmatter(&mut reader, first);
+        assert!(
+            result.is_ok(),
+            "8192-byte content should succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn streaming_budget_boundary_bytes_over_limit() {
+        // Content line of 8193 bytes (including \n) — must error
+        let value = "a".repeat(8189); // "x: " (3) + 8189 + "\n" = 8193
+        let input = format!("---\nx: {value}\n---\n");
+        let mut reader = input.as_bytes();
+        let mut first_line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
+        let first = first_line.trim_end_matches(['\n', '\r']);
+        let result = skip_frontmatter(&mut reader, first);
+        assert!(result.is_err(), "8193-byte content should fail");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("frontmatter too large")
+        );
+    }
 }

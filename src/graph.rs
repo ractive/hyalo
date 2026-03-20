@@ -1,9 +1,5 @@
-use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
-
-use crate::discovery;
-use crate::links::Link;
 
 /// Maps lowercased filename stems to their relative paths.
 /// Used for Obsidian shortest-path resolution: `[[foo]]` → shortest path matching `foo.md`.
@@ -15,30 +11,21 @@ pub struct FileIndex {
     paths: HashMap<String, String>,
 }
 
-/// A link with resolution information.
-#[derive(Debug, Clone)]
-pub struct ResolvedLink {
-    pub source: String,
-    pub link: Link,
-    pub resolved_path: Option<String>,
-}
-
 impl FileIndex {
-    /// Build a file index from all `.md` files in the vault directory.
-    pub fn build(dir: &Path) -> Result<Self> {
-        let files = discovery::discover_files(dir)?;
+    /// Build a file index from a pre-discovered list of relative paths.
+    /// Avoids a redundant directory walk when the caller already has the file list.
+    pub fn from_paths(relative_paths: &[String]) -> Self {
         let mut stems: HashMap<String, Vec<String>> = HashMap::new();
         let mut paths: HashMap<String, String> = HashMap::new();
 
-        for file in &files {
-            let rel = discovery::relative_path(dir, file);
+        for rel in relative_paths {
             let lower_rel = rel.to_ascii_lowercase();
             paths.insert(lower_rel, rel.clone());
 
             // Extract stem (filename without extension)
-            if let Some(stem) = Path::new(&rel).file_stem().and_then(|s| s.to_str()) {
+            if let Some(stem) = Path::new(rel).file_stem().and_then(|s| s.to_str()) {
                 let lower_stem = stem.to_ascii_lowercase();
-                stems.entry(lower_stem).or_default().push(rel);
+                stems.entry(lower_stem).or_default().push(rel.clone());
             }
         }
 
@@ -47,7 +34,7 @@ impl FileIndex {
             paths_list.sort_by_key(|p| p.len());
         }
 
-        Ok(Self { stems, paths })
+        Self { stems, paths }
     }
 
     /// Resolve a link target to a file path in the vault.
@@ -85,71 +72,84 @@ impl FileIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
-    fn setup_vault() -> (tempfile::TempDir, FileIndex) {
-        let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "# Note").unwrap();
-        fs::create_dir_all(tmp.path().join("sub")).unwrap();
-        fs::write(tmp.path().join("sub/note.md"), "# Sub Note").unwrap();
-        fs::write(tmp.path().join("sub/other.md"), "# Other").unwrap();
-        fs::create_dir_all(tmp.path().join("deep/nested")).unwrap();
-        fs::write(tmp.path().join("deep/nested/note.md"), "# Deep").unwrap();
-        let index = FileIndex::build(tmp.path()).unwrap();
-        (tmp, index)
+    fn setup_index() -> FileIndex {
+        FileIndex::from_paths(&[
+            "note.md".to_string(),
+            "sub/note.md".to_string(),
+            "sub/other.md".to_string(),
+            "deep/nested/note.md".to_string(),
+        ])
     }
 
     #[test]
     fn resolve_simple_stem_shortest_path() {
-        let (_tmp, index) = setup_vault();
-        // "note" should resolve to "note.md" (shortest path)
+        let index = setup_index();
         let resolved = index.resolve_target("note").unwrap();
         assert_eq!(resolved, "note.md");
     }
 
     #[test]
     fn resolve_case_insensitive() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         assert!(index.resolve_target("Note").is_some());
         assert!(index.resolve_target("NOTE").is_some());
     }
 
     #[test]
     fn resolve_with_path() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         let resolved = index.resolve_target("sub/other.md").unwrap();
         assert_eq!(resolved, "sub/other.md");
     }
 
     #[test]
     fn resolve_path_without_extension() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         let resolved = index.resolve_target("sub/other").unwrap();
         assert_eq!(resolved, "sub/other.md");
     }
 
     #[test]
     fn resolve_unique_stem() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         let resolved = index.resolve_target("other").unwrap();
         assert_eq!(resolved, "sub/other.md");
     }
 
     #[test]
     fn resolve_nonexistent_returns_none() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         assert!(index.resolve_target("nonexistent").is_none());
     }
 
     #[test]
     fn resolve_empty_target() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         assert!(index.resolve_target("").is_none());
     }
 
     #[test]
     fn resolve_exact_path_not_found() {
-        let (_tmp, index) = setup_vault();
+        let index = setup_index();
         assert!(index.resolve_target("foo/bar.md").is_none());
+    }
+
+    #[test]
+    fn empty_index() {
+        let index = FileIndex::from_paths(&[]);
+        assert!(index.resolve_target("anything").is_none());
+        assert!(index.resolve_target("").is_none());
+    }
+
+    #[test]
+    fn file_with_no_extension() {
+        // README has no extension — stem is "README", no crash expected
+        let index = FileIndex::from_paths(&["README".to_string(), "note.md".to_string()]);
+        // The extensionless file doesn't interfere with other resolution
+        let resolved = index.resolve_target("note").unwrap();
+        assert_eq!(resolved, "note.md");
+        // README itself is reachable by stem
+        assert!(index.resolve_target("README").is_some());
     }
 }

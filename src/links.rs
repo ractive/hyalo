@@ -3,44 +3,27 @@ use std::path::Path;
 
 use crate::scanner::{self, ScanAction};
 
-/// Whether the link was written in wiki or markdown style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkStyle {
-    Wiki,
-    Markdown,
-}
-
 /// A parsed link extracted from a markdown file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
-    /// Raw target: "Note Name" or "sub/note.md"
+    /// Raw target: note name or relative path (without fragment)
     pub target: String,
-    /// Display text from [[target|display]] or [display](target)
-    pub display: Option<String>,
-    /// Heading fragment from [[target#Heading]] or target.md#heading
-    pub heading: Option<String>,
-    /// Block reference from [[target#^block-id]]
-    pub block_ref: Option<String>,
-    /// Whether this is an embed (![[...]]) — always false for markdown links
-    pub is_embed: bool,
-    /// Wiki or markdown style
-    pub style: LinkStyle,
-    /// 1-based line number in the source file
-    pub line: usize,
+    /// Display text from `[[target|label]]` or `[label](target)`
+    pub label: Option<String>,
 }
 
 /// Extract all internal links from a markdown file.
 pub fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
     let mut links = Vec::new();
-    scanner::scan_file(path, |text, line| {
-        extract_links_from_text(text, line, &mut links);
+    scanner::scan_file(path, |text, _line| {
+        extract_links_from_text(text, &mut links);
         ScanAction::Continue
     })?;
     Ok(links)
 }
 
 /// Extract links from a text segment (already cleaned of inline code spans).
-fn extract_links_from_text(text: &str, line: usize, out: &mut Vec<Link>) {
+fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
     let bytes = text.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -51,31 +34,29 @@ fn extract_links_from_text(text: &str, line: usize, out: &mut Vec<Link>) {
             && i + 3 < len
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
-            && let Some((link, end)) = try_parse_wikilink_at(text, i + 1, true)
+            && let Some((link, end)) = try_parse_wikilink_at(text, i + 1)
         {
-            out.push(Link { line, ..link });
+            out.push(link);
             i = end;
             continue;
         }
         if bytes[i] == b'['
             && i + 1 < len
             && bytes[i + 1] == b'['
-            && let Some((link, end)) = try_parse_wikilink_at(text, i, false)
+            && let Some((link, end)) = try_parse_wikilink_at(text, i)
         {
-            out.push(Link { line, ..link });
+            out.push(link);
             i = end;
             continue;
         }
 
         // Check for markdown link: [text](target)
-        if bytes[i] == b'[' {
-            // Make sure it's not preceded by ! (that's an image, but could be an internal embed)
-            let is_image = i > 0 && bytes[i - 1] == b'!';
-            if let Some((link, end)) = try_parse_markdown_link_at(text, i, is_image) {
-                out.push(Link { line, ..link });
-                i = end;
-                continue;
-            }
+        if bytes[i] == b'['
+            && let Some((link, end)) = try_parse_markdown_link_at(text, i)
+        {
+            out.push(link);
+            i = end;
+            continue;
         }
 
         i += 1;
@@ -84,7 +65,7 @@ fn extract_links_from_text(text: &str, line: usize, out: &mut Vec<Link>) {
 
 /// Try to parse a wikilink starting at position `start` (the first `[`).
 /// Returns the parsed Link and the position after the closing `]]`.
-fn try_parse_wikilink_at(text: &str, start: usize, is_embed: bool) -> Option<(Link, usize)> {
+fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
     // start points to first `[`, start+1 is second `[`
     let content_start = start + 2;
     let rest = &text[content_start..];
@@ -98,46 +79,41 @@ fn try_parse_wikilink_at(text: &str, start: usize, is_embed: bool) -> Option<(Li
         return None;
     }
 
-    let link = parse_wikilink(inner, is_embed)?;
+    let link = parse_wikilink(inner)?;
     let end_pos = content_start + close + 2;
     Some((link, end_pos))
 }
 
 /// Parse the inner content of a wikilink (between [[ and ]]).
-/// Handles: target, target|display, target#heading, target#^block-id
-pub fn parse_wikilink(inner: &str, is_embed: bool) -> Option<Link> {
+/// Handles: target, target|label, target#heading, target#^block-id
+pub fn parse_wikilink(inner: &str) -> Option<Link> {
     if inner.is_empty() {
         return None;
     }
 
-    // Split on pipe for display text
-    let (target_part, display) = if let Some(pipe_pos) = inner.find('|') {
+    // Split on pipe for label text
+    let (target_part, label) = if let Some(pipe_pos) = inner.find('|') {
         (&inner[..pipe_pos], Some(inner[pipe_pos + 1..].to_string()))
     } else {
         (inner, None)
     };
 
-    // Split target on # for heading/block ref
-    let (target, heading, block_ref) = parse_fragment(target_part);
+    // Strip fragment (heading/block ref) — not surfaced in output
+    let target = strip_fragment(target_part);
 
     Some(Link {
         target: target.to_string(),
-        display,
-        heading,
-        block_ref,
-        is_embed,
-        style: LinkStyle::Wiki,
-        line: 0, // caller sets this
+        label,
     })
 }
 
 /// Try to parse a markdown-style link [text](target) at position `start`.
-fn try_parse_markdown_link_at(text: &str, start: usize, _is_image: bool) -> Option<(Link, usize)> {
+fn try_parse_markdown_link_at(text: &str, start: usize) -> Option<(Link, usize)> {
     let rest = &text[start..];
 
     // Find the closing ]
     let close_bracket = rest.find(']')?;
-    let display_text = &rest[1..close_bracket];
+    let label_text = &rest[1..close_bracket];
 
     // Must be immediately followed by (
     let after_bracket = start + close_bracket + 1;
@@ -161,13 +137,13 @@ fn try_parse_markdown_link_at(text: &str, start: usize, _is_image: bool) -> Opti
         return None;
     }
 
-    let link = parse_markdown_link(display_text, target_raw)?;
+    let link = parse_markdown_link(label_text, target_raw)?;
     let end_pos = paren_start + close_paren + 1;
     Some((link, end_pos))
 }
 
-/// Parse a markdown link's display text and target into a Link.
-pub fn parse_markdown_link(display_text: &str, target_raw: &str) -> Option<Link> {
+/// Parse a markdown link's label text and target into a Link.
+pub fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<Link> {
     if target_raw.is_empty() {
         return None;
     }
@@ -176,20 +152,16 @@ pub fn parse_markdown_link(display_text: &str, target_raw: &str) -> Option<Link>
         return None;
     }
 
-    let (target, heading, block_ref) = parse_fragment(target_raw);
+    // Strip fragment (heading/block ref) — not surfaced in output
+    let target = strip_fragment(target_raw);
 
     Some(Link {
         target: target.to_string(),
-        display: if display_text.is_empty() {
+        label: if label_text.is_empty() {
             None
         } else {
-            Some(display_text.to_string())
+            Some(label_text.to_string())
         },
-        heading,
-        block_ref,
-        is_embed: false,
-        style: LinkStyle::Markdown,
-        line: 0, // caller sets this
     })
 }
 
@@ -199,20 +171,10 @@ fn is_external(target: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
 }
 
-/// Parse a target string into (target, heading, block_ref).
-/// Handles: "target", "target#heading", "target#^block-id"
-fn parse_fragment(target: &str) -> (&str, Option<String>, Option<String>) {
-    if let Some(hash_pos) = target.find('#') {
-        let base = &target[..hash_pos];
-        let fragment = &target[hash_pos + 1..];
-        if let Some(block_id) = fragment.strip_prefix('^') {
-            (base, None, Some(block_id.to_string()))
-        } else {
-            (base, Some(fragment.to_string()), None)
-        }
-    } else {
-        (target, None, None)
-    }
+/// Strip the fragment (#heading or #^block-id) from a target string,
+/// returning only the base target name.
+fn strip_fragment(target: &str) -> &str {
+    target.split('#').next().unwrap_or(target)
 }
 
 #[cfg(test)]
@@ -221,69 +183,59 @@ mod tests {
 
     #[test]
     fn parse_simple_wikilink() {
-        let link = parse_wikilink("Note", false).unwrap();
+        let link = parse_wikilink("Note").unwrap();
         assert_eq!(link.target, "Note");
-        assert_eq!(link.display, None);
-        assert_eq!(link.heading, None);
-        assert_eq!(link.block_ref, None);
-        assert!(!link.is_embed);
-        assert_eq!(link.style, LinkStyle::Wiki);
+        assert_eq!(link.label, None);
     }
 
     #[test]
-    fn parse_wikilink_with_display() {
-        let link = parse_wikilink("Note|My Display", false).unwrap();
+    fn parse_wikilink_with_label() {
+        let link = parse_wikilink("Note|My Display").unwrap();
         assert_eq!(link.target, "Note");
-        assert_eq!(link.display.as_deref(), Some("My Display"));
+        assert_eq!(link.label.as_deref(), Some("My Display"));
     }
 
     #[test]
-    fn parse_wikilink_with_heading() {
-        let link = parse_wikilink("Note#Section", false).unwrap();
+    fn parse_wikilink_with_heading_strips_fragment() {
+        let link = parse_wikilink("Note#Section").unwrap();
         assert_eq!(link.target, "Note");
-        assert_eq!(link.heading.as_deref(), Some("Section"));
     }
 
     #[test]
-    fn parse_wikilink_with_block_ref() {
-        let link = parse_wikilink("Note#^abc123", false).unwrap();
+    fn parse_wikilink_with_block_ref_strips_fragment() {
+        let link = parse_wikilink("Note#^abc123").unwrap();
         assert_eq!(link.target, "Note");
-        assert_eq!(link.block_ref.as_deref(), Some("abc123"));
     }
 
     #[test]
-    fn parse_wikilink_heading_and_display() {
-        let link = parse_wikilink("Note#Section|display", false).unwrap();
+    fn parse_wikilink_heading_and_label() {
+        let link = parse_wikilink("Note#Section|display").unwrap();
         assert_eq!(link.target, "Note");
-        assert_eq!(link.heading.as_deref(), Some("Section"));
-        assert_eq!(link.display.as_deref(), Some("display"));
+        assert_eq!(link.label.as_deref(), Some("display"));
     }
 
     #[test]
     fn parse_embed_wikilink() {
-        let link = parse_wikilink("image.png", true).unwrap();
-        assert!(link.is_embed);
+        let link = parse_wikilink("image.png").unwrap();
+        assert_eq!(link.target, "image.png");
     }
 
     #[test]
     fn parse_empty_wikilink_returns_none() {
-        assert!(parse_wikilink("", false).is_none());
+        assert!(parse_wikilink("").is_none());
     }
 
     #[test]
     fn parse_simple_markdown_link() {
         let link = parse_markdown_link("click here", "note.md").unwrap();
         assert_eq!(link.target, "note.md");
-        assert_eq!(link.display.as_deref(), Some("click here"));
-        assert_eq!(link.style, LinkStyle::Markdown);
-        assert!(!link.is_embed);
+        assert_eq!(link.label.as_deref(), Some("click here"));
     }
 
     #[test]
-    fn parse_markdown_link_with_heading() {
+    fn parse_markdown_link_with_heading_strips_fragment() {
         let link = parse_markdown_link("text", "note.md#section").unwrap();
         assert_eq!(link.target, "note.md");
-        assert_eq!(link.heading.as_deref(), Some("section"));
     }
 
     #[test]
@@ -308,21 +260,19 @@ mod tests {
     fn extract_wikilinks_from_text() {
         let text = "See [[Note A]] and [[Note B|display]]";
         let mut links = Vec::new();
-        extract_links_from_text(text, 5, &mut links);
+        extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].target, "Note A");
-        assert_eq!(links[0].line, 5);
         assert_eq!(links[1].target, "Note B");
-        assert_eq!(links[1].display.as_deref(), Some("display"));
+        assert_eq!(links[1].label.as_deref(), Some("display"));
     }
 
     #[test]
     fn extract_embed_from_text() {
         let text = "![[embedded note]]";
         let mut links = Vec::new();
-        extract_links_from_text(text, 1, &mut links);
+        extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 1);
-        assert!(links[0].is_embed);
         assert_eq!(links[0].target, "embedded note");
     }
 
@@ -330,18 +280,17 @@ mod tests {
     fn extract_markdown_link_from_text() {
         let text = "See [my note](notes/foo.md) for details";
         let mut links = Vec::new();
-        extract_links_from_text(text, 3, &mut links);
+        extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "notes/foo.md");
-        assert_eq!(links[0].display.as_deref(), Some("my note"));
-        assert_eq!(links[0].style, LinkStyle::Markdown);
+        assert_eq!(links[0].label.as_deref(), Some("my note"));
     }
 
     #[test]
     fn external_markdown_links_skipped() {
         let text = "[Google](https://google.com) and [[internal]]";
         let mut links = Vec::new();
-        extract_links_from_text(text, 1, &mut links);
+        extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "internal");
     }
@@ -350,20 +299,72 @@ mod tests {
     fn multiple_links_on_one_line() {
         let text = "[[A]] then [b](b.md) then [[C#heading]]";
         let mut links = Vec::new();
-        extract_links_from_text(text, 1, &mut links);
+        extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 3);
         assert_eq!(links[0].target, "A");
         assert_eq!(links[1].target, "b.md");
-        assert_eq!(links[2].target, "C");
-        assert_eq!(links[2].heading.as_deref(), Some("heading"));
+        assert_eq!(links[2].target, "C"); // fragment stripped
     }
 
     #[test]
     fn extract_links_from_text_with_block_ref() {
         let text = "[[Note#^abc123]]";
         let mut links = Vec::new();
-        extract_links_from_text(text, 1, &mut links);
+        extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].block_ref.as_deref(), Some("abc123"));
+        assert_eq!(links[0].target, "Note"); // fragment stripped
+    }
+
+    #[test]
+    fn unclosed_wikilink_skipped() {
+        let text = "See [[broken and more text";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn unclosed_markdown_link_skipped() {
+        let text = "See [text](broken and more";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn empty_wikilink_label() {
+        // [[target|]] — pipe present but label is empty string
+        let link = parse_wikilink("target|").unwrap();
+        assert_eq!(link.target, "target");
+        assert_eq!(link.label, Some(String::new()));
+    }
+
+    #[test]
+    fn empty_markdown_display() {
+        // [](note.md) — empty display text becomes None label
+        let link = parse_markdown_link("", "note.md").unwrap();
+        assert_eq!(link.target, "note.md");
+        assert_eq!(link.label, None);
+    }
+
+    #[test]
+    fn nested_brackets_wikilink() {
+        // [[outer [[inner]]]] — the parser finds the first ]] closing "outer [[inner",
+        // so "inner" is parsed as the target after the second [[, stopping at the first ]]
+        let text = "[[outer [[inner]]]]";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        // The outer [[ is tried first; rest is "outer [[inner]]]]",
+        // find("]]") hits the first ]] → inner = "outer [[inner" → no pipe → target = "outer [[inner"
+        // (fragment strip on # only; this is the pinned behavior)
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "outer [[inner");
+    }
+
+    #[test]
+    fn wikilink_only_fragment() {
+        // [[#heading]] — target_part before # is empty string
+        let link = parse_wikilink("#heading").unwrap();
+        assert_eq!(link.target, ""); // strip_fragment returns "" for "#heading"
     }
 }
