@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
 #[test]
@@ -9,7 +9,12 @@ fn remove_existing_property() {
     write_md(
         tmp.path(),
         "note.md",
-        "---\ntitle: Test\nstatus: draft\n---\n# Body\n",
+        md!("---
+title: Test
+status: draft
+---
+# Body
+"),
     );
 
     let output = hyalo()
@@ -37,7 +42,15 @@ fn remove_existing_property() {
 #[test]
 fn remove_missing_property() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Test\n---\n# Body\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!("---
+title: Test
+---
+# Body
+"),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -61,9 +74,18 @@ fn remove_missing_property() {
 #[test]
 fn remove_preserves_body() {
     let tmp = TempDir::new().unwrap();
-    let body = "# Heading\n\nParagraph content.\n";
-    let content = format!("---\ntitle: Test\nstatus: draft\n---\n{body}");
-    write_md(tmp.path(), "note.md", &content);
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!("---
+title: Test
+status: draft
+---
+# Heading
+
+Paragraph content.
+"),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -85,7 +107,13 @@ fn remove_preserves_other_properties() {
     write_md(
         tmp.path(),
         "note.md",
-        "---\ntitle: Keep\nstatus: draft\npriority: 5\n---\n# Body\n",
+        md!("---
+title: Keep
+status: draft
+priority: 5
+---
+# Body
+"),
     );
 
     let output = hyalo()
@@ -126,7 +154,11 @@ fn remove_last_property() {
     write_md(
         tmp.path(),
         "note.md",
-        "---\nonly_prop: value\n---\n# Body\n",
+        md!("---
+only_prop: value
+---
+# Body
+"),
     );
 
     let output = hyalo()

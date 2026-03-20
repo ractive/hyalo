@@ -210,11 +210,27 @@ mod tests {
     use super::*;
     use std::fs;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     fn setup_dir() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            "---\ntitle: Test\nstatus: draft\npriority: 3\ntags:\n  - rust\n  - cli\n---\n# Hello\n",
+            md!(r#"
+---
+title: Test
+status: draft
+priority: 3
+tags:
+  - rust
+  - cli
+---
+# Hello
+"#),
         )
         .unwrap();
         fs::write(tmp.path().join("empty.md"), "No frontmatter here.\n").unwrap();
@@ -372,10 +388,20 @@ mod tests {
     #[test]
     fn property_set_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = "# Heading\n\nBody content.\n";
+        let body = md!(r#"
+# Heading
+
+Body content.
+"#);
         fs::write(
             tmp.path().join("note.md"),
-            format!("---\ntitle: Test\n---\n{body}"),
+            md!(r#"
+---
+title: Test
+---
+"#)
+            .to_owned()
+                + body,
         )
         .unwrap();
 
@@ -388,10 +414,21 @@ mod tests {
     #[test]
     fn property_remove_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = "# Heading\n\nBody content.\n";
+        let body = md!(r#"
+# Heading
+
+Body content.
+"#);
         fs::write(
             tmp.path().join("note.md"),
-            format!("---\ntitle: Test\nstatus: draft\n---\n{body}"),
+            md!(r#"
+---
+title: Test
+status: draft
+---
+"#)
+            .to_owned()
+                + body,
         )
         .unwrap();
 

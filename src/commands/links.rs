@@ -61,11 +61,22 @@ mod tests {
     use super::*;
     use std::fs;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     fn setup_vault() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note-a.md"),
-            "---\ntitle: A\n---\nSee [[note-b]] and [[nonexistent]]\n",
+            md!(r#"
+---
+title: A
+---
+See [[note-b]] and [[nonexistent]]
+"#),
         )
         .unwrap();
         fs::write(

@@ -2,6 +2,15 @@ use assert_cmd::Command;
 use std::fs;
 use std::path::Path;
 
+/// Strip the leading newline from a raw string so the content aligns at column 0.
+macro_rules! md {
+    ($s:expr) => {
+        $s.strip_prefix('\n').unwrap_or($s)
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use md;
+
 /// Returns a `Command` pre-configured to run the `hyalo` binary built by Cargo.
 pub fn hyalo() -> Command {
     Command::cargo_bin("hyalo").unwrap()
@@ -36,17 +45,19 @@ pub fn write_tagged(dir: &Path, name: &str, tags: &[&str]) {
 /// Returns a sample markdown document with YAML frontmatter containing various property types.
 #[allow(dead_code)]
 pub fn sample_frontmatter() -> &'static str {
-    "---\n\
-     title: My Note\n\
-     priority: 3\n\
-     draft: true\n\
-     created: \"2026-03-20\"\n\
-     updated: \"2026-03-20T14:30:00\"\n\
-     tags:\n\
-       - rust\n\
-       - cli\n\
-     ---\n\
-     # Body\n\
-     \n\
-     Some content here.\n"
+    md!(r#"
+---
+title: My Note
+priority: 3
+draft: true
+created: "2026-03-20"
+updated: "2026-03-20T14:30:00"
+tags:
+  - rust
+  - cli
+---
+# Body
+
+Some content here.
+"#)
 }

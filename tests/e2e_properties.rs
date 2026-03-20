@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, sample_frontmatter, write_md};
+use common::{hyalo, md, sample_frontmatter, write_md};
 use tempfile::TempDir;
 
 #[test]
@@ -35,9 +35,25 @@ fn properties_aggregate() {
     write_md(
         tmp.path(),
         "a.md",
-        "---\ntitle: A\nstatus: draft\n---\n# A\n",
+        md!(r#"
+---
+title: A
+status: draft
+---
+# A
+"#),
     );
-    write_md(tmp.path(), "b.md", "---\ntitle: B\npriority: 1\n---\n# B\n");
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r#"
+---
+title: B
+priority: 1
+---
+# B
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -67,9 +83,33 @@ fn properties_aggregate() {
 #[test]
 fn properties_with_glob() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "root.md", "---\ntitle: Root\n---\n");
-    write_md(tmp.path(), "sub/a.md", "---\ntitle: Sub A\n---\n");
-    write_md(tmp.path(), "sub/b.md", "---\ntitle: Sub B\n---\n");
+    write_md(
+        tmp.path(),
+        "root.md",
+        md!(r#"
+---
+title: Root
+---
+"#),
+    );
+    write_md(
+        tmp.path(),
+        "sub/a.md",
+        md!(r#"
+---
+title: Sub A
+---
+"#),
+    );
+    write_md(
+        tmp.path(),
+        "sub/b.md",
+        md!(r#"
+---
+title: Sub B
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -107,7 +147,12 @@ fn properties_text_format() {
     write_md(
         tmp.path(),
         "note.md",
-        "---\ntitle: Hello\nstatus: draft\n---\n",
+        md!(r#"
+---
+title: Hello
+status: draft
+---
+"#),
     );
 
     let output = hyalo()

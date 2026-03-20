@@ -1,13 +1,20 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo, md, write_md};
 
 fn setup_vault() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     write_md(
         tmp.path(),
         "note-a.md",
-        "---\ntitle: Note A\n---\nSee [[note-b]] and [[nonexistent]].\n\nAlso ![[image.png]] embed.\n",
+        md!(r#"
+---
+title: Note A
+---
+See [[note-b]] and [[nonexistent]].
+
+Also ![[image.png]] embed.
+"#),
     );
     write_md(
         tmp.path(),
@@ -19,7 +26,13 @@ fn setup_vault() -> tempfile::TempDir {
     write_md(
         tmp.path(),
         "code-blocks.md",
-        "Before\n```\n[[inside code block]]\n```\nAfter [[real-link]]\n",
+        md!(r#"
+Before
+```
+[[inside code block]]
+```
+After [[real-link]]
+"#),
     );
     tmp
 }

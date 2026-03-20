@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md, write_tagged};
+use common::{hyalo, md, write_md, write_tagged};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,15 @@ fn tag_find_text_format() {
 #[test]
 fn tag_add_single_file() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -322,7 +330,16 @@ fn tag_add_idempotent() {
 fn tag_add_creates_tags_property() {
     let tmp = TempDir::new().unwrap();
     // File has no tags property at all
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n# Body\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+# Body
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -341,7 +358,15 @@ fn tag_add_creates_tags_property() {
 #[test]
 fn tag_add_invalid_name_numeric() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -361,7 +386,15 @@ fn tag_add_invalid_name_numeric() {
 #[test]
 fn tag_add_invalid_name_with_space() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -375,7 +408,15 @@ fn tag_add_invalid_name_with_space() {
 #[test]
 fn tag_add_invalid_name_empty() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -389,7 +430,15 @@ fn tag_add_invalid_name_empty() {
 #[test]
 fn tag_add_nested_tag_valid() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -425,7 +474,15 @@ fn tag_add_file_not_found() {
 #[test]
 fn tag_add_json_format() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+---
+"#),
+    );
 
     let output = hyalo()
         .args([
@@ -599,7 +656,16 @@ fn tags_file_without_frontmatter() {
 fn tags_scalar_string_tag() {
     let tmp = TempDir::new().unwrap();
     // tags as a scalar string (not a list)
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\ntags: rust\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+tags: rust
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -616,7 +682,14 @@ fn tags_scalar_string_tag() {
 #[test]
 fn tag_add_to_file_with_no_frontmatter() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "plain.md", "No frontmatter here.\n# Content\n");
+    write_md(
+        tmp.path(),
+        "plain.md",
+        md!(r#"
+No frontmatter here.
+# Content
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
