@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -45,7 +46,7 @@ where
     if fm_lines == 0 {
         // First line is not frontmatter, process it
         let cleaned = strip_inline_code(trimmed);
-        if visitor(&cleaned, line_num) == ScanAction::Stop {
+        if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
             return Ok(());
         }
     } else {
@@ -79,7 +80,7 @@ where
 
         // Normal text line — strip inline code spans before passing to visitor
         let cleaned = strip_inline_code(line);
-        if visitor(&cleaned, line_num) == ScanAction::Stop {
+        if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
             return Ok(());
         }
     }
@@ -116,11 +117,16 @@ fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -> bool {
 }
 
 /// Strip inline code spans from a line, replacing their content with spaces
-/// to preserve character positions for link parsing.
-fn strip_inline_code(line: &str) -> String {
+/// to preserve byte positions for link parsing.
+/// Returns a borrowed reference when no backticks are present (zero allocation).
+fn strip_inline_code(line: &str) -> Cow<'_, str> {
+    if !line.contains('`') {
+        return Cow::Borrowed(line);
+    }
+
     let bytes = line.as_bytes();
     let len = bytes.len();
-    let mut result = line.to_string();
+    let mut result = line.as_bytes().to_vec();
     let mut i = 0;
 
     while i < len {
@@ -144,9 +150,7 @@ fn strip_inline_code(line: &str) -> String {
                         i += 1;
                     }
                     if close_count == backtick_count {
-                        // Replace everything from opening backticks to closing backticks with spaces
-                        let result_bytes = unsafe { result.as_bytes_mut() };
-                        for b in &mut result_bytes[start..i] {
+                        for b in &mut result[start..i] {
                             *b = b' ';
                         }
                         found_close = true;
@@ -160,7 +164,6 @@ fn strip_inline_code(line: &str) -> String {
 
             if !found_close {
                 // No closing backticks found — treat opening backticks as literal
-                // Reset position to after the opening backticks
                 i = content_start;
             }
         } else {
@@ -168,7 +171,9 @@ fn strip_inline_code(line: &str) -> String {
         }
     }
 
-    result
+    // Only ASCII bytes (backticks and code content) were replaced with ASCII spaces,
+    // so the result is always valid UTF-8.
+    Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
 }
 
 #[cfg(test)]
@@ -313,6 +318,35 @@ mod tests {
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 1);
         // Unmatched backtick is treated as literal, so [[link]] should still be visible
+        assert!(lines[0].0.contains("[[link]]"));
+    }
+
+    #[test]
+    fn non_utf8_file_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.md");
+        std::fs::write(&path, b"\xff\xfe invalid utf-8 here").unwrap();
+        let result = scan_file(&path, |_, _| ScanAction::Continue);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn crlf_line_endings() {
+        let input = "Line 1\r\nLine 2\r\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, "Line 1");
+        assert_eq!(lines[1].0, "Line 2");
+    }
+
+    #[test]
+    fn very_long_line() {
+        // A 100 000-character line with an embedded wikilink must be delivered to the
+        // visitor intact (no panic, no truncation) so that link extraction can find it.
+        let long_part = "a".repeat(100_000);
+        let input = format!("{long_part} [[link]] {long_part}\n");
+        let lines = collect_lines(&input);
+        assert_eq!(lines.len(), 1);
         assert!(lines[0].0.contains("[[link]]"));
     }
 }

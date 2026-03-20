@@ -29,99 +29,87 @@ fn setup_vault() -> tempfile::TempDir {
 #[test]
 fn links_single_file_json() {
     let tmp = setup_vault();
-    hyalo()
-        .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "note-a.md"])
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("\"target\": \"note-b\""))
-        .stdout(predicates::str::contains("\"target\": \"nonexistent\""))
-        .stdout(predicates::str::contains("\"target\": \"image.png\""))
-        .stdout(predicates::str::contains("\"is_embed\": true"));
-}
-
-#[test]
-fn links_single_file_counts() {
-    let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "note-a.md"])
+        .args(["links", "--file", "note-a.md"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["path"], "note-a.md");
     let links = parsed["links"].as_array().unwrap();
     assert_eq!(links.len(), 3); // note-b, nonexistent, image.png
+    // Check that target, path, label are present
+    assert_eq!(links[0]["target"], "note-b");
+    assert_eq!(links[0]["path"], "note-b.md");
 }
 
 #[test]
-fn links_all_files_json() {
+fn links_path_populated() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
-    // note-a (3 links), note-b (2 links), sub/deep.md (2 links), code-blocks (1 link)
-    // isolated has 0 links, so not included
-    assert_eq!(parsed.len(), 4);
-}
-
-#[test]
-fn links_wiki_vs_markdown_style() {
-    let tmp = setup_vault();
-    let output = hyalo()
-        .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "note-b.md"])
+        .args(["links", "--file", "note-b.md"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let links = parsed["links"].as_array().unwrap();
     assert_eq!(links.len(), 2);
-
-    let styles: Vec<&str> = links.iter().map(|l| l["style"].as_str().unwrap()).collect();
-    assert!(styles.contains(&"markdown"));
-    assert!(styles.contains(&"wiki"));
+    // Both links point to note-a.md
+    for link in links {
+        assert_eq!(link["path"], "note-a.md");
+    }
 }
 
 #[test]
-fn links_embed_flag() {
+fn links_path_null_for_broken() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "note-a.md"])
+        .args(["links", "--file", "note-a.md"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let links = parsed["links"].as_array().unwrap();
-
-    let embed = links.iter().find(|l| l["target"] == "image.png").unwrap();
-    assert_eq!(embed["is_embed"], true);
-
-    // Non-embed links should not have is_embed
-    let regular = links.iter().find(|l| l["target"] == "note-b").unwrap();
-    assert!(regular.get("is_embed").is_none());
+    let nonexistent = links.iter().find(|l| l["target"] == "nonexistent").unwrap();
+    assert!(nonexistent["path"].is_null());
 }
 
 #[test]
-fn links_heading_metadata() {
+fn links_label_field() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "note-b.md"])
+        .args(["links", "--file", "note-b.md"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let links = parsed["links"].as_array().unwrap();
+    let md_link = links
+        .iter()
+        .find(|l| l["label"].as_str() == Some("Note A"))
+        .unwrap();
+    assert_eq!(md_link["target"], "note-a.md");
+}
 
-    let wiki = links.iter().find(|l| l["style"] == "wiki").unwrap();
-    assert_eq!(wiki["heading"], "heading");
-    assert_eq!(wiki["target"], "note-a");
+#[test]
+fn links_no_style_line_is_embed_fields() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "note-a.md"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Old fields should not appear
+    assert!(!stdout.contains("\"style\""));
+    assert!(!stdout.contains("\"line\""));
+    assert!(!stdout.contains("\"is_embed\""));
+    assert!(!stdout.contains("\"heading\""));
+    assert!(!stdout.contains("\"block_ref\""));
 }
 
 #[test]
@@ -129,14 +117,12 @@ fn links_skips_code_blocks() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "code-blocks.md"])
+        .args(["links", "--file", "code-blocks.md"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let links = parsed["links"].as_array().unwrap();
-
-    // Only real-link should be found, not inside code block
     assert_eq!(links.len(), 1);
     assert_eq!(links[0]["target"], "real-link");
 }
@@ -147,7 +133,7 @@ fn links_text_format() {
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
         .args(["--format", "text"])
-        .args(["links", "--path", "note-a.md"])
+        .args(["links", "--file", "note-a.md"])
         .assert()
         .success()
         .stdout(predicates::str::contains("target=note-b"));
@@ -158,10 +144,21 @@ fn links_file_not_found() {
     let tmp = setup_vault();
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["links", "--path", "nope.md"])
+        .args(["links", "--file", "nope.md"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("file not found"));
+}
+
+#[test]
+fn links_without_file_flag_fails() {
+    let tmp = setup_vault();
+    hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--file"));
 }
 
 // --- unresolved command ---
@@ -171,14 +168,13 @@ fn unresolved_single_file() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["unresolved", "--path", "note-a.md"])
+        .args(["unresolved", "--file", "note-a.md"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let links = parsed["links"].as_array().unwrap();
 
-    // nonexistent and image.png are unresolved; note-b resolves
     let targets: Vec<&str> = links
         .iter()
         .map(|l| l["target"].as_str().unwrap())
@@ -186,25 +182,10 @@ fn unresolved_single_file() {
     assert!(targets.contains(&"nonexistent"));
     assert!(targets.contains(&"image.png"));
     assert!(!targets.contains(&"note-b"));
-}
-
-#[test]
-fn unresolved_all_files() {
-    let tmp = setup_vault();
-    let output = hyalo()
-        .args(["--dir", &tmp.path().display().to_string()])
-        .args(["unresolved"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
-
-    // Files with unresolved links should be included
-    let paths: Vec<&str> = parsed.iter().map(|v| v["path"].as_str().unwrap()).collect();
-    assert!(paths.contains(&"note-a.md"));
-
-    // code-blocks.md has [[real-link]] which is unresolved
-    assert!(paths.contains(&"code-blocks.md"));
+    // All unresolved links have null path
+    for link in links {
+        assert!(link["path"].is_null());
+    }
 }
 
 #[test]
@@ -213,7 +194,7 @@ fn unresolved_text_format() {
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
         .args(["--format", "text"])
-        .args(["unresolved", "--path", "note-a.md"])
+        .args(["unresolved", "--file", "note-a.md"])
         .assert()
         .success()
         .stdout(predicates::str::contains("target=nonexistent"));
@@ -224,8 +205,79 @@ fn unresolved_file_not_found() {
     let tmp = setup_vault();
     hyalo()
         .args(["--dir", &tmp.path().display().to_string()])
-        .args(["unresolved", "--path", "nope.md"])
+        .args(["unresolved", "--file", "nope.md"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("file not found"));
+}
+
+#[test]
+fn unresolved_without_file_flag_fails() {
+    let tmp = setup_vault();
+    hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["unresolved"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--file"));
+}
+
+// --- edge-case / error-path e2e tests ---
+
+#[test]
+fn links_file_is_directory() {
+    let tmp = setup_vault();
+    // Create a subdirectory named "subdir" and pass it as --file
+    std::fs::create_dir(tmp.path().join("subdir")).unwrap();
+    hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "subdir"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("file not found"));
+}
+
+#[test]
+fn links_nonexistent_dir() {
+    hyalo()
+        .args(["--dir", "/tmp/hyalo-nonexistent-vault-xyz-12345"])
+        .args(["links", "--file", "any.md"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn links_empty_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(tmp.path(), "empty.md", "");
+    let output = hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "empty.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let links = parsed["links"].as_array().unwrap();
+    assert!(links.is_empty());
+}
+
+#[test]
+fn links_unclosed_wikilink_in_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "unclosed.md",
+        "See [[broken link and more text\n",
+    );
+    let output = hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "unclosed.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let links = parsed["links"].as_array().unwrap();
+    assert!(links.is_empty());
 }

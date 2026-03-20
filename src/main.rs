@@ -38,17 +38,17 @@ enum Commands {
         #[command(subcommand)]
         action: PropertyAction,
     },
-    /// List outgoing links from files
+    /// List outgoing links from a file
     Links {
         /// File path (relative to --dir)
         #[arg(long)]
-        path: Option<String>,
+        file: String,
     },
     /// List links that don't resolve to any file
     Unresolved {
         /// File path (relative to --dir)
         #[arg(long)]
-        path: Option<String>,
+        file: String,
     },
 }
 
@@ -121,10 +121,8 @@ fn main() {
                 properties::property_remove(dir, name, path, format)
             }
         },
-        Commands::Links { ref path } => link_commands::links(dir, path.as_deref(), format),
-        Commands::Unresolved { ref path } => {
-            link_commands::unresolved(dir, path.as_deref(), format)
-        }
+        Commands::Links { ref file } => link_commands::links(dir, file, format),
+        Commands::Unresolved { ref file } => link_commands::unresolved(dir, file, format),
     };
 
     match result {
