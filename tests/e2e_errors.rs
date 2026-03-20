@@ -14,7 +14,7 @@ fn error_nonexistent_file() {
             "read",
             "--name",
             "title",
-            "--path",
+            "--file",
             "missing.md",
         ])
         .output()
@@ -55,7 +55,7 @@ fn error_invalid_yaml() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--path", "bad.md"])
+        .args(["properties", "--glob", "bad.md"])
         .output()
         .unwrap();
 
@@ -72,7 +72,7 @@ fn error_missing_md_extension() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "note"])
+        .args(["property", "read", "--name", "title", "--file", "note"])
         .output()
         .unwrap();
 
@@ -89,7 +89,7 @@ fn error_json_structure() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--path", "nope.md"])
+        .args(["property", "read", "--name", "title", "--file", "nope.md"])
         .output()
         .unwrap();
 
@@ -116,7 +116,7 @@ fn error_text_format() {
             "read",
             "--name",
             "title",
-            "--path",
+            "--file",
             "nope.md",
         ])
         .output()

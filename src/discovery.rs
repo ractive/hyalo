@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use globset::{Glob, GlobMatcher};
+use globset::Glob;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,6 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
     // Reject path traversal attempts
     if normalized.starts_with('/')
-        || normalized.starts_with('\\')
         || normalized.contains("..")
         || Path::new(&normalized).is_absolute()
     {
@@ -60,8 +59,11 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
 fn normalize_path(path: &str) -> String {
-    let p = path.strip_prefix("./").unwrap_or(path);
-    p.replace('\\', "/")
+    let normalized = path.replace('\\', "/");
+    normalized
+        .strip_prefix("./")
+        .unwrap_or(&normalized)
+        .to_owned()
 }
 
 /// Check if a path argument contains glob characters.
@@ -79,7 +81,7 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
     let mut matched = Vec::new();
     for file in files {
         let rel = relative_path(dir, file);
-        if glob_matches(&glob, &rel) {
+        if glob.is_match(&rel) {
             matched.push((file.clone(), rel));
         }
     }
@@ -87,18 +89,13 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
 }
 
 /// Get the relative path of a file from a directory, using forward slashes on all platforms.
-fn relative_path(dir: &Path, file: &Path) -> String {
+pub fn relative_path(dir: &Path, file: &Path) -> String {
     let raw = file
         .strip_prefix(dir)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| file.to_string_lossy().to_string());
     // Normalize to forward slashes for consistent output and glob matching on Windows.
     raw.replace('\\', "/")
-}
-
-/// Check if a relative path matches a glob pattern.
-fn glob_matches(glob: &GlobMatcher, rel_path: &str) -> bool {
-    glob.is_match(rel_path)
 }
 
 /// Errors specific to file resolution.
@@ -120,6 +117,34 @@ impl std::fmt::Display for FileResolveError {
 }
 
 impl std::error::Error for FileResolveError {}
+
+/// Resolve a link target to a file path relative to the vault root.
+/// Tries the target as-is, then with `.md` appended.
+/// Returns the relative path if the file exists, or None.
+pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
+    if target.is_empty() {
+        return None;
+    }
+
+    // Reject path traversal attempts
+    let target = target.replace('\\', "/");
+    if target.starts_with('/') || target.contains("..") || Path::new(&target).is_absolute() {
+        return None;
+    }
+
+    if dir.join(&target).is_file() {
+        return Some(target.clone());
+    }
+
+    if !target.ends_with(".md") {
+        let with_ext = format!("{target}.md");
+        if dir.join(&with_ext).is_file() {
+            return Some(with_ext);
+        }
+    }
+
+    None
+}
 
 #[cfg(test)]
 mod tests {
@@ -188,6 +213,15 @@ mod tests {
     }
 
     #[test]
+    fn resolve_file_strips_leading_dot_backslash() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "").unwrap();
+
+        let (_, rel) = resolve_file(tmp.path(), r".\note.md").unwrap();
+        assert_eq!(rel, "note.md");
+    }
+
+    #[test]
     fn resolve_file_missing_extension_hint() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "").unwrap();
@@ -232,5 +266,93 @@ mod tests {
         assert!(is_glob("notes/**/*.md"));
         assert!(is_glob("note[123].md"));
         assert!(!is_glob("notes/file.md"));
+    }
+
+    fn make_files(dir: &Path, paths: &[&str]) {
+        for path in paths {
+            let full = dir.join(path);
+            if let Some(parent) = full.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(full, "").unwrap();
+        }
+    }
+
+    #[test]
+    fn resolve_target_stem_appends_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "note"),
+            Some("note.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_explicit_md_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "note.md"),
+            Some("note.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_subpath_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "sub/other"),
+            Some("sub/other.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_subpath_with_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "sub/other.md"),
+            Some("sub/other.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_bare_stem_does_not_match_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        assert_eq!(resolve_target(tmp.path(), "other"), None);
+    }
+
+    #[test]
+    fn resolve_target_nonexistent_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_target(tmp.path(), "nonexistent"), None);
+    }
+
+    #[test]
+    fn resolve_target_empty_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_target(tmp.path(), ""), None);
+    }
+
+    #[test]
+    fn resolve_target_rejects_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note.md"]);
+        assert_eq!(resolve_target(tmp.path(), "../note"), None);
+        assert_eq!(resolve_target(tmp.path(), "sub/../../note"), None);
+        assert_eq!(resolve_target(tmp.path(), "/etc/passwd"), None);
+    }
+
+    #[test]
+    fn resolve_target_non_md_file_exact_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["image.png"]);
+        assert_eq!(
+            resolve_target(tmp.path(), "image.png"),
+            Some("image.png".to_owned())
+        );
     }
 }
