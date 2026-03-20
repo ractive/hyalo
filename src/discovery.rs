@@ -35,7 +35,6 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
     // Reject path traversal attempts
     if normalized.starts_with('/')
-        || normalized.starts_with('\\')
         || normalized.contains("..")
         || Path::new(&normalized).is_absolute()
     {
@@ -60,8 +59,11 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
 fn normalize_path(path: &str) -> String {
-    let p = path.strip_prefix("./").unwrap_or(path);
-    p.replace('\\', "/")
+    let normalized = path.replace('\\', "/");
+    normalized
+        .strip_prefix("./")
+        .unwrap_or(&normalized)
+        .to_owned()
 }
 
 /// Check if a path argument contains glob characters.
@@ -206,6 +208,15 @@ mod tests {
         fs::write(tmp.path().join("note.md"), "").unwrap();
 
         let (_, rel) = resolve_file(tmp.path(), "./note.md").unwrap();
+        assert_eq!(rel, "note.md");
+    }
+
+    #[test]
+    fn resolve_file_strips_leading_dot_backslash() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "").unwrap();
+
+        let (_, rel) = resolve_file(tmp.path(), r".\note.md").unwrap();
         assert_eq!(rel, "note.md");
     }
 
