@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
 #[test]
@@ -50,7 +50,12 @@ fn error_invalid_yaml() {
     write_md(
         tmp.path(),
         "bad.md",
-        "---\n: invalid yaml [[[{\n---\n# Body\n",
+        md!(r#"
+---
+: invalid yaml [[[{
+---
+# Body
+"#),
     );
 
     let output = hyalo()
@@ -68,7 +73,15 @@ fn error_invalid_yaml() {
 #[test]
 fn error_missing_md_extension() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\ntitle: Test\n---\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Test
+---
+"#),
+    );
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])

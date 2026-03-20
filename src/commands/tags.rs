@@ -331,6 +331,12 @@ mod tests {
     use super::*;
     use std::fs;
 
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
     // --- Tag validation ---
 
     #[test]
@@ -412,7 +418,11 @@ mod tests {
 
     #[test]
     fn extract_tags_from_list() {
-        let props = make_props("tags:\n  - rust\n  - cli\n");
+        let props = make_props(md!(r#"
+tags:
+  - rust
+  - cli
+"#));
         let tags = extract_tags(&props);
         assert_eq!(tags, vec!["rust", "cli"]);
     }
@@ -451,12 +461,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("a.md"),
-            "---\ntags:\n  - rust\n  - cli\n---\n# A\n",
+            md!(r#"
+---
+tags:
+  - rust
+  - cli
+---
+# A
+"#),
         )
         .unwrap();
         fs::write(
             tmp.path().join("b.md"),
-            "---\ntags:\n  - rust\n  - iteration\n---\n# B\n",
+            md!(r#"
+---
+tags:
+  - rust
+  - iteration
+---
+# B
+"#),
         )
         .unwrap();
         fs::write(tmp.path().join("c.md"), "No frontmatter.\n").unwrap();
@@ -510,7 +534,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            "---\ntags:\n  - inbox/processing\n---\n",
+            md!(r#"
+---
+tags:
+  - inbox/processing
+---
+"#),
         )
         .unwrap();
         let outcome = tag_find(tmp.path(), "inbox", None, None, Format::Json).unwrap();
@@ -539,7 +568,15 @@ mod tests {
     #[test]
     fn tag_add_creates_new_property() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "---\ntitle: Note\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+title: Note
+---
+"#),
+        )
+        .unwrap();
 
         let outcome = tag_add(tmp.path(), "rust", Some("note.md"), None, Format::Json).unwrap();
         match outcome {
@@ -558,7 +595,16 @@ mod tests {
     #[test]
     fn tag_add_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "---\ntags:\n  - rust\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+tags:
+  - rust
+---
+"#),
+        )
+        .unwrap();
 
         let outcome = tag_add(tmp.path(), "rust", Some("note.md"), None, Format::Json).unwrap();
         match outcome {
@@ -574,7 +620,15 @@ mod tests {
     #[test]
     fn tag_add_invalid_name_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "---\ntitle: Note\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+title: Note
+---
+"#),
+        )
+        .unwrap();
 
         let outcome = tag_add(tmp.path(), "1984", Some("note.md"), None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -583,7 +637,15 @@ mod tests {
     #[test]
     fn tag_add_requires_file_or_glob() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "---\ntitle: Note\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+title: Note
+---
+"#),
+        )
+        .unwrap();
 
         // Neither --file nor --glob → user error
         let outcome = tag_add(tmp.path(), "rust", None, None, Format::Json).unwrap();
@@ -597,7 +659,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            "---\ntags:\n  - rust\n  - cli\n---\n",
+            md!(r#"
+---
+tags:
+  - rust
+  - cli
+---
+"#),
         )
         .unwrap();
 
@@ -619,7 +687,16 @@ mod tests {
     #[test]
     fn tag_remove_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "---\ntags:\n  - cli\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+tags:
+  - cli
+---
+"#),
+        )
+        .unwrap();
 
         let outcome = tag_remove(tmp.path(), "rust", Some("note.md"), None, Format::Json).unwrap();
         match outcome {
@@ -637,7 +714,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            "---\ntitle: Note\ntags:\n  - rust\n---\n",
+            md!(r#"
+---
+title: Note
+tags:
+  - rust
+---
+"#),
         )
         .unwrap();
 
@@ -653,7 +736,16 @@ mod tests {
     #[test]
     fn tag_remove_requires_file_or_glob() {
         let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("note.md"), "---\ntags:\n  - rust\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r#"
+---
+tags:
+  - rust
+---
+"#),
+        )
+        .unwrap();
 
         // Neither --file nor --glob → user error
         let outcome = tag_remove(tmp.path(), "rust", None, None, Format::Json).unwrap();
@@ -665,7 +757,11 @@ mod tests {
     #[test]
     fn tag_add_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = "# Heading\n\nSome content with [[wikilinks]] and more text.\n";
+        let body = md!(r#"
+# Heading
+
+Some content with [[wikilinks]] and more text.
+"#);
         fs::write(
             tmp.path().join("note.md"),
             format!("---\ntitle: Note\n---\n{body}"),
@@ -681,7 +777,11 @@ mod tests {
     #[test]
     fn tag_remove_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = "# Heading\n\nSome content.\n";
+        let body = md!(r#"
+# Heading
+
+Some content.
+"#);
         fs::write(
             tmp.path().join("note.md"),
             format!("---\ntags:\n  - rust\n  - cli\n---\n{body}"),
