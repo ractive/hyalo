@@ -1,0 +1,48 @@
+{
+  "skill_name": "security-audit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to open-source this project soon. Can you check if there are any secrets, API keys, or private data that might be exposed in the codebase? Look through everything — fixtures, docs, configs, agent memory files, the works.",
+      "expected_output": "A report identifying any real or placeholder credentials in test fixtures, checking .env/.gitignore coverage, scanning docs and memory files for private info, and flagging any real IDs or tokens",
+      "files": [],
+      "expectations": [
+        "The report examines test fixture JSON files for credentials or real-looking IDs",
+        "The report checks whether .env is in .gitignore",
+        "The report scans documentation/knowledgebase markdown files for sensitive info",
+        "The report checks agent memory files under .claude/ for private data",
+        "The report classifies findings by severity (CRITICAL/HIGH/MEDIUM/LOW)",
+        "The report includes a summary count of findings"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review the CLI tool for security vulnerabilities. I'm worried about path traversal in the storage commands and whether the debug flag might leak API keys. Also check if the delete commands have proper safeguards.",
+      "expected_output": "A security review focusing on CLI argument handling, path traversal risks in storage commands, debug output credential leakage, and destructive operation safeguards",
+      "files": [],
+      "expectations": [
+        "The report analyzes path traversal risk in storage upload/download/ls/rm commands",
+        "The report examines whether --debug flag could leak API keys in HTTP headers",
+        "The report checks if delete/purge commands have confirmation prompts",
+        "The report examines the --yes flag as a safety bypass vector",
+        "The report looks at URL construction for injection risks",
+        "Findings include specific file paths and line numbers"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Do a full security audit of this Rust project. Check the code, dependencies, test data, everything. I need to know if it's safe.",
+      "expected_output": "A comprehensive security audit covering secrets scanning, Rust code analysis, CLI misuse vectors, and dependency review with prioritized findings",
+      "files": [],
+      "expectations": [
+        "The report covers secrets/sensitive data scanning",
+        "The report covers Rust code security (input validation, error handling, unsafe code)",
+        "The report covers CLI misuse vectors (destructive ops, privilege escalation)",
+        "The report checks Cargo.toml dependencies",
+        "The report examines test fixtures for leaked data",
+        "The report provides a prioritized summary with severity counts",
+        "The report examines the auth module for credential handling issues"
+      ]
+    }
+  ]
+}

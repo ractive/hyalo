@@ -1,0 +1,44 @@
+{
+  "skill_name": "review-rust",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the current PR on branch iter-1/api-clients against main",
+      "expected_output": "Structured review with summary, critical issues, improvements, and observations covering the changes in this PR",
+      "files": [],
+      "expectations": [
+        "Review covers the actual diff between main and iter-1/api-clients",
+        "Output uses structured format with Summary, Critical Issues, Improvements, and Observations sections",
+        "Identifies at least one concrete issue with file and line references",
+        "Checks Cargo.toml for edition 2024 compliance",
+        "Reviews error handling patterns in the changed code"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review the bunny-api-compute crate",
+      "expected_output": "Focused review of the compute crate covering API design, error handling, and Rust best practices",
+      "files": [],
+      "expectations": [
+        "Reads and reviews files in crates/bunny-api-compute/",
+        "Evaluates public API surface and trait implementations",
+        "Checks error type quality (implements std::error::Error, Display, Debug)",
+        "Assesses test coverage",
+        "Uses structured output format"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review the error handling across all the API client crates",
+      "expected_output": "Cross-cutting review comparing error handling patterns across bunny-api-core, bunny-api-compute, bunny-api-storage, bunny-api-stream, bunny-api-shield",
+      "files": [],
+      "expectations": [
+        "Reads error types from multiple crates, not just one",
+        "Compares error handling consistency across crates",
+        "Checks for unwrap/expect usage in library code",
+        "Evaluates whether error types implement standard traits",
+        "Uses structured output format"
+      ]
+    }
+  ]
+}
