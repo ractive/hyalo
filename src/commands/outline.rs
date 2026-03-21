@@ -262,7 +262,7 @@ fn process_body_line(
     }
 
     // Count task checkboxes: lines of the form `- [ ] ...` or `- [x] ...` etc.
-    if let Some(done) = detect_task_checkbox(line) {
+    if let Some((_status, done)) = crate::tasks::detect_task_checkbox(line) {
         current.task_total += 1;
         if done {
             current.task_done += 1;
@@ -319,34 +319,6 @@ fn parse_atx_heading(line: &str) -> Option<(u8, String)> {
 
     #[allow(clippy::cast_possible_truncation)] // level is guaranteed ≤ 6 by the check above
     Some((level as u8, heading_text))
-}
-
-/// Detect a task checkbox on a line.
-/// Returns `Some(true)` for a completed task, `Some(false)` for an open task,
-/// or `None` if the line is not a task checkbox.
-///
-/// Recognises: `- [ ] ...`, `- [x] ...`, `- [X] ...` (and `*` / `+` bullets).
-fn detect_task_checkbox(line: &str) -> Option<bool> {
-    let trimmed = line.trim_start();
-
-    // Must start with a list marker: `-`, `*`, or `+`
-    let rest = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .or_else(|| trimmed.strip_prefix("+ "))?;
-
-    // Must be followed by `[` then one char then `]`
-    let inner = rest.strip_prefix('[')?;
-    // The checkbox marker is a single character followed by `]`
-    let mut chars = inner.chars();
-    let marker = chars.next()?;
-    let close = chars.next()?;
-    if close != ']' {
-        return None;
-    }
-
-    let done = marker == 'x' || marker == 'X';
-    Some(done)
 }
 
 /// Format a `Link` into a human-readable string for storage in the outline.
@@ -443,44 +415,6 @@ mod tests {
     fn not_a_heading() {
         assert!(parse_atx_heading("Normal text").is_none());
         assert!(parse_atx_heading("").is_none());
-    }
-
-    // --- detect_task_checkbox ---
-
-    #[test]
-    fn open_task() {
-        assert_eq!(detect_task_checkbox("- [ ] Do something"), Some(false));
-    }
-
-    #[test]
-    fn done_task_lowercase() {
-        assert_eq!(detect_task_checkbox("- [x] Done"), Some(true));
-    }
-
-    #[test]
-    fn done_task_uppercase() {
-        assert_eq!(detect_task_checkbox("- [X] Done"), Some(true));
-    }
-
-    #[test]
-    fn task_with_star_bullet() {
-        assert_eq!(detect_task_checkbox("* [ ] Star bullet"), Some(false));
-    }
-
-    #[test]
-    fn task_with_plus_bullet() {
-        assert_eq!(detect_task_checkbox("+ [ ] Plus bullet"), Some(false));
-    }
-
-    #[test]
-    fn indented_task() {
-        assert_eq!(detect_task_checkbox("  - [ ] Indented"), Some(false));
-    }
-
-    #[test]
-    fn not_a_task() {
-        assert!(detect_task_checkbox("- Just a bullet").is_none());
-        assert!(detect_task_checkbox("Regular text").is_none());
     }
 
     // --- extract_fence_language ---

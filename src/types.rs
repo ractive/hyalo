@@ -168,3 +168,37 @@ pub struct FileOutline {
     pub tags: Vec<String>,
     pub sections: Vec<OutlineSection>,
 }
+
+// ---------------------------------------------------------------------------
+// Task types (new in iteration 9)
+// ---------------------------------------------------------------------------
+
+/// A single task (checkbox) with its location and state.
+/// Used by `tasks`, `task read`, `task toggle`, `task set-status`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskInfo {
+    pub line: usize,
+    pub status: String,
+    pub text: String,
+    pub done: bool,
+}
+
+/// A file with its tasks.
+/// Used by `tasks` command (per-file detail).
+#[derive(Debug, Clone, Serialize)]
+pub struct FileTasks {
+    pub file: String,
+    pub tasks: Vec<TaskInfo>,
+    pub total: usize,
+}
+
+/// Result of reading or mutating a single task.
+/// Used by `task read`, `task toggle`, `task set-status`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskReadResult {
+    pub file: String,
+    pub line: usize,
+    pub status: String,
+    pub text: String,
+    pub done: bool,
+}
