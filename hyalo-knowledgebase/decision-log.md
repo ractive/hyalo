@@ -203,6 +203,25 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - New commands can reuse existing types instead of guessing the right `json!()` shape
 - Removed ~50 lines of generic JSON-building helpers from `commands/mod.rs`
 
+## DEC-027: jq Filters via `jaq` for Text Output (2026-03-21)
+
+**Context:** All commands support `--format text` but prior to iteration 7, text output was produced by a generic key=value formatter that was unreadable for nested/typed data (e.g. `properties: [{name=title, type=text, value=My Note}]`).
+
+**Decision:** Use the `jaq` crate (pure-Rust jq interpreter) to transform `serde_json::Value` to human-readable text. Each output type gets a `&'static str` jq filter constant. The filter is looked up by sorting the JSON object's top-level keys into a comma-joined "key signature". Unknown shapes fall back to generic key: value formatting.
+
+**Why jaq:**
+- jq is purpose-built for JSON→text transformation with string interpolation, conditionals, and array iteration
+- Pure Rust — no C deps, no subprocess, fast startup
+- Filters are `&'static str` — changing text format = editing one string constant, no Rust recompile of business logic needed
+- Standard language — no custom DSL to learn or maintain
+
+**Tradeoffs:**
+- Filter re-compilation on every call (acceptable for a CLI tool; no daemon/server use case)
+- Raw string delimiter collision: `"#" * .level` in jq requires `r##"..."##` instead of `r#"..."#` in Rust 2024 edition
+- Filter strings must be tested carefully — jq syntax errors produce `None` and fall back to generic format silently
+
+**Stable versions used:** `jaq-core = "2.2.1"`, `jaq-json = "1.1.3"` (with `serde_json` feature), `jaq-std = "2.1.2"`.
+
 ## DEC-026: Glob `*` Must Not Cross Path Separators (2026-03-21)
 
 **Context:** The `globset` crate's `Glob::new()` defaults to letting `*` match across `/` path separators. This means `*.md` matched `sub/nested.md`, which contradicts standard shell glob semantics and surprises users expecting `*` to match within a single directory only.
