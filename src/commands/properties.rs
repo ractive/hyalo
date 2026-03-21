@@ -1,16 +1,19 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
-use serde_json::json;
 use serde_yaml_ng::Value;
 use std::path::Path;
 
 use crate::commands::{
-    FilesOrOutcome, build_find_json, build_list_mutation_json, collect_files, require_file_or_glob,
-    resolve_error_to_outcome,
+    FilesOrOutcome, collect_files, require_file_or_glob, resolve_error_to_outcome,
+    unwrap_single_file_result,
 };
 use crate::discovery;
 use crate::frontmatter;
-use crate::output::{CommandOutcome, Format};
+use crate::output::{CommandOutcome, Format, format_output};
+use crate::types::{
+    FileProperties, PropertyFindResult, PropertyInfo, PropertyMutationResult, PropertyRemoved,
+    PropertySummaryEntry,
+};
 
 // ---------------------------------------------------------------------------
 // Generic list-property helpers
@@ -241,18 +244,16 @@ pub fn property_add_to_list(
 
     let ListOpResult { modified, skipped } = add_values_to_list_property(&files, name, values)?;
 
-    let result = build_list_mutation_json(
-        "property",
-        name,
-        Some("values"),
-        Some(values),
-        &modified,
-        &skipped,
-    );
+    let total = modified.len() + skipped.len();
+    let result = PropertyMutationResult {
+        property: name.to_owned(),
+        values: values.to_vec(),
+        modified,
+        skipped,
+        total,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format, &result,
-    )))
+    Ok(CommandOutcome::Success(format_output(format, &result)))
 }
 
 /// Remove values from a list property in file(s). Removes the key if list becomes empty.
@@ -279,18 +280,16 @@ pub fn property_remove_from_list(
     let ListOpResult { modified, skipped } =
         remove_values_from_list_property(&files, name, values)?;
 
-    let result = build_list_mutation_json(
-        "property",
-        name,
-        Some("values"),
-        Some(values),
-        &modified,
-        &skipped,
-    );
+    let total = modified.len() + skipped.len();
+    let result = PropertyMutationResult {
+        property: name.to_owned(),
+        values: values.to_vec(),
+        modified,
+        skipped,
+        total,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format, &result,
-    )))
+    Ok(CommandOutcome::Success(format_output(format, &result)))
 }
 
 /// Aggregate summary: unique property names with types and file counts.
@@ -320,15 +319,16 @@ pub fn properties_summary(
         }
     }
 
-    let result: Vec<serde_json::Value> = agg
+    let result: Vec<PropertySummaryEntry> = agg
         .into_iter()
-        .map(|(name, (typ, count))| json!({"name": name, "type": typ, "count": count}))
+        .map(|(name, (prop_type, count))| PropertySummaryEntry {
+            name,
+            prop_type,
+            count,
+        })
         .collect();
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format,
-        &json!(result),
-    )))
+    Ok(CommandOutcome::Success(format_output(format, &result)))
 }
 
 /// Per-file detail: each file with its full property key/value pairs.
@@ -345,26 +345,27 @@ pub fn properties_list(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut results = Vec::new();
+    let mut results: Vec<serde_json::Value> = Vec::new();
     for (full_path, rel_path) in &files {
         let props = frontmatter::read_frontmatter(full_path)?;
 
-        let prop_list: Vec<serde_json::Value> = props
+        let properties: Vec<PropertyInfo> = props
             .iter()
-            .map(|(k, v)| {
-                let typ = frontmatter::infer_type(v);
-                let json_val = frontmatter::yaml_to_json(v);
-                json!({"name": k, "value": json_val, "type": typ})
+            .map(|(k, v)| PropertyInfo {
+                name: k.clone(),
+                prop_type: frontmatter::infer_type(v).to_owned(),
+                value: frontmatter::yaml_to_json(v),
             })
             .collect();
 
-        results.push(json!({
-            "path": rel_path,
-            "properties": prop_list,
-        }));
+        let file_props = FileProperties {
+            path: rel_path.clone(),
+            properties,
+        };
+        results.push(serde_json::to_value(file_props).unwrap_or_default());
     }
 
-    let json_output = crate::commands::unwrap_single_file_result(file, results);
+    let json_output = unwrap_single_file_result(file, results);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
@@ -387,12 +388,12 @@ pub fn property_read(
     let props = frontmatter::read_frontmatter(&full_path)?;
 
     if let Some(value) = props.get(name) {
-        let typ = frontmatter::infer_type(value);
-        let json_val = frontmatter::yaml_to_json(value);
-        let result = json!({"name": name, "value": json_val, "type": typ});
-        Ok(CommandOutcome::Success(crate::output::format_success(
-            format, &result,
-        )))
+        let result = PropertyInfo {
+            name: name.to_owned(),
+            prop_type: frontmatter::infer_type(value).to_owned(),
+            value: frontmatter::yaml_to_json(value),
+        };
+        Ok(CommandOutcome::Success(format_output(format, &result)))
     } else {
         let out =
             crate::output::format_error(format, "property not found", Some(&rel_path), None, None);
@@ -415,18 +416,17 @@ pub fn property_set(
     };
 
     let value = frontmatter::parse_value(raw_value, forced_type)?;
-    let typ = frontmatter::infer_type(&value);
-    let json_val = frontmatter::yaml_to_json(&value);
+    let result = PropertyInfo {
+        name: name.to_owned(),
+        prop_type: frontmatter::infer_type(&value).to_owned(),
+        value: frontmatter::yaml_to_json(&value),
+    };
 
     let mut props = frontmatter::read_frontmatter(&full_path)?;
     props.insert(name.to_owned(), value);
     frontmatter::write_frontmatter(&full_path, &props)?;
 
-    let result = json!({"name": name, "value": json_val, "type": typ});
-
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format, &result,
-    )))
+    Ok(CommandOutcome::Success(format_output(format, &result)))
 }
 
 /// Remove a property from a file.
@@ -445,10 +445,11 @@ pub fn property_remove(
 
     if props.remove(name).is_some() {
         frontmatter::write_frontmatter(&full_path, &props)?;
-        let result = json!({"removed": name, "path": rel_path});
-        Ok(CommandOutcome::Success(crate::output::format_success(
-            format, &result,
-        )))
+        let result = PropertyRemoved {
+            removed: name.to_owned(),
+            path: rel_path,
+        };
+        Ok(CommandOutcome::Success(format_output(format, &result)))
     } else {
         let out =
             crate::output::format_error(format, "property not found", Some(&rel_path), None, None);
@@ -486,11 +487,15 @@ pub fn property_find(
         }
     }
 
-    let result = build_find_json("property", name, value, &matching_paths);
+    let total = matching_paths.len();
+    let result = PropertyFindResult {
+        property: name.to_owned(),
+        value: value.map(str::to_owned),
+        files: matching_paths,
+        total,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format, &result,
-    )))
+    Ok(CommandOutcome::Success(format_output(format, &result)))
 }
 
 /// Check if a YAML value matches a query string, using type-aware comparison.

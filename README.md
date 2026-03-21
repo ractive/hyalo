@@ -74,6 +74,21 @@ hyalo tag remove --name TAG <--file FILE | --glob PATTERN>
 
 **Tag format (Obsidian-compatible):** letters, digits, `_`, `-`, `/`. Must contain at least one non-numeric character. Forward slashes create hierarchy — `tag find --name inbox` matches `inbox`, `inbox/processing`, etc.
 
+### Outline
+
+```sh
+# Structural outline of a single file (returns bare object)
+hyalo outline --file FILE
+
+# Outline of multiple files (returns array)
+hyalo outline --glob PATTERN
+
+# Outline of all .md files under --dir (returns array)
+hyalo outline
+```
+
+Returns per-file: frontmatter properties (with types and values), tags, and a section tree with heading levels, line numbers, wikilinks, task counts (`total`/`done`), and code block languages. Designed for LLM navigation — understand a document's structure without reading the full content.
+
 ## License
 
 MIT
