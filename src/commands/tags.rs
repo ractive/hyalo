@@ -171,11 +171,7 @@ pub fn tags_list(
         }));
     }
 
-    let json_output = if file.is_some() && results.len() == 1 {
-        results.into_iter().next().unwrap()
-    } else {
-        json!(results)
-    };
+    let json_output = crate::commands::unwrap_single_file_result(file, results);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
