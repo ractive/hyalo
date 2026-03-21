@@ -27,6 +27,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
     after_help = "EXAMPLES:\n  \
         Aggregate property summary: hyalo properties summary\n  \
         Per-file property detail:   hyalo properties list --glob '**/*.md'\n  \
+        Read a property:            hyalo property read --name status --file notes/todo.md\n  \
         Set a property:             hyalo property set --name status --value done --file notes/todo.md\n  \
         Find files by property:     hyalo property find --name status --value draft\n  \
         Add to a list property:     hyalo property add-to-list --name aliases --value \"My Note\" --file note.md\n  \
@@ -34,7 +35,8 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
         Aggregate tag summary:      hyalo tags summary\n  \
         Per-file tag detail:        hyalo tags list --glob 'notes/**/*.md'\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
-        Find broken wikilinks:      hyalo links --file index.md --unresolved",
+        Find broken links:          hyalo links --file index.md --unresolved\n  \
+        Document outline:           hyalo outline --file notes/meeting.md",
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Properties (list across files):\n  \
@@ -176,19 +178,20 @@ enum Commands {
         #[command(subcommand)]
         action: PropertyAction,
     },
-    /// List outgoing [[wikilinks]] from a file and their resolution status (read-only)
+    /// List outgoing [[wikilinks]] and [markdown](links) from a file and their resolution status (read-only)
     #[command(
-        long_about = "List outgoing [[wikilinks]] from a file and their resolution status.\n\n\
+        long_about = "List outgoing [[wikilinks]] and [markdown](links) from a file and their resolution status.\n\n\
             INPUT: A single markdown file (--file).\n\
-            OUTPUT: Each [[wikilink]] found in the file body. The 'path' field is the resolved \
-            file path (string) if the link target exists under --dir, or null if unresolved.\n\
+            OUTPUT: Each internal link found in the file body — both [[wikilinks]] and \
+            [label](target) markdown links (external URLs are excluded). The 'path' field is the \
+            resolved file path (string) if the link target exists under --dir, or null if unresolved.\n\
             FILTERS: --unresolved returns only broken links. --resolved returns only valid links. \
             Without either flag, returns all links.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to find broken links, audit cross-references, or build a link graph."
     )]
     Links {
-        /// Markdown file to scan for [[wikilinks]]
+        /// Markdown file to scan for links
         #[arg(long)]
         file: String,
         /// Filter: only return links whose target file does NOT exist (broken links)
