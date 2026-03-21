@@ -229,3 +229,33 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - Filter strings must be tested carefully — jq syntax errors produce `None` and fall back to generic format silently
 
 **Stable versions used:** `jaq-core = "2.2.1"`, `jaq-json = "1.1.3"` (with `serde_json` feature), `jaq-std = "2.1.2"`.
+
+## DEC-028: Multi-Visitor Scanner Architecture (2026-03-21)
+
+**Context:** The outline command opened each file twice (once for frontmatter, once for body scanning). The summary command would need even more passes per file (frontmatter + task counting + metadata). For a vault with hundreds of files this becomes a bottleneck.
+
+**Decision:** Introduce a `FileVisitor` trait in `scanner.rs` with callbacks for `on_frontmatter`, `on_body_line`, `on_code_fence_open`, and `on_code_fence_close`. A new `scan_file_multi` function drives multiple visitors in a single pass per file, tracking which visitors are still active. Visitors can signal `ScanAction::Stop` to opt out early.
+
+**Key optimization:** If all registered visitors only need frontmatter (i.e. they all return `Stop` from `on_frontmatter` or have `needs_body() == false`), the file body is never read. This makes frontmatter-only queries (like `properties summary`) pay zero cost for body scanning.
+
+**Concrete visitors:**
+- `FrontmatterCollector` — captures parsed YAML `BTreeMap<String, Value>`
+- `TaskCollector` / `TaskCounter` — collect or count task checkboxes
+- `SectionScanner` — builds outline sections with headings, links, tasks, code blocks
+
+**Tradeoffs:**
+- Small overhead of `active: Vec<bool>` per scan call — negligible vs I/O
+- Visitors receive raw body lines (not inline-code-stripped) — callers that need cleaned text call `strip_inline_code` themselves
+- Frontmatter is always parsed with `serde_yaml_ng` even if no visitor needs it — overhead is negligible vs the file open syscall
+
+## DEC-029: Summary Command — Single-Call Vault Overview (2026-03-21)
+
+**Decision:** Add `hyalo summary [--glob G] [--recent N]` that returns a `VaultSummary` aggregating file counts (by directory), property summary, tag summary, status grouping, task counts, and recently modified files — all in one pass per file using the multi-visitor scanner.
+
+**Why:** Agents and users need a quick orientation command before drilling down. A single `summary` call replaces what would otherwise require 4-5 separate commands (`properties summary`, `tags summary`, `tasks`, file listing, outline).
+
+## DEC-030: Glob UX Fix on Bare `properties`/`tags` (2026-03-21)
+
+**Decision:** Add `--file`/`--glob` args to the top-level `Commands::Properties` and `Commands::Tags` enum variants, forwarded to the default summary action. This means `hyalo properties --glob 'backlog/*.md'` works without needing the explicit `hyalo properties summary --glob ...`.
+
+**Why:** In dogfooding, typing `hyalo properties --glob ...` felt natural but previously required `hyalo properties summary --glob ...`. The extra `summary` subcommand was friction for the most common use case.
