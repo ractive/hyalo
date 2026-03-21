@@ -349,24 +349,26 @@ pub fn properties_list(
     for (full_path, rel_path) in &files {
         let props = frontmatter::read_frontmatter(full_path)?;
 
-        let prop_map: serde_json::Map<String, serde_json::Value> = props
+        let prop_list: Vec<serde_json::Value> = props
             .iter()
             .map(|(k, v)| {
                 let typ = frontmatter::infer_type(v);
                 let json_val = frontmatter::yaml_to_json(v);
-                (k.clone(), json!({"value": json_val, "type": typ}))
+                json!({"name": k, "value": json_val, "type": typ})
             })
             .collect();
 
         results.push(json!({
             "path": rel_path,
-            "properties": prop_map,
+            "properties": prop_list,
         }));
     }
 
+    let json_output = crate::commands::unwrap_single_file_result(file, results);
+
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
-        &json!(results),
+        &json_output,
     )))
 }
 
@@ -597,11 +599,12 @@ tags:
             properties_list(tmp.path(), Some("note.md"), None, Format::Json).unwrap(),
         );
         assert!(ok);
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0]["path"], "note.md");
-        assert_eq!(parsed[0]["properties"]["priority"]["type"], "number");
-        assert_eq!(parsed[0]["properties"]["tags"]["type"], "list");
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["path"], "note.md");
+        let props = parsed["properties"].as_array().unwrap();
+        let find_prop = |name: &str| props.iter().find(|p| p["name"] == name).unwrap();
+        assert_eq!(find_prop("priority")["type"], "number");
+        assert_eq!(find_prop("tags")["type"], "list");
     }
 
     #[test]

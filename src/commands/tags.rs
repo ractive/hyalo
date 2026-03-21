@@ -171,9 +171,11 @@ pub fn tags_list(
         }));
     }
 
+    let json_output = crate::commands::unwrap_single_file_result(file, results);
+
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
-        &json!(results),
+        &json_output,
     )))
 }
 
@@ -512,10 +514,8 @@ tags:
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let entries = parsed.as_array().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0]["path"].as_str().unwrap().ends_with("a.md"));
-        let tags = entries[0]["tags"].as_array().unwrap();
+        assert!(parsed["path"].as_str().unwrap().ends_with("a.md"));
+        let tags = parsed["tags"].as_array().unwrap();
         assert_eq!(tags.len(), 2);
     }
 
