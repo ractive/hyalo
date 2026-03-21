@@ -96,8 +96,10 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"path\": \"notes/todo.md\", \"properties\": [{\"name\": \"status\", \"type\": \"text\", \"value\": \"draft\"}, ...]}\n\n  \
   # property read\n  \
   {\"name\": \"status\", \"type\": \"text\", \"value\": \"draft\"}\n\n  \
-  # property set / remove (mutation result)\n  \
-  {\"name\": \"status\", \"value\": \"done\", \"path\": \"notes/todo.md\"}\n\n  \
+  # property set (echoes the written value)\n  \
+  {\"name\": \"status\", \"type\": \"text\", \"value\": \"done\"}\n\n  \
+  # property remove\n  \
+  {\"path\": \"notes/todo.md\", \"removed\": \"status\"}\n\n  \
   # property find\n  \
   {\"property\": \"status\", \"value\": \"draft\", \"files\": [\"a.md\", \"b.md\"], \"total\": 2}\n\n  \
   # property add-to-list / remove-from-list\n  \
