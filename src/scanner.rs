@@ -36,8 +36,9 @@ where
     let mut line_num: usize = 0;
     let mut buf = String::new();
 
-    // Track fenced code block state — declared early so it's in scope for the first-line check
+    // Track fenced code block and comment block state
     let mut fence: Option<(char, usize)> = None; // (fence_char, fence_count)
+    let mut in_comment = false;
 
     // Read first line to check for frontmatter
     buf.clear();
@@ -50,11 +51,14 @@ where
     let trimmed = buf.trim_end_matches(['\n', '\r']);
     let fm_lines = frontmatter::skip_frontmatter(&mut reader, trimmed)?;
     if fm_lines == 0 {
-        // First line is not frontmatter — check if it opens a code fence
+        // First line is not frontmatter — check if it opens a code fence or comment
         if let Some(f) = detect_opening_fence(trimmed) {
             fence = Some(f);
+        } else if is_comment_fence(trimmed) {
+            in_comment = true;
         } else {
             let cleaned = strip_inline_code(trimmed);
+            let cleaned = strip_inline_comments(&cleaned);
             if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
                 return Ok(());
             }
@@ -72,7 +76,7 @@ where
         line_num += 1;
         let line = buf.trim_end_matches(['\n', '\r']);
 
-        // Check for fenced code block boundaries
+        // Check for fenced code block boundaries (highest priority)
         if let Some((fence_char, fence_count)) = fence {
             if is_closing_fence(line, fence_char, fence_count) {
                 fence = None;
@@ -80,13 +84,27 @@ where
             continue; // skip lines inside code blocks
         }
 
+        // Check for comment block boundaries
+        if in_comment {
+            if is_comment_fence(line) {
+                in_comment = false;
+            }
+            continue; // skip lines inside comment blocks
+        }
+
         if let Some(f) = detect_opening_fence(line) {
             fence = Some(f);
             continue;
         }
 
-        // Normal text line — strip inline code spans before passing to visitor
+        if is_comment_fence(line) {
+            in_comment = true;
+            continue;
+        }
+
+        // Normal text line — strip inline code spans and comments before passing to visitor
         let cleaned = strip_inline_code(line);
+        let cleaned = strip_inline_comments(&cleaned);
         if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
             return Ok(());
         }
@@ -181,6 +199,74 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     // Only ASCII bytes (backticks and code content) were replaced with ASCII spaces,
     // so the result is always valid UTF-8.
     Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
+}
+
+/// Check if a line is an Obsidian comment fence (`%%` on its own line).
+///
+/// Returns `true` when the trimmed line is exactly `%%`. Lines containing
+/// `%%` with other content (e.g. inline comments like `%%text%%`) are NOT
+/// comment fences.
+pub(crate) fn is_comment_fence(line: &str) -> bool {
+    line.trim() == "%%"
+}
+
+/// Strip inline Obsidian comments (`%%text%%`) from a line, replacing them
+/// (markers inclusive) with spaces to preserve byte positions for downstream
+/// parsing.
+///
+/// Returns a borrowed reference when no `%%` is present (zero allocation).
+/// Unmatched opening `%%` is treated as literal text.
+pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
+    if !line.contains("%%") {
+        return Cow::Borrowed(line);
+    }
+
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut result = bytes.to_vec();
+    let mut i = 0;
+
+    while i + 1 < len {
+        if bytes[i] == b'%' && bytes[i + 1] == b'%' {
+            let open = i;
+            i += 2; // skip opening %%
+
+            // If the rest of the line is only whitespace, this is a block fence
+            // marker, not an inline comment — leave it alone.
+            if line[i..].trim().is_empty() {
+                break;
+            }
+
+            // Scan for closing %%
+            let mut found_close = false;
+            while i + 1 < len {
+                if bytes[i] == b'%' && bytes[i + 1] == b'%' {
+                    // Replace open..=i+1 with spaces
+                    for b in &mut result[open..i + 2] {
+                        *b = b' ';
+                    }
+                    i += 2;
+                    found_close = true;
+                    break;
+                }
+                i += 1;
+            }
+            if !found_close {
+                // No closing %% — treat the opening as literal
+                i = open + 2;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    if result == bytes {
+        Cow::Borrowed(line)
+    } else {
+        // Only ASCII bytes (percent signs and comment content) were replaced
+        // with ASCII spaces, so the result is always valid UTF-8.
+        Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +405,7 @@ pub fn scan_reader_multi<R: BufRead>(
 
     // --- Phase 2: Body ---
     let mut fence: Option<(char, usize)> = None;
+    let mut in_comment = false;
 
     if fm_lines > 0 {
         line_num = fm_lines;
@@ -326,7 +413,14 @@ pub fn scan_reader_multi<R: BufRead>(
 
     // If the first line was not frontmatter, process it as a body line
     if fm_lines == 0 {
-        dispatch_body_line(&first_trimmed, line_num, visitors, &mut active, &mut fence);
+        dispatch_body_line(
+            &first_trimmed,
+            line_num,
+            visitors,
+            &mut active,
+            &mut fence,
+            &mut in_comment,
+        );
         if !active.iter().any(|&a| a) {
             return Ok(());
         }
@@ -341,7 +435,14 @@ pub fn scan_reader_multi<R: BufRead>(
         line_num += 1;
         let line = buf.trim_end_matches(['\n', '\r']);
 
-        dispatch_body_line(line, line_num, visitors, &mut active, &mut fence);
+        dispatch_body_line(
+            line,
+            line_num,
+            visitors,
+            &mut active,
+            &mut fence,
+            &mut in_comment,
+        );
         if !active.iter().any(|&a| a) {
             break;
         }
@@ -357,7 +458,9 @@ fn dispatch_body_line(
     visitors: &mut [&mut dyn FileVisitor],
     active: &mut [bool],
     fence: &mut Option<(char, usize)>,
+    in_comment: &mut bool,
 ) {
+    // Code fences take highest priority — %% inside a code block is literal.
     if let Some((fence_char, fence_count)) = *fence {
         if is_closing_fence(line, fence_char, fence_count) {
             *fence = None;
@@ -368,6 +471,14 @@ fn dispatch_body_line(
             }
         }
         // Lines inside code blocks are not delivered as body lines
+        return;
+    }
+
+    // Comment blocks — code fences inside comments are ignored.
+    if *in_comment {
+        if is_comment_fence(line) {
+            *in_comment = false;
+        }
         return;
     }
 
@@ -382,9 +493,15 @@ fn dispatch_body_line(
         return;
     }
 
-    // Normal body line
+    if is_comment_fence(line) {
+        *in_comment = true;
+        return;
+    }
+
+    // Normal body line — strip inline comments before delivering to visitors.
+    let cleaned = strip_inline_comments(line);
     for (i, v) in visitors.iter_mut().enumerate() {
-        if active[i] && v.on_body_line(line, line_num) == ScanAction::Stop {
+        if active[i] && v.on_body_line(&cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
         }
     }
@@ -876,5 +993,251 @@ Line 2
     #[test]
     fn extract_fence_language_spaces() {
         assert_eq!(extract_fence_language("```  sh  ", '`', 3), "sh");
+    }
+
+    // --- Comment block tests (simple callback scanner) ---
+
+    #[test]
+    fn skips_multiline_comment_block() {
+        let input = md!(r"
+Before
+%%
+commented [[link]]
+- [ ] hidden task
+%%
+After
+");
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, "Before");
+        assert_eq!(lines[1].0, "After");
+    }
+
+    #[test]
+    fn multiline_comment_preserves_line_numbers() {
+        let input = md!(r"
+Line 1
+%%
+skipped
+skipped
+%%
+Line 6
+");
+        let lines = collect_lines(input);
+        assert_eq!(lines[0], ("Line 1".to_string(), 1));
+        assert_eq!(lines[1], ("Line 6".to_string(), 6));
+    }
+
+    #[test]
+    fn inline_comment_stripped() {
+        let input = "See %%[[not a link]]%% and [[real link]]\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].0.contains("not a link"));
+        assert!(lines[0].0.contains("[[real link]]"));
+    }
+
+    #[test]
+    fn comment_inside_code_fence_ignored() {
+        let input = md!(r"
+Before
+```
+%%
+not a comment
+%%
+```
+After
+");
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, "Before");
+        assert_eq!(lines[1].0, "After");
+    }
+
+    #[test]
+    fn code_fence_inside_comment_ignored() {
+        let input = md!(r"
+Before
+%%
+```
+not code
+```
+%%
+After
+");
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, "Before");
+        assert_eq!(lines[1].0, "After");
+    }
+
+    #[test]
+    fn unmatched_inline_comment_treated_as_literal() {
+        let input = "See %%open and [[link]]\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].0.contains("[[link]]"));
+    }
+
+    #[test]
+    fn comment_on_first_line() {
+        let input = md!(r"
+%%
+hidden
+%%
+Visible
+");
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].0, "Visible");
+    }
+
+    #[test]
+    fn empty_inline_comment() {
+        let input = "before %%%% after\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        // %%%% = open %% + close %% with empty content, all replaced with spaces
+        assert!(!lines[0].0.contains("%%"));
+        assert!(lines[0].0.contains("before"));
+        assert!(lines[0].0.contains("after"));
+    }
+
+    #[test]
+    fn nested_percent_signs_in_inline_comment() {
+        let input = "a %%content with % inside%% b\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].0.contains("content"));
+        assert!(lines[0].0.contains("a "));
+        assert!(lines[0].0.contains(" b"));
+    }
+
+    // --- Comment block tests (multi-visitor scanner) ---
+
+    #[test]
+    fn multi_visitor_skips_comment_block() {
+        let input = md!(r"
+Line 1
+%%
+commented [[link]]
+- [ ] hidden task
+%%
+Line 6
+");
+        let mut body = BodyCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body]).unwrap();
+
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 1");
+        assert_eq!(body.lines[0].1, 1);
+        assert_eq!(body.lines[1].0, "Line 6");
+        assert_eq!(body.lines[1].1, 6);
+    }
+
+    #[test]
+    fn multi_visitor_comment_inside_fence_ignored() {
+        let input = md!(r"
+Line 1
+```
+%%
+not a comment
+%%
+```
+Line 8
+");
+        let mut body = BodyCollector::new();
+        let mut fences = FenceCounter::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body, &mut fences]).unwrap();
+
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 1");
+        assert_eq!(body.lines[1].0, "Line 8");
+
+        // Code fence events should still fire normally
+        assert_eq!(fences.opens.len(), 1);
+        assert_eq!(fences.closes.len(), 1);
+    }
+
+    #[test]
+    fn multi_visitor_fence_inside_comment_ignored() {
+        let input = md!(r"
+Line 1
+%%
+```rust
+not code
+```
+%%
+Line 8
+");
+        let mut body = BodyCollector::new();
+        let mut fences = FenceCounter::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body, &mut fences]).unwrap();
+
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 1");
+        assert_eq!(body.lines[1].0, "Line 8");
+
+        // No fence events — the ``` lines were inside a comment
+        assert_eq!(fences.opens.len(), 0);
+        assert_eq!(fences.closes.len(), 0);
+    }
+
+    #[test]
+    fn multi_visitor_inline_comment_stripped() {
+        let input = "See %%[[hidden]]%% and [[visible]]\n";
+        let mut body = BodyCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body]).unwrap();
+
+        assert_eq!(body.lines.len(), 1);
+        assert!(!body.lines[0].0.contains("hidden"));
+        assert!(body.lines[0].0.contains("[[visible]]"));
+    }
+
+    // --- is_comment_fence unit tests ---
+
+    #[test]
+    fn is_comment_fence_basic() {
+        assert!(is_comment_fence("%%"));
+        assert!(is_comment_fence("  %%  "));
+        assert!(is_comment_fence("\t%%"));
+    }
+
+    #[test]
+    fn is_comment_fence_rejects_inline() {
+        assert!(!is_comment_fence("%%inline%%"));
+        assert!(!is_comment_fence("text %% more"));
+        assert!(!is_comment_fence("%%content"));
+        assert!(!is_comment_fence("content%%"));
+    }
+
+    // --- strip_inline_comments unit tests ---
+
+    #[test]
+    fn strip_inline_comments_no_change() {
+        let line = "no comments here";
+        let result = strip_inline_comments(line);
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(result.as_ref(), line);
+    }
+
+    #[test]
+    fn strip_inline_comments_basic() {
+        let result = strip_inline_comments("a %%hidden%% b");
+        assert_eq!(result.as_ref(), "a            b");
+    }
+
+    #[test]
+    fn strip_inline_comments_multiple() {
+        let result = strip_inline_comments("%%a%% mid %%b%%");
+        assert!(!result.contains('a'));
+        assert!(result.contains("mid"));
+        assert!(!result.contains('b'));
+    }
+
+    #[test]
+    fn strip_inline_comments_unmatched() {
+        let result = strip_inline_comments("a %%open");
+        assert_eq!(result.as_ref(), "a %%open");
     }
 }

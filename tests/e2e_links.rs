@@ -335,3 +335,59 @@ fn links_unclosed_wikilink_in_file() {
     let links = parsed["links"].as_array().unwrap();
     assert!(links.is_empty());
 }
+
+// --- Comment block handling ---
+
+#[test]
+fn links_skips_comment_blocks() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "comments.md",
+        md!(r"
+Before [[visible-link]]
+%%
+[[hidden-link]]
+%%
+After [[another-visible]]
+"),
+    );
+    let output = hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "comments.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let links = parsed["links"].as_array().unwrap();
+    let targets: Vec<&str> = links
+        .iter()
+        .map(|l| l["target"].as_str().unwrap())
+        .collect();
+    assert!(targets.contains(&"visible-link"));
+    assert!(targets.contains(&"another-visible"));
+    assert!(!targets.contains(&"hidden-link"));
+    assert_eq!(links.len(), 2);
+}
+
+#[test]
+fn links_skips_inline_comments() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "inline-comments.md",
+        "See %%[[hidden]]%% and [[visible]]\n",
+    );
+    let output = hyalo()
+        .args(["--dir", &tmp.path().display().to_string()])
+        .args(["links", "--file", "inline-comments.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let links = parsed["links"].as_array().unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["target"], "visible");
+}
