@@ -941,4 +941,15 @@ Regular text.
         assert!(task.is_some());
         assert_eq!(task.unwrap().text, "Real task");
     }
+
+    #[test]
+    fn read_task_returns_none_when_first_line_is_comment_fence() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        fs::write(&path, "%%\n- [ ] Inside comment\n%%\n").unwrap();
+
+        // Line 1 is the opening comment fence — not a task
+        let task = read_task(&path, 1).unwrap();
+        assert!(task.is_none());
+    }
 }
