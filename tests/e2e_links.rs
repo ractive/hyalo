@@ -7,14 +7,14 @@ fn setup_vault() -> tempfile::TempDir {
     write_md(
         tmp.path(),
         "note-a.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note A
 ---
 See [[note-b]] and [[nonexistent]].
 
 Also ![[image.png]] embed.
-"#),
+"),
     );
     write_md(
         tmp.path(),
@@ -26,13 +26,13 @@ Also ![[image.png]] embed.
     write_md(
         tmp.path(),
         "code-blocks.md",
-        md!(r#"
+        md!(r"
 Before
 ```
 [[inside code block]]
 ```
 After [[real-link]]
-"#),
+"),
     );
     tmp
 }

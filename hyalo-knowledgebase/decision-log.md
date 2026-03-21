@@ -148,3 +148,19 @@ The old `--path` flag is retired. Both flags are always relative to `--dir` and 
 **Decision:** Tag commands (`tags`, `tag find`, `tag add`, `tag remove`) support vault-wide and glob-scoped operations without requiring an index. They scan all matching files on each invocation.
 
 **Why:** Tags live in frontmatter, which is at most ~8KB per file and can be read without buffering the body. The existing `read_frontmatter` streaming reader stops at the closing `---`. For a 1000-file vault, this means reading ~8MB of data at most — well within acceptable latency. Pre-filtering optimizations (byte-level `tags:` search before YAML parse) can be explored if benchmarks show need. This is fundamentally different from vault-wide task search (DEC-021), which requires reading entire file contents.
+
+## DEC-023: Split `properties`/`tags` into `summary` + `list` Subcommands (2026-03-21)
+
+**Context:** The `properties` and `tags` commands each produced a single aggregate output (unique names with counts). There was no way to get per-file detail — which file has which properties or tags. Adding `--file`/`--glob` to the top-level commands overloaded a single output shape, making it unclear whether the output was aggregate or per-file.
+
+**Decision:** Split both commands into two subcommands:
+- `summary` (default) — aggregate unique names with types/counts, same as the original output
+- `list` — per-file detail, each file with its property key/value pairs or tags array
+
+The `summary` subcommand is the default, so `hyalo properties` and `hyalo tags` without a subcommand still produce the same aggregate output as before. The `--file`/`--glob` flags move to the subcommand level.
+
+**Consequences:**
+- No breaking change for callers that used `hyalo properties` or `hyalo tags` without flags — they get `summary` by default
+- Callers that used `--file`/`--glob` at the top level must now place them after the subcommand name (e.g. `hyalo properties list --glob '*.md'`)
+- Consistent CLI model: both `properties` and `tags` follow the same `summary`/`list` pattern
+- Shared helpers extracted to avoid duplicating file-discovery logic between the two command groups

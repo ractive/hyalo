@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use std::borrow::Cow;
 use std::fs::File;
@@ -92,7 +93,7 @@ where
     Ok(())
 }
 
-/// Detect an opening fence (``` or ~~~) at the start of a line.
+/// Detect an opening fence (triple backtick or `~~~`) at the start of a line.
 /// Returns the fence character and count if found.
 fn detect_opening_fence(line: &str) -> Option<(char, usize)> {
     let trimmed = line.trim_start();
@@ -202,12 +203,12 @@ mod tests {
 
     #[test]
     fn skips_frontmatter() {
-        let input = md!(r#"
+        let input = md!(r"
 ---
 title: Test
 ---
 Hello world
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].0, "Hello world");
@@ -216,10 +217,10 @@ Hello world
 
     #[test]
     fn no_frontmatter() {
-        let input = md!(r#"
+        let input = md!(r"
 Hello world
 Second line
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Hello world");
@@ -230,13 +231,13 @@ Second line
 
     #[test]
     fn skips_backtick_fenced_code_block() {
-        let input = md!(r#"
+        let input = md!(r"
 Before
 ```
 code line
 ```
 After
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -245,13 +246,13 @@ After
 
     #[test]
     fn skips_tilde_fenced_code_block() {
-        let input = md!(r#"
+        let input = md!(r"
 Before
 ~~~
 code line
 ~~~
 After
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -260,13 +261,13 @@ After
 
     #[test]
     fn fenced_code_with_info_string() {
-        let input = md!(r#"
+        let input = md!(r"
 Before
 ```rust
 let x = 1;
 ```
 After
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -276,7 +277,7 @@ After
     #[test]
     fn fence_requires_matching_char_and_count() {
         // Opening with 4 backticks, closing needs >= 4
-        let input = md!(r#"
+        let input = md!(r"
 Before
 ````
 code
@@ -284,7 +285,7 @@ code
 still code
 ````
 After
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -293,7 +294,7 @@ After
 
     #[test]
     fn tilde_fence_not_closed_by_backticks() {
-        let input = md!(r#"
+        let input = md!(r"
 Before
 ~~~
 code
@@ -301,7 +302,7 @@ code
 still code
 ~~~
 After
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, "Before");
@@ -328,12 +329,12 @@ After
 
     #[test]
     fn early_abort_with_stop() {
-        let input = md!(r#"
+        let input = md!(r"
 Line 1
 Line 2
 Line 3
 Line 4
-"#);
+");
         let mut result = Vec::new();
         scan_reader(input.as_bytes(), |text, line| {
             result.push((text.to_string(), line));
@@ -349,7 +350,7 @@ Line 4
 
     #[test]
     fn line_numbers_accurate_with_frontmatter() {
-        let input = md!(r#"
+        let input = md!(r"
 ---
 title: T
 tags:
@@ -357,7 +358,7 @@ tags:
 ---
 Line 6
 Line 7
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines[0].1, 6);
         assert_eq!(lines[1].1, 7);
@@ -365,14 +366,14 @@ Line 7
 
     #[test]
     fn line_numbers_accurate_with_code_block() {
-        let input = md!(r#"
+        let input = md!(r"
 Line 1
 ```
 skipped
 skipped
 ```
 Line 6
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines[0], ("Line 1".to_string(), 1));
         assert_eq!(lines[1], ("Line 6".to_string(), 6));
@@ -413,12 +414,12 @@ Line 6
 
     #[test]
     fn first_line_is_code_fence() {
-        let input = md!(r#"
+        let input = md!(r"
 ```
 [[not a link]]
 ```
 After
-"#);
+");
         let lines = collect_lines(input);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].0, "After");
