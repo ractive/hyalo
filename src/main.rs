@@ -23,12 +23,14 @@ use hyalo::output::{CommandOutcome, Format};
         and list operations (add-to-list, remove-from-list). Use 'tag' for tag-specific find/add/remove. \
         Use 'links' to inspect wikilink targets.",
     after_help = "EXAMPLES:\n  \
-        List all properties:        hyalo properties --glob '**/*.md'\n  \
+        Aggregate property summary: hyalo properties summary\n  \
+        Per-file property detail:   hyalo properties list --glob '**/*.md'\n  \
         Set a property:             hyalo property set --name status --value done --file notes/todo.md\n  \
         Find files by property:     hyalo property find --name status --value draft\n  \
         Add to a list property:     hyalo property add-to-list --name aliases --value \"My Note\" --file note.md\n  \
         Remove from a list:         hyalo property remove-from-list --name authors --value Alice --file note.md\n  \
-        List tags with counts:      hyalo tags\n  \
+        Aggregate tag summary:      hyalo tags summary\n  \
+        Per-file tag detail:        hyalo tags list --glob 'notes/**/*.md'\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
         Find broken wikilinks:      hyalo links --file index.md --unresolved"
 )]
@@ -47,18 +49,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List all frontmatter properties across matched files (read-only, no side effects)
-    #[command(
-        long_about = "List all frontmatter properties across matched files.\n\n\
-            INPUT: Reads .md files matching --glob (or all .md files under --dir if omitted).\n\
-            OUTPUT: For each file, emits every YAML frontmatter key-value pair with its inferred type.\n\
+    /// List frontmatter properties across files — aggregate summary or per-file detail
+    #[command(long_about = "List frontmatter properties across files.\n\n\
+            SUBCOMMANDS:\n\
+            - summary (default): aggregate unique property names with types and file counts.\n\
+            - list: per-file detail — each file with its full key/value pairs.\n\n\
+            INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need to discover what properties exist, audit frontmatter, or find files with specific metadata."
-    )]
+            USE WHEN: You need to discover what properties exist, audit frontmatter, or inspect per-file metadata.")]
     Properties {
-        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md'). Omit to scan all .md files
-        #[arg(long)]
-        glob: Option<String>,
+        #[command(subcommand)]
+        action: Option<PropertiesAction>,
     },
     /// Read, set, find, or remove frontmatter properties; add/remove items from list properties
     #[command(
@@ -99,22 +100,18 @@ enum Commands {
         #[arg(long, conflicts_with = "unresolved")]
         resolved: bool,
     },
-    /// List all unique tags with per-tag file counts across matched files (read-only)
-    #[command(
-        long_about = "List all unique tags with per-tag file counts across matched files.\n\n\
+    /// List tags across files — aggregate summary or per-file detail
+    #[command(long_about = "List tags across files.\n\n\
+            SUBCOMMANDS:\n\
+            - summary (default): aggregate unique tag names with file counts. Tags are compared case-insensitively.\n\
+            - list: per-file detail — each file with its tags array.\n\n\
             INPUT: Reads the 'tags' field from YAML frontmatter in matched files.\n\
-            OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy."
-    )]
+            USE WHEN: You need to see which tags exist, find popular/orphan tags, audit tag taxonomy, or inspect per-file tags.")]
     Tags {
-        /// Scan only this file instead of all files
-        #[arg(long, conflicts_with = "glob")]
-        file: Option<String>,
-        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
-        #[arg(long, conflicts_with = "file")]
-        glob: Option<String>,
+        #[command(subcommand)]
+        action: Option<TagsAction>,
     },
     /// Find, add, or remove tags in file frontmatter
     #[command(long_about = "Find, add, or remove tags in file frontmatter.\n\n\
@@ -125,6 +122,75 @@ enum Commands {
     Tag {
         #[command(subcommand)]
         action: TagAction,
+    },
+}
+
+/// Subcommands for `hyalo properties`
+#[derive(Subcommand)]
+enum PropertiesAction {
+    /// Aggregate: unique property names with types and file counts (default)
+    #[command(
+        long_about = "Aggregate summary of frontmatter properties across matched files.\n\n\
+            OUTPUT: List of unique property names, their inferred type, and how many files contain them.\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    Summary {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Per-file detail: each file with its property key/value pairs
+    #[command(
+        long_about = "Per-file detail: each matched file with its full frontmatter key/value pairs.\n\n\
+            OUTPUT: Array of objects, each with 'path' and 'properties' (key → {value, type}).\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    List {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+}
+
+/// Subcommands for `hyalo tags`
+#[derive(Subcommand)]
+enum TagsAction {
+    /// Aggregate: unique tag names with file counts (default)
+    #[command(long_about = "Aggregate summary of tags across matched files.\n\n\
+            OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only).")]
+    Summary {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Per-file detail: each file with its tags array
+    #[command(
+        long_about = "Per-file detail: each matched file with its tags array.\n\n\
+            OUTPUT: Array of objects, each with 'path' and 'tags' (list of tag strings).\n\
+            Files without frontmatter or without a 'tags' key appear with an empty tags array.\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    List {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
     },
 }
 
@@ -340,7 +406,19 @@ fn main() {
     let dir = &cli.dir;
 
     let result = match cli.command {
-        Commands::Properties { ref glob } => properties::properties(dir, glob.as_deref(), format),
+        Commands::Properties { action: ref pa } => match pa {
+            None
+            | Some(PropertiesAction::Summary {
+                file: None,
+                glob: None,
+            }) => properties::properties_summary(dir, None, None, format),
+            Some(PropertiesAction::Summary { file, glob }) => {
+                properties::properties_summary(dir, file.as_deref(), glob.as_deref(), format)
+            }
+            Some(PropertiesAction::List { file, glob }) => {
+                properties::properties_list(dir, file.as_deref(), glob.as_deref(), format)
+            }
+        },
         Commands::Property { action } => match action {
             PropertyAction::Read { ref name, ref file } => {
                 properties::property_read(dir, name, file, format)
@@ -408,9 +486,19 @@ fn main() {
             };
             link_commands::links(dir, file, filter, format)
         }
-        Commands::Tags { ref file, ref glob } => {
-            tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
-        }
+        Commands::Tags { action: ref ta } => match ta {
+            None
+            | Some(TagsAction::Summary {
+                file: None,
+                glob: None,
+            }) => tag_commands::tags_summary(dir, None, None, format),
+            Some(TagsAction::Summary { file, glob }) => {
+                tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), format)
+            }
+            Some(TagsAction::List { file, glob }) => {
+                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
+            }
+        },
         Commands::Tag { action } => match action {
             TagAction::Find {
                 ref name,
