@@ -124,9 +124,8 @@ fn outline_glob_returns_array() {
     // Array of file outlines
     assert!(parsed.is_array());
     let arr = parsed.as_array().unwrap();
-    // All 4 files match: note.md, plain.md, empty.md, sub/nested.md
-    // (*.md matches .md extension at any depth in this glob implementation)
-    assert_eq!(arr.len(), 4);
+    // *.md matches only top-level files (literal_separator prevents * crossing /)
+    assert_eq!(arr.len(), 3);
 
     // Each element has the FileOutline shape
     for item in arr {
