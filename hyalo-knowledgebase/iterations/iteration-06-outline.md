@@ -35,13 +35,14 @@ The `outline` command fills this gap. It returns a section-aware table of conten
 ### What the outline contains
 
 **Per file:**
-- `frontmatter_keys` — list of property names present in frontmatter (not values, just keys with types)
+- `properties` — list of frontmatter properties with names, types, AND values (matching the `properties list` shape)
+- `tags` — list of tag strings from frontmatter
 - `sections` — ordered list of sections, each with:
   - `level` — heading level (1–6)
   - `heading` — heading text (stripped of leading `#` and whitespace)
   - `line` — line number in the file (1-based)
   - `links` — wikilinks and markdown links found between this heading and the next
-  - `tasks` — `{ "total": N, "done": N }` if checkboxes exist in the section, `null` otherwise
+  - `tasks` — `{ "total": N, "done": N }` if checkboxes exist in the section; omitted (not `null`) when no tasks
   - `code_blocks` — list of fenced code block languages in the section (e.g. `["rust", "json"]`), empty list if none
 
 Content before the first heading is attributed to a synthetic section with `level: 0` and `heading: null` (only emitted if it contains links, tasks, or code blocks).
@@ -52,20 +53,20 @@ JSON (default):
 ```json
 {
   "file": "iterations/iteration-05-summary-list-refactor.md",
-  "frontmatter_keys": [
-    { "key": "title", "type": "text" },
-    { "key": "date", "type": "date" },
-    { "key": "tags", "type": "list" },
-    { "key": "status", "type": "text" },
-    { "key": "branch", "type": "text" }
+  "properties": [
+    { "name": "title", "type": "text", "value": "Iteration 5 — Summary + List Subcommand Refactor" },
+    { "name": "date", "type": "date", "value": "2026-03-21" },
+    { "name": "tags", "type": "list", "value": ["iteration"] },
+    { "name": "status", "type": "text", "value": "completed" },
+    { "name": "branch", "type": "text", "value": "iter-5/summary-list-refactor" }
   ],
+  "tags": ["iteration"],
   "sections": [
     {
       "level": 1,
       "heading": "Iteration 5 — Summary + List Subcommand Refactor",
       "line": 15,
       "links": [],
-      "tasks": null,
       "code_blocks": []
     },
     {
@@ -73,7 +74,6 @@ JSON (default):
       "heading": "Relationship to iteration-04-property-find",
       "line": 27,
       "links": ["[[iteration-04-property-find]]"],
-      "tasks": null,
       "code_blocks": []
     },
     {

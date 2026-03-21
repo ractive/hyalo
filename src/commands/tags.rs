@@ -167,12 +167,12 @@ pub fn tags_list(
             path: rel_path.clone(),
             tags,
         };
-        results.push(serde_json::to_value(entry).unwrap_or_default());
+        results.push(serde_json::to_value(entry).expect("derived Serialize impl should not fail"));
     }
 
     let json_output = unwrap_single_file_result(file, results);
 
-    Ok(CommandOutcome::Success(crate::output::format_output(
+    Ok(CommandOutcome::Success(crate::output::format_success(
         format,
         &json_output,
     )))
