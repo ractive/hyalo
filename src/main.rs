@@ -606,14 +606,28 @@ fn main() {
                 let value: serde_json::Value = match serde_json::from_str(&output) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!("internal error: failed to parse command JSON output: {e}");
+                        let msg = hyalo::output::format_error(
+                            format,
+                            "internal error: failed to parse command JSON output",
+                            None,
+                            None,
+                            Some(&e.to_string()),
+                        );
+                        eprintln!("{msg}");
                         process::exit(2);
                     }
                 };
                 match apply_jq_filter_result(filter, &value) {
                     Ok(filtered) => println!("{filtered}"),
                     Err(e) => {
-                        eprintln!("Error: jq filter failed: {e}");
+                        let msg = hyalo::output::format_error(
+                            format,
+                            "jq filter failed",
+                            None,
+                            None,
+                            Some(&e),
+                        );
+                        eprintln!("{msg}");
                         process::exit(1);
                     }
                 }

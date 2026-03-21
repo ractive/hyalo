@@ -168,9 +168,14 @@ fn jq_invalid_filter_exits_nonzero() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should mention "jq" and give some indication of a syntax/filter problem
     assert!(
-        stderr.contains("jq") || stderr.contains("Error"),
-        "expected error message, got: {stderr}"
+        stderr.contains("jq"),
+        "expected 'jq' in error message, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("syntax") || stderr.contains("filter") || stderr.contains("parse"),
+        "expected description of what went wrong, got: {stderr}"
     );
 }
 
@@ -178,7 +183,7 @@ fn jq_invalid_filter_exits_nonzero() {
 fn jq_runtime_error_exits_nonzero() {
     let tmp = setup_vault();
 
-    // .no_such_field on a non-object path that causes a type error (e.g. trying to iterate null)
+    // Explicit jq runtime error raised via error("deliberate") to verify non-zero exit on runtime failure
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "error(\"deliberate\")"])
@@ -188,9 +193,41 @@ fn jq_runtime_error_exits_nonzero() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should mention "jq" and include the error value "deliberate"
     assert!(
-        stderr.contains("jq") || stderr.contains("Error"),
-        "expected error message, got: {stderr}"
+        stderr.contains("jq"),
+        "expected 'jq' in error message, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("deliberate"),
+        "expected the raised error value 'deliberate' in output, got: {stderr}"
+    );
+}
+
+#[test]
+fn jq_filter_error_is_json_when_format_json() {
+    let tmp = setup_vault();
+
+    // With --format json (the default), jq errors should be emitted as structured JSON
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "json"])
+        .args(["--jq", "error(\"structured-error\")"])
+        .arg("tags")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|_| panic!("expected JSON on stderr for --format json, got: {stderr}"));
+    assert!(
+        parsed.get("error").is_some(),
+        "expected 'error' field in JSON error, got: {stderr}"
+    );
+    assert!(
+        parsed.get("cause").is_some(),
+        "expected 'cause' field in JSON error, got: {stderr}"
     );
 }
 
