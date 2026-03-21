@@ -164,3 +164,49 @@ The `summary` subcommand is the default, so `hyalo properties` and `hyalo tags` 
 - Callers that used `--file`/`--glob` at the top level must now place them after the subcommand name (e.g. `hyalo properties list --glob '*.md'`)
 - Consistent CLI model: both `properties` and `tags` follow the same `summary`/`list` pattern
 - Shared helpers extracted to avoid duplicating file-discovery logic between the two command groups
+
+## DEC-024: Outline Command — Section-Aware Structural Extraction (2026-03-21)
+
+**Context:** An LLM needs to understand a document's structure without reading it in full. Existing commands answer narrow questions (`properties` → metadata, `tags` → categorization, `links` → flat reference list), but none give the structural skeleton: what sections exist, what each section references, and whether work is complete.
+
+**Decision:** Add an `outline` command that extracts per-section structure:
+- **Headings** with level, text, and line number — the document skeleton
+- **Frontmatter properties with names, types, and values** — matching the `properties list` shape
+- **Tags** — list of tag strings from frontmatter
+- **Wikilinks per section** — which section references what (not just "file has links")
+- **Task counts per section** — `total`/`done` per section; `tasks` field omitted (not null) when section has no tasks
+- **Code block languages per section** — content type hints
+
+Content before the first heading gets a synthetic `level: 0` section (only if non-empty). ATX headings only — no setext.
+
+Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single-file per DEC-016) because outline output is lightweight.
+
+**Why:** This gives an LLM a "table of contents with context" — enough to navigate, decide where to edit, and assess completeness without reading the full body. Each piece of enrichment (links, tasks, code blocks) answers a question an LLM would otherwise need a separate command call or full file read for.
+
+**Consequences:**
+- Scanner gains heading extraction capability (ATX headings outside code blocks)
+- New section-aware accumulator pattern for attributing links/tasks/code blocks to their enclosing section
+- Multi-file outline produces an array — consistent with `properties list` and `tags list` output shape
+
+## DEC-025: Typed Structs for JSON Output (2026-03-21)
+
+**Context:** All commands built JSON output dynamically using `serde_json::json!()` macros and manual `serde_json::Map` construction. Shapes were implicit — defined only by the code that constructed them and the tests that parsed them. The outline command needed to reuse the same property and tag shapes as existing commands.
+
+**Decision:** Introduce `src/types.rs` with `#[derive(Serialize)]` structs for all JSON output shapes. Refactor all existing commands to construct typed structs instead of ad-hoc `json!()` values. Add `format_output<T: Serialize>()` to `output.rs` as the standard serialization path.
+
+**Types introduced:** `PropertyInfo`, `FileProperties`, `PropertySummaryEntry`, `PropertyRemoved`, `PropertyFindResult`, `PropertyMutationResult`, `FileTags`, `TagSummary`, `TagSummaryEntry`, `TagFindResult`, `TagMutationResult`, `LinkInfo`, `FileLinks`, `FileOutline`, `OutlineSection`, `TaskCount`.
+
+**Why:** Typed structs guarantee that the outline command's `properties` and `tags` fields are structurally identical to what `properties list` and `tags list` produce — the compiler enforces it. Also removes the `build_find_json` / `build_list_mutation_json` generic helpers that used dynamic key names, replacing them with specific structs per command.
+
+**Consequences:**
+- JSON output is now compiler-verified — shape mismatches are caught at build time
+- New commands can reuse existing types instead of guessing the right `json!()` shape
+- Removed ~50 lines of generic JSON-building helpers from `commands/mod.rs`
+
+## DEC-026: Glob `*` Must Not Cross Path Separators (2026-03-21)
+
+**Context:** The `globset` crate's `Glob::new()` defaults to letting `*` match across `/` path separators. This means `*.md` matched `sub/nested.md`, which contradicts standard shell glob semantics and surprises users expecting `*` to match within a single directory only.
+
+**Decision:** Use `GlobBuilder::literal_separator(true)` when compiling glob patterns in `match_glob()`. This makes `*` match only within a single directory component. Use `**` for recursive matching across directories.
+
+**Why:** Standard shell behavior — `*.md` should match `note.md` but not `sub/note.md`. Users familiar with any shell, ripgrep, fd, or .gitignore expect this. The previous behavior made `--glob "*.md"` equivalent to `--glob "**/*.md"`, removing the ability to scope to a single directory level.

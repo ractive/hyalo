@@ -12,6 +12,8 @@ cargo build --release
 
 All commands accept `--dir <path>` (default: `.`) and `--format json|text` (default: `json`).
 
+Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
+
 ### Properties
 
 ```sh
@@ -73,6 +75,21 @@ hyalo tag remove --name TAG <--file FILE | --glob PATTERN>
 `tags summary` is the default when no subcommand is given (`hyalo tags` runs `summary`).
 
 **Tag format (Obsidian-compatible):** letters, digits, `_`, `-`, `/`. Must contain at least one non-numeric character. Forward slashes create hierarchy — `tag find --name inbox` matches `inbox`, `inbox/processing`, etc.
+
+### Outline
+
+```sh
+# Structural outline of a single file (returns bare object)
+hyalo outline --file FILE
+
+# Outline of multiple files (returns array)
+hyalo outline --glob PATTERN
+
+# Outline of all .md files under --dir (returns array)
+hyalo outline
+```
+
+Returns per-file: frontmatter properties (with types and values), tags, and a section tree with heading levels, line numbers, wikilinks, task counts (`total`/`done`), and code block languages. Designed for LLM navigation — understand a document's structure without reading the full content.
 
 ## License
 
