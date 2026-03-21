@@ -12,6 +12,8 @@ cargo build --release
 
 All commands accept `--dir <path>` (default: `.`) and `--format json|text` (default: `json`).
 
+Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
+
 ### Properties
 
 ```sh

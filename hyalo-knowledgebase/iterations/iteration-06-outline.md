@@ -125,11 +125,17 @@ Unlike `links` (DEC-016, single-file only), outline supports multi-file mode bec
 - [x] Add e2e tests for `outline --file`, `outline --glob`, and vault-wide mode
 - [x] Run quality gates: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 
+### Bug fixes
+- [x] Fix glob matching: `*` was crossing `/` path separators (DEC-026). Use `GlobBuilder::literal_separator(true)` so `*.md` matches top-level only, `**/*.md` for recursive.
+- [x] Fix empty fence languages pushed to `code_blocks` (empty info strings now produce no entry)
+- [x] Fix `format_link_string` to preserve `[[target|label]]` format for wikilinks
+
 ### Documentation
 - [x] Add decision log entry DEC-024 for outline command design
 - [x] Add decision log entry DEC-025 for typed structs
+- [x] Add decision log entry DEC-026 for glob literal separator fix
 - [x] Update iteration plan to reflect iteration 6 scope change
-- [x] Update README.md with `outline` command usage
+- [x] Update README.md with `outline` command usage and glob semantics
 
 ## Design Notes
 
