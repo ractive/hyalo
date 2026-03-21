@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use hyalo::commands::{
     links as link_commands, outline as outline_commands, properties, tags as tag_commands,
 };
-use hyalo::output::{CommandOutcome, Format};
+use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +45,12 @@ struct Cli {
     #[arg(long, global = true, default_value = "json")]
     format: String,
 
+    /// Apply a jq filter expression to the JSON output of any command.
+    /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
+    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'
+    #[arg(long, global = true, value_name = "FILTER")]
+    jq: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -53,10 +59,11 @@ struct Cli {
 enum Commands {
     /// List frontmatter properties across files — aggregate summary or per-file detail
     #[command(long_about = "List frontmatter properties across files.\n\n\
-            SUBCOMMANDS:\n\
+            Subcommands:\n\
             - summary (default): aggregate unique property names with types and file counts.\n\
             - list: per-file detail — each file with its full key/value pairs.\n\n\
             INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to discover what properties exist, audit frontmatter, or inspect per-file metadata.")]
     Properties {
@@ -72,9 +79,11 @@ enum Commands {
         - remove: Delete a property from one file.\n\
         - find: Search files by property existence or value (read-only).\n\
         - add-to-list: Append values to a list property across file(s).\n\
-        - remove-from-list: Remove values from a list property across file(s).\n\
-        SIDE EFFECTS: 'set', 'remove', 'add-to-list', and 'remove-from-list' modify files on disk. \
-        'read' and 'find' are read-only."
+        - remove-from-list: Remove values from a list property across file(s).\n\n\
+        INPUT: Property name (--name) and file (--file) or scope (--glob) depending on subcommand.\n\
+        SCOPE: 'read', 'set', and 'remove' operate on a single --file. 'find', 'add-to-list', and 'remove-from-list' support --file or --glob.\n\
+        SIDE EFFECTS: 'set', 'remove', 'add-to-list', and 'remove-from-list' modify files on disk. 'read' and 'find' are read-only.\n\
+        USE WHEN: You need to read, write, or search frontmatter properties in one or more files."
     )]
     Property {
         #[command(subcommand)]
@@ -84,8 +93,8 @@ enum Commands {
     #[command(
         long_about = "List outgoing [[wikilinks]] from a file and their resolution status.\n\n\
             INPUT: A single markdown file (--file).\n\
-            OUTPUT: Each [[wikilink]] found in the file body, with a boolean indicating whether \
-            the link target resolves to an existing .md file under --dir.\n\
+            OUTPUT: Each [[wikilink]] found in the file body. The 'path' field is the resolved \
+            file path (string) if the link target exists under --dir, or null if unresolved.\n\
             FILTERS: --unresolved returns only broken links. --resolved returns only valid links. \
             Without either flag, returns all links.\n\
             SIDE EFFECTS: None (read-only).\n\
@@ -104,7 +113,7 @@ enum Commands {
     },
     /// List tags across files — aggregate summary or per-file detail
     #[command(long_about = "List tags across files.\n\n\
-            SUBCOMMANDS:\n\
+            Subcommands:\n\
             - summary (default): aggregate unique tag names with file counts. Tags are compared case-insensitively.\n\
             - list: per-file detail — each file with its tags array.\n\n\
             INPUT: Reads the 'tags' field from YAML frontmatter in matched files.\n\
@@ -117,10 +126,16 @@ enum Commands {
     },
     /// Find, add, or remove tags in file frontmatter
     #[command(long_about = "Find, add, or remove tags in file frontmatter.\n\n\
-        Subcommands: find, add, remove.\n\
+        Subcommands:\n\
+        - find: Search files by tag name or prefix (read-only).\n\
+        - add: Append a tag to file(s) frontmatter.\n\
+        - remove: Delete a tag from file(s) frontmatter.\n\n\
+        INPUT: Tag name (--name) and file (--file) or scope (--glob).\n\
+        SCOPE: 'find', 'add', and 'remove' support --file or --glob; defaults to all .md files.\n\
+        SIDE EFFECTS: 'add' and 'remove' modify files on disk. 'find' is read-only.\n\
+        USE WHEN: You need to find files by tag, or add/remove tags across one or more files.\n\
         NESTED TAG MATCHING: Tag names can be hierarchical (e.g. 'project/backend'). \
-        Searching for a parent tag like 'project' matches all children ('project/backend', 'project/frontend').\n\
-        SIDE EFFECTS: 'add' and 'remove' modify files on disk. 'find' is read-only.")]
+        Searching for a parent tag like 'project' matches all children ('project/backend', 'project/frontend').")]
     Tag {
         #[command(subcommand)]
         action: TagAction,
@@ -431,6 +446,22 @@ fn main() {
         process::exit(2);
     };
 
+    // --jq operates on JSON, so it conflicts with an explicit --format text.
+    let jq_filter = cli.jq.as_deref();
+    if jq_filter.is_some() && format != Format::Json {
+        eprintln!(
+            "Error: --jq cannot be combined with --format {}",
+            cli.format
+        );
+        eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
+        process::exit(2);
+    }
+    let effective_format = if jq_filter.is_some() {
+        Format::Json
+    } else {
+        format
+    };
+
     let dir = &cli.dir;
 
     let result = match cli.command {
@@ -439,26 +470,36 @@ fn main() {
             | Some(PropertiesAction::Summary {
                 file: None,
                 glob: None,
-            }) => properties::properties_summary(dir, None, None, format),
-            Some(PropertiesAction::Summary { file, glob }) => {
-                properties::properties_summary(dir, file.as_deref(), glob.as_deref(), format)
-            }
+            }) => properties::properties_summary(dir, None, None, effective_format),
+            Some(PropertiesAction::Summary { file, glob }) => properties::properties_summary(
+                dir,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
             Some(PropertiesAction::List { file, glob }) => {
-                properties::properties_list(dir, file.as_deref(), glob.as_deref(), format)
+                properties::properties_list(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
         },
         Commands::Property { action } => match action {
             PropertyAction::Read { ref name, ref file } => {
-                properties::property_read(dir, name, file, format)
+                properties::property_read(dir, name, file, effective_format)
             }
             PropertyAction::Set {
                 ref name,
                 ref value,
                 ref prop_type,
                 ref file,
-            } => properties::property_set(dir, name, value, prop_type.as_deref(), file, format),
+            } => properties::property_set(
+                dir,
+                name,
+                value,
+                prop_type.as_deref(),
+                file,
+                effective_format,
+            ),
             PropertyAction::Remove { ref name, ref file } => {
-                properties::property_remove(dir, name, file, format)
+                properties::property_remove(dir, name, file, effective_format)
             }
             PropertyAction::Find {
                 ref name,
@@ -471,7 +512,7 @@ fn main() {
                 value.as_deref(),
                 file.as_deref(),
                 glob.as_deref(),
-                format,
+                effective_format,
             ),
             PropertyAction::AddToList {
                 ref name,
@@ -484,7 +525,7 @@ fn main() {
                 value,
                 file.as_deref(),
                 glob.as_deref(),
-                format,
+                effective_format,
             ),
             PropertyAction::RemoveFromList {
                 ref name,
@@ -497,7 +538,7 @@ fn main() {
                 value,
                 file.as_deref(),
                 glob.as_deref(),
-                format,
+                effective_format,
             ),
         },
         Commands::Links {
@@ -512,19 +553,19 @@ fn main() {
             } else {
                 link_commands::LinkFilter::All
             };
-            link_commands::links(dir, file, filter, format)
+            link_commands::links(dir, file, filter, effective_format)
         }
         Commands::Tags { action: ref ta } => match ta {
             None
             | Some(TagsAction::Summary {
                 file: None,
                 glob: None,
-            }) => tag_commands::tags_summary(dir, None, None, format),
+            }) => tag_commands::tags_summary(dir, None, None, effective_format),
             Some(TagsAction::Summary { file, glob }) => {
-                tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), format)
+                tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
             Some(TagsAction::List { file, glob }) => {
-                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
+                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
         },
         Commands::Tag { action } => match action {
@@ -532,26 +573,76 @@ fn main() {
                 ref name,
                 ref file,
                 ref glob,
-            } => tag_commands::tag_find(dir, name, file.as_deref(), glob.as_deref(), format),
+            } => tag_commands::tag_find(
+                dir,
+                name,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
             TagAction::Add {
                 ref name,
                 ref file,
                 ref glob,
-            } => tag_commands::tag_add(dir, name, file.as_deref(), glob.as_deref(), format),
+            } => tag_commands::tag_add(
+                dir,
+                name,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
             TagAction::Remove {
                 ref name,
                 ref file,
                 ref glob,
-            } => tag_commands::tag_remove(dir, name, file.as_deref(), glob.as_deref(), format),
+            } => tag_commands::tag_remove(
+                dir,
+                name,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
         },
         Commands::Outline { ref file, ref glob } => {
-            outline_commands::outline(dir, file.as_deref(), glob.as_deref(), format)
+            outline_commands::outline(dir, file.as_deref(), glob.as_deref(), effective_format)
         }
     };
 
     match result {
         Ok(CommandOutcome::Success(output)) => {
-            println!("{output}");
+            if let Some(filter) = jq_filter {
+                // Parse the JSON output we forced above, then apply the user filter.
+                let value: serde_json::Value = match serde_json::from_str(&output) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let msg = hyalo::output::format_error(
+                            format,
+                            "internal error: failed to parse command JSON output",
+                            None,
+                            None,
+                            Some(&e.to_string()),
+                        );
+                        eprintln!("{msg}");
+                        process::exit(2);
+                    }
+                };
+                match apply_jq_filter_result(filter, &value) {
+                    Ok(filtered) => println!("{filtered}"),
+                    Err(e) => {
+                        let msg = hyalo::output::format_error(
+                            format,
+                            "jq filter failed",
+                            None,
+                            None,
+                            Some(&e),
+                        );
+                        eprintln!("{msg}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                println!("{output}");
+            }
         }
         Ok(CommandOutcome::UserError(output)) => {
             eprintln!("{output}");

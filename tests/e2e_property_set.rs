@@ -255,6 +255,68 @@ Some paragraph content.
 }
 
 #[test]
+fn property_set_text_format() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Test
+---
+# Body
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "text"])
+        .args([
+            "property", "set", "--name", "status", "--value", "done", "--file", "note.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // PropertyInfo text format: "status (text): done"
+    assert!(
+        stdout.contains("status"),
+        "expected property name, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("text"),
+        "expected property type, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("done"),
+        "expected property value, got: {stdout}"
+    );
+}
+
+#[test]
+fn set_missing_file_errors() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "property",
+            "set",
+            "--name",
+            "status",
+            "--value",
+            "done",
+            "--file",
+            "nonexistent.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
 fn set_preserves_other_properties() {
     let tmp = TempDir::new().unwrap();
     write_md(

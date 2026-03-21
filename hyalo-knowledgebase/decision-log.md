@@ -210,3 +210,22 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 **Decision:** Use `GlobBuilder::literal_separator(true)` when compiling glob patterns in `match_glob()`. This makes `*` match only within a single directory component. Use `**` for recursive matching across directories.
 
 **Why:** Standard shell behavior — `*.md` should match `note.md` but not `sub/note.md`. Users familiar with any shell, ripgrep, fd, or .gitignore expect this. The previous behavior made `--glob "*.md"` equivalent to `--glob "**/*.md"`, removing the ability to scope to a single directory level.
+
+## DEC-027: jq Filters via `jaq` for Text Output (2026-03-21)
+
+**Context:** All commands support `--format text` but prior to iteration 7, text output was produced by a generic key=value formatter that was unreadable for nested/typed data (e.g. `properties: [{name=title, type=text, value=My Note}]`).
+
+**Decision:** Use the `jaq` crate (pure-Rust jq interpreter) to transform `serde_json::Value` to human-readable text. Each output type gets a `&'static str` jq filter constant. The filter is looked up by sorting the JSON object's top-level keys into a comma-joined "key signature". Unknown shapes fall back to generic key: value formatting.
+
+**Why jaq:**
+- jq is purpose-built for JSON→text transformation with string interpolation, conditionals, and array iteration
+- Pure Rust — no C deps, no subprocess, fast startup
+- Filters are `&'static str` — changing text format = editing one string constant, no Rust recompile of business logic needed
+- Standard language — no custom DSL to learn or maintain
+
+**Tradeoffs:**
+- Filter re-compilation on every call (acceptable for a CLI tool; no daemon/server use case)
+- Raw string delimiter collision: `"#" * .level` in jq requires `r##"..."##` instead of `r#"..."#` in Rust 2024 edition
+- Filter strings must be tested carefully — jq syntax errors produce `None` and fall back to generic format silently
+
+**Stable versions used:** `jaq-core = "2.2.1"`, `jaq-json = "1.1.3"` (with `serde_json` feature), `jaq-std = "2.1.2"`.

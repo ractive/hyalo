@@ -284,8 +284,16 @@ fn outline_text_format() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Text format should contain key: value pairs
-    assert!(stdout.contains("file:"));
+    // File path appears at the top
+    assert!(stdout.contains("note.md"));
+    // Tags appear in output
+    assert!(stdout.contains("rust"));
+    assert!(stdout.contains("cli"));
+    // Headings appear with # prefix
+    assert!(stdout.contains("# Introduction"));
+    assert!(stdout.contains("## Tasks"));
+    // Task counts appear
+    assert!(stdout.contains("[1/2]"));
 }
 
 // --- Glob no match ---

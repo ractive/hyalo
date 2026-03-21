@@ -341,7 +341,55 @@ status: draft
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Text format outputs key: value lines
-    assert!(stdout.contains("path:"));
-    assert!(stdout.contains("properties:"));
+    // File path header
+    assert!(stdout.contains("note.md"));
+    // Properties are listed with name (type): value format
+    assert!(stdout.contains("title"));
+    assert!(stdout.contains("Hello"));
+    assert!(stdout.contains("status"));
+    assert!(stdout.contains("draft"));
+}
+
+#[test]
+fn properties_summary_text_format() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+status: draft
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--format",
+            "text",
+            "properties",
+            "summary",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Properties listed with name, type, and count
+    assert!(stdout.contains("title"));
+    assert!(stdout.contains("text"));
+    assert!(stdout.contains("2 files"));
+    assert!(stdout.contains("status"));
 }
