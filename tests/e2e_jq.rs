@@ -102,6 +102,61 @@ fn jq_works_on_property_find() {
 }
 
 // ---------------------------------------------------------------------------
+// --jq on links and outline commands
+// ---------------------------------------------------------------------------
+
+#[test]
+fn jq_works_on_links() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "source.md",
+        "---\ntitle: Source\n---\nSee [[target]] and [[other]].\n",
+    );
+    write_md(tmp.path(), "target.md", "# Target\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".links | length"])
+        .args(["links", "--file", "source.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "2", "expected 2 links, got: {stdout}");
+}
+
+#[test]
+fn jq_works_on_outline() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "doc.md",
+        "# Introduction\n\nSome text.\n\n## Details\n\nMore text.\n\n### Sub\n\nDeep.\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".sections | length"])
+        .args(["outline", "--file", "doc.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "3", "expected 3 sections, got: {stdout}");
+}
+
+// ---------------------------------------------------------------------------
 // --jq conflicts with --format text
 // ---------------------------------------------------------------------------
 
