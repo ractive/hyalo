@@ -1,14 +1,14 @@
 ---
-title: "Add --glob filter to properties and tags aggregate commands"
-type: backlog
 date: 2026-03-21
-status: ready
-priority: low
 origin: dogfooding
+priority: low
+status: completed
 tags:
-  - backlog
-  - cli
-  - ux
+- backlog
+- cli
+- ux
+title: Add --glob filter to properties and tags aggregate commands
+type: backlog
 ---
 
 # Add --glob filter to properties and tags aggregate commands

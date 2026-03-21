@@ -1,14 +1,14 @@
 ---
-title: "Vault dashboard — single-call project overview"
-type: backlog
 date: 2026-03-21
-status: idea
-priority: medium
 origin: dogfooding iteration-06
+priority: medium
+status: completed
 tags:
-  - backlog
-  - cli
-  - llm
+- backlog
+- cli
+- llm
+title: Vault dashboard — single-call project overview
+type: backlog
 ---
 
 # Vault dashboard — single-call project overview
@@ -47,3 +47,10 @@ A `dashboard` or `status` command that returns a structured project overview in 
 ## Notes
 
 This would be the "entry point" command for LLM agents. Currently the closest equivalent is `outline` on the whole vault, but that's too detailed — it gives document structure, not project state.
+
+## My Comments
+- Should hyalo propose "standard" properties and tags - define a convention that's used, when the user does not propse something else?
+- All available types in types.rs (and everywhere else) that are use for other --format json output should be used inside the "summary"
+- I don't think "dashboard" fits well here. What about "summary"?
+  `hyalo --dir ./knowledgebase summary`? Other ideas?
+- Thinking even further: Should the hyalo help propose conventions also how to structure the knowledgebase with directories like "iterations" etc.? Or is this too intrusive?
