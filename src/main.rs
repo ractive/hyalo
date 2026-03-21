@@ -34,7 +34,92 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
         Aggregate tag summary:      hyalo tags summary\n  \
         Per-file tag detail:        hyalo tags list --glob 'notes/**/*.md'\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
-        Find broken wikilinks:      hyalo links --file index.md --unresolved"
+        Find broken wikilinks:      hyalo links --file index.md --unresolved",
+    after_long_help = "\
+COMMAND REFERENCE:\n  \
+  Properties (list across files):\n  \
+    hyalo properties summary  [--file F | --glob G]       Unique names, types, file counts\n  \
+    hyalo properties list     [--file F | --glob G]       Per-file key/value detail\n\n  \
+  Property (single-property operations):\n  \
+    hyalo property read       --name N --file F           Read one property value\n  \
+    hyalo property set        --name N --value V [--type T] --file F\n  \
+    hyalo property remove     --name N --file F           Delete a property\n  \
+    hyalo property find       --name N [--value V] [--file F | --glob G]\n  \
+    hyalo property add-to-list       --name N --value V [--value ...] [--file F | --glob G]\n  \
+    hyalo property remove-from-list  --name N --value V [--value ...] [--file F | --glob G]\n\n  \
+  Tags (list across files):\n  \
+    hyalo tags summary        [--file F | --glob G]       Unique tags with file counts\n  \
+    hyalo tags list           [--file F | --glob G]       Per-file tag arrays\n\n  \
+  Tag (single-tag operations):\n  \
+    hyalo tag find            --name N [--file F | --glob G]   Supports nested matching\n  \
+    hyalo tag add             --name N [--file F | --glob G]   Idempotent\n  \
+    hyalo tag remove          --name N [--file F | --glob G]\n\n  \
+  Links:\n  \
+    hyalo links               --file F [--unresolved | --resolved]\n\n  \
+  Outline:\n  \
+    hyalo outline             [--file F | --glob G]       Structure, tasks, links per section\n\n  \
+  Global flags (apply to all commands):\n  \
+    --dir <DIR>         Root directory (default: .)\n  \
+    --format json|text  Output format (default: json)\n  \
+    --jq <FILTER>       Apply a jq expression to JSON output\n\n\
+COOKBOOK:\n  \
+  # Discover what metadata exists in a vault\n  \
+  hyalo properties summary\n  \
+  hyalo tags summary\n\n  \
+  # See all properties of a specific file\n  \
+  hyalo properties list --file notes/todo.md\n\n  \
+  # Find all files with status=draft\n  \
+  hyalo property find --name status --value draft\n\n  \
+  # Find files tagged 'project' (matches project/backend, project/frontend, etc.)\n  \
+  hyalo tag find --name project\n\n  \
+  # Tag all research notes in a folder\n  \
+  hyalo tag add --name reviewed --glob 'research/**/*.md'\n\n  \
+  # Bulk-update a property across files\n  \
+  hyalo property find --name status --value draft --jq '.files[]' \\\n    \
+    | xargs -I{} hyalo property set --name status --value in-progress --file {}\n\n  \
+  # Find broken [[wikilinks]] in a file\n  \
+  hyalo links --file index.md --unresolved\n\n  \
+  # Get document structure: headings, tasks, code blocks\n  \
+  hyalo outline --file notes/meeting.md --format text\n\n  \
+  # Count tasks across all files\n  \
+  hyalo outline --glob '**/*.md' --jq '[.[].sections[].tasks // empty] | map(.total) | add'\n\n  \
+  # Extract just file paths from a tag search\n  \
+  hyalo tag find --name backlog --jq '.files[]'\n\n  \
+  # List all property names as a flat list\n  \
+  hyalo properties summary --jq '[.[].name] | join(\", \")'\n\n  \
+  # Pipe JSON through external jq for complex queries\n  \
+  hyalo outline --glob '**/*.md' | jq '[.[] | {file, headings: [.sections[].heading]}]'\n\n\
+OUTPUT SHAPES (JSON, default):\n  \
+  # properties summary\n  \
+  [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...]\n\n  \
+  # properties list (--file → bare object, --glob/default → array)\n  \
+  {\"path\": \"notes/todo.md\", \"properties\": [{\"name\": \"status\", \"type\": \"text\", \"value\": \"draft\"}, ...]}\n\n  \
+  # property read\n  \
+  {\"name\": \"status\", \"type\": \"text\", \"value\": \"draft\"}\n\n  \
+  # property set / remove (mutation result)\n  \
+  {\"name\": \"status\", \"value\": \"done\", \"path\": \"notes/todo.md\"}\n\n  \
+  # property find\n  \
+  {\"property\": \"status\", \"value\": \"draft\", \"files\": [\"a.md\", \"b.md\"], \"total\": 2}\n\n  \
+  # property add-to-list / remove-from-list\n  \
+  {\"property\": \"tags\", \"values\": [\"rust\"], \"modified\": [\"a.md\"], \"skipped\": [\"b.md\"], \"total\": 2}\n\n  \
+  # tags summary\n  \
+  {\"tags\": [{\"name\": \"backlog\", \"count\": 10}, ...], \"total\": 31}\n\n  \
+  # tags list (--file → bare object, --glob/default → array)\n  \
+  {\"path\": \"notes/todo.md\", \"tags\": [\"backlog\", \"cli\"]}\n\n  \
+  # tag find\n  \
+  {\"tag\": \"backlog\", \"files\": [\"a.md\", \"b.md\"], \"total\": 2}\n\n  \
+  # tag add / remove (mutation result)\n  \
+  {\"tag\": \"reviewed\", \"modified\": [\"a.md\"], \"skipped\": [\"b.md\"], \"total\": 2}\n\n  \
+  # links\n  \
+  {\"path\": \"index.md\", \"links\": [{\"target\": \"notes/todo\", \"path\": \"notes/todo.md\", \"label\": null}, ...]}\n  \
+  # (unresolved links have \"path\": null)\n\n  \
+  # outline (--file → bare object, --glob/default → array)\n  \
+  {\"file\": \"notes/todo.md\", \"properties\": [...], \"tags\": [...],\n   \
+  \"sections\": [{\"level\": 1, \"heading\": \"Title\", \"line\": 5, \"links\": [],\n   \
+                  \"tasks\": {\"total\": 3, \"done\": 1}, \"code_blocks\": [\"rust\"]}]}\n\n  \
+  # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
+  {\"error\": \"property not found\", \"name\": \"foo\", \"path\": \"notes/todo.md\"}\n\n  \
+  # --format text produces tab-separated human-readable output on all commands"
 )]
 struct Cli {
     /// Root directory for resolving all --file and --glob paths. Defaults to current directory
