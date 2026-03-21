@@ -205,7 +205,7 @@ fn read_text_format() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Text format should contain the property name and value
-    assert!(stdout.contains("name:"));
+    // Text format shows: name (type): value
+    assert!(stdout.contains("title"));
     assert!(stdout.contains("My Note"));
 }

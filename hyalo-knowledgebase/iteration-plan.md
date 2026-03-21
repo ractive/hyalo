@@ -50,13 +50,19 @@ Also introduced `src/types.rs` with `#[derive(Serialize)]` structs for all JSON 
 
 **Commands:** `outline`
 
-## Iteration 7 — Search
+## Iteration 7 — Human-Readable Text Output via jaq
 
-Property query syntax, boolean logic, operators. Ties iterations 1–6 together into one query interface.
+Replaced the generic key=value text formatter with proper human-readable output for all commands. Each output type gets a jq filter string executed via the `jaq` crate (pure Rust). Filter lookup is based on sorted top-level JSON keys. Unknown shapes fall back to old generic format. (DEC-027)
+
+**No new commands** — purely output layer change. See [[iterations/iteration-07-text-output]].
+
+## Iteration 8 — Search
+
+Property query syntax, boolean logic, operators. Ties iterations 1–7 together into one query interface.
 
 **Commands:** `search` with `[prop:value]`, `path:`, `file:`, `tag:`, `content:`, `task-todo:`, `task-done:`
 
-## Iteration 8 — Move/Rename with Link Updates
+## Iteration 9 — Move/Rename with Link Updates
 
 Move or rename a file and update all wikilinks across the knowledge base.
 
