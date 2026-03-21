@@ -1,5 +1,5 @@
 ---
-branch: iter-7/text-output-jaq
+branch: iter-7/text-output
 date: 2026-03-21
 status: completed
 tags:

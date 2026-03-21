@@ -1,15 +1,15 @@
 ---
-title: "Iteration 5 — Summary + List Subcommand Refactor"
-type: iteration
-date: 2026-03-21
-tags:
-  - iteration
-  - refactor
-  - cli
-  - properties
-  - tags
-status: in-progress
 branch: iter-5/summary-list-refactor
+date: 2026-03-21
+status: completed
+tags:
+- iteration
+- refactor
+- cli
+- properties
+- tags
+title: Iteration 5 — Summary + List Subcommand Refactor
+type: iteration
 ---
 
 # Iteration 5 — Summary + List Subcommand Refactor
