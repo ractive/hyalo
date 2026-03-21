@@ -263,9 +263,9 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     if result == bytes {
         Cow::Borrowed(line)
     } else {
-        // Only ASCII bytes (percent signs and comment content) were replaced
-        // with ASCII spaces, so the result is always valid UTF-8.
-        Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
+        // Comment regions are overwritten with ASCII spaces, regardless of their
+        // original contents, so the resulting byte sequence is always valid UTF-8.
+        Cow::Owned(String::from_utf8(result).expect("overwriting comment bytes with spaces preserves UTF-8"))
     }
 }
 
