@@ -163,7 +163,7 @@ const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-he
 const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)") [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)""##;
 
 /// `FileOutline`: `{file, properties, sections, tags}`
-const FILE_OUTLINE_FILTER: &str = r##""\(.file)\(if (.tags | length) > 0 then "\n  tags: \(.tags | join(", "))" else "" end)\(if (.properties | length) > 0 then "\n  props: \(.properties | map("\(.name)=\(if (.value | type) == "array" then (.value | join(", ")) else .value end)") | join(", "))" else "" end)\n\(.sections | map("\("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)") | join("\n"))""##;
+const FILE_OUTLINE_FILTER: &str = r##""\(.file)\(if (.tags | length) > 0 then "\n  tags: \(.tags | join(", "))" else "" end)\(if (.properties | length) > 0 then "\n  props: \(.properties | map("\(.name)=\(if (.value | type) == "array" then "[\(.value | join(", "))]" else .value end)") | join(", "))" else "" end)\n\(.sections | map("\("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)") | join("\n"))""##;
 
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
