@@ -284,8 +284,8 @@ pub trait FileVisitor {
         ScanAction::Continue
     }
 
-    /// Called for each body line outside fenced code blocks.
-    /// Receives the **raw** line text (not stripped of inline code).
+    /// Called for each body line outside fenced code blocks and comment blocks.
+    /// Inline `%%comment%%` spans are stripped; inline code spans are **not**.
     fn on_body_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {
         ScanAction::Continue
     }
@@ -1239,5 +1239,20 @@ Line 8
     fn strip_inline_comments_unmatched() {
         let result = strip_inline_comments("a %%open");
         assert_eq!(result.as_ref(), "a %%open");
+    }
+
+    #[test]
+    fn strip_inline_comments_trailing_double_percent() {
+        // Trailing `%%` with nothing after it looks like a block fence marker,
+        // not an inline comment opener — leave it as-is.
+        let result = strip_inline_comments("text%%");
+        assert_eq!(result.as_ref(), "text%%");
+    }
+
+    #[test]
+    fn strip_inline_comments_triple_percent() {
+        // `%%%` = opening `%%` + lone `%` — no matching close, treated as literal.
+        let result = strip_inline_comments("a %%% b");
+        assert_eq!(result.as_ref(), "a %%% b");
     }
 }
