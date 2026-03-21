@@ -265,7 +265,10 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     } else {
         // Comment regions are overwritten with ASCII spaces, regardless of their
         // original contents, so the resulting byte sequence is always valid UTF-8.
-        Cow::Owned(String::from_utf8(result).expect("overwriting comment bytes with spaces preserves UTF-8"))
+        Cow::Owned(
+            String::from_utf8(result)
+                .expect("overwriting comment bytes with spaces preserves UTF-8"),
+        )
     }
 }
 

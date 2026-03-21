@@ -2,7 +2,7 @@
 title: "Discoverable drill-down commands in summary output (HATEOAS for CLI)"
 type: backlog
 date: 2026-03-21
-status: idea
+status: completed
 priority: medium
 origin: dogfooding iteration-08
 tags:
@@ -78,3 +78,7 @@ An LLM agent consuming summary output can autonomously drill down without needin
 
 ## My Comments
 The tricky part could be to know the "context" and decide on what actual commands to propse. How to design a good heuristic for this?
+
+## Resolution
+
+Implemented in [[iteration-11-discoverable-drill-down-commands]]. The heuristic question was solved by making hint generation state-aware — inspecting the actual output data rather than using static lookup tables. The `--hints` flag was chosen over `--no-hints` (opt-in rather than opt-out) to keep default output clean.
