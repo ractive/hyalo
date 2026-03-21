@@ -183,8 +183,7 @@ only_prop: value
         .output()
         .unwrap();
     assert!(props_output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&props_output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    let props = json[0]["properties"].as_object().unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&props_output.stdout).unwrap();
+    let props = json["properties"].as_array().unwrap();
     assert!(props.is_empty());
 }

@@ -197,19 +197,19 @@ fn properties_list_single_file() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0]["path"], "file.md");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["path"], "file.md");
 
-    let props = &json[0]["properties"];
-    assert_eq!(props["title"]["type"], "text");
-    assert_eq!(props["title"]["value"], "My Note");
-    assert_eq!(props["priority"]["type"], "number");
-    assert_eq!(props["priority"]["value"], 3);
-    assert_eq!(props["draft"]["type"], "checkbox");
-    assert_eq!(props["draft"]["value"], true);
-    assert_eq!(props["created"]["type"], "date");
-    assert_eq!(props["tags"]["type"], "list");
+    let props = json["properties"].as_array().unwrap();
+    let find_prop = |name: &str| props.iter().find(|p| p["name"] == name).unwrap();
+    assert_eq!(find_prop("title")["type"], "text");
+    assert_eq!(find_prop("title")["value"], "My Note");
+    assert_eq!(find_prop("priority")["type"], "number");
+    assert_eq!(find_prop("priority")["value"], 3);
+    assert_eq!(find_prop("draft")["type"], "checkbox");
+    assert_eq!(find_prop("draft")["value"], true);
+    assert_eq!(find_prop("created")["type"], "date");
+    assert_eq!(find_prop("tags")["type"], "list");
 }
 
 #[test]
@@ -290,7 +290,7 @@ status: draft
     assert_eq!(json.len(), 2);
     // Each entry has path and properties
     assert!(json.iter().all(|e| e["path"].is_string()));
-    assert!(json.iter().all(|e| e["properties"].is_object()));
+    assert!(json.iter().all(|e| e["properties"].is_array()));
 }
 
 #[test]
@@ -305,10 +305,9 @@ fn properties_list_file_without_frontmatter() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0]["path"], "plain.md");
-    let props = json[0]["properties"].as_object().unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["path"], "plain.md");
+    let props = json["properties"].as_array().unwrap();
     assert!(props.is_empty());
 }
 

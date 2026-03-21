@@ -104,6 +104,20 @@ pub fn require_file_or_glob(
     }
 }
 
+/// If `--file` was used (single-file mode), unwrap a one-element results Vec into a bare
+/// JSON object. Otherwise return the full array.
+#[must_use]
+pub fn unwrap_single_file_result(
+    file: Option<&str>,
+    mut results: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    if file.is_some() && results.len() == 1 {
+        results.pop().unwrap_or_default()
+    } else {
+        serde_json::json!(results)
+    }
+}
+
 /// Build the standard JSON output for list-mutation commands
 /// (`property add-to-list`, `property remove-from-list`, `tag add`, `tag remove`).
 ///
