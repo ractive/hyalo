@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
-use globset::Glob;
+use globset::GlobBuilder;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
@@ -79,7 +79,9 @@ pub fn is_glob(path: &str) -> bool {
 /// Match discovered files against a glob pattern.
 /// The glob is matched against paths relative to `dir`.
 pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(PathBuf, String)>> {
-    let glob = Glob::new(pattern)
+    let glob = GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
         .context("invalid glob pattern")?
         .compile_matcher();
 
@@ -201,6 +203,20 @@ mod tests {
 
         let matched_all = match_glob(tmp.path(), &files, "**/*.md").unwrap();
         assert_eq!(matched_all.len(), 3);
+    }
+
+    #[test]
+    fn glob_star_does_not_cross_slash() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a.md", "b.md", "sub/c.md", "sub/deep/d.md"]);
+        let files = discover_files(tmp.path()).unwrap();
+
+        let star = match_glob(tmp.path(), &files, "*.md").unwrap();
+        // *.md should NOT match sub/c.md or sub/deep/d.md
+        assert_eq!(star.len(), 2);
+
+        let double_star = match_glob(tmp.path(), &files, "**/*.md").unwrap();
+        assert_eq!(double_star.len(), 4);
     }
 
     #[test]
