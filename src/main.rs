@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 
 use hyalo::commands::{
     links as link_commands, outline as outline_commands, properties, tags as tag_commands,
+    tasks as task_commands,
 };
 use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
 
@@ -257,6 +258,47 @@ enum Commands {
         /// Glob pattern to select multiple files (e.g. '**/*.md'); returns an array
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
+    },
+    /// List tasks (checkboxes) across files — shows task text, line number, and completion status
+    #[command(
+        long_about = "List tasks (checkboxes) across one or more markdown files.\n\n\
+            INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
+            OUTPUT: Array of objects, each with 'file', 'tasks' array, and 'total' count. Each task has 'line', 'status', 'text', and 'done' fields.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob. Tasks inside fenced code blocks are skipped.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to find, list, or count tasks across your vault."
+    )]
+    Tasks {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+        /// Show only completed tasks (status x or X)
+        #[arg(long, conflicts_with_all = ["todo", "status"])]
+        done: bool,
+        /// Show only incomplete tasks
+        #[arg(long, conflicts_with_all = ["done", "status"])]
+        todo: bool,
+        /// Show only tasks with this exact status character
+        #[arg(long, conflicts_with_all = ["done", "todo"])]
+        status: Option<String>,
+    },
+    /// Read, toggle, or set status on a single task checkbox
+    #[command(
+        long_about = "Read, toggle, or set status on a single task checkbox.\n\n\
+            Subcommands:\n\
+            - read: Show task details at a specific line number.\n\
+            - toggle: Flip completion state ([ ] <-> [x], custom -> [x]).\n\
+            - set-status: Set an arbitrary single-character status.\n\n\
+            INPUT: File (--file) and line number (--line).\n\
+            SCOPE: Single file only.\n\
+            SIDE EFFECTS: 'toggle' and 'set-status' modify the file on disk. 'read' is read-only."
+    )]
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
     },
 }
 
@@ -524,6 +566,41 @@ enum PropertyAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TaskAction {
+    /// Show task details at a specific line number (read-only)
+    Read {
+        /// File containing the task (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// 1-based line number of the task
+        #[arg(long)]
+        line: usize,
+    },
+    /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
+    Toggle {
+        /// File containing the task (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// 1-based line number of the task
+        #[arg(long)]
+        line: usize,
+    },
+    /// Set a custom single-character status on a task
+    #[command(name = "set-status")]
+    SetStatus {
+        /// File containing the task (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// 1-based line number of the task
+        #[arg(long)]
+        line: usize,
+        /// Single character to set as the task status (e.g. '?', '-', '!')
+        #[arg(long)]
+        status: String,
+    },
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
@@ -696,6 +773,73 @@ fn main() {
         Commands::Outline { ref file, ref glob } => {
             outline_commands::outline(dir, file.as_deref(), glob.as_deref(), effective_format)
         }
+        Commands::Tasks {
+            ref file,
+            ref glob,
+            done,
+            todo,
+            ref status,
+        } => {
+            let filter = if done {
+                task_commands::TaskFilter::Done
+            } else if todo {
+                task_commands::TaskFilter::Todo
+            } else if let Some(s) = status {
+                if s.chars().count() != 1 {
+                    let out = hyalo::output::format_error(
+                        effective_format,
+                        "--status must be a single character",
+                        None,
+                        Some("example: --status '?' or --status '-'"),
+                        None,
+                    );
+                    eprintln!("{out}");
+                    process::exit(1);
+                }
+                task_commands::TaskFilter::Status(s.chars().next().unwrap())
+            } else {
+                task_commands::TaskFilter::All
+            };
+            task_commands::tasks_list(
+                dir,
+                file.as_deref(),
+                glob.as_deref(),
+                filter,
+                effective_format,
+            )
+        }
+        Commands::Task { action } => match action {
+            TaskAction::Read { ref file, line } => {
+                task_commands::task_read(dir, file, line, effective_format)
+            }
+            TaskAction::Toggle { ref file, line } => {
+                task_commands::task_toggle(dir, file, line, effective_format)
+            }
+            TaskAction::SetStatus {
+                ref file,
+                line,
+                ref status,
+            } => {
+                if status.chars().count() != 1 {
+                    let out = hyalo::output::format_error(
+                        effective_format,
+                        "--status must be a single character",
+                        None,
+                        Some("example: --status '?' or --status '-'"),
+                        None,
+                    );
+                    eprintln!("{out}");
+                    process::exit(1);
+                }
+                task_commands::task_set_status(
+                    dir,
+                    file,
+                    line,
+                    status.chars().next().unwrap(),
+                    effective_format,
+                )
+            }
+        },
     };
 
     match result {

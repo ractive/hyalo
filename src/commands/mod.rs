@@ -3,6 +3,7 @@ pub mod links;
 pub mod outline;
 pub mod properties;
 pub mod tags;
+pub mod tasks;
 
 use crate::discovery::{self, FileResolveError};
 use crate::output::{CommandOutcome, Format};

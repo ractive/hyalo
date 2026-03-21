@@ -164,6 +164,17 @@ const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading 
 /// `FileOutline`: `{file, properties, sections, tags}`
 const FILE_OUTLINE_FILTER: &str = r##""\(.file)\(if (.tags | length) > 0 then "\n  tags: \(.tags | join(", "))" else "" end)\(if (.properties | length) > 0 then "\n  props: \(.properties | map("\(.name)=\(if (.value | type) == "array" then "[\(.value | join(", "))]" else .value end)") | join(", "))" else "" end)\n\(.sections | map("\("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)") | join("\n"))""##;
 
+/// `TaskInfo`: `{done, line, status, text}`
+const TASK_INFO_FILTER: &str =
+    r#""line \(.line): [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
+
+/// `FileTasks`: `{file, tasks, total}`
+const FILE_TASKS_FILTER: &str = r#""\(.file) (\(.total) \(if .total == 1 then "task" else "tasks" end))\(if (.tasks | length) > 0 then "\n\(.tasks | map("  line \(.line): [\(.status)] \(.text)") | join("\n"))" else "" end)""#;
+
+/// `TaskReadResult`: `{done, file, line, status, text}`
+const TASK_READ_RESULT_FILTER: &str =
+    r#""\(.file):\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
+
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
 // ---------------------------------------------------------------------------
@@ -217,6 +228,12 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "code_blocks,heading,level,line,links,tasks" => Some(OUTLINE_SECTION_WITH_TASKS_FILTER),
         // FileOutline
         "file,properties,sections,tags" => Some(FILE_OUTLINE_FILTER),
+        // TaskInfo
+        "done,line,status,text" => Some(TASK_INFO_FILTER),
+        // FileTasks
+        "file,tasks,total" => Some(FILE_TASKS_FILTER),
+        // TaskReadResult
+        "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         _ => None,
     }
 }
