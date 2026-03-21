@@ -203,6 +203,14 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - New commands can reuse existing types instead of guessing the right `json!()` shape
 - Removed ~50 lines of generic JSON-building helpers from `commands/mod.rs`
 
+## DEC-026: Glob `*` Must Not Cross Path Separators (2026-03-21)
+
+**Context:** The `globset` crate's `Glob::new()` defaults to letting `*` match across `/` path separators. This means `*.md` matched `sub/nested.md`, which contradicts standard shell glob semantics and surprises users expecting `*` to match within a single directory only.
+
+**Decision:** Use `GlobBuilder::literal_separator(true)` when compiling glob patterns in `match_glob()`. This makes `*` match only within a single directory component. Use `**` for recursive matching across directories.
+
+**Why:** Standard shell behavior — `*.md` should match `note.md` but not `sub/note.md`. Users familiar with any shell, ripgrep, fd, or .gitignore expect this. The previous behavior made `--glob "*.md"` equivalent to `--glob "**/*.md"`, removing the ability to scope to a single directory level.
+
 ## DEC-027: jq Filters via `jaq` for Text Output (2026-03-21)
 
 **Context:** All commands support `--format text` but prior to iteration 7, text output was produced by a generic key=value formatter that was unreadable for nested/typed data (e.g. `properties: [{name=title, type=text, value=My Note}]`).
@@ -221,11 +229,3 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - Filter strings must be tested carefully — jq syntax errors produce `None` and fall back to generic format silently
 
 **Stable versions used:** `jaq-core = "2.2.1"`, `jaq-json = "1.1.3"` (with `serde_json` feature), `jaq-std = "2.1.2"`.
-
-## DEC-026: Glob `*` Must Not Cross Path Separators (2026-03-21)
-
-**Context:** The `globset` crate's `Glob::new()` defaults to letting `*` match across `/` path separators. This means `*.md` matched `sub/nested.md`, which contradicts standard shell glob semantics and surprises users expecting `*` to match within a single directory only.
-
-**Decision:** Use `GlobBuilder::literal_separator(true)` when compiling glob patterns in `match_glob()`. This makes `*` match only within a single directory component. Use `**` for recursive matching across directories.
-
-**Why:** Standard shell behavior — `*.md` should match `note.md` but not `sub/note.md`. Users familiar with any shell, ripgrep, fd, or .gitignore expect this. The previous behavior made `--glob "*.md"` equivalent to `--glob "**/*.md"`, removing the ability to scope to a single directory level.

@@ -82,7 +82,7 @@ SQLite or similar index for properties, tags, and links. Incremental updates bas
 Iteration 1 (frontmatter) ──→ Iteration 4 (find needs parser)
 Iteration 2 (link graph)  ──→ Iteration 6 (outline reuses scanner)
 Iteration 2 (link graph)  ──→ Iteration 8 (rename needs links)
-Iterations 1–6             ──→ Iteration 7 (search unifies all)
+Iterations 1–7             ──→ Iteration 8 (search unifies all)
 ```
 
 ## Dogfooding
