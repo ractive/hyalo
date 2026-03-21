@@ -7,7 +7,7 @@ tags:
   - properties
   - search
   - refactor
-status: in-progress
+status: completed
 branch: iter-4/property-find
 ---
 
@@ -37,20 +37,20 @@ A general `search` command could subsume both `tag find` and `property find`. Fo
 ## Phase 2 — Generic List Operations & Tag Refactor
 
 ### New commands
-- [ ] `hyalo property add-to-list --name <key> --value <val>... --file <path> [--glob <pattern>]` — append values to a list property, create the list if absent, skip duplicates (case-insensitive)
-- [ ] `hyalo property remove-from-list --name <key> --value <val>... --file <path> [--glob <pattern>]` — remove values from a list property, remove the key if list becomes empty
+- [x] `hyalo property add-to-list --name <key> --value <val>... --file <path> [--glob <pattern>]` — append values to a list property, create the list if absent, skip duplicates (case-insensitive)
+- [x] `hyalo property remove-from-list --name <key> --value <val>... --file <path> [--glob <pattern>]` — remove values from a list property, remove the key if list becomes empty
 
 ### Refactor tag commands
-- [ ] Extract core list logic into shared helpers in `properties.rs`: `property_add_to_list()` and `property_remove_from_list()`
-- [ ] Refactor `tag_add()` to: validate tag → delegate to `property_add_to_list(name="tags", ...)`
-- [ ] Refactor `tag_remove()` to: delegate to `property_remove_from_list(name="tags", ...)`
-- [ ] Keep `tag find` separate (nested tag matching is tag-domain logic, not generic list behavior)
+- [x] Extract core list logic into shared helpers in `properties.rs`: `property_add_to_list()` and `property_remove_from_list()`
+- [x] Refactor `tag_add()` to: validate tag → delegate to `property_add_to_list(name="tags", ...)`
+- [x] Refactor `tag_remove()` to: delegate to `property_remove_from_list(name="tags", ...)`
+- [x] Keep `tag find` separate (nested tag matching is tag-domain logic, not generic list behavior)
 
 ### Tests
-- [ ] Unit tests for `property_add_to_list` and `property_remove_from_list` (happy + unhappy paths)
-- [ ] E2e tests for the new CLI commands (happy + unhappy paths)
-- [ ] Verify all existing tag e2e tests still pass (no behavioral changes)
-- [ ] Run quality gates: `cargo fmt`, `cargo clippy`, `cargo test`
+- [x] Unit tests for `property_add_to_list` and `property_remove_from_list` (happy + unhappy paths)
+- [x] E2e tests for the new CLI commands (happy + unhappy paths)
+- [x] Verify all existing tag e2e tests still pass (no behavioral changes)
+- [x] Run quality gates: `cargo fmt`, `cargo clippy`, `cargo test`
 
 ## Design Notes
 

@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde_json::json;
 use serde_yaml_ng::Value;
@@ -23,7 +24,6 @@ fn extract_list_property(
     name: &str,
 ) -> Vec<String> {
     match props.get(name) {
-        None | Some(Value::Null) => vec![],
         Some(Value::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| match v {
@@ -44,6 +44,7 @@ fn extract_list_property(
 }
 
 /// Result type for list-mutation operations.
+#[derive(Debug)]
 pub(crate) struct ListOpResult {
     pub(crate) modified: Vec<String>,
     pub(crate) skipped: Vec<String>,
@@ -52,7 +53,8 @@ pub(crate) struct ListOpResult {
 /// Core logic: add `values` to the list property `property_name` across `files`.
 ///
 /// For each file:
-/// - Reads current list (empty if absent or non-list).
+/// - Checks that the property is absent, null, a string, or a sequence — returns an error for
+///   other types (bool, number, mapping) to prevent silent data loss.
 /// - Appends any value not already present (case-insensitive for strings).
 /// - Writes back if at least one value was added; otherwise marks file as skipped.
 pub(crate) fn add_values_to_list_property(
@@ -65,19 +67,64 @@ pub(crate) fn add_values_to_list_property(
 
     for (full_path, rel_path) in files {
         let mut props = frontmatter::read_frontmatter(full_path)?;
-        let mut current = extract_list_property(&props, property_name);
-        let before_len = current.len();
 
-        for value in values {
-            let already_present = current.iter().any(|v| v.eq_ignore_ascii_case(value));
-            if !already_present {
-                current.push(value.clone());
+        // Guard against silently overwriting non-list scalar types.
+        match props.get(property_name) {
+            None | Some(Value::Null) | Some(Value::String(_)) | Some(Value::Sequence(_)) => {}
+            Some(existing) => {
+                let kind = match existing {
+                    Value::Bool(_) => "boolean",
+                    Value::Number(_) => "number",
+                    Value::Mapping(_) => "mapping",
+                    _ => "unknown",
+                };
+                anyhow::bail!(
+                    "property '{}' in '{}' is a {kind} value, not a list — \
+                     use `property set` to overwrite it explicitly",
+                    property_name,
+                    rel_path
+                );
             }
         }
 
-        if current.len() > before_len {
-            let yaml_list = Value::Sequence(current.into_iter().map(Value::String).collect());
-            props.insert(property_name.to_owned(), yaml_list);
+        // If the property is already a sequence, append directly to preserve element types.
+        // Otherwise fall back to the string-based approach for null / absent / scalar-string.
+        let added_any = match props.get_mut(property_name) {
+            Some(Value::Sequence(seq)) => {
+                let before_len = seq.len();
+                for value in values {
+                    let already_present = seq.iter().any(|v| match v {
+                        Value::String(s) => s.eq_ignore_ascii_case(value),
+                        _ => v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(value)),
+                    });
+                    if !already_present {
+                        seq.push(Value::String(value.clone()));
+                    }
+                }
+                seq.len() > before_len
+            }
+            _ => {
+                // Build a fresh list from the existing string value (if any) plus new values.
+                let mut current = extract_list_property(&props, property_name);
+                let before_len = current.len();
+                for value in values {
+                    let already_present = current.iter().any(|v| v.eq_ignore_ascii_case(value));
+                    if !already_present {
+                        current.push(value.clone());
+                    }
+                }
+                if current.len() > before_len {
+                    let yaml_list =
+                        Value::Sequence(current.into_iter().map(Value::String).collect());
+                    props.insert(property_name.to_owned(), yaml_list);
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        if added_any {
             frontmatter::write_frontmatter(full_path, &props)?;
             modified.push(rel_path.clone());
         } else {
@@ -228,18 +275,15 @@ pub fn property_remove_from_list(
     )))
 }
 
-/// List all properties across all files, or properties of a single file / glob match.
-pub fn properties(dir: &Path, path: Option<&str>, format: Format) -> Result<CommandOutcome> {
-    match path {
-        Some(p) if discovery::is_glob(p) => properties_glob(dir, p, format),
-        Some(p) => properties_single(dir, p, format),
-        None => properties_all(dir, format),
-    }
-}
-
-/// List all unique property names across all `.md` files.
-fn properties_all(dir: &Path, format: Format) -> Result<CommandOutcome> {
-    let files = collect_files(dir, None, None, format)?;
+/// Aggregate summary: unique property names with types and file counts.
+/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
+pub fn properties_summary(
+    dir: &Path,
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -249,8 +293,8 @@ fn properties_all(dir: &Path, format: Format) -> Result<CommandOutcome> {
     let mut agg: std::collections::BTreeMap<String, (String, usize)> =
         std::collections::BTreeMap::new();
 
-    for (file, _) in &files {
-        let props = frontmatter::read_frontmatter(file)?;
+    for (fp, _) in &files {
+        let props = frontmatter::read_frontmatter(fp)?;
         for (key, value) in &props {
             agg.entry(key.clone())
                 .and_modify(|entry| entry.1 += 1)
@@ -269,37 +313,15 @@ fn properties_all(dir: &Path, format: Format) -> Result<CommandOutcome> {
     )))
 }
 
-/// List properties of a single file.
-fn properties_single(dir: &Path, path_arg: &str, format: Format) -> Result<CommandOutcome> {
-    let (full_path, rel_path) = match discovery::resolve_file(dir, path_arg) {
-        Ok(r) => r,
-        Err(e) => return Ok(resolve_error_to_outcome(e, format)),
-    };
-
-    let props = frontmatter::read_frontmatter(&full_path)?;
-
-    let prop_map: serde_json::Map<String, serde_json::Value> = props
-        .iter()
-        .map(|(k, v)| {
-            let typ = frontmatter::infer_type(v);
-            let json_val = frontmatter::yaml_to_json(v);
-            (k.clone(), json!({"value": json_val, "type": typ}))
-        })
-        .collect();
-
-    let result = json!({
-        "path": rel_path,
-        "properties": prop_map,
-    });
-
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format, &result,
-    )))
-}
-
-/// List properties of files matching a glob pattern.
-fn properties_glob(dir: &Path, pattern: &str, format: Format) -> Result<CommandOutcome> {
-    let files = collect_files(dir, None, Some(pattern), format)?;
+/// Per-file detail: each file with its full property key/value pairs.
+/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
+pub fn properties_list(
+    dir: &Path,
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -467,19 +489,27 @@ fn value_matches(yaml_val: &serde_yaml_ng::Value, query: &str) -> bool {
             if let Some(i) = n.as_i64() {
                 query.parse::<i64>() == Ok(i)
             } else if let Some(f) = n.as_f64() {
+                // Exact float equality — acceptable for simple YAML frontmatter values
                 query.parse::<f64>() == Ok(f)
             } else {
                 false
             }
         }
-        Value::Bool(b) => match query {
-            "true" => *b,
-            "false" => !b,
-            _ => false,
-        },
+        Value::Bool(b) => {
+            // Accept the same spellings the CLI uses for boolean flags, case-insensitively.
+            let q = query.to_ascii_lowercase();
+            let is_truthy = matches!(q.as_str(), "true" | "yes" | "1");
+            let is_falsy = matches!(q.as_str(), "false" | "no" | "0");
+            if is_truthy {
+                *b
+            } else if is_falsy {
+                !*b
+            } else {
+                false
+            }
+        }
         Value::Sequence(seq) => seq.iter().any(|item| value_matches(item, query)),
-        Value::Null => false,
-        Value::Mapping(_) | Value::Tagged(_) => false,
+        Value::Null | Value::Mapping(_) | Value::Tagged(_) => false,
     }
 }
 
@@ -510,7 +540,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Test
 status: draft
@@ -520,7 +550,7 @@ tags:
   - cli
 ---
 # Hello
-"#),
+"),
         )
         .unwrap();
         fs::write(tmp.path().join("empty.md"), "No frontmatter here.\n").unwrap();
@@ -536,9 +566,10 @@ tags:
     }
 
     #[test]
-    fn properties_all_aggregates() {
+    fn properties_summary_aggregates() {
         let tmp = setup_dir();
-        let (out, ok) = unwrap_output(properties(tmp.path(), None, Format::Json).unwrap());
+        let (out, ok) =
+            unwrap_output(properties_summary(tmp.path(), None, None, Format::Json).unwrap());
         assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         assert!(!parsed.is_empty());
@@ -548,15 +579,17 @@ tags:
     }
 
     #[test]
-    fn properties_single_file() {
+    fn properties_list_single_file() {
         let tmp = setup_dir();
-        let (out, ok) =
-            unwrap_output(properties(tmp.path(), Some("note.md"), Format::Json).unwrap());
+        let (out, ok) = unwrap_output(
+            properties_list(tmp.path(), Some("note.md"), None, Format::Json).unwrap(),
+        );
         assert!(ok);
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["path"], "note.md");
-        assert_eq!(parsed["properties"]["priority"]["type"], "number");
-        assert_eq!(parsed["properties"]["tags"]["type"], "list");
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["path"], "note.md");
+        assert_eq!(parsed[0]["properties"]["priority"]["type"], "number");
+        assert_eq!(parsed[0]["properties"]["tags"]["type"], "list");
     }
 
     #[test]
@@ -678,18 +711,18 @@ tags:
     #[test]
     fn property_set_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = md!(r#"
+        let body = md!(r"
 # Heading
 
 Body content.
-"#);
+");
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Test
 ---
-"#)
+")
             .to_owned()
                 + body,
         )
@@ -704,19 +737,19 @@ title: Test
     #[test]
     fn property_remove_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = md!(r#"
+        let body = md!(r"
 # Heading
 
 Body content.
-"#);
+");
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Test
 status: draft
 ---
-"#)
+")
             .to_owned()
                 + body,
         )
@@ -737,7 +770,7 @@ status: draft
         // a.md: status=draft (string), priority=3 (number), draft=true (bool), tags=[rust,cli]
         fs::write(
             tmp.path().join("a.md"),
-            md!(r#"
+            md!(r"
 ---
 status: draft
 priority: 3
@@ -746,19 +779,19 @@ tags:
   - rust
   - cli
 ---
-"#),
+"),
         )
         .unwrap();
         // b.md: status=done (string), priority=5 (number), draft=false (bool)
         fs::write(
             tmp.path().join("b.md"),
-            md!(r#"
+            md!(r"
 ---
 status: done
 priority: 5
 draft: false
 ---
-"#),
+"),
         )
         .unwrap();
         // c.md: no frontmatter
@@ -871,20 +904,20 @@ draft: false
         fs::create_dir(tmp.path().join("sub")).unwrap();
         fs::write(
             tmp.path().join("sub/x.md"),
-            md!(r#"
+            md!(r"
 ---
 status: draft
 ---
-"#),
+"),
         )
         .unwrap();
         fs::write(
             tmp.path().join("root.md"),
-            md!(r#"
+            md!(r"
 ---
 status: draft
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -985,6 +1018,29 @@ status: draft
         );
         assert_eq!(parsed["total"], 0);
         assert!(parsed["files"].as_array().unwrap().is_empty());
+    }
+
+    // Issue 3 — extended boolean matching for value_matches
+    #[test]
+    fn value_matches_bool_yes_no() {
+        let t = Value::Bool(true);
+        let f = Value::Bool(false);
+        assert!(value_matches(&t, "yes"));
+        assert!(value_matches(&t, "YES"));
+        assert!(!value_matches(&t, "no"));
+        assert!(value_matches(&f, "no"));
+        assert!(value_matches(&f, "NO"));
+        assert!(!value_matches(&f, "yes"));
+    }
+
+    #[test]
+    fn value_matches_bool_zero_one() {
+        let t = Value::Bool(true);
+        let f = Value::Bool(false);
+        assert!(value_matches(&t, "1"));
+        assert!(!value_matches(&t, "0"));
+        assert!(value_matches(&f, "0"));
+        assert!(!value_matches(&f, "1"));
     }
 
     // ---------------------------------------------------------------------------
@@ -1292,5 +1348,80 @@ status: draft
         );
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+    }
+
+    // Issue 1 — non-list scalar types must not be silently overwritten
+    #[test]
+    fn property_add_to_list_rejects_bool_property() {
+        let tmp = tempfile::tempdir().unwrap();
+        // `draft` is a boolean — add-to-list must return an error
+        write_note(tmp.path(), "note.md", "---\ndraft: true\n---\n");
+
+        let files = vec![(tmp.path().join("note.md"), "note.md".to_owned())];
+        let result = add_values_to_list_property(&files, "draft", &["foo".to_owned()]);
+        assert!(result.is_err(), "expected error for boolean property");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("boolean"),
+            "error should mention the type: {msg}"
+        );
+    }
+
+    #[test]
+    fn property_add_to_list_rejects_number_property() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\npriority: 3\n---\n");
+
+        let files = vec![(tmp.path().join("note.md"), "note.md".to_owned())];
+        let result = add_values_to_list_property(&files, "priority", &["foo".to_owned()]);
+        assert!(result.is_err(), "expected error for number property");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("number"),
+            "error should mention the type: {msg}"
+        );
+    }
+
+    // Issue 2 — existing numeric list elements must be preserved as numbers after append
+    #[test]
+    fn property_add_to_list_preserves_numeric_elements() {
+        let tmp = tempfile::tempdir().unwrap();
+        // `scores` contains numbers; appending a string must not stringify the numbers
+        write_note(tmp.path(), "note.md", "---\nscores:\n  - 42\n  - 7\n---\n");
+
+        unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "scores",
+                &["best".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+
+        // Read back and verify that 42 and 7 are still YAML numbers (not quoted strings)
+        let props = frontmatter::read_frontmatter(&tmp.path().join("note.md")).unwrap();
+        let seq = match props.get("scores") {
+            Some(Value::Sequence(s)) => s,
+            other => panic!("expected sequence, got: {other:?}"),
+        };
+        assert_eq!(seq.len(), 3);
+        assert!(
+            matches!(&seq[0], Value::Number(n) if n.as_i64() == Some(42)),
+            "first element should remain a number 42, got: {:?}",
+            seq[0]
+        );
+        assert!(
+            matches!(&seq[1], Value::Number(n) if n.as_i64() == Some(7)),
+            "second element should remain a number 7, got: {:?}",
+            seq[1]
+        );
+        assert!(
+            matches!(&seq[2], Value::String(s) if s == "best"),
+            "third element should be string 'best', got: {:?}",
+            seq[2]
+        );
     }
 }

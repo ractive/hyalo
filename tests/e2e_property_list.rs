@@ -222,9 +222,8 @@ title: Note
         .unwrap();
 
     assert!(output.status.success());
-    // text output should at least mention the property name or value
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(!stdout.is_empty());
+    assert!(stdout.contains("aliases") || stdout.contains("alias1"));
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +336,7 @@ fn remove_from_list_text_format() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(!stdout.is_empty());
+    assert!(stdout.contains("aliases") || stdout.contains("foo"));
 }
 
 // ---------------------------------------------------------------------------
