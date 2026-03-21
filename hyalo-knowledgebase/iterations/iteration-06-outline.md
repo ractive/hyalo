@@ -1,7 +1,7 @@
 ---
 branch: iter-6/outline
 date: 2026-03-21
-status: in-progress
+status: completed
 tags:
 - iteration
 - outline

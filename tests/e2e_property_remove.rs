@@ -149,6 +149,42 @@ priority: 5
 }
 
 #[test]
+fn property_remove_text_format() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!("---
+title: Test
+status: active
+---
+# Body
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "text"])
+        .args([
+            "property", "remove", "--name", "status", "--file", "note.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // PropertyRemoved text format: "Removed "status" from note.md"
+    assert!(
+        stdout.contains("Removed"),
+        "expected 'Removed', got: {stdout}"
+    );
+    assert!(
+        stdout.contains("status"),
+        "expected property name, got: {stdout}"
+    );
+}
+
+#[test]
 fn remove_last_property() {
     let tmp = TempDir::new().unwrap();
     write_md(

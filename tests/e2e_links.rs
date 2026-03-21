@@ -149,7 +149,8 @@ fn links_text_format() {
         .args(["links", "--file", "note-a.md"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("target=note-b"));
+        .stdout(predicates::str::contains("note-b"))
+        .stdout(predicates::str::contains("note-a.md"));
 }
 
 #[test]
@@ -210,7 +211,8 @@ fn links_unresolved_text_format() {
         .args(["links", "--file", "note-a.md", "--unresolved"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("target=nonexistent"));
+        .stdout(predicates::str::contains("nonexistent"))
+        .stdout(predicates::str::contains("unresolved"));
 }
 
 #[test]
@@ -260,7 +262,8 @@ fn links_resolved_text_format() {
         .args(["links", "--file", "note-a.md", "--resolved"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("target=note-b"));
+        .stdout(predicates::str::contains("note-b"))
+        .stdout(predicates::str::contains("note-b.md"));
 }
 
 #[test]

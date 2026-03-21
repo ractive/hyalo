@@ -145,6 +145,7 @@ fn tags_summary_empty_vault() {
 fn tags_summary_text_format() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
+    write_tagged(tmp.path(), "other.md", &["rust", "cli"]);
 
     let output = hyalo()
         .args([
@@ -160,7 +161,14 @@ fn tags_summary_text_format() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    // Shows total unique tags
+    assert!(stdout.contains("unique tags"));
+    // Shows tag names with file counts
     assert!(stdout.contains("rust"));
+    assert!(stdout.contains("2 files"));
+    assert!(stdout.contains("cli"));
+    assert!(stdout.contains("1 file"));
+    assert!(!stdout.contains("1 files"));
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +278,7 @@ fn tags_list_file_without_frontmatter() {
 #[test]
 fn tags_list_text_format() {
     let tmp = TempDir::new().unwrap();
-    write_tagged(tmp.path(), "note.md", &["rust"]);
+    write_tagged(tmp.path(), "note.md", &["rust", "cli"]);
 
     let output = hyalo()
         .args([
@@ -288,8 +296,10 @@ fn tags_list_text_format() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    // File path and tags shown together
     assert!(stdout.contains("note.md"));
     assert!(stdout.contains("rust"));
+    assert!(stdout.contains("cli"));
 }
 
 #[test]
@@ -487,6 +497,7 @@ fn tag_find_case_insensitive() {
 fn tag_find_text_format() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
+    write_tagged(tmp.path(), "other.md", &["cli"]);
 
     let output = hyalo()
         .args([
@@ -504,6 +515,11 @@ fn tag_find_text_format() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    // Tag name and file count shown
+    assert!(stdout.contains("rust"));
+    assert!(stdout.contains("1 file"));
+    assert!(!stdout.contains("1 files"));
+    // Matching file listed
     assert!(stdout.contains("note.md"));
 }
 
@@ -879,7 +895,39 @@ fn tag_remove_text_format() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    // Tag name shown in output
     assert!(stdout.contains("rust"));
+    // Modified count shown
+    assert!(stdout.contains("1 modified"));
+}
+
+#[test]
+fn tag_add_text_format() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["cli"]);
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--format",
+            "text",
+            "tag",
+            "add",
+            "--name",
+            "rust",
+            "--file",
+            "note.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Tag name shown in output
+    assert!(stdout.contains("rust"));
+    // Modified count shown
+    assert!(stdout.contains("1 modified"));
 }
 
 // ---------------------------------------------------------------------------

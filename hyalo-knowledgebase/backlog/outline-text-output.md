@@ -1,14 +1,14 @@
 ---
-title: "Outline text output as indented tree"
-type: backlog
 date: 2026-03-21
-status: ready
-priority: high
 origin: iteration-06 (open task)
+priority: high
+status: completed
 tags:
-  - backlog
-  - outline
-  - cli
+- backlog
+- outline
+- cli
+title: Outline text output as indented tree
+type: backlog
 ---
 
 # Outline text output as indented tree
