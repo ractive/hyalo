@@ -114,7 +114,7 @@ hyalo task toggle --file FILE --line N
 hyalo task set-status --file FILE --line N --status CHAR
 ```
 
-Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) found in the file body. Checkboxes inside fenced code blocks are ignored.
+Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) found in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored.
 
 ### Summary
 
