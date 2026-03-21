@@ -1,10 +1,16 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde_json::json;
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::commands::{FilesOrOutcome, collect_files};
+use crate::commands::properties::{
+    ListOpResult, add_values_to_list_property, remove_values_from_list_property,
+};
+use crate::commands::{
+    FilesOrOutcome, build_find_json, build_list_mutation_json, collect_files, require_file_or_glob,
+};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
@@ -50,6 +56,7 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
 ///
 /// Uses byte-level ASCII comparison — safe because tag names are validated to only
 /// contain ASCII characters (letters, digits, `_`, `-`, `/`).
+#[must_use]
 pub fn tag_matches(tag: &str, query: &str) -> bool {
     tag.eq_ignore_ascii_case(query)
         || (tag.len() > query.len()
@@ -67,9 +74,9 @@ pub fn tag_matches(tag: &str, query: &str) -> bool {
 /// - `tags` as a YAML sequence → collect string items
 /// - `tags` as a scalar string → single-element vec
 /// - `tags` as empty sequence → empty vec
+#[must_use]
 pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
     match props.get("tags") {
-        None => vec![],
         Some(Value::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| match v {
@@ -85,16 +92,17 @@ pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
                 vec![s.clone()]
             }
         }
-        Some(Value::Null) => vec![],
         _ => vec![],
     }
 }
 
 // ---------------------------------------------------------------------------
-// `hyalo tags` — list all unique tags with counts
+// `hyalo tags summary` — aggregate: unique tags with counts
 // ---------------------------------------------------------------------------
 
-pub fn tags_list(
+/// Aggregate summary: unique tag names with file counts.
+/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
+pub fn tags_summary(
     dir: &Path,
     file: Option<&str>,
     glob: Option<&str>,
@@ -134,6 +142,42 @@ pub fn tags_list(
 }
 
 // ---------------------------------------------------------------------------
+// `hyalo tags list` — per-file detail: each file with its tags array
+// ---------------------------------------------------------------------------
+
+/// Per-file detail: each file with its tags array.
+/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
+pub fn tags_list(
+    dir: &Path,
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    let files = collect_files(dir, file, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+
+    let mut results = Vec::new();
+    for (full_path, rel_path) in &files {
+        let props = frontmatter::read_frontmatter(full_path)?;
+        let tags = extract_tags(&props);
+        let tags_json: Vec<serde_json::Value> =
+            tags.into_iter().map(serde_json::Value::String).collect();
+        results.push(json!({
+            "path": rel_path,
+            "tags": tags_json,
+        }));
+    }
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format,
+        &json!(results),
+    )))
+}
+
+// ---------------------------------------------------------------------------
 // `hyalo tag find` — find files containing a specific tag
 // ---------------------------------------------------------------------------
 
@@ -160,8 +204,7 @@ pub fn tag_find(
         }
     }
 
-    let total = matching_paths.len();
-    let result = json!({"tag": name, "files": matching_paths, "total": total});
+    let result = build_find_json("tag", name, None, &matching_paths);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -194,17 +237,8 @@ pub fn tag_add(
     }
 
     // Mutation commands require --file or --glob to avoid accidentally touching every file
-    if file.is_none() && glob.is_none() {
-        let out = crate::output::format_error(
-            format,
-            "tag add requires --file or --glob",
-            None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
+    if let Some(outcome) = require_file_or_glob(file, glob, "tag add", format) {
+        return Ok(outcome);
     }
 
     let files = collect_files(dir, file, glob, format)?;
@@ -213,36 +247,10 @@ pub fn tag_add(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut modified: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
+    let ListOpResult { modified, skipped } =
+        add_values_to_list_property(&files, "tags", &[name.to_owned()])?;
 
-    for (full_path, rel_path) in &files {
-        // Read frontmatter only for the idempotency check
-        let props = frontmatter::read_frontmatter(full_path)?;
-        let tags = extract_tags(&props);
-        let already_has = tags.iter().any(|t| t.eq_ignore_ascii_case(name));
-
-        if already_has {
-            skipped.push(rel_path.clone());
-        } else {
-            // Build updated tags list
-            let mut new_tags = tags;
-            new_tags.push(name.to_owned());
-            let yaml_list = Value::Sequence(new_tags.into_iter().map(Value::String).collect());
-            let mut new_props = props;
-            new_props.insert("tags".to_owned(), yaml_list);
-            frontmatter::write_frontmatter(full_path, &new_props)?;
-            modified.push(rel_path.clone());
-        }
-    }
-
-    let total = modified.len() + skipped.len();
-    let result = json!({
-        "tag": name,
-        "modified": modified,
-        "skipped": skipped,
-        "total": total,
-    });
+    let result = build_list_mutation_json("tag", name, None, None, &modified, &skipped);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -261,17 +269,8 @@ pub fn tag_remove(
     format: Format,
 ) -> Result<CommandOutcome> {
     // Mutation commands require --file or --glob to avoid accidentally touching every file
-    if file.is_none() && glob.is_none() {
-        let out = crate::output::format_error(
-            format,
-            "tag remove requires --file or --glob",
-            None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
+    if let Some(outcome) = require_file_or_glob(file, glob, "tag remove", format) {
+        return Ok(outcome);
     }
 
     let files = collect_files(dir, file, glob, format)?;
@@ -280,42 +279,10 @@ pub fn tag_remove(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut modified: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
+    let ListOpResult { modified, skipped } =
+        remove_values_from_list_property(&files, "tags", &[name.to_owned()])?;
 
-    for (full_path, rel_path) in &files {
-        // Read frontmatter only
-        let props = frontmatter::read_frontmatter(full_path)?;
-        let tags = extract_tags(&props);
-        let new_tags: Vec<String> = tags
-            .iter()
-            .filter(|t| !t.eq_ignore_ascii_case(name))
-            .cloned()
-            .collect();
-
-        if new_tags.len() == tags.len() {
-            // Tag was not present — idempotent skip
-            skipped.push(rel_path.clone());
-        } else {
-            let mut new_props = props;
-            if new_tags.is_empty() {
-                new_props.remove("tags");
-            } else {
-                let yaml_list = Value::Sequence(new_tags.into_iter().map(Value::String).collect());
-                new_props.insert("tags".to_owned(), yaml_list);
-            }
-            frontmatter::write_frontmatter(full_path, &new_props)?;
-            modified.push(rel_path.clone());
-        }
-    }
-
-    let total = modified.len() + skipped.len();
-    let result = json!({
-        "tag": name,
-        "modified": modified,
-        "skipped": skipped,
-        "total": total,
-    });
+    let result = build_list_mutation_json("tag", name, None, None, &modified, &skipped);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -418,11 +385,11 @@ mod tests {
 
     #[test]
     fn extract_tags_from_list() {
-        let props = make_props(md!(r#"
+        let props = make_props(md!(r"
 tags:
   - rust
   - cli
-"#));
+"));
         let tags = extract_tags(&props);
         assert_eq!(tags, vec!["rust", "cli"]);
     }
@@ -461,26 +428,26 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("a.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
   - cli
 ---
 # A
-"#),
+"),
         )
         .unwrap();
         fs::write(
             tmp.path().join("b.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
   - iteration
 ---
 # B
-"#),
+"),
         )
         .unwrap();
         fs::write(tmp.path().join("c.md"), "No frontmatter.\n").unwrap();
@@ -488,9 +455,9 @@ tags:
     }
 
     #[test]
-    fn tags_list_all_files() {
+    fn tags_summary_all_files() {
         let tmp = setup_vault();
-        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
@@ -503,6 +470,40 @@ tags:
     }
 
     #[test]
+    fn tags_summary_single_file() {
+        let tmp = setup_vault();
+        let outcome = tags_summary(tmp.path(), Some("a.md"), None, Format::Json).unwrap();
+        let out = match outcome {
+            CommandOutcome::Success(s) => s,
+            CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["total"], 2);
+    }
+
+    // --- tags_list (per-file) command ---
+
+    #[test]
+    fn tags_list_per_file_all_files() {
+        let tmp = setup_vault();
+        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        let out = match outcome {
+            CommandOutcome::Success(s) => s,
+            CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let entries = parsed.as_array().unwrap();
+        // 3 files: a.md, b.md, c.md
+        assert_eq!(entries.len(), 3);
+        let a = entries
+            .iter()
+            .find(|e| e["path"].as_str().unwrap().ends_with("a.md"))
+            .unwrap();
+        let a_tags = a["tags"].as_array().unwrap();
+        assert_eq!(a_tags.len(), 2);
+    }
+
+    #[test]
     fn tags_list_single_file() {
         let tmp = setup_vault();
         let outcome = tags_list(tmp.path(), Some("a.md"), None, Format::Json).unwrap();
@@ -511,7 +512,11 @@ tags:
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["total"], 2);
+        let entries = parsed.as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0]["path"].as_str().unwrap().ends_with("a.md"));
+        let tags = entries[0]["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
     }
 
     // --- tag_find command ---
@@ -534,12 +539,12 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - inbox/processing
 ---
-"#),
+"),
         )
         .unwrap();
         let outcome = tag_find(tmp.path(), "inbox", None, None, Format::Json).unwrap();
@@ -555,9 +560,8 @@ tags:
     fn tag_find_no_match() {
         let tmp = setup_vault();
         let outcome = tag_find(tmp.path(), "nonexistent", None, None, Format::Json).unwrap();
-        let out = match outcome {
-            CommandOutcome::Success(s) => s,
-            _ => panic!("expected success"),
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["total"], 0);
@@ -570,11 +574,11 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -597,12 +601,12 @@ title: Note
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -622,11 +626,11 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -639,11 +643,11 @@ title: Note
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -659,13 +663,13 @@ title: Note
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
   - cli
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -689,12 +693,12 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - cli
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -714,13 +718,13 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 tags:
   - rust
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -738,12 +742,12 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -757,11 +761,11 @@ tags:
     #[test]
     fn tag_add_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = md!(r#"
+        let body = md!(r"
 # Heading
 
 Some content with [[wikilinks]] and more text.
-"#);
+");
         fs::write(
             tmp.path().join("note.md"),
             format!("---\ntitle: Note\n---\n{body}"),
@@ -777,11 +781,11 @@ Some content with [[wikilinks]] and more text.
     #[test]
     fn tag_remove_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = md!(r#"
+        let body = md!(r"
 # Heading
 
 Some content.
-"#);
+");
         fs::write(
             tmp.path().join("note.md"),
             format!("---\ntags:\n  - rust\n  - cli\n---\n{body}"),
@@ -794,13 +798,13 @@ Some content.
         assert!(content.contains(body), "body was corrupted:\n{content}");
     }
 
-    // --- discover_files used by tags_list (read-only) still works without file/glob ---
+    // --- discover_files used by tags_summary (read-only) still works without file/glob ---
 
     #[test]
-    fn tags_list_no_file_or_glob_reads_all() {
+    fn tags_summary_no_file_or_glob_reads_all() {
         let tmp = setup_vault();
-        // tags_list (read-only) still accepts no --file/--glob
-        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        // tags_summary (read-only) still accepts no --file/--glob
+        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success(_)));
     }
 }

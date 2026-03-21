@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
@@ -13,10 +14,12 @@ pub struct Document {
 }
 
 impl Document {
+    #[must_use]
     pub fn properties(&self) -> &BTreeMap<String, Value> {
         &self.properties
     }
 
+    #[must_use]
     pub fn body(&self) -> &str {
         &self.body
     }
@@ -61,6 +64,7 @@ impl Document {
     }
 
     /// Get a property value by name.
+    #[must_use]
     pub fn get_property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
     }
@@ -326,15 +330,14 @@ fn find_closing_delimiter(s: &str) -> Option<usize> {
 }
 
 /// Infer the Obsidian property type from a YAML value.
+#[must_use]
 pub fn infer_type(value: &Value) -> &'static str {
     match value {
         Value::Bool(_) => "checkbox",
         Value::Number(_) => "number",
         Value::Sequence(_) => "list",
         Value::String(s) => infer_string_type(s),
-        Value::Null => "text",
-        Value::Mapping(_) => "text",
-        Value::Tagged(_) => "text",
+        Value::Null | Value::Mapping(_) | Value::Tagged(_) => "text",
     }
 }
 
@@ -357,9 +360,9 @@ fn is_date(s: &str) -> bool {
     let b = s.as_bytes();
     b[4] == b'-'
         && b[7] == b'-'
-        && b[..4].iter().all(|c| c.is_ascii_digit())
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
 /// Check if a string matches `YYYY-MM-DDThh:mm:ss`.
@@ -373,12 +376,12 @@ fn is_datetime(s: &str) -> bool {
         && b[10] == b'T'
         && b[13] == b':'
         && b[16] == b':'
-        && b[..4].iter().all(|c| c.is_ascii_digit())
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
-        && b[11..13].iter().all(|c| c.is_ascii_digit())
-        && b[14..16].iter().all(|c| c.is_ascii_digit())
-        && b[17..19].iter().all(|c| c.is_ascii_digit())
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
+        && b[11..13].iter().all(u8::is_ascii_digit)
+        && b[14..16].iter().all(u8::is_ascii_digit)
+        && b[17..19].iter().all(u8::is_ascii_digit)
 }
 
 /// Parse a string value into an appropriate YAML Value, optionally forced to a specific type.
@@ -449,7 +452,7 @@ fn infer_value(raw: &str) -> Value {
     Value::String(raw.to_owned())
 }
 
-/// Convert a YAML value to a serde_json::Value for output.
+/// Convert a YAML value to a `serde_json::Value` for output.
 pub fn yaml_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
@@ -494,13 +497,13 @@ mod tests {
 
     #[test]
     fn parse_valid_frontmatter() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Hello
 status: draft
 ---
 Body text here.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         assert_eq!(doc.properties().len(), 2);
         assert_eq!(
@@ -520,11 +523,11 @@ Body text here.
 
     #[test]
     fn parse_empty_frontmatter() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 ---
 Body.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         assert!(doc.properties().is_empty());
         assert_eq!(doc.body(), "Body.\n");
@@ -533,11 +536,11 @@ Body.
     #[test]
     fn parse_malformed_frontmatter() {
         // Missing closing delimiter — now returns an error to prevent corruption on write
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Broken
 No closing delimiter.
-"#);
+");
         let err = Document::parse(content).unwrap_err();
         assert!(err.to_string().contains("unclosed frontmatter"));
     }
@@ -585,7 +588,7 @@ No closing delimiter.
 
     #[test]
     fn roundtrip_preserves_body() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Test
 priority: 5
@@ -593,7 +596,7 @@ priority: 5
 # Heading
 
 Paragraph content.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         let serialized = doc.serialize().unwrap();
         let doc2 = Document::parse(&serialized).unwrap();
@@ -610,12 +613,12 @@ Paragraph content.
 
     #[test]
     fn set_and_remove_property() {
-        let mut doc = Document::parse(md!(r#"
+        let mut doc = Document::parse(md!(r"
 ---
 title: Hi
 ---
 Body
-"#))
+"))
         .unwrap();
         doc.set_property("status".into(), Value::String("done".into()));
         assert!(doc.get_property("status").is_some());
@@ -655,11 +658,11 @@ Body
 
     #[test]
     fn file_with_only_frontmatter() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Only FM
 ---
-"#);
+");
         let doc = Document::parse(content).unwrap();
         assert_eq!(doc.properties().len(), 1);
         assert_eq!(doc.body(), "");
@@ -669,14 +672,15 @@ title: Only FM
 
     #[test]
     fn streaming_valid_frontmatter() {
-        let input = br#"---
+        let input = md!("
+---
 title: Hello
 status: draft
 ---
 # Body that should not be read
 Lots of content here.
-"#;
-        let props = read_frontmatter_from_reader(&input[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
         assert_eq!(props.len(), 2);
         assert_eq!(props.get("title"), Some(&Value::String("Hello".into())));
         assert_eq!(props.get("status"), Some(&Value::String("draft".into())));
@@ -684,20 +688,22 @@ Lots of content here.
 
     #[test]
     fn streaming_no_frontmatter() {
-        let input = br#"Just a regular file.
+        let input = md!("
+Just a regular file.
 No frontmatter.
-"#;
-        let props = read_frontmatter_from_reader(&input[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
         assert!(props.is_empty());
     }
 
     #[test]
     fn streaming_empty_frontmatter() {
-        let input = br#"---
+        let input = md!("
+---
 ---
 Body.
-"#;
-        let props = read_frontmatter_from_reader(&input[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
         assert!(props.is_empty());
     }
 
@@ -705,25 +711,27 @@ Body.
     fn streaming_no_closing_delimiter() {
         // No closing `---` means everything after the opening is read as YAML.
         // If it's not valid YAML, we get an error — which is correct.
-        let input = br#"---
+        let input = md!("
+---
 title: Broken
 Not valid yaml line
-"#;
-        let result = read_frontmatter_from_reader(&input[..]);
+");
+        let result = read_frontmatter_from_reader(input.as_bytes());
         assert!(result.is_err());
 
         // But if the content happens to be valid YAML, it parses fine
-        let input2 = br#"---
+        let input2 = md!("
+---
 title: Works
 status: ok
-"#;
-        let props = read_frontmatter_from_reader(&input2[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input2.as_bytes()).unwrap();
         assert_eq!(props.get("title"), Some(&Value::String("Works".into())));
     }
 
     #[test]
     fn streaming_matches_full_parse() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Test
 priority: 5
@@ -734,7 +742,7 @@ tags:
 # Heading
 
 Body.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         let streamed = read_frontmatter_from_reader(content.as_bytes()).unwrap();
         assert_eq!(doc.properties(), &streamed);
@@ -743,10 +751,11 @@ Body.
     // --- Budget boundary tests for skip_frontmatter ---
 
     fn make_frontmatter_with_n_lines(n: usize) -> String {
+        use std::fmt::Write as _;
         // Each content line is "k: v\n" (6 bytes). The closing --- is appended.
         let mut s = String::from("---\n");
         for i in 0..n {
-            s.push_str(&format!("k{i}: v\n"));
+            let _ = writeln!(s, "k{i}: v");
         }
         s.push_str("---\n");
         s

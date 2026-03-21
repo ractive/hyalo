@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde_json::json;
 use std::path::Path;
@@ -71,12 +72,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note-a.md"),
-            md!(r#"
+            md!(r"
 ---
 title: A
 ---
 See [[note-b]] and [[nonexistent]]
-"#),
+"),
         )
         .unwrap();
         fs::write(
@@ -176,7 +177,7 @@ See [[note-b]] and [[nonexistent]]
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
                 assert_eq!(parsed["error"], "file not found");
             }
-            _ => panic!("expected user error"),
+            CommandOutcome::Success(_) => panic!("expected user error"),
         }
     }
 

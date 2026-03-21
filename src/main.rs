@@ -19,12 +19,18 @@ use hyalo::output::{CommandOutcome, Format};
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
-        COMMANDS: Use 'properties'/'tags' to list across files. Use 'property'/'tag' for single-item mutations. \
+        COMMANDS: Use 'properties'/'tags' to list across files. Use 'property' for read/set/remove/find \
+        and list operations (add-to-list, remove-from-list). Use 'tag' for tag-specific find/add/remove. \
         Use 'links' to inspect wikilink targets.",
     after_help = "EXAMPLES:\n  \
-        List all properties:        hyalo properties --glob '**/*.md'\n  \
+        Aggregate property summary: hyalo properties summary\n  \
+        Per-file property detail:   hyalo properties list --glob '**/*.md'\n  \
         Set a property:             hyalo property set --name status --value done --file notes/todo.md\n  \
-        List tags with counts:      hyalo tags\n  \
+        Find files by property:     hyalo property find --name status --value draft\n  \
+        Add to a list property:     hyalo property add-to-list --name aliases --value \"My Note\" --file note.md\n  \
+        Remove from a list:         hyalo property remove-from-list --name authors --value Alice --file note.md\n  \
+        Aggregate tag summary:      hyalo tags summary\n  \
+        Per-file tag detail:        hyalo tags list --glob 'notes/**/*.md'\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
         Find broken wikilinks:      hyalo links --file index.md --unresolved"
 )]
@@ -43,25 +49,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List all frontmatter properties across matched files (read-only, no side effects)
-    #[command(
-        long_about = "List all frontmatter properties across matched files.\n\n\
-            INPUT: Reads .md files matching --glob (or all .md files under --dir if omitted).\n\
-            OUTPUT: For each file, emits every YAML frontmatter key-value pair with its inferred type.\n\
+    /// List frontmatter properties across files — aggregate summary or per-file detail
+    #[command(long_about = "List frontmatter properties across files.\n\n\
+            SUBCOMMANDS:\n\
+            - summary (default): aggregate unique property names with types and file counts.\n\
+            - list: per-file detail — each file with its full key/value pairs.\n\n\
+            INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need to discover what properties exist, audit frontmatter, or find files with specific metadata."
-    )]
+            USE WHEN: You need to discover what properties exist, audit frontmatter, or inspect per-file metadata.")]
     Properties {
-        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md'). Omit to scan all .md files
-        #[arg(long)]
-        glob: Option<String>,
+        #[command(subcommand)]
+        action: Option<PropertiesAction>,
     },
-    /// Read, set, or remove a single frontmatter property on one file
+    /// Read, set, find, or remove frontmatter properties; add/remove items from list properties
     #[command(
-        long_about = "Read, set, or remove a single frontmatter property on one file.\n\n\
-        Subcommands: read, set, remove. Each operates on exactly one property in one file.\n\
-        USE 'read' to get a value, 'set' to create/overwrite, 'remove' to delete.\n\
-        SIDE EFFECTS: 'set' and 'remove' modify the file on disk. 'read' is read-only."
+        long_about = "Read, set, find, or remove frontmatter properties; add/remove items from list properties.\n\n\
+        Subcommands:\n\
+        - read: Get a single property value from one file (read-only).\n\
+        - set: Create or overwrite a property on one file.\n\
+        - remove: Delete a property from one file.\n\
+        - find: Search files by property existence or value (read-only).\n\
+        - add-to-list: Append values to a list property across file(s).\n\
+        - remove-from-list: Remove values from a list property across file(s).\n\
+        SIDE EFFECTS: 'set', 'remove', 'add-to-list', and 'remove-from-list' modify files on disk. \
+        'read' and 'find' are read-only."
     )]
     Property {
         #[command(subcommand)]
@@ -89,22 +100,18 @@ enum Commands {
         #[arg(long, conflicts_with = "unresolved")]
         resolved: bool,
     },
-    /// List all unique tags with per-tag file counts across matched files (read-only)
-    #[command(
-        long_about = "List all unique tags with per-tag file counts across matched files.\n\n\
+    /// List tags across files — aggregate summary or per-file detail
+    #[command(long_about = "List tags across files.\n\n\
+            SUBCOMMANDS:\n\
+            - summary (default): aggregate unique tag names with file counts. Tags are compared case-insensitively.\n\
+            - list: per-file detail — each file with its tags array.\n\n\
             INPUT: Reads the 'tags' field from YAML frontmatter in matched files.\n\
-            OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy."
-    )]
+            USE WHEN: You need to see which tags exist, find popular/orphan tags, audit tag taxonomy, or inspect per-file tags.")]
     Tags {
-        /// Scan only this file instead of all files
-        #[arg(long, conflicts_with = "glob")]
-        file: Option<String>,
-        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
-        #[arg(long, conflicts_with = "file")]
-        glob: Option<String>,
+        #[command(subcommand)]
+        action: Option<TagsAction>,
     },
     /// Find, add, or remove tags in file frontmatter
     #[command(long_about = "Find, add, or remove tags in file frontmatter.\n\n\
@@ -115,6 +122,75 @@ enum Commands {
     Tag {
         #[command(subcommand)]
         action: TagAction,
+    },
+}
+
+/// Subcommands for `hyalo properties`
+#[derive(Subcommand)]
+enum PropertiesAction {
+    /// Aggregate: unique property names with types and file counts (default)
+    #[command(
+        long_about = "Aggregate summary of frontmatter properties across matched files.\n\n\
+            OUTPUT: List of unique property names, their inferred type, and how many files contain them.\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    Summary {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Per-file detail: each file with its property key/value pairs
+    #[command(
+        long_about = "Per-file detail: each matched file with its full frontmatter key/value pairs.\n\n\
+            OUTPUT: Array of objects, each with 'path' and 'properties' (key → {value, type}).\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    List {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+}
+
+/// Subcommands for `hyalo tags`
+#[derive(Subcommand)]
+enum TagsAction {
+    /// Aggregate: unique tag names with file counts (default)
+    #[command(long_about = "Aggregate summary of tags across matched files.\n\n\
+            OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only).")]
+    Summary {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Per-file detail: each file with its tags array
+    #[command(
+        long_about = "Per-file detail: each matched file with its tags array.\n\n\
+            OUTPUT: Array of objects, each with 'path' and 'tags' (list of tag strings).\n\
+            Files without frontmatter or without a 'tags' key appear with an empty tags array.\n\
+            SCOPE: Filtered by --file or --glob; defaults to all .md files under --dir.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    List {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
     },
 }
 
@@ -232,26 +308,115 @@ enum PropertyAction {
         #[arg(long)]
         file: String,
     },
+    /// Find files containing a specific frontmatter property (read-only)
+    #[command(
+        long_about = "Find files that contain a specific frontmatter property, optionally matching a value.\n\n\
+            INPUT: A property name (--name), an optional value filter (--value), and an optional file scope (--file or --glob).\n\
+            OUTPUT: List of files whose frontmatter contains the given property (and matching value if --value is provided).\n\
+            VALUE MATCHING: If --value is given, the comparison is type-aware:\n\
+              - String properties: case-insensitive string comparison.\n\
+              - Number properties: numeric comparison (parse --value as a number).\n\
+              - Boolean properties: parse --value as true/false/yes/no/1/0 (case-insensitive for words).\n\
+              - List properties: match if any element equals --value (case-insensitive for strings).\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to find files with a particular metadata property or a specific value for that property."
+    )]
+    Find {
+        /// Property name to search for (e.g. 'status', 'priority', 'draft')
+        #[arg(long)]
+        name: String,
+        /// Optional value to match (e.g. 'draft', '3', 'true'). If omitted, matches any file that has the property
+        #[arg(long)]
+        value: Option<String>,
+        /// Search only in this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to limit which files to search (e.g. 'docs/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Add values to a list property in file(s) frontmatter (mutates files on disk)
+    #[command(
+        long_about = "Add values to a list property in file(s) frontmatter.\n\n\
+            INPUT: A property name (--name), one or more values (--value, repeatable), and target file(s) via --file or --glob.\n\
+            BEHAVIOR: Reads the current list for the named property (or treats it as empty if absent). \
+            Appends each value that is not already present (comparison is case-insensitive for strings). \
+            If the property does not exist it is created. If it exists as a scalar string it is promoted to a list.\n\
+            IDEMPOTENT: Files where all requested values already exist are reported as 'skipped', not modified.\n\
+            OUTPUT: {\"property\": name, \"values\": [...], \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            SIDE EFFECTS: Modifies matched files on disk.\n\
+            USE WHEN: You need to append items to any list-type frontmatter property such as 'tags', 'aliases', or 'authors'."
+    )]
+    AddToList {
+        /// Property name (e.g. 'tags', 'aliases', 'authors')
+        #[arg(long)]
+        name: String,
+        /// Values to add (can be specified multiple times, e.g. --value rust --value cli)
+        #[arg(long, required = true)]
+        value: Vec<String>,
+        /// Target a single file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern for multiple files (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Remove values from a list property in file(s) frontmatter (mutates files on disk)
+    #[command(
+        long_about = "Remove values from a list property in file(s) frontmatter.\n\n\
+            INPUT: A property name (--name), one or more values (--value, repeatable), and target file(s) via --file or --glob.\n\
+            BEHAVIOR: Reads the current list for the named property and removes any matching values \
+            (comparison is case-insensitive for strings). If the list becomes empty after removal, \
+            the entire property key is deleted from frontmatter.\n\
+            IDEMPOTENT: Files where none of the requested values are present are reported as 'skipped', not an error.\n\
+            OUTPUT: {\"property\": name, \"values\": [...], \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            SIDE EFFECTS: Modifies matched files on disk.\n\
+            USE WHEN: You need to remove items from any list-type frontmatter property such as 'tags', 'aliases', or 'authors'."
+    )]
+    RemoveFromList {
+        /// Property name (e.g. 'tags', 'aliases', 'authors')
+        #[arg(long)]
+        name: String,
+        /// Values to remove (can be specified multiple times, e.g. --value rust --value cli)
+        #[arg(long, required = true)]
+        value: Vec<String>,
+        /// Target a single file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern for multiple files (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
 
-    let format = match Format::from_str_opt(&cli.format) {
-        Some(f) => f,
-        None => {
-            eprintln!(
-                "Error: invalid format '{}', expected 'json' or 'text'",
-                cli.format
-            );
-            process::exit(2);
-        }
+    let Some(format) = Format::from_str_opt(&cli.format) else {
+        eprintln!(
+            "Error: invalid format '{}', expected 'json' or 'text'",
+            cli.format
+        );
+        process::exit(2);
     };
 
     let dir = &cli.dir;
 
     let result = match cli.command {
-        Commands::Properties { ref glob } => properties::properties(dir, glob.as_deref(), format),
+        Commands::Properties { action: ref pa } => match pa {
+            None
+            | Some(PropertiesAction::Summary {
+                file: None,
+                glob: None,
+            }) => properties::properties_summary(dir, None, None, format),
+            Some(PropertiesAction::Summary { file, glob }) => {
+                properties::properties_summary(dir, file.as_deref(), glob.as_deref(), format)
+            }
+            Some(PropertiesAction::List { file, glob }) => {
+                properties::properties_list(dir, file.as_deref(), glob.as_deref(), format)
+            }
+        },
         Commands::Property { action } => match action {
             PropertyAction::Read { ref name, ref file } => {
                 properties::property_read(dir, name, file, format)
@@ -265,6 +430,45 @@ fn main() {
             PropertyAction::Remove { ref name, ref file } => {
                 properties::property_remove(dir, name, file, format)
             }
+            PropertyAction::Find {
+                ref name,
+                ref value,
+                ref file,
+                ref glob,
+            } => properties::property_find(
+                dir,
+                name,
+                value.as_deref(),
+                file.as_deref(),
+                glob.as_deref(),
+                format,
+            ),
+            PropertyAction::AddToList {
+                ref name,
+                ref value,
+                ref file,
+                ref glob,
+            } => properties::property_add_to_list(
+                dir,
+                name,
+                value,
+                file.as_deref(),
+                glob.as_deref(),
+                format,
+            ),
+            PropertyAction::RemoveFromList {
+                ref name,
+                ref value,
+                ref file,
+                ref glob,
+            } => properties::property_remove_from_list(
+                dir,
+                name,
+                value,
+                file.as_deref(),
+                glob.as_deref(),
+                format,
+            ),
         },
         Commands::Links {
             ref file,
@@ -280,9 +484,19 @@ fn main() {
             };
             link_commands::links(dir, file, filter, format)
         }
-        Commands::Tags { ref file, ref glob } => {
-            tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
-        }
+        Commands::Tags { action: ref ta } => match ta {
+            None
+            | Some(TagsAction::Summary {
+                file: None,
+                glob: None,
+            }) => tag_commands::tags_summary(dir, None, None, format),
+            Some(TagsAction::Summary { file, glob }) => {
+                tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), format)
+            }
+            Some(TagsAction::List { file, glob }) => {
+                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
+            }
+        },
         Commands::Tag { action } => match action {
             TagAction::Find {
                 ref name,

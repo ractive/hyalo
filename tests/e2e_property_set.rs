@@ -9,12 +9,12 @@ fn set_new_property() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Existing
 ---
 # Body
-"#),
+"),
     );
 
     let output = hyalo()
@@ -48,12 +48,12 @@ fn set_overwrite_property() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Old Title
 ---
 # Body
-"#),
+"),
     );
 
     let output = hyalo()
@@ -112,11 +112,11 @@ fn set_infers_number_type() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -139,11 +139,11 @@ fn set_infers_bool_type() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -166,11 +166,11 @@ fn set_infers_date_type() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -200,11 +200,11 @@ fn set_explicit_type() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -225,7 +225,7 @@ title: Test
 #[test]
 fn set_preserves_body() {
     let tmp = TempDir::new().unwrap();
-    let content = md!(r#"
+    let content = md!(r"
 ---
 title: Test
 ---
@@ -235,7 +235,7 @@ Some paragraph content.
 
 - Item 1
 - Item 2
-"#);
+");
     write_md(tmp.path(), "note.md", content);
 
     let output = hyalo()
@@ -260,13 +260,13 @@ fn set_preserves_other_properties() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Keep Me
 status: draft
 ---
 # Body
-"#),
+"),
     );
 
     let output = hyalo()

@@ -20,6 +20,7 @@ pub enum CommandOutcome {
 }
 
 impl Format {
+    #[must_use]
     pub fn from_str_opt(s: &str) -> Option<Self> {
         match s {
             "json" => Some(Self::Json),
@@ -30,6 +31,7 @@ impl Format {
 }
 
 /// Format a successful JSON value for output.
+#[must_use]
 pub fn format_success(format: Format, value: &serde_json::Value) -> String {
     match format {
         Format::Json => serde_json::to_string_pretty(value).unwrap_or_default(),
@@ -38,6 +40,7 @@ pub fn format_success(format: Format, value: &serde_json::Value) -> String {
 }
 
 /// Format an error for output to stderr.
+#[must_use]
 pub fn format_error(
     format: Format,
     error: &str,
