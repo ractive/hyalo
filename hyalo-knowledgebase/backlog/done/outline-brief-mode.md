@@ -1,8 +1,8 @@
 ---
-title: "Outline --brief flag to omit property values"
+title: Outline --brief flag to omit property values
 type: backlog
 date: 2026-03-21
-status: idea
+status: wont-do
 priority: low
 origin: dogfooding iteration-06
 tags:
@@ -43,3 +43,6 @@ Add `--brief` flag to `outline` that:
 ## Notes
 
 Low priority — the current full output works fine and isn't excessively large for typical vaults. Revisit if vault size grows or token budgets become a concern.
+
+## Won't do
+Since we now have --jq, you can define your own output format. Better then --brief
