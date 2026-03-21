@@ -1,11 +1,232 @@
 use anyhow::Result;
 use serde_json::json;
+use serde_yaml_ng::Value;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files, resolve_error_to_outcome};
 use crate::discovery;
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
+
+// ---------------------------------------------------------------------------
+// Generic list-property helpers
+// ---------------------------------------------------------------------------
+
+/// Extract a list from any YAML value under `property_name`.
+///
+/// - Sequence → collect string and number items as strings
+/// - String → single-element vec (empty string → empty vec)
+/// - Null / missing → empty vec
+/// - Any other type → empty vec
+fn extract_list_property(
+    props: &std::collections::BTreeMap<String, Value>,
+    name: &str,
+) -> Vec<String> {
+    match props.get(name) {
+        None | Some(Value::Null) => vec![],
+        Some(Value::Sequence(seq)) => seq
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Some(Value::String(s)) => {
+            if s.is_empty() {
+                vec![]
+            } else {
+                vec![s.clone()]
+            }
+        }
+        _ => vec![],
+    }
+}
+
+/// Result type for list-mutation operations.
+pub(crate) struct ListOpResult {
+    pub(crate) modified: Vec<String>,
+    pub(crate) skipped: Vec<String>,
+}
+
+/// Core logic: add `values` to the list property `property_name` across `files`.
+///
+/// For each file:
+/// - Reads current list (empty if absent or non-list).
+/// - Appends any value not already present (case-insensitive for strings).
+/// - Writes back if at least one value was added; otherwise marks file as skipped.
+pub(crate) fn add_values_to_list_property(
+    files: &[(std::path::PathBuf, String)],
+    property_name: &str,
+    values: &[String],
+) -> Result<ListOpResult> {
+    let mut modified = Vec::new();
+    let mut skipped = Vec::new();
+
+    for (full_path, rel_path) in files {
+        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let mut current = extract_list_property(&props, property_name);
+        let before_len = current.len();
+
+        for value in values {
+            let already_present = current.iter().any(|v| v.eq_ignore_ascii_case(value));
+            if !already_present {
+                current.push(value.clone());
+            }
+        }
+
+        if current.len() > before_len {
+            let yaml_list = Value::Sequence(current.into_iter().map(Value::String).collect());
+            props.insert(property_name.to_owned(), yaml_list);
+            frontmatter::write_frontmatter(full_path, &props)?;
+            modified.push(rel_path.clone());
+        } else {
+            skipped.push(rel_path.clone());
+        }
+    }
+
+    Ok(ListOpResult { modified, skipped })
+}
+
+/// Core logic: remove `values` from the list property `property_name` across `files`.
+///
+/// For each file:
+/// - Reads current list.
+/// - Removes matching values (case-insensitive).
+/// - If list becomes empty, removes the entire key.
+/// - Writes back if at least one value was removed; otherwise marks file as skipped.
+pub(crate) fn remove_values_from_list_property(
+    files: &[(std::path::PathBuf, String)],
+    property_name: &str,
+    values: &[String],
+) -> Result<ListOpResult> {
+    let mut modified = Vec::new();
+    let mut skipped = Vec::new();
+
+    for (full_path, rel_path) in files {
+        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let current = extract_list_property(&props, property_name);
+        let new_list: Vec<String> = current
+            .iter()
+            .filter(|v| !values.iter().any(|rm| rm.eq_ignore_ascii_case(v)))
+            .cloned()
+            .collect();
+
+        if new_list.len() == current.len() {
+            // Nothing was removed
+            skipped.push(rel_path.clone());
+        } else {
+            if new_list.is_empty() {
+                props.remove(property_name);
+            } else {
+                let yaml_list = Value::Sequence(new_list.into_iter().map(Value::String).collect());
+                props.insert(property_name.to_owned(), yaml_list);
+            }
+            frontmatter::write_frontmatter(full_path, &props)?;
+            modified.push(rel_path.clone());
+        }
+    }
+
+    Ok(ListOpResult { modified, skipped })
+}
+
+// ---------------------------------------------------------------------------
+// Public CLI-facing list-property commands
+// ---------------------------------------------------------------------------
+
+/// Add values to a list property in file(s). Creates the list if absent.
+/// Skips duplicates (case-insensitive). Returns a `CommandOutcome` with JSON.
+///
+/// JSON output: `{"property": name, "values": [...], "modified": [...], "skipped": [...], "total": N}`
+pub fn property_add_to_list(
+    dir: &Path,
+    name: &str,
+    values: &[String],
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    if file.is_none() && glob.is_none() {
+        let out = crate::output::format_error(
+            format,
+            "property add-to-list requires --file or --glob",
+            None,
+            Some(
+                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
+            ),
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
+    let files = collect_files(dir, file, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+
+    let ListOpResult { modified, skipped } = add_values_to_list_property(&files, name, values)?;
+
+    let total = modified.len() + skipped.len();
+    let result = json!({
+        "property": name,
+        "values": values,
+        "modified": modified,
+        "skipped": skipped,
+        "total": total,
+    });
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format, &result,
+    )))
+}
+
+/// Remove values from a list property in file(s). Removes the key if list becomes empty.
+///
+/// JSON output: `{"property": name, "values": [...], "modified": [...], "skipped": [...], "total": N}`
+pub fn property_remove_from_list(
+    dir: &Path,
+    name: &str,
+    values: &[String],
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    if file.is_none() && glob.is_none() {
+        let out = crate::output::format_error(
+            format,
+            "property remove-from-list requires --file or --glob",
+            None,
+            Some(
+                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
+            ),
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
+    let files = collect_files(dir, file, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+
+    let ListOpResult { modified, skipped } =
+        remove_values_from_list_property(&files, name, values)?;
+
+    let total = modified.len() + skipped.len();
+    let result = json!({
+        "property": name,
+        "values": values,
+        "modified": modified,
+        "skipped": skipped,
+        "total": total,
+    });
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format, &result,
+    )))
+}
 
 /// List all properties across all files, or properties of a single file / glob match.
 pub fn properties(dir: &Path, path: Option<&str>, format: Format) -> Result<CommandOutcome> {
@@ -764,5 +985,312 @@ status: draft
         );
         assert_eq!(parsed["total"], 0);
         assert!(parsed["files"].as_array().unwrap().is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // property_add_to_list / property_remove_from_list unit tests
+    // ---------------------------------------------------------------------------
+
+    fn write_note(dir: &std::path::Path, name: &str, content: &str) {
+        fs::write(dir.join(name), content).unwrap();
+    }
+
+    // --- Happy paths: add ---
+
+    #[test]
+    fn property_add_to_list_creates_new_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\ntitle: T\n---\n");
+
+        let parsed = unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "aliases",
+                &["foo".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["property"], "aliases");
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 0);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("foo"));
+    }
+
+    #[test]
+    fn property_add_to_list_appends_to_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\naliases:\n  - bar\n---\n");
+
+        unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "aliases",
+                &["baz".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("bar"));
+        assert!(content.contains("baz"));
+    }
+
+    #[test]
+    fn property_add_to_list_skips_duplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\naliases:\n  - Foo\n---\n");
+
+        let parsed = unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "aliases",
+                &["foo".to_owned()], // different case
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn property_add_to_list_multiple_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\ntitle: T\n---\n");
+
+        let parsed = unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "authors",
+                &["alice".to_owned(), "bob".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("alice"));
+        assert!(content.contains("bob"));
+    }
+
+    #[test]
+    fn property_add_to_list_to_scalar_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Property exists as a scalar string
+        write_note(tmp.path(), "note.md", "---\naliases: old\n---\n");
+
+        unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "aliases",
+                &["new".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("old"));
+        assert!(content.contains("new"));
+    }
+
+    // --- Happy paths: remove ---
+
+    #[test]
+    fn property_remove_from_list_removes_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(
+            tmp.path(),
+            "note.md",
+            "---\naliases:\n  - foo\n  - bar\n---\n",
+        );
+
+        let parsed = unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "aliases",
+                &["foo".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 0);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("foo"));
+        assert!(content.contains("bar"));
+    }
+
+    #[test]
+    fn property_remove_from_list_empties_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(
+            tmp.path(),
+            "note.md",
+            "---\ntitle: T\naliases:\n  - solo\n---\n",
+        );
+
+        unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "aliases",
+                &["solo".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("aliases:"));
+        assert!(content.contains("title:"));
+    }
+
+    #[test]
+    fn property_remove_from_list_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\naliases:\n  - Rust\n---\n");
+
+        let parsed = unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "aliases",
+                &["rust".to_owned()], // lowercase
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn property_remove_from_list_multiple_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(
+            tmp.path(),
+            "note.md",
+            "---\naliases:\n  - a\n  - b\n  - c\n---\n",
+        );
+
+        unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "aliases",
+                &["a".to_owned(), "b".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("- a\n") && !content.contains("- b\n"));
+        assert!(content.contains("c"));
+    }
+
+    // --- Unhappy paths ---
+
+    #[test]
+    fn property_add_to_list_requires_file_or_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\ntitle: T\n---\n");
+
+        let parsed = unwrap_user_error(
+            property_add_to_list(
+                tmp.path(),
+                "aliases",
+                &["foo".to_owned()],
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert!(
+            parsed["error"].as_str().unwrap().contains("--file")
+                || parsed["error"].as_str().unwrap().contains("--glob")
+        );
+    }
+
+    #[test]
+    fn property_remove_from_list_requires_file_or_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\naliases:\n  - foo\n---\n");
+
+        let parsed = unwrap_user_error(
+            property_remove_from_list(
+                tmp.path(),
+                "aliases",
+                &["foo".to_owned()],
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert!(
+            parsed["error"].as_str().unwrap().contains("--file")
+                || parsed["error"].as_str().unwrap().contains("--glob")
+        );
+    }
+
+    #[test]
+    fn property_add_to_list_file_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let parsed = unwrap_user_error(
+            property_add_to_list(
+                tmp.path(),
+                "aliases",
+                &["foo".to_owned()],
+                Some("nonexistent.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["error"], "file not found");
+    }
+
+    #[test]
+    fn property_remove_from_list_absent_values_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\naliases:\n  - bar\n---\n");
+
+        let parsed = unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "aliases",
+                &["nothere".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
     }
 }
