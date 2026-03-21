@@ -193,6 +193,75 @@ pub fn property_remove(
     }
 }
 
+/// Find files that contain a specific frontmatter property, optionally filtering by value.
+pub fn property_find(
+    dir: &Path,
+    name: &str,
+    value: Option<&str>,
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    let files = collect_files(dir, file, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+
+    let mut matching_paths: Vec<String> = Vec::new();
+
+    for (full_path, rel_path) in &files {
+        let props = frontmatter::read_frontmatter(full_path)?;
+        if let Some(yaml_val) = props.get(name) {
+            let matches = match value {
+                None => true,
+                Some(query) => value_matches(yaml_val, query),
+            };
+            if matches {
+                matching_paths.push(rel_path.clone());
+            }
+        }
+    }
+
+    let total = matching_paths.len();
+    let result = serde_json::json!({
+        "property": name,
+        "value": value,
+        "files": matching_paths,
+        "total": total,
+    });
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format, &result,
+    )))
+}
+
+/// Check if a YAML value matches a query string, using type-aware comparison.
+fn value_matches(yaml_val: &serde_yaml_ng::Value, query: &str) -> bool {
+    use serde_yaml_ng::Value;
+    match yaml_val {
+        Value::String(s) => s.eq_ignore_ascii_case(query),
+        Value::Number(n) => {
+            // Try integer match first, then float
+            if let Some(i) = n.as_i64() {
+                query.parse::<i64>() == Ok(i)
+            } else if let Some(f) = n.as_f64() {
+                query.parse::<f64>() == Ok(f)
+            } else {
+                false
+            }
+        }
+        Value::Bool(b) => match query {
+            "true" => *b,
+            "false" => !b,
+            _ => false,
+        },
+        Value::Sequence(seq) => seq.iter().any(|item| value_matches(item, query)),
+        Value::Null => false,
+        Value::Mapping(_) | Value::Tagged(_) => false,
+    }
+}
+
 /// Helper to resolve a file path or produce a user error outcome.
 fn resolve_or_error(
     dir: &Path,
@@ -436,5 +505,264 @@ status: draft
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    // ---------------------------------------------------------------------------
+    // property_find tests
+    // ---------------------------------------------------------------------------
+
+    fn setup_find_vault() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        // a.md: status=draft (string), priority=3 (number), draft=true (bool), tags=[rust,cli]
+        fs::write(
+            tmp.path().join("a.md"),
+            md!(r#"
+---
+status: draft
+priority: 3
+draft: true
+tags:
+  - rust
+  - cli
+---
+"#),
+        )
+        .unwrap();
+        // b.md: status=done (string), priority=5 (number), draft=false (bool)
+        fs::write(
+            tmp.path().join("b.md"),
+            md!(r#"
+---
+status: done
+priority: 5
+draft: false
+---
+"#),
+        )
+        .unwrap();
+        // c.md: no frontmatter
+        fs::write(tmp.path().join("c.md"), "No frontmatter.\n").unwrap();
+        tmp
+    }
+
+    fn unwrap_success(outcome: CommandOutcome) -> serde_json::Value {
+        match outcome {
+            CommandOutcome::Success(s) => serde_json::from_str(&s).unwrap(),
+            CommandOutcome::UserError(s) => panic!("unexpected user error: {s}"),
+        }
+    }
+
+    fn unwrap_user_error(outcome: CommandOutcome) -> serde_json::Value {
+        match outcome {
+            CommandOutcome::UserError(s) => serde_json::from_str(&s).unwrap(),
+            CommandOutcome::Success(s) => panic!("expected user error, got success: {s}"),
+        }
+    }
+
+    #[test]
+    fn property_find_by_existence() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "status", None, None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 2);
+        let files: Vec<&str> = parsed["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(files.iter().any(|f| f.contains("a.md")));
+        assert!(files.iter().any(|f| f.contains("b.md")));
+        assert!(!files.iter().any(|f| f.contains("c.md")));
+    }
+
+    #[test]
+    fn property_find_by_string_value() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(
+                tmp.path(),
+                "status",
+                Some("draft"),
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+        assert!(parsed["files"][0].as_str().unwrap().contains("a.md"));
+    }
+
+    #[test]
+    fn property_find_by_number_value() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "priority", Some("3"), None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+        assert!(parsed["files"][0].as_str().unwrap().contains("a.md"));
+    }
+
+    #[test]
+    fn property_find_by_bool_value() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "draft", Some("true"), None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+        assert!(parsed["files"][0].as_str().unwrap().contains("a.md"));
+    }
+
+    #[test]
+    fn property_find_in_list() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "tags", Some("rust"), None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+        assert!(parsed["files"][0].as_str().unwrap().contains("a.md"));
+    }
+
+    #[test]
+    fn property_find_case_insensitive() {
+        let tmp = setup_find_vault();
+        // "Draft" should match "draft" case-insensitively
+        let parsed = unwrap_success(
+            property_find(
+                tmp.path(),
+                "status",
+                Some("Draft"),
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+        assert!(parsed["files"][0].as_str().unwrap().contains("a.md"));
+    }
+
+    #[test]
+    fn property_find_with_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(
+            tmp.path().join("sub/x.md"),
+            md!(r#"
+---
+status: draft
+---
+"#),
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("root.md"),
+            md!(r#"
+---
+status: draft
+---
+"#),
+        )
+        .unwrap();
+
+        let parsed = unwrap_success(
+            property_find(
+                tmp.path(),
+                "status",
+                None,
+                None,
+                Some("sub/*.md"),
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+        assert!(parsed["files"][0].as_str().unwrap().contains("sub/x.md"));
+    }
+
+    #[test]
+    fn property_find_with_file() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "status", None, Some("a.md"), None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 1);
+    }
+
+    #[test]
+    fn property_find_no_match() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(
+                tmp.path(),
+                "status",
+                Some("nonexistent-value"),
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["total"], 0);
+        assert!(parsed["files"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn property_find_value_no_match() {
+        let tmp = setup_find_vault();
+        // Property exists but value doesn't match any file
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "priority", Some("99"), None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 0);
+    }
+
+    #[test]
+    fn property_find_nonexistent_property() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "does_not_exist", None, None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 0);
+    }
+
+    #[test]
+    fn property_find_file_not_found() {
+        let tmp = setup_find_vault();
+        let parsed = unwrap_user_error(
+            property_find(
+                tmp.path(),
+                "status",
+                None,
+                Some("nope.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["error"], "file not found");
+    }
+
+    #[test]
+    fn property_find_no_frontmatter_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Only a file with no frontmatter
+        fs::write(tmp.path().join("plain.md"), "Just text.\n").unwrap();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "status", None, None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 0);
+    }
+
+    #[test]
+    fn property_find_empty_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parsed = unwrap_success(
+            property_find(tmp.path(), "status", None, None, None, Format::Json).unwrap(),
+        );
+        assert_eq!(parsed["total"], 0);
+        assert!(parsed["files"].as_array().unwrap().is_empty());
     }
 }
