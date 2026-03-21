@@ -168,3 +168,80 @@ pub struct FileOutline {
     pub tags: Vec<String>,
     pub sections: Vec<OutlineSection>,
 }
+
+// ---------------------------------------------------------------------------
+// Task types (new in iteration 9)
+// ---------------------------------------------------------------------------
+
+/// A single task (checkbox) with its location and state.
+/// Used by `tasks`, `task read`, `task toggle`, `task set-status`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskInfo {
+    pub line: usize,
+    pub status: String,
+    pub text: String,
+    pub done: bool,
+}
+
+/// A file with its tasks.
+/// Used by `tasks` command (per-file detail).
+#[derive(Debug, Clone, Serialize)]
+pub struct FileTasks {
+    pub file: String,
+    pub tasks: Vec<TaskInfo>,
+    pub total: usize,
+}
+
+/// Result of reading or mutating a single task.
+/// Used by `task read`, `task toggle`, `task set-status`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskReadResult {
+    pub file: String,
+    pub line: usize,
+    pub status: String,
+    pub text: String,
+    pub done: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Summary types (new in iteration 9)
+// ---------------------------------------------------------------------------
+
+/// High-level vault summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct VaultSummary {
+    pub files: FileCounts,
+    pub properties: Vec<PropertySummaryEntry>,
+    pub tags: TagSummary,
+    pub status: Vec<StatusGroup>,
+    pub tasks: TaskCount,
+    pub recent_files: Vec<RecentFile>,
+}
+
+/// File counts by directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileCounts {
+    pub total: usize,
+    pub by_directory: Vec<DirectoryCount>,
+}
+
+/// Count of files in a directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct DirectoryCount {
+    pub directory: String,
+    pub count: usize,
+}
+
+/// Files grouped by status property value.
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusGroup {
+    pub value: String,
+    pub files: Vec<String>,
+}
+
+/// A recently modified file.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentFile {
+    pub path: String,
+    pub modified: String,
+}

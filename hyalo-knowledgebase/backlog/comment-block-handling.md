@@ -1,14 +1,14 @@
 ---
-title: "Scanner should skip %%comment%% blocks"
-type: backlog
 date: 2026-03-21
-status: ready
-priority: high
 origin: iteration-02 known limitation, DEC-015
+priority: high
+status: ready
 tags:
-  - backlog
-  - scanner
-  - links
+- backlog
+- scanner
+- links
+title: Scanner should skip %%comment%% blocks
+type: backlog
 ---
 
 # Scanner should skip %%comment%% blocks
@@ -32,3 +32,6 @@ Small — the scanner already tracks fenced code block state with the same open/
 
 - [[decision-log#DEC-015]]: documented as known limitation, explicitly noted as "straightforward to add"
 - [[iteration-02-links]]: listed under Known Limitations
+
+## My Comments
+With our own "parser", this could be done easily I guess?
