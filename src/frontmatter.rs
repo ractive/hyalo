@@ -494,13 +494,13 @@ mod tests {
 
     #[test]
     fn parse_valid_frontmatter() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Hello
 status: draft
 ---
 Body text here.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         assert_eq!(doc.properties().len(), 2);
         assert_eq!(
@@ -520,11 +520,11 @@ Body text here.
 
     #[test]
     fn parse_empty_frontmatter() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 ---
 Body.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         assert!(doc.properties().is_empty());
         assert_eq!(doc.body(), "Body.\n");
@@ -533,11 +533,11 @@ Body.
     #[test]
     fn parse_malformed_frontmatter() {
         // Missing closing delimiter — now returns an error to prevent corruption on write
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Broken
 No closing delimiter.
-"#);
+");
         let err = Document::parse(content).unwrap_err();
         assert!(err.to_string().contains("unclosed frontmatter"));
     }
@@ -585,7 +585,7 @@ No closing delimiter.
 
     #[test]
     fn roundtrip_preserves_body() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Test
 priority: 5
@@ -593,7 +593,7 @@ priority: 5
 # Heading
 
 Paragraph content.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         let serialized = doc.serialize().unwrap();
         let doc2 = Document::parse(&serialized).unwrap();
@@ -610,12 +610,12 @@ Paragraph content.
 
     #[test]
     fn set_and_remove_property() {
-        let mut doc = Document::parse(md!(r#"
+        let mut doc = Document::parse(md!(r"
 ---
 title: Hi
 ---
 Body
-"#))
+"))
         .unwrap();
         doc.set_property("status".into(), Value::String("done".into()));
         assert!(doc.get_property("status").is_some());
@@ -655,11 +655,11 @@ Body
 
     #[test]
     fn file_with_only_frontmatter() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Only FM
 ---
-"#);
+");
         let doc = Document::parse(content).unwrap();
         assert_eq!(doc.properties().len(), 1);
         assert_eq!(doc.body(), "");
@@ -669,14 +669,15 @@ title: Only FM
 
     #[test]
     fn streaming_valid_frontmatter() {
-        let input = br#"---
+        let input = md!("
+---
 title: Hello
 status: draft
 ---
 # Body that should not be read
 Lots of content here.
-"#;
-        let props = read_frontmatter_from_reader(&input[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
         assert_eq!(props.len(), 2);
         assert_eq!(props.get("title"), Some(&Value::String("Hello".into())));
         assert_eq!(props.get("status"), Some(&Value::String("draft".into())));
@@ -684,20 +685,22 @@ Lots of content here.
 
     #[test]
     fn streaming_no_frontmatter() {
-        let input = br#"Just a regular file.
+        let input = md!("
+Just a regular file.
 No frontmatter.
-"#;
-        let props = read_frontmatter_from_reader(&input[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
         assert!(props.is_empty());
     }
 
     #[test]
     fn streaming_empty_frontmatter() {
-        let input = br#"---
+        let input = md!("
+---
 ---
 Body.
-"#;
-        let props = read_frontmatter_from_reader(&input[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
         assert!(props.is_empty());
     }
 
@@ -705,25 +708,27 @@ Body.
     fn streaming_no_closing_delimiter() {
         // No closing `---` means everything after the opening is read as YAML.
         // If it's not valid YAML, we get an error — which is correct.
-        let input = br#"---
+        let input = md!("
+---
 title: Broken
 Not valid yaml line
-"#;
-        let result = read_frontmatter_from_reader(&input[..]);
+");
+        let result = read_frontmatter_from_reader(input.as_bytes());
         assert!(result.is_err());
 
         // But if the content happens to be valid YAML, it parses fine
-        let input2 = br#"---
+        let input2 = md!("
+---
 title: Works
 status: ok
-"#;
-        let props = read_frontmatter_from_reader(&input2[..]).unwrap();
+");
+        let props = read_frontmatter_from_reader(input2.as_bytes()).unwrap();
         assert_eq!(props.get("title"), Some(&Value::String("Works".into())));
     }
 
     #[test]
     fn streaming_matches_full_parse() {
-        let content = md!(r#"
+        let content = md!(r"
 ---
 title: Test
 priority: 5
@@ -734,7 +739,7 @@ tags:
 # Heading
 
 Body.
-"#);
+");
         let doc = Document::parse(content).unwrap();
         let streamed = read_frontmatter_from_reader(content.as_bytes()).unwrap();
         assert_eq!(doc.properties(), &streamed);

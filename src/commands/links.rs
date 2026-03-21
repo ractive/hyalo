@@ -71,12 +71,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note-a.md"),
-            md!(r#"
+            md!(r"
 ---
 title: A
 ---
 See [[note-b]] and [[nonexistent]]
-"#),
+"),
         )
         .unwrap();
         fs::write(
