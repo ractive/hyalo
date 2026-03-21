@@ -468,6 +468,100 @@ fn remove_from_list_absent_value() {
     assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
 }
 
+// Cross-type duplicate: YAML number 42 in list; adding string "42" must be skipped.
+#[test]
+fn add_to_list_skips_numeric_duplicate() {
+    let tmp = TempDir::new().unwrap();
+    // Write a file with a list property that contains the YAML number 42 (no quotes).
+    write_md(
+        tmp.path(),
+        "test.md",
+        "---\ntitle: Test\nscores:\n  - 42\n---\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "property",
+            "add-to-list",
+            "--name",
+            "scores",
+            "--value",
+            "42",
+            "--file",
+            "test.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        0,
+        "file should be skipped — 42 already present as a YAML number"
+    );
+    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+
+    // File must be unchanged: still exactly one element.
+    let content = std::fs::read_to_string(tmp.path().join("test.md")).unwrap();
+    // The list should not have a second entry for 42.
+    let occurrences = content.matches("42").count();
+    assert_eq!(
+        occurrences, 1,
+        "expected exactly one '42' in file, got {occurrences}"
+    );
+}
+
+// Removing all items from a list must delete the key entirely from frontmatter.
+#[test]
+fn remove_from_list_removes_key_when_all_removed() {
+    let tmp = TempDir::new().unwrap();
+    write_with_list(tmp.path(), "note.md", "tags", &["a", "b"]);
+
+    // Remove first value.
+    let out1 = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "property",
+            "remove-from-list",
+            "--name",
+            "tags",
+            "--value",
+            "a",
+            "--file",
+            "note.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(out1.status.success());
+
+    // Remove second value.
+    let out2 = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "property",
+            "remove-from-list",
+            "--name",
+            "tags",
+            "--value",
+            "b",
+            "--file",
+            "note.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(out2.status.success());
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        !content.contains("tags:"),
+        "tags key should be fully removed, got:\n{content}"
+    );
+    // Other frontmatter must survive.
+    assert!(content.contains("title:"));
+}
+
 #[test]
 fn add_to_list_no_values_provided() {
     // Clap enforces --value is required; omitting it should produce a clap error (exit 2)

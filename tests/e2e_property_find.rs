@@ -384,6 +384,46 @@ fn property_find_multiple_files_matching() {
 }
 
 // ---------------------------------------------------------------------------
+// Boolean alias tests — "yes", "no", "1", "0" as value filters
+// ---------------------------------------------------------------------------
+
+#[test]
+fn property_find_bool_value_yes() {
+    let tmp = TempDir::new().unwrap();
+    write_with_frontmatter(tmp.path(), "a.md", "draft: true\n");
+    write_with_frontmatter(tmp.path(), "b.md", "draft: false\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["property", "find", "--name", "draft", "--value", "yes"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert!(json["files"][0].as_str().unwrap().contains("a.md"));
+}
+
+#[test]
+fn property_find_bool_value_zero() {
+    let tmp = TempDir::new().unwrap();
+    write_with_frontmatter(tmp.path(), "a.md", "active: true\n");
+    write_with_frontmatter(tmp.path(), "b.md", "active: false\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["property", "find", "--name", "active", "--value", "0"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert!(json["files"][0].as_str().unwrap().contains("b.md"));
+}
+
+// ---------------------------------------------------------------------------
 // Verify the md! macro is available (it's used in some e2e tests)
 // ---------------------------------------------------------------------------
 
