@@ -53,6 +53,37 @@ pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
     format_success(format, &json)
 }
 
+/// Format output with drill-down hints appended.
+///
+/// - **JSON**: wraps the original value in `{"data": ..., "hints": [...]}`
+/// - **Text**: appends `  -> <command>` lines after the formatted output
+///
+/// If `hints` is empty, produces the same output as [`format_success`].
+#[must_use]
+pub fn format_with_hints(format: Format, value: &serde_json::Value, hints: &[String]) -> String {
+    if hints.is_empty() {
+        return format_success(format, value);
+    }
+    match format {
+        Format::Json => {
+            let envelope = serde_json::json!({
+                "data": value,
+                "hints": hints,
+            });
+            serde_json::to_string_pretty(&envelope).unwrap_or_default()
+        }
+        Format::Text => {
+            let mut text = format_value_as_text(value);
+            text.push('\n');
+            for hint in hints {
+                text.push_str("\n  -> ");
+                text.push_str(hint);
+            }
+            text
+        }
+    }
+}
+
 /// Format an error for output to stderr.
 #[must_use]
 pub fn format_error(

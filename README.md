@@ -10,7 +10,7 @@ cargo build --release
 
 ## Usage
 
-All commands accept `--dir <path>` (default: `.`), `--format json|text` (default: `json`), and `--jq <FILTER>` (apply a jq expression to the JSON output).
+All commands accept `--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), and `--hints` (append executable drill-down command suggestions).
 
 Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
 
@@ -133,9 +133,32 @@ hyalo summary --format text
 
 # Extract a single field with --jq
 hyalo summary --jq '.tasks.total'
+
+# Show drill-down hints (suggested next commands)
+hyalo summary --format text --hints
 ```
 
 Single-call vault overview designed as the entry point for LLM agents. Returns file counts by directory, property summary, tag counts, status groups, task totals, and recently modified files.
+
+### Hints
+
+Add `--hints` to any read-only command to see executable drill-down commands:
+
+```
+$ hyalo summary --format text --hints
+Files: 32 total (.: 5, backlog: 7, iterations: 12, research: 8)
+Properties: 8 unique
+Tags: 15 unique
+Status: completed (10), in-progress (2), planned (2)
+Tasks: 89/174
+
+  -> hyalo properties summary
+  -> hyalo tags summary
+  -> hyalo tasks --todo
+  -> hyalo property find --name status --value in-progress
+```
+
+In JSON mode, `--hints` wraps the output in `{"data": ..., "hints": [...]}`. Hints are concrete, copy-pasteable commands — no templates or placeholders. Suppressed when combined with `--jq`.
 
 ## License
 

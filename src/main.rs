@@ -7,7 +7,8 @@ use hyalo::commands::{
     links as link_commands, outline as outline_commands, properties, summary as summary_commands,
     tags as tag_commands, tasks as task_commands,
 };
-use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
+use hyalo::hints::{HintContext, HintSource, generate_hints};
+use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_hints};
 
 #[derive(Parser)]
 #[command(
@@ -74,11 +75,14 @@ COMMAND REFERENCE:\n  \
   Global flags (apply to all commands):\n  \
     --dir <DIR>         Root directory (default: .)\n  \
     --format json|text  Output format (default: json)\n  \
-    --jq <FILTER>       Apply a jq expression to JSON output\n\n\
+    --jq <FILTER>       Apply a jq expression to JSON output\n  \
+    --hints             Append drill-down command hints to output\n\n\
 COOKBOOK:\n  \
   # Discover what metadata exists in a vault\n  \
   hyalo properties summary\n  \
   hyalo tags summary\n\n  \
+  # Get a vault overview with drill-down hints\n  \
+  hyalo summary --format text --hints\n\n  \
   # See all properties of a specific file\n  \
   hyalo properties list --file notes/todo.md\n\n  \
   # Find all files with status=draft\n  \
@@ -144,6 +148,8 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},\n   \
   \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},\n   \
   \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}\n\n  \
+  # --hints wraps JSON output in an envelope with drill-down commands\n  \
+  {\"data\": { ... original output ... }, \"hints\": [\"hyalo properties summary\", ...]}\n\n  \
   # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
   {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}\n\n  \
   # --format text produces human-readable output on all commands"
@@ -162,6 +168,12 @@ struct Cli {
     /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'
     #[arg(long, global = true, value_name = "FILTER")]
     jq: Option<String>,
+
+    /// Append drill-down command hints to the output.
+    /// Text mode: shows '-> hyalo ...' lines. JSON mode: wraps in {"data": ..., "hints": [...]}.
+    /// Suppressed when --jq is active
+    #[arg(long, global = true)]
+    hints: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -652,6 +664,122 @@ enum TaskAction {
     },
 }
 
+/// Build a `HintContext` from the parsed command, or `None` for mutation commands
+/// (set, remove, add, toggle, etc.) where drill-down hints don't make sense.
+fn build_hint_context(command: &Commands, dir: &std::path::Path) -> Option<HintContext> {
+    let dir_str = dir.to_str().map(|s| s.to_owned());
+    // Only pass --dir to hints if it's not the default "."
+    let dir_opt = dir_str.filter(|s| s != ".");
+
+    match command {
+        Commands::Summary { glob, .. } => Some(HintContext {
+            source: HintSource::Summary,
+            dir: dir_opt,
+            glob: glob.clone(),
+        }),
+        Commands::Properties {
+            file: _,
+            glob,
+            action,
+        } => {
+            let effective_glob = match action {
+                Some(PropertiesAction::List { glob: sg, .. }) => {
+                    return Some(HintContext {
+                        source: HintSource::PropertiesList,
+                        dir: dir_opt,
+                        glob: sg.clone().or_else(|| glob.clone()),
+                    });
+                }
+                Some(PropertiesAction::Summary { glob: sg, .. }) => {
+                    sg.clone().or_else(|| glob.clone())
+                }
+                None => glob.clone(),
+            };
+            Some(HintContext {
+                source: HintSource::PropertiesSummary,
+                dir: dir_opt,
+                glob: effective_glob,
+            })
+        }
+        Commands::Property { action } => match action {
+            PropertyAction::Find {
+                name, value, glob, ..
+            } => Some(HintContext {
+                source: HintSource::PropertyFind {
+                    name: name.clone(),
+                    value: value.clone(),
+                },
+                dir: dir_opt,
+                glob: glob.clone(),
+            }),
+            _ => None,
+        },
+        Commands::Tags {
+            file: _,
+            glob,
+            action,
+        } => {
+            let effective_glob = match action {
+                Some(TagsAction::List { glob: sg, .. }) => {
+                    return Some(HintContext {
+                        source: HintSource::TagsList,
+                        dir: dir_opt,
+                        glob: sg.clone().or_else(|| glob.clone()),
+                    });
+                }
+                Some(TagsAction::Summary { glob: sg, .. }) => sg.clone().or_else(|| glob.clone()),
+                None => glob.clone(),
+            };
+            Some(HintContext {
+                source: HintSource::TagsSummary,
+                dir: dir_opt,
+                glob: effective_glob,
+            })
+        }
+        Commands::Tag { action } => match action {
+            TagAction::Find { name, glob, .. } => Some(HintContext {
+                source: HintSource::TagFind { name: name.clone() },
+                dir: dir_opt,
+                glob: glob.clone(),
+            }),
+            _ => None,
+        },
+        Commands::Links { file, .. } => Some(HintContext {
+            source: HintSource::Links { file: file.clone() },
+            dir: dir_opt,
+            glob: None,
+        }),
+        Commands::Outline { glob, .. } => Some(HintContext {
+            source: HintSource::Outline,
+            dir: dir_opt,
+            glob: glob.clone(),
+        }),
+        Commands::Tasks {
+            glob,
+            done,
+            todo,
+            status,
+            ..
+        } => {
+            let filter = if *done {
+                "done".to_owned()
+            } else if *todo {
+                "todo".to_owned()
+            } else if let Some(s) = status {
+                s.clone()
+            } else {
+                "all".to_owned()
+            };
+            Some(HintContext {
+                source: HintSource::Tasks { filter },
+                dir: dir_opt,
+                glob: glob.clone(),
+            })
+        }
+        Commands::Task { .. } => None,
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
@@ -674,13 +802,23 @@ fn main() {
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         process::exit(2);
     }
-    let effective_format = if jq_filter.is_some() {
+    // When --jq or --hints is active, force JSON internally so we can re-parse the output.
+    // The user-requested format is applied afterwards.
+    let hints_active = cli.hints && jq_filter.is_none();
+    let effective_format = if jq_filter.is_some() || hints_active {
         Format::Json
     } else {
         format
     };
 
     let dir = &cli.dir;
+
+    // Build hint context before the command dispatch (which moves cli.command fields).
+    let hint_ctx = if cli.hints && jq_filter.is_none() {
+        build_hint_context(&cli.command, dir)
+    } else {
+        None
+    };
 
     let result = match cli.command {
         Commands::Properties {
@@ -978,6 +1116,13 @@ fn main() {
                         process::exit(1);
                     }
                 }
+            } else if let Some(ctx) = &hint_ctx {
+                // Re-parse the output to generate hints, then format with them.
+                let value: serde_json::Value =
+                    serde_json::from_str(&output).unwrap_or(serde_json::Value::Null);
+                let hints = generate_hints(ctx, &value);
+                let formatted = format_with_hints(format, &value, &hints);
+                println!("{formatted}");
             } else {
                 println!("{output}");
             }

@@ -263,3 +263,30 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 **Decision:** Add `--file`/`--glob` args to the top-level `Commands::Properties` and `Commands::Tags` enum variants, forwarded to the default summary action. This means `hyalo properties --glob 'backlog/*.md'` works without needing the explicit `hyalo properties summary --glob ...`.
 
 **Why:** In dogfooding, typing `hyalo properties --glob ...` felt natural but previously required `hyalo properties summary --glob ...`. The extra `summary` subcommand was friction for the most common use case.
+
+## DEC-031: Discoverable Drill-Down Hints Architecture (2026-03-22)
+
+**Context:** After building summary, outline, and tags commands, dogfooding revealed that LLM agents (and humans) had no way to discover follow-up commands from output alone. An agent seeing "rust: 7 files" in tags summary had to already know `hyalo tag find --name rust` exists. This is the CLI equivalent of the HATEOAS problem in REST APIs. See [[discoverable-drill-down-commands]] for the original backlog item.
+
+**Decision:** Add a hint system with these architectural choices:
+
+1. **Concrete-only hints (no templates):** Every hint is a fully executable command string. No `<placeholder>` syntax. An LLM agent can execute hints verbatim without interpolation, eliminating hallucination risk from template filling.
+
+2. **Opt-in `--hints` flag:** Hints are off by default. This keeps default output backward-compatible and clean for scripting. Chosen over `--no-hints` (opt-out) because hints add noise for most programmatic consumers.
+
+3. **JSON envelope `{"data": ..., "hints": [...]}`:** When `--hints` is active, the original output is wrapped in an envelope. The `data` field contains the unmodified original output; `hints` is a flat string array of commands. This avoids polluting existing output types with hint fields.
+
+4. **Suppress when `--jq` is active:** If the user passes `--jq`, they are doing custom extraction and the envelope would break their filter. Hints are silently suppressed.
+
+5. **State-aware hint generation:** `generate_hints()` inspects the actual serialized output data — which tags appear, which properties exist, what counts are highest — and produces relevant commands. This is not a static lookup table; hints adapt to the data.
+
+**Why these tradeoffs:**
+- Concrete hints are safer than templates for automated agents but cannot cover every possible drill-down (only the most useful ones). Acceptable because the goal is discoverability, not exhaustive API documentation.
+- The JSON envelope adds one level of nesting but keeps the `data` field structurally identical to non-hint output. Callers that don't use `--hints` see zero change.
+- Flag propagation (`--dir`, `--glob`) in hints ensures suggested commands work in the caller's current context without manual flag copying.
+
+**Consequences:**
+- New `src/hints.rs` module with `HintSource`, `HintContext`, and `generate_hints()` function
+- New `format_with_hints()` in `src/output.rs` alongside existing `format_output()`
+- 37 unit tests + 14 e2e tests covering hint generation and flag interactions
+- Found and fixed tags summary sort bug during dogfooding (hints were showing alphabetically-first tags instead of most-used)

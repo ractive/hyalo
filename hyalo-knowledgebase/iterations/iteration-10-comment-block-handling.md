@@ -40,4 +40,4 @@ Follows the same pattern as fenced code block tracking:
 ## References
 
 - [[decision-log#DEC-015]]: originally deferred, now resolved
-- [[backlog/comment-block-handling]]: backlog item (status: done)
+- [[comment-block-handling]]: backlog item (status: done)
