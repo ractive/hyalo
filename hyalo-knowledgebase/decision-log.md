@@ -202,3 +202,11 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - JSON output is now compiler-verified — shape mismatches are caught at build time
 - New commands can reuse existing types instead of guessing the right `json!()` shape
 - Removed ~50 lines of generic JSON-building helpers from `commands/mod.rs`
+
+## DEC-026: Glob `*` Must Not Cross Path Separators (2026-03-21)
+
+**Context:** The `globset` crate's `Glob::new()` defaults to letting `*` match across `/` path separators. This means `*.md` matched `sub/nested.md`, which contradicts standard shell glob semantics and surprises users expecting `*` to match within a single directory only.
+
+**Decision:** Use `GlobBuilder::literal_separator(true)` when compiling glob patterns in `match_glob()`. This makes `*` match only within a single directory component. Use `**` for recursive matching across directories.
+
+**Why:** Standard shell behavior — `*.md` should match `note.md` but not `sub/note.md`. Users familiar with any shell, ripgrep, fd, or .gitignore expect this. The previous behavior made `--glob "*.md"` equivalent to `--glob "**/*.md"`, removing the ability to scope to a single directory level.
