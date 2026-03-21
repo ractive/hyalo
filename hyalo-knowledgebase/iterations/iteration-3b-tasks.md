@@ -2,7 +2,7 @@
 title: "Iteration 3b — Task Commands"
 type: iteration
 date: 2026-03-20
-status: planned
+status: superseded
 branch: iter-3b/task-commands
 tags:
   - iteration

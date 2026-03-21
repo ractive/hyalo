@@ -137,11 +137,13 @@ The old `--path` flag is retired. Both flags are always relative to `--dir` and 
 
 **Why:** Frontmatter tags are structured data — a YAML list that can be reliably parsed, added to, and removed from. Inline `#tags` are embedded in prose, making extraction ambiguous (code blocks, URLs, headings with `#`) and modification risky (could corrupt surrounding text). Frontmatter tags are also what Obsidian uses for programmatic tag management. If inline tag extraction is needed later, it can be added as a separate read-only feature.
 
-## DEC-021: Tasks Are File-Scoped Only (2026-03-20)
+## DEC-021: Tasks Are File-Scoped Only (2026-03-20) — SUPERSEDED
 
-**Decision:** All task commands (`tasks`, `task read`, `task toggle`, `task set-status`) require `--file`. No vault-wide task listing or searching.
+**Original decision:** All task commands require `--file`. No vault-wide task listing.
 
-**Why:** Tasks live in the markdown body, so vault-wide task search requires reading the full content of every file — not just frontmatter. Without an index, this is O(n) full-file reads per invocation. For an AI agent, "what tasks are in this file?" is the actionable question. Vault-wide task queries ("all incomplete tasks across the project") belong in the indexing iteration.
+**Why (original):** Tasks live in the markdown body, so vault-wide task search requires reading the full content of every file — not just frontmatter. Without an index, this is O(n) full-file reads per invocation.
+
+**Superseded by:** Iteration 9 introduced vault-wide and glob-scoped task support (`--file`, `--glob`, or no scope flag). The multi-visitor scanner ([[decision-log#DEC-028]]) made this feasible — each file is opened exactly once regardless of how many data dimensions are collected. Vault-wide tasks are now consistent with the tags API and give LLM agents a single-call way to find all open work.
 
 ## DEC-022: Tags Support Vault-Wide Operations Without Index (2026-03-20)
 

@@ -117,7 +117,7 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"name\": \"status\", \"type\": \"text\", \"value\": \"done\"}\n\n  \
   # property remove\n  \
   {\"path\": \"notes/todo.md\", \"removed\": \"status\"}\n\n  \
-  # property find\n  \
+  # property find (\"value\" field only present when --value is given)\n  \
   {\"property\": \"status\", \"value\": \"draft\", \"files\": [\"a.md\", \"b.md\"], \"total\": 2}\n\n  \
   # property add-to-list / remove-from-list\n  \
   {\"property\": \"tags\", \"values\": [\"rust\"], \"modified\": [\"a.md\"], \"skipped\": [\"b.md\"], \"total\": 2}\n\n  \
@@ -465,7 +465,7 @@ enum TagAction {
     #[command(long_about = "Remove a tag from file(s) frontmatter.\n\n\
             INPUT: A tag name and target file(s) via --file or --glob.\n\
             BEHAVIOR: Removes the exact tag from the 'tags' list. \
-            Reports an error if the tag is not present in a file.\n\
+            Idempotent: files where the tag is not present are reported as skipped.\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
             USE WHEN: You need to un-tag or re-categorize files.")]
     Remove {
