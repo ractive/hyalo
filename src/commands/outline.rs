@@ -272,7 +272,7 @@ fn process_body_line(
 // ---------------------------------------------------------------------------
 
 /// Extract the info-string (language tag) from a fenced code block opening line.
-/// E.g. "```rust" → "rust", "~~~" → ""
+/// E.g. `` ```rust `` → `"rust"`, `~~~` → `""`
 fn extract_fence_language(line: &str, fence_char: char, fence_count: usize) -> String {
     let trimmed = line.trim_start();
     // Skip past the fence chars
@@ -314,6 +314,7 @@ fn parse_atx_heading(line: &str) -> Option<(u8, String)> {
         return None;
     };
 
+    #[allow(clippy::cast_possible_truncation)] // level is guaranteed ≤ 6 by the check above
     Some((level as u8, heading_text))
 }
 
