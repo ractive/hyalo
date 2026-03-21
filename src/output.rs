@@ -416,7 +416,7 @@ mod tests {
         assert!(out.contains("tags"));
         assert!(out.contains("list"));
         // Array values should be joined with ", " not rendered as JSON
-        assert!(out.contains("rust, cli") || out.contains("rust") && out.contains("cli"));
+        assert!(out.contains("rust, cli") || (out.contains("rust") && out.contains("cli")));
         assert!(!out.contains("[\"rust\""));
     }
 
