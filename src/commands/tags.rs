@@ -94,10 +94,12 @@ pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// `hyalo tags` — list all unique tags with counts
+// `hyalo tags summary` — aggregate: unique tags with counts
 // ---------------------------------------------------------------------------
 
-pub fn tags_list(
+/// Aggregate summary: unique tag names with file counts.
+/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
+pub fn tags_summary(
     dir: &Path,
     file: Option<&str>,
     glob: Option<&str>,
@@ -133,6 +135,42 @@ pub fn tags_list(
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// `hyalo tags list` — per-file detail: each file with its tags array
+// ---------------------------------------------------------------------------
+
+/// Per-file detail: each file with its tags array.
+/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
+pub fn tags_list(
+    dir: &Path,
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    let files = collect_files(dir, file, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+
+    let mut results = Vec::new();
+    for (full_path, rel_path) in &files {
+        let props = frontmatter::read_frontmatter(full_path)?;
+        let tags = extract_tags(&props);
+        let tags_json: Vec<serde_json::Value> =
+            tags.into_iter().map(serde_json::Value::String).collect();
+        results.push(json!({
+            "path": rel_path,
+            "tags": tags_json,
+        }));
+    }
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format,
+        &json!(results),
     )))
 }
 
@@ -375,11 +413,11 @@ mod tests {
 
     #[test]
     fn extract_tags_from_list() {
-        let props = make_props(md!(r#"
+        let props = make_props(md!(r"
 tags:
   - rust
   - cli
-"#));
+"));
         let tags = extract_tags(&props);
         assert_eq!(tags, vec!["rust", "cli"]);
     }
@@ -418,26 +456,26 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("a.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
   - cli
 ---
 # A
-"#),
+"),
         )
         .unwrap();
         fs::write(
             tmp.path().join("b.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
   - iteration
 ---
 # B
-"#),
+"),
         )
         .unwrap();
         fs::write(tmp.path().join("c.md"), "No frontmatter.\n").unwrap();
@@ -445,9 +483,9 @@ tags:
     }
 
     #[test]
-    fn tags_list_all_files() {
+    fn tags_summary_all_files() {
         let tmp = setup_vault();
-        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
@@ -460,6 +498,40 @@ tags:
     }
 
     #[test]
+    fn tags_summary_single_file() {
+        let tmp = setup_vault();
+        let outcome = tags_summary(tmp.path(), Some("a.md"), None, Format::Json).unwrap();
+        let out = match outcome {
+            CommandOutcome::Success(s) => s,
+            CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["total"], 2);
+    }
+
+    // --- tags_list (per-file) command ---
+
+    #[test]
+    fn tags_list_per_file_all_files() {
+        let tmp = setup_vault();
+        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        let out = match outcome {
+            CommandOutcome::Success(s) => s,
+            CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let entries = parsed.as_array().unwrap();
+        // 3 files: a.md, b.md, c.md
+        assert_eq!(entries.len(), 3);
+        let a = entries
+            .iter()
+            .find(|e| e["path"].as_str().unwrap().ends_with("a.md"))
+            .unwrap();
+        let a_tags = a["tags"].as_array().unwrap();
+        assert_eq!(a_tags.len(), 2);
+    }
+
+    #[test]
     fn tags_list_single_file() {
         let tmp = setup_vault();
         let outcome = tags_list(tmp.path(), Some("a.md"), None, Format::Json).unwrap();
@@ -468,7 +540,11 @@ tags:
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["total"], 2);
+        let entries = parsed.as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0]["path"].as_str().unwrap().ends_with("a.md"));
+        let tags = entries[0]["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
     }
 
     // --- tag_find command ---
@@ -491,12 +567,12 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - inbox/processing
 ---
-"#),
+"),
         )
         .unwrap();
         let outcome = tag_find(tmp.path(), "inbox", None, None, Format::Json).unwrap();
@@ -527,11 +603,11 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -554,12 +630,12 @@ title: Note
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -579,11 +655,11 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -596,11 +672,11 @@ title: Note
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -616,13 +692,13 @@ title: Note
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
   - cli
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -646,12 +722,12 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - cli
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -671,13 +747,13 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 title: Note
 tags:
   - rust
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -695,12 +771,12 @@ tags:
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
             tmp.path().join("note.md"),
-            md!(r#"
+            md!(r"
 ---
 tags:
   - rust
 ---
-"#),
+"),
         )
         .unwrap();
 
@@ -714,11 +790,11 @@ tags:
     #[test]
     fn tag_add_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = md!(r#"
+        let body = md!(r"
 # Heading
 
 Some content with [[wikilinks]] and more text.
-"#);
+");
         fs::write(
             tmp.path().join("note.md"),
             format!("---\ntitle: Note\n---\n{body}"),
@@ -734,11 +810,11 @@ Some content with [[wikilinks]] and more text.
     #[test]
     fn tag_remove_preserves_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let body = md!(r#"
+        let body = md!(r"
 # Heading
 
 Some content.
-"#);
+");
         fs::write(
             tmp.path().join("note.md"),
             format!("---\ntags:\n  - rust\n  - cli\n---\n{body}"),
@@ -751,13 +827,13 @@ Some content.
         assert!(content.contains(body), "body was corrupted:\n{content}");
     }
 
-    // --- discover_files used by tags_list (read-only) still works without file/glob ---
+    // --- discover_files used by tags_summary (read-only) still works without file/glob ---
 
     #[test]
-    fn tags_list_no_file_or_glob_reads_all() {
+    fn tags_summary_no_file_or_glob_reads_all() {
         let tmp = setup_vault();
-        // tags_list (read-only) still accepts no --file/--glob
-        let outcome = tags_list(tmp.path(), None, None, Format::Json).unwrap();
+        // tags_summary (read-only) still accepts no --file/--glob
+        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success(_)));
     }
 }

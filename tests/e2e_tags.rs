@@ -4,11 +4,11 @@ use common::{hyalo, md, write_md, write_tagged};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
-// `hyalo tags` — list all unique tags with counts
+// `hyalo tags` (bare) — defaults to summary
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tags_all_files() {
+fn tags_bare_defaults_to_summary() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "a.md", &["rust", "cli"]);
     write_tagged(tmp.path(), "b.md", &["rust", "iteration"]);
@@ -31,7 +31,50 @@ fn tags_all_files() {
 }
 
 #[test]
-fn tags_with_glob() {
+fn tags_empty_vault() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("tags")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 0);
+    assert!(json["tags"].as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// `hyalo tags summary` — explicit summary subcommand
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_summary_all_files() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "a.md", &["rust", "cli"]);
+    write_tagged(tmp.path(), "b.md", &["rust", "iteration"]);
+    write_md(tmp.path(), "c.md", "No frontmatter.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "summary"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 3); // rust, cli, iteration
+    let tags = json["tags"].as_array().unwrap();
+    let rust = tags.iter().find(|t| t["name"] == "rust").unwrap();
+    assert_eq!(rust["count"], 2);
+    let cli = tags.iter().find(|t| t["name"] == "cli").unwrap();
+    assert_eq!(cli["count"], 1);
+}
+
+#[test]
+fn tags_summary_with_glob() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "sub/a.md", &["alpha"]);
     write_tagged(tmp.path(), "sub/b.md", &["beta"]);
@@ -39,7 +82,7 @@ fn tags_with_glob() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "--glob", "sub/*.md"])
+        .args(["tags", "summary", "--glob", "sub/*.md"])
         .output()
         .unwrap();
 
@@ -58,14 +101,14 @@ fn tags_with_glob() {
 }
 
 #[test]
-fn tags_with_file() {
+fn tags_summary_with_file() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust", "cli"]);
     write_tagged(tmp.path(), "other.md", &["python"]);
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "--file", "note.md"])
+        .args(["tags", "summary", "--file", "note.md"])
         .output()
         .unwrap();
 
@@ -83,12 +126,12 @@ fn tags_with_file() {
 }
 
 #[test]
-fn tags_empty_vault() {
+fn tags_summary_empty_vault() {
     let tmp = TempDir::new().unwrap();
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -99,7 +142,7 @@ fn tags_empty_vault() {
 }
 
 #[test]
-fn tags_text_format() {
+fn tags_summary_text_format() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
 
@@ -110,6 +153,7 @@ fn tags_text_format() {
             "--format",
             "text",
             "tags",
+            "summary",
         ])
         .output()
         .unwrap();
@@ -117,6 +161,214 @@ fn tags_text_format() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("rust"));
+}
+
+// ---------------------------------------------------------------------------
+// `hyalo tags list` — per-file detail subcommand (new capability)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_list_all_files() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "a.md", &["rust", "cli"]);
+    write_tagged(tmp.path(), "b.md", &["iteration"]);
+    write_md(tmp.path(), "c.md", "No frontmatter.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "list"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    // 3 files
+    assert_eq!(json.len(), 3);
+    // Each entry has path and tags
+    assert!(json.iter().all(|e| e["path"].is_string()));
+    assert!(json.iter().all(|e| e["tags"].is_array()));
+
+    let a = json
+        .iter()
+        .find(|e| e["path"].as_str().unwrap().ends_with("a.md"))
+        .unwrap();
+    let a_tags: Vec<&str> = a["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(a_tags.contains(&"rust"));
+    assert!(a_tags.contains(&"cli"));
+}
+
+#[test]
+fn tags_list_with_glob() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "sub/a.md", &["alpha"]);
+    write_tagged(tmp.path(), "sub/b.md", &["beta"]);
+    write_tagged(tmp.path(), "root.md", &["gamma"]);
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "list", "--glob", "sub/*.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    // Only sub/ files
+    assert_eq!(json.len(), 2);
+    let paths: Vec<&str> = json.iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert!(paths.iter().all(|p| p.starts_with("sub/")));
+    assert!(!paths.iter().any(|p| p.contains("root.md")));
+}
+
+#[test]
+fn tags_list_with_file() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["rust", "cli"]);
+    write_tagged(tmp.path(), "other.md", &["python"]);
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "list", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json.len(), 1);
+    assert!(json[0]["path"].as_str().unwrap().ends_with("note.md"));
+    let tags: Vec<&str> = json[0]["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(tags.contains(&"rust"));
+    assert!(tags.contains(&"cli"));
+    assert!(!tags.contains(&"python"));
+}
+
+#[test]
+fn tags_list_file_without_frontmatter() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "plain.md", "Just a plain markdown file.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "list", "--file", "plain.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json.len(), 1);
+    assert_eq!(json[0]["path"], "plain.md");
+    assert!(json[0]["tags"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn tags_list_text_format() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["rust"]);
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--format",
+            "text",
+            "tags",
+            "list",
+            "--file",
+            "note.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("note.md"));
+    assert!(stdout.contains("rust"));
+}
+
+#[test]
+fn tags_list_glob_no_match() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["rust"]);
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "list", "--glob", "nonexistent/*.md"])
+        .output()
+        .unwrap();
+
+    // Should exit with error status (user error: no files match pattern)
+    assert!(!output.status.success());
+}
+
+// ---------------------------------------------------------------------------
+// Edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_file_without_frontmatter() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "plain.md", "Just a plain markdown file.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("tags")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 0);
+}
+
+#[test]
+fn tags_scalar_string_tag() {
+    let tmp = TempDir::new().unwrap();
+    // tags as a scalar string (not a list)
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r#"
+---
+title: Note
+tags: rust
+---
+"#),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("tags")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["tags"][0]["name"], "rust");
+}
+
+#[test]
+fn tags_summary_glob_no_match() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["rust"]);
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "summary", "--glob", "nonexistent/*.md"])
+        .output()
+        .unwrap();
+
+    // Should exit with error status (user error: no files match pattern)
+    assert!(!output.status.success());
 }
 
 // ---------------------------------------------------------------------------
@@ -633,51 +885,8 @@ fn tag_remove_text_format() {
 }
 
 // ---------------------------------------------------------------------------
-// Edge cases
+// More edge cases
 // ---------------------------------------------------------------------------
-
-#[test]
-fn tags_file_without_frontmatter() {
-    let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "plain.md", "Just a plain markdown file.\n");
-
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total"], 0);
-}
-
-#[test]
-fn tags_scalar_string_tag() {
-    let tmp = TempDir::new().unwrap();
-    // tags as a scalar string (not a list)
-    write_md(
-        tmp.path(),
-        "note.md",
-        md!(r#"
----
-title: Note
-tags: rust
----
-"#),
-    );
-
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total"], 1);
-    assert_eq!(json["tags"][0]["name"], "rust");
-}
 
 #[test]
 fn tag_add_to_file_with_no_frontmatter() {
@@ -739,21 +948,6 @@ fn tag_find_file_with_empty_tags_list() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 0);
-}
-
-#[test]
-fn tags_glob_no_match() {
-    let tmp = TempDir::new().unwrap();
-    write_tagged(tmp.path(), "note.md", &["rust"]);
-
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "--glob", "nonexistent/*.md"])
-        .output()
-        .unwrap();
-
-    // Should exit with error status (user error: no files match pattern)
-    assert!(!output.status.success());
 }
 
 // ---------------------------------------------------------------------------

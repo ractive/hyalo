@@ -179,11 +179,12 @@ only_prop: value
     // File should still be readable and have no properties
     let props_output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--glob", "note.md"])
+        .args(["properties", "list", "--file", "note.md"])
         .output()
         .unwrap();
     assert!(props_output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&props_output.stdout).unwrap();
-    let props = json["properties"].as_object().unwrap();
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&props_output.stdout).unwrap();
+    assert_eq!(json.len(), 1);
+    let props = json[0]["properties"].as_object().unwrap();
     assert!(props.is_empty());
 }
