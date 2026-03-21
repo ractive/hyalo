@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use serde::Serialize;
 use serde_json::json;
 
 /// Output format.
@@ -37,6 +38,16 @@ pub fn format_success(format: Format, value: &serde_json::Value) -> String {
         Format::Json => serde_json::to_string_pretty(value).unwrap_or_default(),
         Format::Text => format_value_as_text(value),
     }
+}
+
+/// Format any `Serialize` type for output.
+///
+/// Converts the value to `serde_json::Value` first so that the text formatter
+/// can operate on a uniform representation.
+#[must_use]
+pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
+    let json = serde_json::to_value(value).expect("derived Serialize impl should not fail");
+    format_success(format, &json)
 }
 
 /// Format an error for output to stderr.

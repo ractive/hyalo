@@ -3,7 +3,9 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
-use hyalo::commands::{links as link_commands, properties, tags as tag_commands};
+use hyalo::commands::{
+    links as link_commands, outline as outline_commands, properties, tags as tag_commands,
+};
 use hyalo::output::{CommandOutcome, Format};
 
 #[derive(Parser)]
@@ -122,6 +124,34 @@ enum Commands {
     Tag {
         #[command(subcommand)]
         action: TagAction,
+    },
+    /// Build a structural outline of one or more markdown files (read-only)
+    #[command(
+        long_about = "Build a structural outline of one or more markdown files.\n\n\
+            OUTPUT: For each file, returns a 'FileOutline' object containing:\n\
+            - 'file': relative path to the file\n\
+            - 'properties': frontmatter key/value pairs with inferred types\n\
+            - 'tags': tag list extracted from frontmatter\n\
+            - 'sections': ordered list of document sections, each with:\n\
+                - 'level': heading depth (1-6); 0 = pre-heading content\n\
+                - 'heading': heading text (null for level-0 pre-heading section)\n\
+                - 'line': 1-based line number of the heading\n\
+                - 'links': internal [[wikilinks]] and [label](target) links found in the section\n\
+                - 'tasks': checkbox counts ({total, done}) — omitted if the section has no tasks\n\
+                - 'code_blocks': list of fenced code block language tags found in the section\n\
+            INPUT: Single file via --file (returns bare object), glob via --glob (returns array),\n\
+            or all .md files under --dir when neither is provided (returns array).\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to understand document structure, extract navigation data, \
+            audit which sections contain tasks or links, or build a document map."
+    )]
+    Outline {
+        /// Markdown file to outline (relative to --dir); returns a bare object
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select multiple files (e.g. '**/*.md'); returns an array
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
     },
 }
 
@@ -514,6 +544,9 @@ fn main() {
                 ref glob,
             } => tag_commands::tag_remove(dir, name, file.as_deref(), glob.as_deref(), format),
         },
+        Commands::Outline { ref file, ref glob } => {
+            outline_commands::outline(dir, file.as_deref(), glob.as_deref(), format)
+        }
     };
 
     match result {

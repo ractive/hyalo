@@ -24,7 +24,7 @@ pub fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
 }
 
 /// Extract links from a text segment (already cleaned of inline code spans).
-fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
+pub(crate) fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
     let bytes = text.as_bytes();
     let len = bytes.len();
     let mut i = 0;
