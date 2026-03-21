@@ -1,14 +1,13 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::{Context, Result};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use anyhow::Result;
 use std::path::Path;
 
+use crate::commands::tags::extract_tags;
 use crate::commands::{FilesOrOutcome, collect_files, unwrap_single_file_result};
 use crate::frontmatter;
 use crate::links;
 use crate::output::{CommandOutcome, Format};
-use crate::scanner;
+use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::types::{FileOutline, OutlineSection, PropertyInfo, TaskCount};
 
 // ---------------------------------------------------------------------------
@@ -51,11 +50,13 @@ pub fn outline(
 // Core outline builder
 // ---------------------------------------------------------------------------
 
-/// Build a `FileOutline` for a single file.
+/// Build a `FileOutline` for a single file using a single-pass scan.
 fn build_file_outline(path: &Path, rel_path: &str) -> Result<FileOutline> {
-    // Read frontmatter properties
-    let props_raw = frontmatter::read_frontmatter(path)?;
+    let mut fm = FrontmatterCollector::new(true);
+    let mut section_scanner = SectionScanner::new();
+    scanner::scan_file_multi(path, &mut [&mut fm, &mut section_scanner])?;
 
+    let props_raw = fm.into_props();
     let properties: Vec<PropertyInfo> = props_raw
         .iter()
         .map(|(name, value)| PropertyInfo {
@@ -65,11 +66,8 @@ fn build_file_outline(path: &Path, rel_path: &str) -> Result<FileOutline> {
         })
         .collect();
 
-    // Extract tags from frontmatter
-    let tags = crate::commands::tags::extract_tags(&props_raw);
-
-    // Scan the file body for sections
-    let sections = scan_sections(path)?;
+    let tags = extract_tags(&props_raw);
+    let sections = section_scanner.into_sections();
 
     Ok(FileOutline {
         file: rel_path.to_owned(),
@@ -80,7 +78,7 @@ fn build_file_outline(path: &Path, rel_path: &str) -> Result<FileOutline> {
 }
 
 // ---------------------------------------------------------------------------
-// Section scanning
+// SectionScanner visitor
 // ---------------------------------------------------------------------------
 
 /// State accumulated for the current section being built.
@@ -128,161 +126,97 @@ impl SectionBuilder {
     }
 }
 
-/// Scan file body line by line, building `OutlineSection` values.
-/// Skips frontmatter, tracks fenced code block state, detects ATX headings,
-/// extracts links, counts task checkboxes, and records code block languages.
-fn scan_sections(path: &Path) -> Result<Vec<OutlineSection>> {
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-
-    let mut line_num: usize = 0;
-    let mut buf = String::new();
-
-    // --- Skip frontmatter ---
-    buf.clear();
-    let n = reader.read_line(&mut buf).context("failed to read line")?;
-    if n == 0 {
-        // Empty file
-        return Ok(Vec::new());
-    }
-    line_num += 1;
-
-    let first_trimmed = buf.trim_end_matches(['\n', '\r']).to_owned();
-    let fm_lines = frontmatter::skip_frontmatter(&mut reader, &first_trimmed)?;
-    if fm_lines > 0 {
-        line_num = fm_lines;
-    }
-
-    // --- Scan body ---
-
-    // Pre-heading section (level 0): collects content before the first heading
-    let mut current = SectionBuilder::new(0, None, 1);
-    let mut sections: Vec<OutlineSection> = Vec::new();
-    // Fenced code block state: (fence_char, fence_count, language)
-    let mut fence: Option<(char, usize, String)> = None;
-
-    // If the first line was not frontmatter, process it now
-    if fm_lines == 0 {
-        process_body_line(
-            &first_trimmed,
-            line_num,
-            &mut current,
-            &mut fence,
-            &mut sections,
-        );
-    }
-
-    loop {
-        buf.clear();
-        let n = reader.read_line(&mut buf).context("failed to read line")?;
-        if n == 0 {
-            break; // EOF
-        }
-        line_num += 1;
-        let line = buf.trim_end_matches(['\n', '\r']);
-
-        process_body_line(line, line_num, &mut current, &mut fence, &mut sections);
-    }
-
-    // Flush the last section
-    let last = current.finish();
-    // Only emit the pre-heading section (level 0) if it has any content
-    let should_emit = last.level > 0
-        || !last.links.is_empty()
-        || last.tasks.is_some()
-        || !last.code_blocks.is_empty();
-    if should_emit {
-        sections.push(last);
-    }
-
-    Ok(sections)
+/// Visitor that builds outline sections from body events.
+/// Tracks headings, links, tasks, and code blocks per section.
+pub struct SectionScanner {
+    current: SectionBuilder,
+    sections: Vec<OutlineSection>,
 }
 
-/// Process a single body line, updating the current section builder and
-/// emitting a finished section to `sections` when a new heading is detected.
-fn process_body_line(
-    line: &str,
-    line_num: usize,
-    current: &mut SectionBuilder,
-    fence: &mut Option<(char, usize, String)>,
-    sections: &mut Vec<OutlineSection>,
-) {
-    // --- Fenced code block handling ---
-    if let Some((fence_char, fence_count, _)) = fence.as_ref() {
-        if scanner::is_closing_fence(line, *fence_char, *fence_count) {
-            *fence = None;
+impl Default for SectionScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SectionScanner {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            current: SectionBuilder::new(0, None, 1),
+            sections: Vec::new(),
         }
-        // Lines inside a code block are not processed for links/tasks/headings
-        return;
     }
 
-    // Detect opening fence
-    if let Some((fc, count)) = scanner::detect_opening_fence(line) {
-        let lang = extract_fence_language(line, fc, count);
-        if !lang.is_empty() {
-            current.code_blocks.push(lang.clone());
-        }
-        *fence = Some((fc, count, lang));
-        return;
-    }
-
-    // --- ATX heading detection ---
-    if let Some((level, heading_text)) = parse_atx_heading(line) {
-        // Finish the current section, emitting it only if it has content
-        // (or if it is a named section, i.e. level > 0)
-        let finished = std::mem::replace(
-            current,
-            SectionBuilder::new(level, Some(heading_text), line_num),
-        );
-
-        // Level-0 (pre-heading) sections are only emitted if they have
-        // links, tasks, or code blocks — plain text doesn't count.
+    /// Consume and return all collected sections.
+    #[must_use]
+    pub fn into_sections(mut self) -> Vec<OutlineSection> {
+        // Flush the last section
+        let last = std::mem::replace(&mut self.current, SectionBuilder::new(0, None, 0));
+        let finished = last.finish();
         let should_emit = finished.level > 0
             || !finished.links.is_empty()
-            || finished.task_total > 0
+            || finished.tasks.is_some()
             || !finished.code_blocks.is_empty();
-
         if should_emit {
-            sections.push(finished.finish());
+            self.sections.push(finished);
+        }
+        self.sections
+    }
+}
+
+impl FileVisitor for SectionScanner {
+    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+        // ATX heading detection
+        if let Some((level, heading_text)) = parse_atx_heading(raw) {
+            let finished = std::mem::replace(
+                &mut self.current,
+                SectionBuilder::new(level, Some(heading_text), line_num),
+            );
+
+            let should_emit = finished.level > 0
+                || !finished.links.is_empty()
+                || finished.task_total > 0
+                || !finished.code_blocks.is_empty();
+
+            if should_emit {
+                self.sections.push(finished.finish());
+            }
+
+            return ScanAction::Continue;
         }
 
-        return;
-    }
+        // Normal text line — extract links and count tasks
+        let cleaned = scanner::strip_inline_code(raw);
+        let mut line_links: Vec<links::Link> = Vec::new();
+        links::extract_links_from_text(cleaned.as_ref(), &mut line_links);
 
-    // --- Normal text line ---
-
-    // Strip inline code spans before extracting links
-    let cleaned = scanner::strip_inline_code(line);
-    let mut line_links: Vec<links::Link> = Vec::new();
-    links::extract_links_from_text(cleaned.as_ref(), &mut line_links);
-
-    for link in line_links {
-        let formatted = format_link_string(&link);
-        current.links.push(formatted);
-    }
-
-    // Count task checkboxes: lines of the form `- [ ] ...` or `- [x] ...` etc.
-    if let Some((_status, done)) = crate::tasks::detect_task_checkbox(line) {
-        current.task_total += 1;
-        if done {
-            current.task_done += 1;
+        for link in line_links {
+            let formatted = format_link_string(&link);
+            self.current.links.push(formatted);
         }
+
+        if let Some((_status, done)) = crate::tasks::detect_task_checkbox(raw) {
+            self.current.task_total += 1;
+            if done {
+                self.current.task_done += 1;
+            }
+        }
+
+        ScanAction::Continue
+    }
+
+    fn on_code_fence_open(&mut self, _raw: &str, language: &str, _line_num: usize) -> ScanAction {
+        if !language.is_empty() {
+            self.current.code_blocks.push(language.to_owned());
+        }
+        ScanAction::Continue
     }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Extract the info-string (language tag) from a fenced code block opening line.
-/// E.g. `` ```rust `` → `"rust"`, `~~~` → `""`
-fn extract_fence_language(line: &str, fence_char: char, fence_count: usize) -> String {
-    let trimmed = line.trim_start();
-    // Skip past the fence chars
-    let after_fence = &trimmed[fence_count * fence_char.len_utf8()..];
-    // The info string runs to end-of-line; trim whitespace
-    after_fence.trim().to_owned()
-}
 
 /// Parse an ATX heading line (`# Heading`, `## Sub`, etc.).
 /// Returns `(level, heading_text)` if the line is a valid ATX heading,
@@ -364,6 +298,13 @@ mod tests {
         }
     }
 
+    /// Helper: scan a file and return its sections using the new visitor.
+    fn scan_sections(path: &std::path::Path) -> Vec<OutlineSection> {
+        let mut ss = SectionScanner::new();
+        scanner::scan_file_multi(path, &mut [&mut ss]).unwrap();
+        ss.into_sections()
+    }
+
     // --- parse_atx_heading ---
 
     #[test]
@@ -421,17 +362,17 @@ mod tests {
 
     #[test]
     fn fence_language_rust() {
-        assert_eq!(extract_fence_language("```rust", '`', 3), "rust");
+        assert_eq!(scanner::extract_fence_language("```rust", '`', 3), "rust");
     }
 
     #[test]
     fn fence_no_language() {
-        assert_eq!(extract_fence_language("```", '`', 3), "");
+        assert_eq!(scanner::extract_fence_language("```", '`', 3), "");
     }
 
     #[test]
     fn fence_language_with_spaces() {
-        assert_eq!(extract_fence_language("```  sh  ", '`', 3), "sh");
+        assert_eq!(scanner::extract_fence_language("```  sh  ", '`', 3), "sh");
     }
 
     // --- format_link_string ---
@@ -479,7 +420,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("empty.md");
         fs::write(&path, "").unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert!(sections.is_empty());
     }
 
@@ -496,7 +437,7 @@ title: Test
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert!(sections.is_empty());
     }
 
@@ -513,7 +454,7 @@ Some text.
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].level, 1);
         assert_eq!(sections[0].heading.as_deref(), Some("Hello"));
@@ -537,7 +478,7 @@ Text B.
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 2);
         assert_eq!(sections[0].level, 1);
         assert_eq!(sections[0].heading.as_deref(), Some("First"));
@@ -558,7 +499,7 @@ See [[some-note]] for details.
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         // pre-heading section (level 0) + heading section
         assert_eq!(sections.len(), 2);
         assert_eq!(sections[0].level, 0);
@@ -580,7 +521,7 @@ Text here.
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].level, 1);
     }
@@ -602,7 +543,7 @@ See [[note-c]].
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 2);
         assert_eq!(sections[0].links.len(), 2);
         assert!(sections[0].links.contains(&"[[note-a]]".to_owned()));
@@ -627,7 +568,7 @@ See [[note-c]].
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 1);
         let tasks = sections[0].tasks.as_ref().unwrap();
         assert_eq!(tasks.total, 3);
@@ -647,7 +588,7 @@ Just text, no tasks.
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert!(sections[0].tasks.is_none());
     }
 
@@ -670,7 +611,7 @@ print('hello')
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].code_blocks.len(), 2);
         assert!(sections[0].code_blocks.contains(&"rust".to_owned()));
@@ -694,7 +635,7 @@ print('hello')
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections[0].links.len(), 1);
         assert_eq!(sections[0].links[0], "[[real-link]]");
     }
@@ -712,7 +653,7 @@ Use `[[not-a-link]]` and [[real-link]].
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections[0].links.len(), 1);
         assert_eq!(sections[0].links[0], "[[real-link]]");
     }
@@ -733,7 +674,7 @@ title: Test
 "),
         )
         .unwrap();
-        let sections = scan_sections(&path).unwrap();
+        let sections = scan_sections(&path);
         assert_eq!(sections.len(), 2);
         // "---", "title: Test", "---" = 3 lines of frontmatter. First heading is line 4.
         assert_eq!(sections[0].line, 4);

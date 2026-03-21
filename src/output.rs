@@ -175,6 +175,9 @@ const FILE_TASKS_FILTER: &str = r#""\(.file) (\(.total) \(if .total == 1 then "t
 const TASK_READ_RESULT_FILTER: &str =
     r#""\(.file):\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
 
+/// `VaultSummary`: `{files, properties, recent_files, status, tags, tasks}`
+const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then " (\(.files.by_directory | map("\(.directory): \(.count)") | join(", ")))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
+
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
 // ---------------------------------------------------------------------------
@@ -234,6 +237,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "file,tasks,total" => Some(FILE_TASKS_FILTER),
         // TaskReadResult
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
+        // VaultSummary
+        "files,properties,recent_files,status,tags,tasks" => Some(VAULT_SUMMARY_FILTER),
         _ => None,
     }
 }
