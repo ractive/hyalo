@@ -13,24 +13,24 @@ fn properties_aggregate() {
     write_md(
         tmp.path(),
         "a.md",
-        md!(r#"
+        md!(r"
 ---
 title: A
 status: draft
 ---
 # A
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "b.md",
-        md!(r#"
+        md!(r"
 ---
 title: B
 priority: 1
 ---
 # B
-"#),
+"),
     );
 
     let output = hyalo()
@@ -84,22 +84,22 @@ fn properties_summary_explicit() {
     write_md(
         tmp.path(),
         "a.md",
-        md!(r#"
+        md!(r"
 ---
 title: A
 status: draft
 ---
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "b.md",
-        md!(r#"
+        md!(r"
 ---
 title: B
 priority: 1
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -121,21 +121,21 @@ fn properties_summary_with_glob() {
     write_md(
         tmp.path(),
         "root.md",
-        md!(r#"
+        md!(r"
 ---
 title: Root
 ---
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "sub/a.md",
-        md!(r#"
+        md!(r"
 ---
 title: Sub A
 only_in_sub: yes
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -159,12 +159,12 @@ fn properties_summary_with_file() {
     write_md(
         tmp.path(),
         "other.md",
-        md!(r#"
+        md!(r"
 ---
 title: Other
 only_in_other: true
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -218,29 +218,29 @@ fn properties_list_with_glob() {
     write_md(
         tmp.path(),
         "root.md",
-        md!(r#"
+        md!(r"
 ---
 title: Root
 ---
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "sub/a.md",
-        md!(r#"
+        md!(r"
 ---
 title: Sub A
 ---
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "sub/b.md",
-        md!(r#"
+        md!(r"
 ---
 title: Sub B
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -263,20 +263,20 @@ fn properties_list_all_files() {
     write_md(
         tmp.path(),
         "a.md",
-        md!(r#"
+        md!(r"
 ---
 title: A
 ---
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "b.md",
-        md!(r#"
+        md!(r"
 ---
 status: draft
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -318,12 +318,12 @@ fn properties_list_text_format() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Hello
 status: draft
 ---
-"#),
+"),
     );
 
     let output = hyalo()

@@ -393,7 +393,7 @@ fn property_find_with_complex_frontmatter() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: My Note
 status: draft
@@ -406,7 +406,7 @@ tags:
 # Body
 
 Some content.
-"#),
+"),
     );
 
     let output = hyalo()

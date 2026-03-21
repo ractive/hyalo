@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use std::path::Path;
 
@@ -88,6 +89,7 @@ fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
 
 /// Parse the inner content of a wikilink (between [[ and ]]).
 /// Handles: target, target|label, target#heading, target#^block-id
+#[must_use]
 pub fn parse_wikilink(inner: &str) -> Option<Link> {
     if inner.is_empty() {
         return None;
@@ -150,6 +152,7 @@ fn try_parse_markdown_link_at(text: &str, start: usize) -> Option<(Link, usize)>
 }
 
 /// Parse a markdown link's label text and target into a Link.
+#[must_use]
 pub fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<Link> {
     if target_raw.is_empty() {
         return None;

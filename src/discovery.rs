@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use globset::Glob;
 use ignore::WalkBuilder;
@@ -41,7 +42,10 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
         return Err(FileResolveError::NotFound { path: normalized });
     }
 
-    if !normalized.ends_with(".md") {
+    if !std::path::Path::new(&normalized)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    {
         let hint = format!("{normalized}.md");
         return Err(FileResolveError::MissingExtension {
             path: normalized,
@@ -67,6 +71,7 @@ fn normalize_path(path: &str) -> String {
 }
 
 /// Check if a path argument contains glob characters.
+#[must_use]
 pub fn is_glob(path: &str) -> bool {
     path.contains('*') || path.contains('?') || path.contains('[')
 }
@@ -89,11 +94,12 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
 }
 
 /// Get the relative path of a file from a directory, using forward slashes on all platforms.
+#[must_use]
 pub fn relative_path(dir: &Path, file: &Path) -> String {
-    let raw = file
-        .strip_prefix(dir)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| file.to_string_lossy().to_string());
+    let raw = file.strip_prefix(dir).map_or_else(
+        |_| file.to_string_lossy().to_string(),
+        |p| p.to_string_lossy().to_string(),
+    );
     // Normalize to forward slashes for consistent output and glob matching on Windows.
     raw.replace('\\', "/")
 }
@@ -121,6 +127,7 @@ impl std::error::Error for FileResolveError {}
 /// Resolve a link target to a file path relative to the vault root.
 /// Tries the target as-is, then with `.md` appended.
 /// Returns the relative path if the file exists, or None.
+#[must_use]
 pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
     if target.is_empty() {
         return None;
@@ -136,7 +143,10 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
         return Some(target.clone());
     }
 
-    if !target.ends_with(".md") {
+    if !std::path::Path::new(&target)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    {
         let with_ext = format!("{target}.md");
         if dir.join(&with_ext).is_file() {
             return Some(with_ext);
@@ -232,7 +242,9 @@ mod tests {
                 assert_eq!(path, "note");
                 assert_eq!(hint, "note.md");
             }
-            other => panic!("expected MissingExtension, got {other:?}"),
+            other @ FileResolveError::NotFound { .. } => {
+                panic!("expected MissingExtension, got {other:?}")
+            }
         }
     }
 

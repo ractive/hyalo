@@ -11,7 +11,11 @@ fn write_with_list(dir: &std::path::Path, name: &str, prop: &str, items: &[&str]
     let list_yaml = if items.is_empty() {
         format!("{prop}: []\n")
     } else {
-        let rows: String = items.iter().map(|v| format!("  - {v}\n")).collect();
+        let rows = items.iter().fold(String::new(), |mut s, v| {
+            use std::fmt::Write as _;
+            let _ = writeln!(s, "  - {v}");
+            s
+        });
         format!("{prop}:\n{rows}")
     };
     write_md(dir, name, &format!("---\ntitle: {name}\n{list_yaml}---\n"));
@@ -27,11 +31,11 @@ fn add_to_list_creates_property() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -117,11 +121,11 @@ fn add_to_list_multiple_values() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -153,20 +157,20 @@ fn add_to_list_with_glob() {
     write_md(
         tmp.path(),
         "sub/a.md",
-        md!(r#"
+        md!(r"
 ---
 title: A
 ---
-"#),
+"),
     );
     write_md(
         tmp.path(),
         "sub/b.md",
-        md!(r#"
+        md!(r"
 ---
 title: B
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -196,11 +200,11 @@ fn add_to_list_text_format() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -349,11 +353,11 @@ fn add_to_list_without_file_or_glob() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -471,11 +475,11 @@ fn add_to_list_no_values_provided() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()

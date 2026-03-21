@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
@@ -13,10 +14,12 @@ pub struct Document {
 }
 
 impl Document {
+    #[must_use]
     pub fn properties(&self) -> &BTreeMap<String, Value> {
         &self.properties
     }
 
+    #[must_use]
     pub fn body(&self) -> &str {
         &self.body
     }
@@ -61,6 +64,7 @@ impl Document {
     }
 
     /// Get a property value by name.
+    #[must_use]
     pub fn get_property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
     }
@@ -326,15 +330,14 @@ fn find_closing_delimiter(s: &str) -> Option<usize> {
 }
 
 /// Infer the Obsidian property type from a YAML value.
+#[must_use]
 pub fn infer_type(value: &Value) -> &'static str {
     match value {
         Value::Bool(_) => "checkbox",
         Value::Number(_) => "number",
         Value::Sequence(_) => "list",
         Value::String(s) => infer_string_type(s),
-        Value::Null => "text",
-        Value::Mapping(_) => "text",
-        Value::Tagged(_) => "text",
+        Value::Null | Value::Mapping(_) | Value::Tagged(_) => "text",
     }
 }
 
@@ -357,9 +360,9 @@ fn is_date(s: &str) -> bool {
     let b = s.as_bytes();
     b[4] == b'-'
         && b[7] == b'-'
-        && b[..4].iter().all(|c| c.is_ascii_digit())
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
 /// Check if a string matches `YYYY-MM-DDThh:mm:ss`.
@@ -373,12 +376,12 @@ fn is_datetime(s: &str) -> bool {
         && b[10] == b'T'
         && b[13] == b':'
         && b[16] == b':'
-        && b[..4].iter().all(|c| c.is_ascii_digit())
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
-        && b[11..13].iter().all(|c| c.is_ascii_digit())
-        && b[14..16].iter().all(|c| c.is_ascii_digit())
-        && b[17..19].iter().all(|c| c.is_ascii_digit())
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
+        && b[11..13].iter().all(u8::is_ascii_digit)
+        && b[14..16].iter().all(u8::is_ascii_digit)
+        && b[17..19].iter().all(u8::is_ascii_digit)
 }
 
 /// Parse a string value into an appropriate YAML Value, optionally forced to a specific type.
@@ -449,7 +452,7 @@ fn infer_value(raw: &str) -> Value {
     Value::String(raw.to_owned())
 }
 
-/// Convert a YAML value to a serde_json::Value for output.
+/// Convert a YAML value to a `serde_json::Value` for output.
 pub fn yaml_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
@@ -748,10 +751,11 @@ Body.
     // --- Budget boundary tests for skip_frontmatter ---
 
     fn make_frontmatter_with_n_lines(n: usize) -> String {
+        use std::fmt::Write as _;
         // Each content line is "k: v\n" (6 bytes). The closing --- is appended.
         let mut s = String::from("---\n");
         for i in 0..n {
-            s.push_str(&format!("k{i}: v\n"));
+            let _ = writeln!(s, "k{i}: v");
         }
         s.push_str("---\n");
         s

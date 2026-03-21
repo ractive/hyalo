@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde_json::json;
 use std::path::Path;
@@ -176,7 +177,7 @@ See [[note-b]] and [[nonexistent]]
                 let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
                 assert_eq!(parsed["error"], "file not found");
             }
-            _ => panic!("expected user error"),
+            CommandOutcome::Success(_) => panic!("expected user error"),
         }
     }
 
