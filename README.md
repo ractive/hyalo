@@ -10,7 +10,7 @@ cargo build --release
 
 ## Usage
 
-All commands accept `--dir <path>` (default: `.`) and `--format json|text` (default: `json`).
+All commands accept `--dir <path>` (default: `.`), `--format json|text` (default: `json`), and `--jq <FILTER>` (apply a jq expression to the JSON output).
 
 Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
 
@@ -90,6 +90,52 @@ hyalo outline
 ```
 
 Returns per-file: frontmatter properties (with types and values), tags, and a section tree with heading levels, line numbers, wikilinks, task counts (`total`/`done`), and code block languages. Designed for LLM navigation — understand a document's structure without reading the full content.
+
+### Tasks
+
+```sh
+# List tasks (checkboxes) across all files
+hyalo tasks
+
+# Tasks in a single file (returns bare object)
+hyalo tasks --file FILE
+
+# Tasks matching a glob (returns array)
+hyalo tasks --glob PATTERN
+
+# Filter by completion status
+hyalo tasks --done           # only completed tasks
+hyalo tasks --todo           # only open tasks
+hyalo tasks --status x       # tasks with a specific status character
+
+# Single-task operations
+hyalo task read --file FILE --line N
+hyalo task toggle --file FILE --line N
+hyalo task set-status --file FILE --line N --status CHAR
+```
+
+Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) found in the file body. Checkboxes inside fenced code blocks are ignored.
+
+### Summary
+
+```sh
+# Vault overview: files, properties, tags, status groups, tasks, recent files
+hyalo summary
+
+# Limit to a subset of files
+hyalo summary --glob PATTERN
+
+# Control how many recent files to show (default: 10)
+hyalo summary --recent 5
+
+# Human-readable text output
+hyalo summary --format text
+
+# Extract a single field with --jq
+hyalo summary --jq '.tasks.total'
+```
+
+Single-call vault overview designed as the entry point for LLM agents. Returns file counts by directory, property summary, tag counts, status groups, task totals, and recently modified files.
 
 ## License
 

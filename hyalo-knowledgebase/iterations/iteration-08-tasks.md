@@ -1,7 +1,7 @@
 ---
 branch: iter-8/task-commands
 date: 2026-03-20
-status: planned
+status: superseded
 tags:
 - iteration
 - tasks
@@ -89,7 +89,7 @@ Only `[x]` and `[X]` are considered "done". All other status characters are "not
 
 ### Behavior Notes
 
-- `--file` is required for all task commands (no vault-wide mode, see [[decision-log#DEC-021]])
+- Originally `--file` was required for all task commands (see [[decision-log#DEC-021]]). Iteration 9 added vault-wide and `--glob` support.
 - `task toggle` flips `[ ]` → `[x]` and `[x]` / `[X]` → `[ ]`. For custom statuses like `[-]`, toggle sets to `[x]` (marking done)
 - `task set-status` accepts any single character
 - Line numbers are 1-based (matching editor conventions)
