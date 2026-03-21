@@ -118,6 +118,11 @@ fn jq_with_format_text_errors() {
         .unwrap();
 
     assert!(!output.status.success());
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 (usage error)"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--jq cannot be combined with --format text"),

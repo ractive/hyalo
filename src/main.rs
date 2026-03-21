@@ -46,7 +46,7 @@ struct Cli {
     format: String,
 
     /// Apply a jq filter expression to the JSON output of any command.
-    /// The filtered result is printed as plain text. Overrides --format.
+    /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
     /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'
     #[arg(long, global = true, value_name = "FILTER")]
     jq: Option<String>,
