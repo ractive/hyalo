@@ -106,16 +106,17 @@ const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type)
 const FILE_PROPERTIES_FILTER: &str = r#""\(.path)\n\(.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)") | join("\n"))""#;
 
 /// `PropertySummaryEntry`: `{count, name, type}`
-const PROPERTY_SUMMARY_ENTRY_FILTER: &str = r#""\(.name)\t\(.type)\t\(.count) files""#;
+const PROPERTY_SUMMARY_ENTRY_FILTER: &str =
+    r#""\(.name)\t\(.type)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
 
 /// `PropertyRemoved`: `{path, removed}`
 const PROPERTY_REMOVED_FILTER: &str = r#""Removed \"\(.removed)\" from \(.path)""#;
 
 /// `PropertyFindResult` without value: `{files, property, total}`
-const PROPERTY_FIND_RESULT_FILTER: &str = r#""\(.property): \(.total) files\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
+const PROPERTY_FIND_RESULT_FILTER: &str = r#""\(.property): \(.total) \(if .total == 1 then "file" else "files" end)\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
 
 /// `PropertyFindResult` with value: `{files, property, total, value}`
-const PROPERTY_FIND_RESULT_WITH_VALUE_FILTER: &str = r#""\(.property)=\(.value): \(.total) files\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
+const PROPERTY_FIND_RESULT_WITH_VALUE_FILTER: &str = r#""\(.property)=\(.value): \(.total) \(if .total == 1 then "file" else "files" end)\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
 
 /// `PropertyMutationResult`: `{modified, property, skipped, total, values}`
 const PROPERTY_MUTATION_RESULT_FILTER: &str = r#""\(.property): \(.modified | length) modified, \(.skipped | length) skipped\(if (.modified | length) > 0 then "\n  modified: \(.modified | join(", "))" else "" end)\(if (.skipped | length) > 0 then "\n  skipped: \(.skipped | join(", "))" else "" end)""#;
@@ -124,20 +125,17 @@ const PROPERTY_MUTATION_RESULT_FILTER: &str = r#""\(.property): \(.modified | le
 const FILE_TAGS_FILTER: &str = r#""\(.path): \(.tags | join(", "))""#;
 
 /// `TagSummary`: `{tags, total}`
-const TAG_SUMMARY_FILTER: &str =
-    r#""\(.total) unique tags\n\(.tags | map("  \(.name)\t\(.count) files") | join("\n"))""#;
+const TAG_SUMMARY_FILTER: &str = r#""\(.total) unique \(if .total == 1 then "tag" else "tags" end)\n\(.tags | map("  \(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)") | join("\n"))""#;
 
 /// `TagSummaryEntry`: `{count, name}`
-const TAG_SUMMARY_ENTRY_FILTER: &str = r#""\(.name)\t\(.count) files""#;
+const TAG_SUMMARY_ENTRY_FILTER: &str =
+    r#""\(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
 
 /// `TagFindResult` without value: `{files, tag, total}`
-const TAG_FIND_RESULT_FILTER: &str = r#""\(.tag): \(.total) files\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
-
-/// `TagFindResult` with value: `{files, tag, total, value}`
-const TAG_FIND_RESULT_WITH_VALUE_FILTER: &str = r#""\(.tag)=\(.value): \(.total) files\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
+const TAG_FIND_RESULT_FILTER: &str = r#""\(.tag): \(.total) \(if .total == 1 then "file" else "files" end)\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
 
 /// `TagMutationResult`: `{modified, skipped, tag, total}`
-const TAG_MUTATION_RESULT_FILTER: &str = r#""Tag \"\(.tag)\": \(.modified | length) modified, \(.skipped | length) skipped\(if (.modified | length) > 0 then "\n  modified: \(.modified | join(", "))" else "" end)\(if (.skipped | length) > 0 then "\n  skipped: \(.skipped | join(", "))" else "" end)""#;
+const TAG_MUTATION_RESULT_FILTER: &str = r#""\(.tag): \(.modified | length) modified, \(.skipped | length) skipped\(if (.modified | length) > 0 then "\n  modified: \(.modified | join(", "))" else "" end)\(if (.skipped | length) > 0 then "\n  skipped: \(.skipped | join(", "))" else "" end)""#;
 
 /// `LinkInfo` — just target: `{target}`
 const LINK_INFO_TARGET_FILTER: &str = r#""  \(.target) (unresolved)""#;
@@ -152,7 +150,7 @@ const LINK_INFO_LABEL_FILTER: &str = r#""  \(.target) (unresolved) [\(.label)]""
 const LINK_INFO_FULL_FILTER: &str = r#""  \(.target) → \(.path) [\(.label)]""#;
 
 /// `FileLinks`: `{links, path}`
-const FILE_LINKS_FILTER: &str = r#""\(.path) — \(.links | length) links\(if (.links | length) > 0 then "\n\(.links | map("  \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)") | join("\n"))" else "" end)""#;
+const FILE_LINKS_FILTER: &str = r#""\(.path): \(.links | length) \(if (.links | length) == 1 then "link" else "links" end)\(if (.links | length) > 0 then "\n\(.links | map("  \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)") | join("\n"))" else "" end)""#;
 
 /// `TaskCount`: `{done, total}`
 const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
@@ -201,9 +199,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "tags,total" => Some(TAG_SUMMARY_FILTER),
         // TagSummaryEntry
         "count,name" => Some(TAG_SUMMARY_ENTRY_FILTER),
-        // TagFindResult (with and without value)
+        // TagFindResult
         "files,tag,total" => Some(TAG_FIND_RESULT_FILTER),
-        "files,tag,total,value" => Some(TAG_FIND_RESULT_WITH_VALUE_FILTER),
         // TagMutationResult
         "modified,skipped,tag,total" => Some(TAG_MUTATION_RESULT_FILTER),
         // LinkInfo variants (optional path and label → 4 combos)
@@ -503,7 +500,16 @@ mod tests {
         let val = json!({"files": ["a.md"], "property": "status", "total": 1, "value": "draft"});
         let out = apply_jq_filter(PROPERTY_FIND_RESULT_WITH_VALUE_FILTER, &val).unwrap();
         assert!(out.contains("status=draft"));
-        assert!(out.contains("1 files"));
+        assert!(out.contains("1 file"));
+        assert!(!out.contains("1 files"));
+    }
+
+    #[test]
+    fn property_find_result_with_value_filter_plural() {
+        let val =
+            json!({"files": ["a.md", "b.md"], "property": "status", "total": 2, "value": "draft"});
+        let out = apply_jq_filter(PROPERTY_FIND_RESULT_WITH_VALUE_FILTER, &val).unwrap();
+        assert!(out.contains("2 files"));
     }
 
     #[test]
@@ -562,7 +568,10 @@ mod tests {
             "total": 2
         });
         let out = apply_jq_filter(TAG_MUTATION_RESULT_FILTER, &val).unwrap();
-        assert!(out.contains("\"rust\""));
+        // Format is now "rust: N modified, N skipped" — no Tag prefix, no quotes
+        assert!(out.contains("rust"));
+        assert!(!out.contains("Tag "));
+        assert!(!out.contains("\"rust\""));
         assert!(out.contains("2 modified"));
     }
 
