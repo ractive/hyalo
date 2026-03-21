@@ -4,6 +4,9 @@ use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::commands::properties::{
+    ListOpResult, add_values_to_list_property, remove_values_from_list_property,
+};
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
@@ -213,28 +216,8 @@ pub fn tag_add(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut modified: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-
-    for (full_path, rel_path) in &files {
-        // Read frontmatter only for the idempotency check
-        let props = frontmatter::read_frontmatter(full_path)?;
-        let tags = extract_tags(&props);
-        let already_has = tags.iter().any(|t| t.eq_ignore_ascii_case(name));
-
-        if already_has {
-            skipped.push(rel_path.clone());
-        } else {
-            // Build updated tags list
-            let mut new_tags = tags;
-            new_tags.push(name.to_owned());
-            let yaml_list = Value::Sequence(new_tags.into_iter().map(Value::String).collect());
-            let mut new_props = props;
-            new_props.insert("tags".to_owned(), yaml_list);
-            frontmatter::write_frontmatter(full_path, &new_props)?;
-            modified.push(rel_path.clone());
-        }
-    }
+    let ListOpResult { modified, skipped } =
+        add_values_to_list_property(&files, "tags", &[name.to_owned()])?;
 
     let total = modified.len() + skipped.len();
     let result = json!({
@@ -280,34 +263,8 @@ pub fn tag_remove(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut modified: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-
-    for (full_path, rel_path) in &files {
-        // Read frontmatter only
-        let props = frontmatter::read_frontmatter(full_path)?;
-        let tags = extract_tags(&props);
-        let new_tags: Vec<String> = tags
-            .iter()
-            .filter(|t| !t.eq_ignore_ascii_case(name))
-            .cloned()
-            .collect();
-
-        if new_tags.len() == tags.len() {
-            // Tag was not present — idempotent skip
-            skipped.push(rel_path.clone());
-        } else {
-            let mut new_props = props;
-            if new_tags.is_empty() {
-                new_props.remove("tags");
-            } else {
-                let yaml_list = Value::Sequence(new_tags.into_iter().map(Value::String).collect());
-                new_props.insert("tags".to_owned(), yaml_list);
-            }
-            frontmatter::write_frontmatter(full_path, &new_props)?;
-            modified.push(rel_path.clone());
-        }
-    }
+    let ListOpResult { modified, skipped } =
+        remove_values_from_list_property(&files, "tags", &[name.to_owned()])?;
 
     let total = modified.len() + skipped.len();
     let result = json!({

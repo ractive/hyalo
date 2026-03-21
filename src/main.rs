@@ -19,11 +19,15 @@ use hyalo::output::{CommandOutcome, Format};
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
-        COMMANDS: Use 'properties'/'tags' to list across files. Use 'property'/'tag' for single-item mutations. \
+        COMMANDS: Use 'properties'/'tags' to list across files. Use 'property' for read/set/remove/find \
+        and list operations (add-to-list, remove-from-list). Use 'tag' for tag-specific find/add/remove. \
         Use 'links' to inspect wikilink targets.",
     after_help = "EXAMPLES:\n  \
         List all properties:        hyalo properties --glob '**/*.md'\n  \
         Set a property:             hyalo property set --name status --value done --file notes/todo.md\n  \
+        Find files by property:     hyalo property find --name status --value draft\n  \
+        Add to a list property:     hyalo property add-to-list --name aliases --value \"My Note\" --file note.md\n  \
+        Remove from a list:         hyalo property remove-from-list --name authors --value Alice --file note.md\n  \
         List tags with counts:      hyalo tags\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
         Find broken wikilinks:      hyalo links --file index.md --unresolved"
@@ -56,12 +60,18 @@ enum Commands {
         #[arg(long)]
         glob: Option<String>,
     },
-    /// Read, set, or remove a single frontmatter property on one file
+    /// Read, set, find, or remove frontmatter properties; add/remove items from list properties
     #[command(
-        long_about = "Read, set, or remove a single frontmatter property on one file.\n\n\
-        Subcommands: read, set, remove. Each operates on exactly one property in one file.\n\
-        USE 'read' to get a value, 'set' to create/overwrite, 'remove' to delete.\n\
-        SIDE EFFECTS: 'set' and 'remove' modify the file on disk. 'read' is read-only."
+        long_about = "Read, set, find, or remove frontmatter properties; add/remove items from list properties.\n\n\
+        Subcommands:\n\
+        - read: Get a single property value from one file (read-only).\n\
+        - set: Create or overwrite a property on one file.\n\
+        - remove: Delete a property from one file.\n\
+        - find: Search files by property existence or value (read-only).\n\
+        - add-to-list: Append values to a list property across file(s).\n\
+        - remove-from-list: Remove values from a list property across file(s).\n\
+        SIDE EFFECTS: 'set', 'remove', 'add-to-list', and 'remove-from-list' modify files on disk. \
+        'read' and 'find' are read-only."
     )]
     Property {
         #[command(subcommand)]
@@ -259,6 +269,58 @@ enum PropertyAction {
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
     },
+    /// Add values to a list property in file(s) frontmatter (mutates files on disk)
+    #[command(
+        long_about = "Add values to a list property in file(s) frontmatter.\n\n\
+            INPUT: A property name (--name), one or more values (--value, repeatable), and target file(s) via --file or --glob.\n\
+            BEHAVIOR: Reads the current list for the named property (or treats it as empty if absent). \
+            Appends each value that is not already present (comparison is case-insensitive for strings). \
+            If the property does not exist it is created. If it exists as a scalar string it is promoted to a list.\n\
+            IDEMPOTENT: Files where all requested values already exist are reported as 'skipped', not modified.\n\
+            OUTPUT: {\"property\": name, \"values\": [...], \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            SIDE EFFECTS: Modifies matched files on disk.\n\
+            USE WHEN: You need to append items to any list-type frontmatter property such as 'tags', 'aliases', or 'authors'."
+    )]
+    AddToList {
+        /// Property name (e.g. 'tags', 'aliases', 'authors')
+        #[arg(long)]
+        name: String,
+        /// Values to add (can be specified multiple times, e.g. --value rust --value cli)
+        #[arg(long, required = true)]
+        value: Vec<String>,
+        /// Target a single file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern for multiple files (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
+    /// Remove values from a list property in file(s) frontmatter (mutates files on disk)
+    #[command(
+        long_about = "Remove values from a list property in file(s) frontmatter.\n\n\
+            INPUT: A property name (--name), one or more values (--value, repeatable), and target file(s) via --file or --glob.\n\
+            BEHAVIOR: Reads the current list for the named property and removes any matching values \
+            (comparison is case-insensitive for strings). If the list becomes empty after removal, \
+            the entire property key is deleted from frontmatter.\n\
+            IDEMPOTENT: Files where none of the requested values are present are reported as 'skipped', not an error.\n\
+            OUTPUT: {\"property\": name, \"values\": [...], \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            SIDE EFFECTS: Modifies matched files on disk.\n\
+            USE WHEN: You need to remove items from any list-type frontmatter property such as 'tags', 'aliases', or 'authors'."
+    )]
+    RemoveFromList {
+        /// Property name (e.g. 'tags', 'aliases', 'authors')
+        #[arg(long)]
+        name: String,
+        /// Values to remove (can be specified multiple times, e.g. --value rust --value cli)
+        #[arg(long, required = true)]
+        value: Vec<String>,
+        /// Target a single file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern for multiple files (e.g. 'notes/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
 }
 
 fn main() {
@@ -301,6 +363,32 @@ fn main() {
                 dir,
                 name,
                 value.as_deref(),
+                file.as_deref(),
+                glob.as_deref(),
+                format,
+            ),
+            PropertyAction::AddToList {
+                ref name,
+                ref value,
+                ref file,
+                ref glob,
+            } => properties::property_add_to_list(
+                dir,
+                name,
+                value,
+                file.as_deref(),
+                glob.as_deref(),
+                format,
+            ),
+            PropertyAction::RemoveFromList {
+                ref name,
+                ref value,
+                ref file,
+                ref glob,
+            } => properties::property_remove_from_list(
+                dir,
+                name,
+                value,
                 file.as_deref(),
                 glob.as_deref(),
                 format,
