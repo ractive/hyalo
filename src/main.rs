@@ -232,6 +232,33 @@ enum PropertyAction {
         #[arg(long)]
         file: String,
     },
+    /// Find files containing a specific frontmatter property (read-only)
+    #[command(
+        long_about = "Find files that contain a specific frontmatter property, optionally matching a value.\n\n\
+            INPUT: A property name (--name), an optional value filter (--value), and an optional file scope (--file or --glob).\n\
+            OUTPUT: List of files whose frontmatter contains the given property (and matching value if --value is provided).\n\
+            VALUE MATCHING: If --value is given, the comparison is type-aware:\n\
+              - String properties: case-insensitive string comparison.\n\
+              - Number properties: numeric comparison (parse --value as a number).\n\
+              - Boolean properties: parse --value as 'true' or 'false'.\n\
+              - List properties: match if any element equals --value (case-insensitive for strings).\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to find files with a particular metadata property or a specific value for that property."
+    )]
+    Find {
+        /// Property name to search for (e.g. 'status', 'priority', 'draft')
+        #[arg(long)]
+        name: String,
+        /// Optional value to match (e.g. 'draft', '3', 'true'). If omitted, matches any file that has the property
+        #[arg(long)]
+        value: Option<String>,
+        /// Search only in this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to limit which files to search (e.g. 'docs/**/*.md')
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+    },
 }
 
 fn main() {
@@ -265,6 +292,19 @@ fn main() {
             PropertyAction::Remove { ref name, ref file } => {
                 properties::property_remove(dir, name, file, format)
             }
+            PropertyAction::Find {
+                ref name,
+                ref value,
+                ref file,
+                ref glob,
+            } => properties::property_find(
+                dir,
+                name,
+                value.as_deref(),
+                file.as_deref(),
+                glob.as_deref(),
+                format,
+            ),
         },
         Commands::Links {
             ref file,
