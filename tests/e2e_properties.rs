@@ -393,3 +393,22 @@ title: B
     assert!(stdout.contains("2 files"));
     assert!(stdout.contains("status"));
 }
+
+#[test]
+fn properties_rejects_parent_glob_with_subcommand() {
+    let tmp = TempDir::new().unwrap();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "properties",
+            "--glob",
+            "*.md",
+            "list",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--file/--glob must be placed after the subcommand"));
+}

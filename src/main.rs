@@ -137,7 +137,7 @@ OUTPUT SHAPES (JSON, default):\n  \
   \"sections\": [{\"level\": 1, \"heading\": \"Title\", \"line\": 5, \"links\": [],\n   \
                   \"tasks\": {\"total\": 3, \"done\": 1}, \"code_blocks\": [\"rust\"]}]}\n\n  \
   # tasks (--file → bare object, --glob/default → array)\n  \
-  [{\"file\": \"todo.md\", \"tasks\": [{\"line\": 5, \"status\": \" \", \"text\": \"Fix bug\", \"done\": false}], \"total\": 1}]\n\n  \
+  {\"file\": \"todo.md\", \"tasks\": [{\"line\": 5, \"status\": \" \", \"text\": \"Fix bug\", \"done\": false}], \"total\": 1}\n\n  \
   # task read / toggle / set-status\n  \
   {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}\n\n  \
   # summary\n  \
@@ -694,24 +694,35 @@ fn main() {
                 glob.as_deref(),
                 effective_format,
             ),
-            Some(PropertiesAction::Summary {
-                file: sub_file,
-                glob: sub_glob,
-            }) => properties::properties_summary(
-                dir,
-                sub_file.as_deref(),
-                sub_glob.as_deref(),
-                effective_format,
-            ),
-            Some(PropertiesAction::List {
-                file: sub_file,
-                glob: sub_glob,
-            }) => properties::properties_list(
-                dir,
-                sub_file.as_deref(),
-                sub_glob.as_deref(),
-                effective_format,
-            ),
+            Some(sub) => {
+                if file.is_some() || glob.is_some() {
+                    eprintln!(
+                        "Error: --file/--glob must be placed after the subcommand, not before it"
+                    );
+                    eprintln!("  Example: hyalo properties summary --glob '*.md'");
+                    process::exit(2);
+                }
+                match sub {
+                    PropertiesAction::Summary {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => properties::properties_summary(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                    PropertiesAction::List {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => properties::properties_list(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                }
+            }
         },
         Commands::Property { action } => match action {
             PropertyAction::Read { ref name, ref file } => {
@@ -795,24 +806,35 @@ fn main() {
             None => {
                 tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
-            Some(TagsAction::Summary {
-                file: sub_file,
-                glob: sub_glob,
-            }) => tag_commands::tags_summary(
-                dir,
-                sub_file.as_deref(),
-                sub_glob.as_deref(),
-                effective_format,
-            ),
-            Some(TagsAction::List {
-                file: sub_file,
-                glob: sub_glob,
-            }) => tag_commands::tags_list(
-                dir,
-                sub_file.as_deref(),
-                sub_glob.as_deref(),
-                effective_format,
-            ),
+            Some(sub) => {
+                if file.is_some() || glob.is_some() {
+                    eprintln!(
+                        "Error: --file/--glob must be placed after the subcommand, not before it"
+                    );
+                    eprintln!("  Example: hyalo tags summary --glob '*.md'");
+                    process::exit(2);
+                }
+                match sub {
+                    TagsAction::Summary {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => tag_commands::tags_summary(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                    TagsAction::List {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => tag_commands::tags_list(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                }
+            }
         },
         Commands::Tag { action } => match action {
             TagAction::Find {
