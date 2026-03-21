@@ -93,9 +93,14 @@ pub(crate) fn add_values_to_list_property(
         let added_any = if let Some(Value::Sequence(seq)) = props.get_mut(property_name) {
             let before_len = seq.len();
             for value in values {
+                // Duplicate detection: compare strings case-insensitively; for non-string scalars
+                // (e.g. YAML number 42) stringify them so that adding "42" is detected as a
+                // duplicate of the existing numeric element.
                 let already_present = seq.iter().any(|v| match v {
                     Value::String(s) => s.eq_ignore_ascii_case(value),
-                    _ => v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(value)),
+                    Value::Number(n) => n.to_string().eq_ignore_ascii_case(value),
+                    Value::Bool(b) => b.to_string().eq_ignore_ascii_case(value),
+                    _ => false,
                 });
                 if !already_present {
                     seq.push(Value::String(value.clone()));
@@ -149,22 +154,56 @@ pub(crate) fn remove_values_from_list_property(
 
     for (full_path, rel_path) in files {
         let mut props = frontmatter::read_frontmatter(full_path)?;
-        let current = extract_list_property(&props, property_name);
-        let new_list: Vec<String> = current
-            .iter()
-            .filter(|v| !values.iter().any(|rm| rm.eq_ignore_ascii_case(v)))
-            .cloned()
-            .collect();
 
-        if new_list.len() == current.len() {
-            // Nothing was removed
+        // Helper: check if a YAML value matches any of the removal targets (case-insensitive).
+        let should_remove = |v: &Value| -> bool {
+            match v {
+                Value::String(s) => values.iter().any(|rm| rm.eq_ignore_ascii_case(s)),
+                Value::Number(n) => values
+                    .iter()
+                    .any(|rm| rm.eq_ignore_ascii_case(&n.to_string())),
+                Value::Bool(b) => values
+                    .iter()
+                    .any(|rm| rm.eq_ignore_ascii_case(&b.to_string())),
+                _ => false,
+            }
+        };
+
+        // If the property is a sequence, filter it in-place, retaining original Value types.
+        // For null / absent / scalar-string fall back to the string-based path.
+        let (before_len, after_len) =
+            if let Some(Value::Sequence(seq)) = props.get_mut(property_name) {
+                let before = seq.len();
+                seq.retain(|v| !should_remove(v));
+                (before, seq.len())
+            } else {
+                let current = extract_list_property(&props, property_name);
+                let before = current.len();
+                let new_list: Vec<String> = current
+                    .into_iter()
+                    .filter(|v| !values.iter().any(|rm| rm.eq_ignore_ascii_case(v)))
+                    .collect();
+                let after = new_list.len();
+                // Write back only if something changed (handled below).
+                if after < before {
+                    if new_list.is_empty() {
+                        // Will be removed below.
+                    } else {
+                        let yaml_list =
+                            Value::Sequence(new_list.into_iter().map(Value::String).collect());
+                        props.insert(property_name.to_owned(), yaml_list);
+                    }
+                }
+                (before, after)
+            };
+
+        if after_len == before_len {
+            // Nothing was removed.
             skipped.push(rel_path.clone());
         } else {
-            if new_list.is_empty() {
+            // If the sequence is now empty (either branch), remove the key entirely.
+            if after_len == 0 {
                 props.remove(property_name);
-            } else {
-                let yaml_list = Value::Sequence(new_list.into_iter().map(Value::String).collect());
-                props.insert(property_name.to_owned(), yaml_list);
             }
             frontmatter::write_frontmatter(full_path, &props)?;
             modified.push(rel_path.clone());
@@ -1352,6 +1391,157 @@ status: draft
         assert!(
             msg.contains("number"),
             "error should mention the type: {msg}"
+        );
+    }
+
+    // Issue 1 — remove_values_from_list_property must preserve non-string element types
+    #[test]
+    fn property_remove_from_list_preserves_numeric_elements() {
+        let tmp = tempfile::tempdir().unwrap();
+        // List contains YAML numbers; removing one must leave the remaining as Value::Number.
+        write_note(
+            tmp.path(),
+            "note.md",
+            "---\nscores:\n  - 42\n  - 7\n  - 99\n---\n",
+        );
+
+        unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "scores",
+                &["7".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+
+        let props = frontmatter::read_frontmatter(&tmp.path().join("note.md")).unwrap();
+        let seq = match props.get("scores") {
+            Some(Value::Sequence(s)) => s,
+            other => panic!("expected sequence, got: {other:?}"),
+        };
+        assert_eq!(seq.len(), 2);
+        assert!(
+            matches!(&seq[0], Value::Number(n) if n.as_i64() == Some(42)),
+            "first element should remain number 42, got: {:?}",
+            seq[0]
+        );
+        assert!(
+            matches!(&seq[1], Value::Number(n) if n.as_i64() == Some(99)),
+            "second element should remain number 99, got: {:?}",
+            seq[1]
+        );
+    }
+
+    #[test]
+    fn property_remove_from_list_numeric_element_by_string_value() {
+        // Removing "42" (a string arg) from a list that contains the YAML number 42 should work.
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\nscores:\n  - 42\n  - 7\n---\n");
+
+        let parsed = unwrap_success(
+            property_remove_from_list(
+                tmp.path(),
+                "scores",
+                &["42".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let props = frontmatter::read_frontmatter(&tmp.path().join("note.md")).unwrap();
+        let seq = match props.get("scores") {
+            Some(Value::Sequence(s)) => s,
+            other => panic!("expected sequence, got: {other:?}"),
+        };
+        assert_eq!(seq.len(), 1);
+        assert!(
+            matches!(&seq[0], Value::Number(n) if n.as_i64() == Some(7)),
+            "remaining element should be number 7, got: {:?}",
+            seq[0]
+        );
+    }
+
+    // Issue 2 — add_values_to_list_property must detect numeric duplicates by stringifying
+    #[test]
+    fn property_add_to_list_detects_numeric_duplicate() {
+        // YAML number 42 already in list; adding string "42" must be a no-op (duplicate).
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\nscores:\n  - 42\n---\n");
+
+        let parsed = unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "scores",
+                &["42".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            parsed["modified"].as_array().unwrap().len(),
+            0,
+            "file should be skipped — 42 already present as number"
+        );
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+
+        // The list must still contain exactly one element, still a number.
+        let props = frontmatter::read_frontmatter(&tmp.path().join("note.md")).unwrap();
+        let seq = match props.get("scores") {
+            Some(Value::Sequence(s)) => s,
+            other => panic!("expected sequence, got: {other:?}"),
+        };
+        assert_eq!(seq.len(), 1);
+        assert!(
+            matches!(&seq[0], Value::Number(n) if n.as_i64() == Some(42)),
+            "element must remain a number 42, got: {:?}",
+            seq[0]
+        );
+    }
+
+    // Boolean duplicate detection: adding "true" must be detected as a duplicate of
+    // an existing `Value::Bool(true)` element.
+    #[test]
+    fn property_add_to_list_detects_boolean_duplicate() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_note(tmp.path(), "note.md", "---\nflags:\n  - true\n---\n");
+
+        let parsed = unwrap_success(
+            property_add_to_list(
+                tmp.path(),
+                "flags",
+                &["true".to_owned()],
+                Some("note.md"),
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            parsed["modified"].as_array().unwrap().len(),
+            0,
+            "file should be skipped — true already present as boolean"
+        );
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+
+        // The list must still contain exactly one element, still a bool.
+        let props = frontmatter::read_frontmatter(&tmp.path().join("note.md")).unwrap();
+        let seq = match props.get("flags") {
+            Some(Value::Sequence(s)) => s,
+            other => panic!("expected sequence, got: {other:?}"),
+        };
+        assert_eq!(seq.len(), 1);
+        assert!(
+            matches!(&seq[0], Value::Bool(true)),
+            "element must remain bool true, got: {:?}",
+            seq[0]
         );
     }
 

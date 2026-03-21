@@ -316,7 +316,7 @@ enum PropertyAction {
             VALUE MATCHING: If --value is given, the comparison is type-aware:\n\
               - String properties: case-insensitive string comparison.\n\
               - Number properties: numeric comparison (parse --value as a number).\n\
-              - Boolean properties: parse --value as 'true' or 'false'.\n\
+              - Boolean properties: parse --value as true/false/yes/no/1/0 (case-insensitive for words).\n\
               - List properties: match if any element equals --value (case-insensitive for strings).\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to find files with a particular metadata property or a specific value for that property."
