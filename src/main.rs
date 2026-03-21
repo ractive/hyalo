@@ -45,15 +45,15 @@ COMMAND REFERENCE:\n  \
     hyalo property set        --name N --value V [--type T] --file F\n  \
     hyalo property remove     --name N --file F           Delete a property\n  \
     hyalo property find       --name N [--value V] [--file F | --glob G]\n  \
-    hyalo property add-to-list       --name N --value V [--value ...] [--file F | --glob G]\n  \
-    hyalo property remove-from-list  --name N --value V [--value ...] [--file F | --glob G]\n\n  \
+    hyalo property add-to-list       --name N --value V [--value ...] --file F | --glob G\n  \
+    hyalo property remove-from-list  --name N --value V [--value ...] --file F | --glob G\n\n  \
   Tags (list across files):\n  \
     hyalo tags summary        [--file F | --glob G]       Unique tags with file counts\n  \
     hyalo tags list           [--file F | --glob G]       Per-file tag arrays\n\n  \
   Tag (single-tag operations):\n  \
     hyalo tag find            --name N [--file F | --glob G]   Supports nested matching\n  \
-    hyalo tag add             --name N [--file F | --glob G]   Idempotent\n  \
-    hyalo tag remove          --name N [--file F | --glob G]\n\n  \
+    hyalo tag add             --name N --file F | --glob G     Idempotent\n  \
+    hyalo tag remove          --name N --file F | --glob G\n\n  \
   Links:\n  \
     hyalo links               --file F [--unresolved | --resolved]\n\n  \
   Outline:\n  \
@@ -120,8 +120,8 @@ OUTPUT SHAPES (JSON, default):\n  \
   \"sections\": [{\"level\": 1, \"heading\": \"Title\", \"line\": 5, \"links\": [],\n   \
                   \"tasks\": {\"total\": 3, \"done\": 1}, \"code_blocks\": [\"rust\"]}]}\n\n  \
   # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
-  {\"error\": \"property not found\", \"name\": \"foo\", \"path\": \"notes/todo.md\"}\n\n  \
-  # --format text produces tab-separated human-readable output on all commands"
+  {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}\n\n  \
+  # --format text produces human-readable output on all commands"
 )]
 struct Cli {
     /// Root directory for resolving all --file and --glob paths. Defaults to current directory
