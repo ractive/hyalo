@@ -46,7 +46,7 @@ pub fn format_success(format: Format, value: &serde_json::Value) -> String {
 /// can operate on a uniform representation.
 #[must_use]
 pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
-    let json = serde_json::to_value(value).unwrap_or_default();
+    let json = serde_json::to_value(value).expect("derived Serialize impl should not fail");
     format_success(format, &json)
 }
 

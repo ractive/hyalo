@@ -171,9 +171,10 @@ The `summary` subcommand is the default, so `hyalo properties` and `hyalo tags` 
 
 **Decision:** Add an `outline` command that extracts per-section structure:
 - **Headings** with level, text, and line number — the document skeleton
-- **Frontmatter keys with types** — what metadata exists (not values)
+- **Frontmatter properties with names, types, and values** — matching the `properties list` shape
+- **Tags** — list of tag strings from frontmatter
 - **Wikilinks per section** — which section references what (not just "file has links")
-- **Task counts per section** — `total`/`done` per section (null if no tasks)
+- **Task counts per section** — `total`/`done` per section; `tasks` field omitted (not null) when section has no tasks
 - **Code block languages per section** — content type hints
 
 Content before the first heading gets a synthetic `level: 0` section (only if non-empty). ATX headings only — no setext.

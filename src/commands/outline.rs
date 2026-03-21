@@ -35,12 +35,13 @@ pub fn outline(
     let mut results: Vec<serde_json::Value> = Vec::new();
     for (full_path, rel_path) in &files {
         let outline = build_file_outline(full_path, rel_path)?;
-        results.push(serde_json::to_value(outline).unwrap_or_default());
+        results
+            .push(serde_json::to_value(outline).expect("derived Serialize impl should not fail"));
     }
 
     let json_output = unwrap_single_file_result(file, results);
 
-    Ok(CommandOutcome::Success(crate::output::format_output(
+    Ok(CommandOutcome::Success(crate::output::format_success(
         format,
         &json_output,
     )))
@@ -218,7 +219,9 @@ fn process_body_line(
     // Detect opening fence
     if let Some((fc, count)) = scanner::detect_opening_fence(line) {
         let lang = extract_fence_language(line, fc, count);
-        current.code_blocks.push(lang.clone());
+        if !lang.is_empty() {
+            current.code_blocks.push(lang.clone());
+        }
         *fence = Some((fc, count, lang));
         return;
     }
@@ -347,32 +350,23 @@ fn detect_task_checkbox(line: &str) -> Option<bool> {
 }
 
 /// Format a `Link` into a human-readable string for storage in the outline.
-/// Wikilinks: `[[target]]`
-/// Markdown links: `[label](target)` or `[](target)` when no label
 fn format_link_string(link: &links::Link) -> String {
-    // Heuristic: if the target contains `.md` or `/` it's likely a markdown link
-    // that came from `[text](target)` syntax. But we don't have the original syntax
-    // available here — the Link struct doesn't distinguish between wikilinks and
-    // markdown links. We use the label field:
-    // - links::extract_links_from_text sets label for both wikilinks (from `|`) and
-    //   markdown links (from `[text]`).
-    // The simplest consistent representation: wikilinks have no label or a pipe label,
-    // markdown links always have the display text as label.
-    // Without the original syntax we fall back to a simple format:
-    //   [[target]] for no-label links, [[target|label]] for labeled wikilinks
-    //   [label](target) for markdown links.
-    // Since we can't distinguish from the Link struct alone, emit `[[target]]` style
-    // for wikilinks (no label or pipe-separated) and `[label](target)` for markdown.
-    // The underlying Link is produced by the same parser for both — we emit wikilink
-    // format by default (matches the outline spec: `"[[iteration-02-links]]"`).
-    match &link.label {
-        Some(label) if !label.is_empty() => {
-            // Could be from a wikilink [[t|label]] or markdown [label](t).
-            // We can't tell them apart from the Link struct, so use the markdown format
-            // which is more informative for labeled links.
-            format!("[{}]({})", label, link.target)
+    // Heuristic: targets containing '://' are URLs from markdown links.
+    // Targets ending in common extensions with '/' are file paths from markdown links.
+    // Everything else is treated as a wikilink.
+    let is_markdown_link =
+        link.target.contains("://") || (link.target.contains('/') && link.target.contains('.'));
+
+    if is_markdown_link {
+        match &link.label {
+            Some(label) if !label.is_empty() => format!("[{}]({})", label, link.target),
+            _ => format!("[]({})", link.target),
         }
-        _ => format!("[[{}]]", link.target),
+    } else {
+        match &link.label {
+            Some(label) if !label.is_empty() => format!("[[{}|{}]]", link.target, label),
+            _ => format!("[[{}]]", link.target),
+        }
     }
 }
 
@@ -518,12 +512,30 @@ mod tests {
     }
 
     #[test]
-    fn format_link_with_label() {
+    fn format_wikilink_with_label() {
         let link = links::Link {
             target: "my-note".to_owned(),
             label: Some("My Note".to_owned()),
         };
-        assert_eq!(format_link_string(&link), "[My Note](my-note)");
+        assert_eq!(format_link_string(&link), "[[my-note|My Note]]");
+    }
+
+    #[test]
+    fn format_markdown_link_with_label() {
+        let link = links::Link {
+            target: "https://example.com".to_owned(),
+            label: Some("Example".to_owned()),
+        };
+        assert_eq!(format_link_string(&link), "[Example](https://example.com)");
+    }
+
+    #[test]
+    fn format_file_path_link_with_label() {
+        let link = links::Link {
+            target: "docs/some-note.md".to_owned(),
+            label: Some("Some Note".to_owned()),
+        };
+        assert_eq!(format_link_string(&link), "[Some Note](docs/some-note.md)");
     }
 
     // --- scan_sections ---
