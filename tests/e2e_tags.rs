@@ -167,7 +167,8 @@ fn tags_summary_text_format() {
     assert!(stdout.contains("rust"));
     assert!(stdout.contains("2 files"));
     assert!(stdout.contains("cli"));
-    assert!(stdout.contains("1 files"));
+    assert!(stdout.contains("1 file"));
+    assert!(!stdout.contains("1 files"));
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +517,8 @@ fn tag_find_text_format() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     // Tag name and file count shown
     assert!(stdout.contains("rust"));
-    assert!(stdout.contains("1 files"));
+    assert!(stdout.contains("1 file"));
+    assert!(!stdout.contains("1 files"));
     // Matching file listed
     assert!(stdout.contains("note.md"));
 }

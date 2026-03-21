@@ -59,10 +59,11 @@ struct Cli {
 enum Commands {
     /// List frontmatter properties across files — aggregate summary or per-file detail
     #[command(long_about = "List frontmatter properties across files.\n\n\
-            SUBCOMMANDS:\n\
+            Subcommands:\n\
             - summary (default): aggregate unique property names with types and file counts.\n\
             - list: per-file detail — each file with its full key/value pairs.\n\n\
             INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to discover what properties exist, audit frontmatter, or inspect per-file metadata.")]
     Properties {
@@ -78,9 +79,11 @@ enum Commands {
         - remove: Delete a property from one file.\n\
         - find: Search files by property existence or value (read-only).\n\
         - add-to-list: Append values to a list property across file(s).\n\
-        - remove-from-list: Remove values from a list property across file(s).\n\
-        SIDE EFFECTS: 'set', 'remove', 'add-to-list', and 'remove-from-list' modify files on disk. \
-        'read' and 'find' are read-only."
+        - remove-from-list: Remove values from a list property across file(s).\n\n\
+        INPUT: Property name (--name) and file (--file) or scope (--glob) depending on subcommand.\n\
+        SCOPE: 'read', 'set', and 'remove' operate on a single --file. 'find', 'add-to-list', and 'remove-from-list' support --file or --glob.\n\
+        SIDE EFFECTS: 'set', 'remove', 'add-to-list', and 'remove-from-list' modify files on disk. 'read' and 'find' are read-only.\n\
+        USE WHEN: You need to read, write, or search frontmatter properties in one or more files."
     )]
     Property {
         #[command(subcommand)]
@@ -90,8 +93,8 @@ enum Commands {
     #[command(
         long_about = "List outgoing [[wikilinks]] from a file and their resolution status.\n\n\
             INPUT: A single markdown file (--file).\n\
-            OUTPUT: Each [[wikilink]] found in the file body, with a boolean indicating whether \
-            the link target resolves to an existing .md file under --dir.\n\
+            OUTPUT: Each [[wikilink]] found in the file body. The 'path' field is the resolved \
+            file path (string) if the link target exists under --dir, or null if unresolved.\n\
             FILTERS: --unresolved returns only broken links. --resolved returns only valid links. \
             Without either flag, returns all links.\n\
             SIDE EFFECTS: None (read-only).\n\
@@ -110,7 +113,7 @@ enum Commands {
     },
     /// List tags across files — aggregate summary or per-file detail
     #[command(long_about = "List tags across files.\n\n\
-            SUBCOMMANDS:\n\
+            Subcommands:\n\
             - summary (default): aggregate unique tag names with file counts. Tags are compared case-insensitively.\n\
             - list: per-file detail — each file with its tags array.\n\n\
             INPUT: Reads the 'tags' field from YAML frontmatter in matched files.\n\
@@ -123,10 +126,16 @@ enum Commands {
     },
     /// Find, add, or remove tags in file frontmatter
     #[command(long_about = "Find, add, or remove tags in file frontmatter.\n\n\
-        Subcommands: find, add, remove.\n\
+        Subcommands:\n\
+        - find: Search files by tag name or prefix (read-only).\n\
+        - add: Append a tag to file(s) frontmatter.\n\
+        - remove: Delete a tag from file(s) frontmatter.\n\n\
+        INPUT: Tag name (--name) and file (--file) or scope (--glob).\n\
+        SCOPE: 'find', 'add', and 'remove' support --file or --glob; defaults to all .md files.\n\
+        SIDE EFFECTS: 'add' and 'remove' modify files on disk. 'find' is read-only.\n\
+        USE WHEN: You need to find files by tag, or add/remove tags across one or more files.\n\
         NESTED TAG MATCHING: Tag names can be hierarchical (e.g. 'project/backend'). \
-        Searching for a parent tag like 'project' matches all children ('project/backend', 'project/frontend').\n\
-        SIDE EFFECTS: 'add' and 'remove' modify files on disk. 'find' is read-only.")]
+        Searching for a parent tag like 'project' matches all children ('project/backend', 'project/frontend').")]
     Tag {
         #[command(subcommand)]
         action: TagAction,
