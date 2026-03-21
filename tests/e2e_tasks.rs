@@ -852,3 +852,35 @@ fn task_set_status_file_not_found() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
 }
+
+// --- Comment block handling ---
+
+#[test]
+fn tasks_skips_comment_blocks() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "comments.md",
+        md!(r"
+- [ ] Visible task
+%%
+- [ ] Hidden task
+- [x] Hidden done
+%%
+- [x] Another visible
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tasks", "--file", "comments.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let tasks = parsed["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0]["text"], "Visible task");
+    assert_eq!(tasks[1]["text"], "Another visible");
+}
