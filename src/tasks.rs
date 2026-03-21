@@ -215,6 +215,7 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
     }
 
     let mut fence: Option<(char, usize)> = None;
+    let mut in_comment = false;
 
     // Process first line if not frontmatter
     if fm_lines == 0 {
@@ -222,6 +223,9 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
             if let Some(f) = scanner::detect_opening_fence(&first_trimmed) {
                 fence = Some(f);
                 // A fence opener is never a task
+            } else if scanner::is_comment_fence(&first_trimmed) {
+                in_comment = true;
+                // A comment fence is never a task
             } else {
                 let info =
                     detect_task_checkbox(&first_trimmed).map(|(status_char, done)| TaskInfo {
@@ -234,6 +238,8 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
             }
         } else if let Some(f) = scanner::detect_opening_fence(&first_trimmed) {
             fence = Some(f);
+        } else if scanner::is_comment_fence(&first_trimmed) {
+            in_comment = true;
         }
     }
 
@@ -246,7 +252,7 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
         line_num += 1;
         let line_str = buf.trim_end_matches(['\n', '\r']);
 
-        // Handle fenced code block
+        // Handle fenced code block (highest priority)
         if let Some((fence_char, fence_count)) = fence {
             if scanner::is_closing_fence(line_str, fence_char, fence_count) {
                 fence = None;
@@ -260,11 +266,36 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
             continue;
         }
 
+        // Handle comment block
+        if in_comment {
+            if scanner::is_comment_fence(line_str) {
+                in_comment = false;
+            }
+            if line_num == line {
+                return Ok(None); // inside comment block
+            }
+            if line_num > line {
+                break;
+            }
+            continue;
+        }
+
         if let Some(f) = scanner::detect_opening_fence(line_str) {
             if line_num == line {
                 return Ok(None); // fence opener is not a task
             }
             fence = Some(f);
+            if line_num > line {
+                break;
+            }
+            continue;
+        }
+
+        if scanner::is_comment_fence(line_str) {
+            if line_num == line {
+                return Ok(None); // comment fence is not a task
+            }
+            in_comment = true;
             if line_num > line {
                 break;
             }
@@ -846,5 +877,79 @@ Regular text.
         let result = set_task_status(&path, 1, 'x');
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
+    }
+
+    // --- Comment block handling ---
+
+    #[test]
+    fn extract_tasks_skips_comment_blocks() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        fs::write(
+            &path,
+            md!(r"
+- [ ] Before comment
+%%
+- [ ] Inside comment — ignored
+- [x] Also inside — ignored
+%%
+- [x] After comment
+"),
+        )
+        .unwrap();
+
+        let tasks = extract_tasks(&path).unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].text, "Before comment");
+        assert_eq!(tasks[1].text, "After comment");
+    }
+
+    #[test]
+    fn count_tasks_skips_comment_blocks() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        fs::write(
+            &path,
+            md!(r"
+- [ ] Visible 1
+%%
+- [ ] Hidden
+- [x] Hidden done
+%%
+- [x] Visible 2
+"),
+        )
+        .unwrap();
+
+        let count = count_tasks(&path).unwrap();
+        assert_eq!(count.total, 2);
+        assert_eq!(count.done, 1);
+    }
+
+    #[test]
+    fn read_task_returns_none_inside_comment() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        fs::write(&path, "%%\n- [ ] Inside comment\n%%\n- [ ] Real task\n").unwrap();
+
+        // Line 2 is inside the comment block
+        let task = read_task(&path, 2).unwrap();
+        assert!(task.is_none());
+
+        // Line 4 is a real task
+        let task = read_task(&path, 4).unwrap();
+        assert!(task.is_some());
+        assert_eq!(task.unwrap().text, "Real task");
+    }
+
+    #[test]
+    fn read_task_returns_none_when_first_line_is_comment_fence() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        fs::write(&path, "%%\n- [ ] Inside comment\n%%\n").unwrap();
+
+        // Line 1 is the opening comment fence — not a task
+        let task = read_task(&path, 1).unwrap();
+        assert!(task.is_none());
     }
 }
