@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde_json::json;
 use serde_yaml_ng::Value;
@@ -7,7 +8,9 @@ use std::path::Path;
 use crate::commands::properties::{
     ListOpResult, add_values_to_list_property, remove_values_from_list_property,
 };
-use crate::commands::{FilesOrOutcome, collect_files};
+use crate::commands::{
+    FilesOrOutcome, build_find_json, build_list_mutation_json, collect_files, require_file_or_glob,
+};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
@@ -53,6 +56,7 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
 ///
 /// Uses byte-level ASCII comparison — safe because tag names are validated to only
 /// contain ASCII characters (letters, digits, `_`, `-`, `/`).
+#[must_use]
 pub fn tag_matches(tag: &str, query: &str) -> bool {
     tag.eq_ignore_ascii_case(query)
         || (tag.len() > query.len()
@@ -70,9 +74,9 @@ pub fn tag_matches(tag: &str, query: &str) -> bool {
 /// - `tags` as a YAML sequence → collect string items
 /// - `tags` as a scalar string → single-element vec
 /// - `tags` as empty sequence → empty vec
+#[must_use]
 pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
     match props.get("tags") {
-        None => vec![],
         Some(Value::Sequence(seq)) => seq
             .iter()
             .filter_map(|v| match v {
@@ -88,7 +92,6 @@ pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
                 vec![s.clone()]
             }
         }
-        Some(Value::Null) => vec![],
         _ => vec![],
     }
 }
@@ -201,8 +204,7 @@ pub fn tag_find(
         }
     }
 
-    let total = matching_paths.len();
-    let result = json!({"tag": name, "files": matching_paths, "total": total});
+    let result = build_find_json("tag", name, None, &matching_paths);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -235,17 +237,8 @@ pub fn tag_add(
     }
 
     // Mutation commands require --file or --glob to avoid accidentally touching every file
-    if file.is_none() && glob.is_none() {
-        let out = crate::output::format_error(
-            format,
-            "tag add requires --file or --glob",
-            None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
+    if let Some(outcome) = require_file_or_glob(file, glob, "tag add", format) {
+        return Ok(outcome);
     }
 
     let files = collect_files(dir, file, glob, format)?;
@@ -257,13 +250,7 @@ pub fn tag_add(
     let ListOpResult { modified, skipped } =
         add_values_to_list_property(&files, "tags", &[name.to_owned()])?;
 
-    let total = modified.len() + skipped.len();
-    let result = json!({
-        "tag": name,
-        "modified": modified,
-        "skipped": skipped,
-        "total": total,
-    });
+    let result = build_list_mutation_json("tag", name, None, None, &modified, &skipped);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -282,17 +269,8 @@ pub fn tag_remove(
     format: Format,
 ) -> Result<CommandOutcome> {
     // Mutation commands require --file or --glob to avoid accidentally touching every file
-    if file.is_none() && glob.is_none() {
-        let out = crate::output::format_error(
-            format,
-            "tag remove requires --file or --glob",
-            None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
+    if let Some(outcome) = require_file_or_glob(file, glob, "tag remove", format) {
+        return Ok(outcome);
     }
 
     let files = collect_files(dir, file, glob, format)?;
@@ -304,13 +282,7 @@ pub fn tag_remove(
     let ListOpResult { modified, skipped } =
         remove_values_from_list_property(&files, "tags", &[name.to_owned()])?;
 
-    let total = modified.len() + skipped.len();
-    let result = json!({
-        "tag": name,
-        "modified": modified,
-        "skipped": skipped,
-        "total": total,
-    });
+    let result = build_list_mutation_json("tag", name, None, None, &modified, &skipped);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -588,9 +560,8 @@ tags:
     fn tag_find_no_match() {
         let tmp = setup_vault();
         let outcome = tag_find(tmp.path(), "nonexistent", None, None, Format::Json).unwrap();
-        let out = match outcome {
-            CommandOutcome::Success(s) => s,
-            _ => panic!("expected success"),
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["total"], 0);

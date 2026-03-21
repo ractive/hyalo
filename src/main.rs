@@ -389,18 +389,16 @@ enum PropertyAction {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
 
-    let format = match Format::from_str_opt(&cli.format) {
-        Some(f) => f,
-        None => {
-            eprintln!(
-                "Error: invalid format '{}', expected 'json' or 'text'",
-                cli.format
-            );
-            process::exit(2);
-        }
+    let Some(format) = Format::from_str_opt(&cli.format) else {
+        eprintln!(
+            "Error: invalid format '{}', expected 'json' or 'text'",
+            cli.format
+        );
+        process::exit(2);
     };
 
     let dir = &cli.dir;

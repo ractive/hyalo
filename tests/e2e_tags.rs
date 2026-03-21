@@ -336,12 +336,12 @@ fn tags_scalar_string_tag() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 tags: rust
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -519,11 +519,11 @@ fn tag_add_single_file() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -585,12 +585,12 @@ fn tag_add_creates_tags_property() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
 # Body
-"#),
+"),
     );
 
     let output = hyalo()
@@ -613,11 +613,11 @@ fn tag_add_invalid_name_numeric() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -641,11 +641,11 @@ fn tag_add_invalid_name_with_space() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -663,11 +663,11 @@ fn tag_add_invalid_name_empty() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -685,11 +685,11 @@ fn tag_add_nested_tag_valid() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -729,11 +729,11 @@ fn tag_add_json_format() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Note
 ---
-"#),
+"),
     );
 
     let output = hyalo()
@@ -894,10 +894,10 @@ fn tag_add_to_file_with_no_frontmatter() {
     write_md(
         tmp.path(),
         "plain.md",
-        md!(r#"
+        md!(r"
 No frontmatter here.
 # Content
-"#),
+"),
     );
 
     let output = hyalo()

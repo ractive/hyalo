@@ -32,7 +32,11 @@ pub fn write_tagged(dir: &Path, name: &str, tags: &[&str]) {
     let tags_yaml = if tags.is_empty() {
         "tags: []\n".to_owned()
     } else {
-        let items: String = tags.iter().map(|t| format!("  - {t}\n")).collect();
+        let items = tags.iter().fold(String::new(), |mut s, t| {
+            use std::fmt::Write as _;
+            let _ = writeln!(s, "  - {t}");
+            s
+        });
         format!("tags:\n{items}")
     };
     write_md(

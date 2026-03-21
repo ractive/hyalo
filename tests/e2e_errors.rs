@@ -50,12 +50,12 @@ fn error_invalid_yaml() {
     write_md(
         tmp.path(),
         "bad.md",
-        md!(r#"
+        md!(r"
 ---
 : invalid yaml [[[{
 ---
 # Body
-"#),
+"),
     );
 
     let output = hyalo()
@@ -76,11 +76,11 @@ fn error_missing_md_extension() {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test
 ---
-"#),
+"),
     );
 
     let output = hyalo()

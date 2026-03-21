@@ -4,7 +4,10 @@ use serde_json::json;
 use serde_yaml_ng::Value;
 use std::path::Path;
 
-use crate::commands::{FilesOrOutcome, collect_files, resolve_error_to_outcome};
+use crate::commands::{
+    FilesOrOutcome, build_find_json, build_list_mutation_json, collect_files, require_file_or_glob,
+    resolve_error_to_outcome,
+};
 use crate::discovery;
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
@@ -70,7 +73,7 @@ pub(crate) fn add_values_to_list_property(
 
         // Guard against silently overwriting non-list scalar types.
         match props.get(property_name) {
-            None | Some(Value::Null) | Some(Value::String(_)) | Some(Value::Sequence(_)) => {}
+            None | Some(Value::Null | Value::String(_) | Value::Sequence(_)) => {}
             Some(existing) => {
                 let kind = match existing {
                     Value::Bool(_) => "boolean",
@@ -79,48 +82,42 @@ pub(crate) fn add_values_to_list_property(
                     _ => "unknown",
                 };
                 anyhow::bail!(
-                    "property '{}' in '{}' is a {kind} value, not a list — \
-                     use `property set` to overwrite it explicitly",
-                    property_name,
-                    rel_path
+                    "property '{property_name}' in '{rel_path}' is a {kind} value, not a list — \
+                     use `property set` to overwrite it explicitly"
                 );
             }
         }
 
         // If the property is already a sequence, append directly to preserve element types.
         // Otherwise fall back to the string-based approach for null / absent / scalar-string.
-        let added_any = match props.get_mut(property_name) {
-            Some(Value::Sequence(seq)) => {
-                let before_len = seq.len();
-                for value in values {
-                    let already_present = seq.iter().any(|v| match v {
-                        Value::String(s) => s.eq_ignore_ascii_case(value),
-                        _ => v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(value)),
-                    });
-                    if !already_present {
-                        seq.push(Value::String(value.clone()));
-                    }
+        let added_any = if let Some(Value::Sequence(seq)) = props.get_mut(property_name) {
+            let before_len = seq.len();
+            for value in values {
+                let already_present = seq.iter().any(|v| match v {
+                    Value::String(s) => s.eq_ignore_ascii_case(value),
+                    _ => v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(value)),
+                });
+                if !already_present {
+                    seq.push(Value::String(value.clone()));
                 }
-                seq.len() > before_len
             }
-            _ => {
-                // Build a fresh list from the existing string value (if any) plus new values.
-                let mut current = extract_list_property(&props, property_name);
-                let before_len = current.len();
-                for value in values {
-                    let already_present = current.iter().any(|v| v.eq_ignore_ascii_case(value));
-                    if !already_present {
-                        current.push(value.clone());
-                    }
+            seq.len() > before_len
+        } else {
+            // Build a fresh list from the existing string value (if any) plus new values.
+            let mut current = extract_list_property(&props, property_name);
+            let before_len = current.len();
+            for value in values {
+                let already_present = current.iter().any(|v| v.eq_ignore_ascii_case(value));
+                if !already_present {
+                    current.push(value.clone());
                 }
-                if current.len() > before_len {
-                    let yaml_list =
-                        Value::Sequence(current.into_iter().map(Value::String).collect());
-                    props.insert(property_name.to_owned(), yaml_list);
-                    true
-                } else {
-                    false
-                }
+            }
+            if current.len() > before_len {
+                let yaml_list = Value::Sequence(current.into_iter().map(Value::String).collect());
+                props.insert(property_name.to_owned(), yaml_list);
+                true
+            } else {
+                false
             }
         };
 
@@ -193,17 +190,8 @@ pub fn property_add_to_list(
     glob: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    if file.is_none() && glob.is_none() {
-        let out = crate::output::format_error(
-            format,
-            "property add-to-list requires --file or --glob",
-            None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
+    if let Some(outcome) = require_file_or_glob(file, glob, "property add-to-list", format) {
+        return Ok(outcome);
     }
 
     let files = collect_files(dir, file, glob, format)?;
@@ -214,14 +202,14 @@ pub fn property_add_to_list(
 
     let ListOpResult { modified, skipped } = add_values_to_list_property(&files, name, values)?;
 
-    let total = modified.len() + skipped.len();
-    let result = json!({
-        "property": name,
-        "values": values,
-        "modified": modified,
-        "skipped": skipped,
-        "total": total,
-    });
+    let result = build_list_mutation_json(
+        "property",
+        name,
+        Some("values"),
+        Some(values),
+        &modified,
+        &skipped,
+    );
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -239,17 +227,8 @@ pub fn property_remove_from_list(
     glob: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    if file.is_none() && glob.is_none() {
-        let out = crate::output::format_error(
-            format,
-            "property remove-from-list requires --file or --glob",
-            None,
-            Some(
-                "use --file <path> to target a single file or --glob <pattern> to target multiple files",
-            ),
-            None,
-        );
-        return Ok(CommandOutcome::UserError(out));
+    if let Some(outcome) = require_file_or_glob(file, glob, "property remove-from-list", format) {
+        return Ok(outcome);
     }
 
     let files = collect_files(dir, file, glob, format)?;
@@ -261,14 +240,14 @@ pub fn property_remove_from_list(
     let ListOpResult { modified, skipped } =
         remove_values_from_list_property(&files, name, values)?;
 
-    let total = modified.len() + skipped.len();
-    let result = json!({
-        "property": name,
-        "values": values,
-        "modified": modified,
-        "skipped": skipped,
-        "total": total,
-    });
+    let result = build_list_mutation_json(
+        "property",
+        name,
+        Some("values"),
+        Some(values),
+        &modified,
+        &skipped,
+    );
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -466,13 +445,7 @@ pub fn property_find(
         }
     }
 
-    let total = matching_paths.len();
-    let result = serde_json::json!({
-        "property": name,
-        "value": value,
-        "files": matching_paths,
-        "total": total,
-    });
+    let result = build_find_json("property", name, value, &matching_paths);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &result,
@@ -557,7 +530,7 @@ tags:
         tmp
     }
 
-    /// Extract the output string from a CommandOutcome.
+    /// Extract the output string from a `CommandOutcome`.
     fn unwrap_output(outcome: CommandOutcome) -> (String, bool) {
         match outcome {
             CommandOutcome::Success(s) => (s, true),
@@ -1263,7 +1236,7 @@ status: draft
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(!content.contains("- a\n") && !content.contains("- b\n"));
-        assert!(content.contains("c"));
+        assert!(content.contains('c'));
     }
 
     // --- Unhappy paths ---

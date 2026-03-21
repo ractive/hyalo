@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use std::borrow::Cow;
 use std::fs::File;
@@ -92,7 +93,7 @@ where
     Ok(())
 }
 
-/// Detect an opening fence (``` or ~~~) at the start of a line.
+/// Detect an opening fence (triple backtick or `~~~`) at the start of a line.
 /// Returns the fence character and count if found.
 fn detect_opening_fence(line: &str) -> Option<(char, usize)> {
     let trimmed = line.trim_start();
