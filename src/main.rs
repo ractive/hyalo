@@ -170,7 +170,8 @@ struct Cli {
     jq: Option<String>,
 
     /// Append drill-down command hints to the output.
-    /// Text mode: shows '-> hyalo ...' lines. JSON mode: wraps in {"data": ..., "hints": [...]}.
+    /// Text mode: '-> hyalo ...' lines — concrete, copy-pasteable commands.
+    /// JSON mode: wraps in {"data": ..., "hints": [...]}.
     /// Suppressed when --jq is active
     #[arg(long, global = true)]
     hints: bool,
