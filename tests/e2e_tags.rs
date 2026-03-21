@@ -237,10 +237,9 @@ fn tags_list_with_file() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    assert!(json[0]["path"].as_str().unwrap().ends_with("note.md"));
-    let tags: Vec<&str> = json[0]["tags"]
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(json["path"].as_str().unwrap().ends_with("note.md"));
+    let tags: Vec<&str> = json["tags"]
         .as_array()
         .unwrap()
         .iter()
@@ -263,10 +262,9 @@ fn tags_list_file_without_frontmatter() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0]["path"], "plain.md");
-    assert!(json[0]["tags"].as_array().unwrap().is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["path"], "plain.md");
+    assert!(json["tags"].as_array().unwrap().is_empty());
 }
 
 #[test]
