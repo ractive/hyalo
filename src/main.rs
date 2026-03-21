@@ -4,7 +4,8 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 use hyalo::commands::{
-    links as link_commands, outline as outline_commands, properties, tags as tag_commands,
+    links as link_commands, outline as outline_commands, properties, summary as summary_commands,
+    tags as tag_commands, tasks as task_commands,
 };
 use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
 
@@ -36,7 +37,9 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
         Per-file tag detail:        hyalo tags list --glob 'notes/**/*.md'\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
         Find broken links:          hyalo links --file index.md --unresolved\n  \
-        Document outline:           hyalo outline --file notes/meeting.md",
+        Document outline:           hyalo outline --file notes/meeting.md\n  \
+        List open tasks:            hyalo tasks --glob 'iterations/*.md' --todo\n  \
+        Vault overview:             hyalo summary --format text",
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Properties (list across files):\n  \
@@ -60,6 +63,14 @@ COMMAND REFERENCE:\n  \
     hyalo links               --file F [--unresolved | --resolved]\n\n  \
   Outline:\n  \
     hyalo outline             [--file F | --glob G]       Structure, tasks, links per section\n\n  \
+  Tasks (list across files):\n  \
+    hyalo tasks               [--file F | --glob G] [--done | --todo | --status C]\n\n  \
+  Task (single-task operations):\n  \
+    hyalo task read           --file F --line N           Read task at a line\n  \
+    hyalo task toggle         --file F --line N           Toggle completion\n  \
+    hyalo task set-status     --file F --line N --status C\n\n  \
+  Summary:\n  \
+    hyalo summary             [--glob G] [--recent N]     Vault overview\n\n  \
   Global flags (apply to all commands):\n  \
     --dir <DIR>         Root directory (default: .)\n  \
     --format json|text  Output format (default: json)\n  \
@@ -83,8 +94,12 @@ COOKBOOK:\n  \
   hyalo links --file index.md --unresolved\n\n  \
   # Get document structure: headings, tasks, code blocks\n  \
   hyalo outline --file notes/meeting.md --format text\n\n  \
+  # List incomplete tasks across iteration files\n  \
+  hyalo tasks --glob 'iterations/*.md' --todo --format text\n\n  \
+  # Quick vault overview\n  \
+  hyalo summary --format text\n\n  \
   # Count tasks across all files\n  \
-  hyalo outline --glob '**/*.md' --jq '[.[].sections[].tasks // empty] | map(.total) | add'\n\n  \
+  hyalo summary --jq '.tasks.total'\n\n  \
   # Extract just file paths from a tag search\n  \
   hyalo tag find --name backlog --jq '.files[]'\n\n  \
   # List all property names as a flat list\n  \
@@ -102,7 +117,7 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"name\": \"status\", \"type\": \"text\", \"value\": \"done\"}\n\n  \
   # property remove\n  \
   {\"path\": \"notes/todo.md\", \"removed\": \"status\"}\n\n  \
-  # property find\n  \
+  # property find (\"value\" field only present when --value is given)\n  \
   {\"property\": \"status\", \"value\": \"draft\", \"files\": [\"a.md\", \"b.md\"], \"total\": 2}\n\n  \
   # property add-to-list / remove-from-list\n  \
   {\"property\": \"tags\", \"values\": [\"rust\"], \"modified\": [\"a.md\"], \"skipped\": [\"b.md\"], \"total\": 2}\n\n  \
@@ -121,6 +136,14 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"file\": \"notes/todo.md\", \"properties\": [...], \"tags\": [...],\n   \
   \"sections\": [{\"level\": 1, \"heading\": \"Title\", \"line\": 5, \"links\": [],\n   \
                   \"tasks\": {\"total\": 3, \"done\": 1}, \"code_blocks\": [\"rust\"]}]}\n\n  \
+  # tasks (--file → bare object, --glob/default → array)\n  \
+  {\"file\": \"todo.md\", \"tasks\": [{\"line\": 5, \"status\": \" \", \"text\": \"Fix bug\", \"done\": false}], \"total\": 1}\n\n  \
+  # task read / toggle / set-status\n  \
+  {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}\n\n  \
+  # summary\n  \
+  {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},\n   \
+  \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},\n   \
+  \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}\n\n  \
   # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
   {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}\n\n  \
   # --format text produces human-readable output on all commands"
@@ -156,6 +179,12 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to discover what properties exist, audit frontmatter, or inspect per-file metadata.")]
     Properties {
+        /// Scan only this file (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select files (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
         #[command(subcommand)]
         action: Option<PropertiesAction>,
     },
@@ -211,6 +240,12 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to see which tags exist, find popular/orphan tags, audit tag taxonomy, or inspect per-file tags.")]
     Tags {
+        /// Scan only this file (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
         #[command(subcommand)]
         action: Option<TagsAction>,
     },
@@ -257,6 +292,64 @@ enum Commands {
         /// Glob pattern to select multiple files (e.g. '**/*.md'); returns an array
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
+    },
+    /// List tasks (checkboxes) across files — shows task text, line number, and completion status
+    #[command(
+        long_about = "List tasks (checkboxes) across one or more markdown files.\n\n\
+            INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
+            OUTPUT: Array of objects, each with 'file', 'tasks' array, and 'total' count. Each task has 'line', 'status', 'text', and 'done' fields.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob. Tasks inside fenced code blocks are skipped.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need to find, list, or count tasks across your vault."
+    )]
+    Tasks {
+        /// Scan only this file
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
+        /// Show only completed tasks (status x or X)
+        #[arg(long, conflicts_with_all = ["todo", "status"])]
+        done: bool,
+        /// Show only incomplete tasks
+        #[arg(long, conflicts_with_all = ["done", "status"])]
+        todo: bool,
+        /// Show only tasks with this exact status character
+        #[arg(long, conflicts_with_all = ["done", "todo"])]
+        status: Option<String>,
+    },
+    /// Read, toggle, or set status on a single task checkbox
+    #[command(
+        long_about = "Read, toggle, or set status on a single task checkbox.\n\n\
+            Subcommands:\n\
+            - read: Show task details at a specific line number.\n\
+            - toggle: Flip completion state ([ ] <-> [x], custom -> [x]).\n\
+            - set-status: Set an arbitrary single-character status.\n\n\
+            INPUT: File (--file) and line number (--line).\n\
+            SCOPE: Single file only.\n\
+            SIDE EFFECTS: 'toggle' and 'set-status' modify the file on disk. 'read' is read-only."
+    )]
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
+    },
+    /// Show a high-level vault summary: file counts, property/tag/status aggregation, tasks, recent files
+    #[command(long_about = "Show a high-level vault summary.\n\n\
+            OUTPUT: A single 'VaultSummary' object with file counts (total + by directory), \
+            property summary (unique names/types/counts), tag summary (unique tags/counts), \
+            status grouping (files grouped by frontmatter 'status' value), \
+            task counts (total/done), and recently modified files.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need a quick overview of a vault's metadata landscape.")]
+    Summary {
+        /// Glob pattern to filter which files to include
+        #[arg(long)]
+        glob: Option<String>,
+        /// Number of recent files to show (default: 10)
+        #[arg(long, default_value = "10")]
+        recent: usize,
     },
 }
 
@@ -372,7 +465,7 @@ enum TagAction {
     #[command(long_about = "Remove a tag from file(s) frontmatter.\n\n\
             INPUT: A tag name and target file(s) via --file or --glob.\n\
             BEHAVIOR: Removes the exact tag from the 'tags' list. \
-            Reports an error if the tag is not present in a file.\n\
+            Idempotent: files where the tag is not present are reported as skipped.\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
             USE WHEN: You need to un-tag or re-categorize files.")]
     Remove {
@@ -524,6 +617,41 @@ enum PropertyAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TaskAction {
+    /// Show task details at a specific line number (read-only)
+    Read {
+        /// File containing the task (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// 1-based line number of the task
+        #[arg(long)]
+        line: usize,
+    },
+    /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
+    Toggle {
+        /// File containing the task (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// 1-based line number of the task
+        #[arg(long)]
+        line: usize,
+    },
+    /// Set a custom single-character status on a task
+    #[command(name = "set-status")]
+    SetStatus {
+        /// File containing the task (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// 1-based line number of the task
+        #[arg(long)]
+        line: usize,
+        /// Single character to set as the task status (e.g. '?', '-', '!')
+        #[arg(long)]
+        status: String,
+    },
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
@@ -555,20 +683,45 @@ fn main() {
     let dir = &cli.dir;
 
     let result = match cli.command {
-        Commands::Properties { action: ref pa } => match pa {
-            None
-            | Some(PropertiesAction::Summary {
-                file: None,
-                glob: None,
-            }) => properties::properties_summary(dir, None, None, effective_format),
-            Some(PropertiesAction::Summary { file, glob }) => properties::properties_summary(
+        Commands::Properties {
+            ref file,
+            ref glob,
+            action: ref pa,
+        } => match pa {
+            None => properties::properties_summary(
                 dir,
                 file.as_deref(),
                 glob.as_deref(),
                 effective_format,
             ),
-            Some(PropertiesAction::List { file, glob }) => {
-                properties::properties_list(dir, file.as_deref(), glob.as_deref(), effective_format)
+            Some(sub) => {
+                if file.is_some() || glob.is_some() {
+                    eprintln!(
+                        "Error: --file/--glob must be placed after the subcommand, not before it"
+                    );
+                    eprintln!("  Example: hyalo properties summary --glob '*.md'");
+                    process::exit(2);
+                }
+                match sub {
+                    PropertiesAction::Summary {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => properties::properties_summary(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                    PropertiesAction::List {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => properties::properties_list(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                }
             }
         },
         Commands::Property { action } => match action {
@@ -645,17 +798,42 @@ fn main() {
             };
             link_commands::links(dir, file, filter, effective_format)
         }
-        Commands::Tags { action: ref ta } => match ta {
-            None
-            | Some(TagsAction::Summary {
-                file: None,
-                glob: None,
-            }) => tag_commands::tags_summary(dir, None, None, effective_format),
-            Some(TagsAction::Summary { file, glob }) => {
+        Commands::Tags {
+            ref file,
+            ref glob,
+            action: ref ta,
+        } => match ta {
+            None => {
                 tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
-            Some(TagsAction::List { file, glob }) => {
-                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), effective_format)
+            Some(sub) => {
+                if file.is_some() || glob.is_some() {
+                    eprintln!(
+                        "Error: --file/--glob must be placed after the subcommand, not before it"
+                    );
+                    eprintln!("  Example: hyalo tags summary --glob '*.md'");
+                    process::exit(2);
+                }
+                match sub {
+                    TagsAction::Summary {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => tag_commands::tags_summary(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                    TagsAction::List {
+                        file: sub_file,
+                        glob: sub_glob,
+                    } => tag_commands::tags_list(
+                        dir,
+                        sub_file.as_deref(),
+                        sub_glob.as_deref(),
+                        effective_format,
+                    ),
+                }
             }
         },
         Commands::Tag { action } => match action {
@@ -695,6 +873,76 @@ fn main() {
         },
         Commands::Outline { ref file, ref glob } => {
             outline_commands::outline(dir, file.as_deref(), glob.as_deref(), effective_format)
+        }
+        Commands::Tasks {
+            ref file,
+            ref glob,
+            done,
+            todo,
+            ref status,
+        } => {
+            let filter = if done {
+                task_commands::TaskFilter::Done
+            } else if todo {
+                task_commands::TaskFilter::Todo
+            } else if let Some(s) = status {
+                if s.chars().count() != 1 {
+                    let out = hyalo::output::format_error(
+                        effective_format,
+                        "--status must be a single character",
+                        None,
+                        Some("example: --status '?' or --status '-'"),
+                        None,
+                    );
+                    eprintln!("{out}");
+                    process::exit(1);
+                }
+                task_commands::TaskFilter::Status(s.chars().next().unwrap())
+            } else {
+                task_commands::TaskFilter::All
+            };
+            task_commands::tasks_list(
+                dir,
+                file.as_deref(),
+                glob.as_deref(),
+                filter,
+                effective_format,
+            )
+        }
+        Commands::Task { action } => match action {
+            TaskAction::Read { ref file, line } => {
+                task_commands::task_read(dir, file, line, effective_format)
+            }
+            TaskAction::Toggle { ref file, line } => {
+                task_commands::task_toggle(dir, file, line, effective_format)
+            }
+            TaskAction::SetStatus {
+                ref file,
+                line,
+                ref status,
+            } => {
+                if status.chars().count() != 1 {
+                    let out = hyalo::output::format_error(
+                        effective_format,
+                        "--status must be a single character",
+                        None,
+                        Some("example: --status '?' or --status '-'"),
+                        None,
+                    );
+                    eprintln!("{out}");
+                    process::exit(1);
+                }
+                task_commands::task_set_status(
+                    dir,
+                    file,
+                    line,
+                    status.chars().next().unwrap(),
+                    effective_format,
+                )
+            }
+        },
+        Commands::Summary { ref glob, recent } => {
+            summary_commands::summary(dir, glob.as_deref(), recent, effective_format)
         }
     };
 
