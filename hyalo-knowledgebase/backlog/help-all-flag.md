@@ -2,7 +2,7 @@
 title: "Enriched --help via clap's two-tier help system"
 type: backlog
 date: 2026-03-21
-status: idea
+status: completed
 priority: medium
 origin: dogfooding iteration-07
 tags:
