@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use hyalo::commands::{
     links as link_commands, outline as outline_commands, properties, tags as tag_commands,
 };
-use hyalo::output::{CommandOutcome, Format};
+use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
 
 #[derive(Parser)]
 #[command(
@@ -44,6 +44,12 @@ struct Cli {
     /// Output format: "json" (structured, default) or "text" (human-readable). Applies to both stdout and stderr
     #[arg(long, global = true, default_value = "json")]
     format: String,
+
+    /// Apply a jq filter expression to the JSON output of any command.
+    /// The filtered result is printed as plain text. Overrides --format.
+    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'
+    #[arg(long, global = true, value_name = "FILTER")]
+    jq: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -431,6 +437,22 @@ fn main() {
         process::exit(2);
     };
 
+    // --jq operates on JSON, so it conflicts with an explicit --format text.
+    let jq_filter = cli.jq.as_deref();
+    if jq_filter.is_some() && format != Format::Json {
+        eprintln!(
+            "Error: --jq cannot be combined with --format {}",
+            cli.format
+        );
+        eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
+        process::exit(2);
+    }
+    let effective_format = if jq_filter.is_some() {
+        Format::Json
+    } else {
+        format
+    };
+
     let dir = &cli.dir;
 
     let result = match cli.command {
@@ -439,26 +461,36 @@ fn main() {
             | Some(PropertiesAction::Summary {
                 file: None,
                 glob: None,
-            }) => properties::properties_summary(dir, None, None, format),
-            Some(PropertiesAction::Summary { file, glob }) => {
-                properties::properties_summary(dir, file.as_deref(), glob.as_deref(), format)
-            }
+            }) => properties::properties_summary(dir, None, None, effective_format),
+            Some(PropertiesAction::Summary { file, glob }) => properties::properties_summary(
+                dir,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
             Some(PropertiesAction::List { file, glob }) => {
-                properties::properties_list(dir, file.as_deref(), glob.as_deref(), format)
+                properties::properties_list(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
         },
         Commands::Property { action } => match action {
             PropertyAction::Read { ref name, ref file } => {
-                properties::property_read(dir, name, file, format)
+                properties::property_read(dir, name, file, effective_format)
             }
             PropertyAction::Set {
                 ref name,
                 ref value,
                 ref prop_type,
                 ref file,
-            } => properties::property_set(dir, name, value, prop_type.as_deref(), file, format),
+            } => properties::property_set(
+                dir,
+                name,
+                value,
+                prop_type.as_deref(),
+                file,
+                effective_format,
+            ),
             PropertyAction::Remove { ref name, ref file } => {
-                properties::property_remove(dir, name, file, format)
+                properties::property_remove(dir, name, file, effective_format)
             }
             PropertyAction::Find {
                 ref name,
@@ -471,7 +503,7 @@ fn main() {
                 value.as_deref(),
                 file.as_deref(),
                 glob.as_deref(),
-                format,
+                effective_format,
             ),
             PropertyAction::AddToList {
                 ref name,
@@ -484,7 +516,7 @@ fn main() {
                 value,
                 file.as_deref(),
                 glob.as_deref(),
-                format,
+                effective_format,
             ),
             PropertyAction::RemoveFromList {
                 ref name,
@@ -497,7 +529,7 @@ fn main() {
                 value,
                 file.as_deref(),
                 glob.as_deref(),
-                format,
+                effective_format,
             ),
         },
         Commands::Links {
@@ -512,19 +544,19 @@ fn main() {
             } else {
                 link_commands::LinkFilter::All
             };
-            link_commands::links(dir, file, filter, format)
+            link_commands::links(dir, file, filter, effective_format)
         }
         Commands::Tags { action: ref ta } => match ta {
             None
             | Some(TagsAction::Summary {
                 file: None,
                 glob: None,
-            }) => tag_commands::tags_summary(dir, None, None, format),
+            }) => tag_commands::tags_summary(dir, None, None, effective_format),
             Some(TagsAction::Summary { file, glob }) => {
-                tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), format)
+                tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
             Some(TagsAction::List { file, glob }) => {
-                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), format)
+                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
         },
         Commands::Tag { action } => match action {
@@ -532,26 +564,62 @@ fn main() {
                 ref name,
                 ref file,
                 ref glob,
-            } => tag_commands::tag_find(dir, name, file.as_deref(), glob.as_deref(), format),
+            } => tag_commands::tag_find(
+                dir,
+                name,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
             TagAction::Add {
                 ref name,
                 ref file,
                 ref glob,
-            } => tag_commands::tag_add(dir, name, file.as_deref(), glob.as_deref(), format),
+            } => tag_commands::tag_add(
+                dir,
+                name,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
             TagAction::Remove {
                 ref name,
                 ref file,
                 ref glob,
-            } => tag_commands::tag_remove(dir, name, file.as_deref(), glob.as_deref(), format),
+            } => tag_commands::tag_remove(
+                dir,
+                name,
+                file.as_deref(),
+                glob.as_deref(),
+                effective_format,
+            ),
         },
         Commands::Outline { ref file, ref glob } => {
-            outline_commands::outline(dir, file.as_deref(), glob.as_deref(), format)
+            outline_commands::outline(dir, file.as_deref(), glob.as_deref(), effective_format)
         }
     };
 
     match result {
         Ok(CommandOutcome::Success(output)) => {
-            println!("{output}");
+            if let Some(filter) = jq_filter {
+                // Parse the JSON output we forced above, then apply the user filter.
+                let value: serde_json::Value = match serde_json::from_str(&output) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("internal error: failed to parse command JSON output: {e}");
+                        process::exit(2);
+                    }
+                };
+                match apply_jq_filter_result(filter, &value) {
+                    Ok(filtered) => println!("{filtered}"),
+                    Err(e) => {
+                        eprintln!("Error: jq filter failed: {e}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                println!("{output}");
+            }
         }
         Ok(CommandOutcome::UserError(output)) => {
             eprintln!("{output}");

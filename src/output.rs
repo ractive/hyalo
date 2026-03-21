@@ -230,8 +230,24 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
 /// Apply a jq filter string to a `serde_json::Value` and return the text output.
 ///
 /// Multiple outputs are joined with newlines. On any error (parse or runtime),
-/// returns a fallback generic representation.
+/// returns `None` (used internally by the text formatter, which has its own fallbacks).
 fn apply_jq_filter(filter_code: &str, value: &serde_json::Value) -> Option<String> {
+    run_jq_filter(filter_code, value).ok()
+}
+
+/// Apply a user-supplied jq filter to a `serde_json::Value`.
+///
+/// Returns `Ok(String)` with newline-joined output values on success, or
+/// `Err(String)` with a human-readable description of the parse or runtime error.
+pub fn apply_jq_filter_result(
+    filter_code: &str,
+    value: &serde_json::Value,
+) -> Result<String, String> {
+    run_jq_filter(filter_code, value)
+}
+
+/// Core jq execution logic shared by `apply_jq_filter` and `apply_jq_filter_result`.
+fn run_jq_filter(filter_code: &str, value: &serde_json::Value) -> Result<String, String> {
     let program = File {
         code: filter_code,
         path: (),
@@ -239,11 +255,13 @@ fn apply_jq_filter(filter_code: &str, value: &serde_json::Value) -> Option<Strin
     let loader = Loader::new(jaq_std::defs().chain(jaq_json::defs()));
     let arena = Arena::default();
 
-    let modules = loader.load(&arena, program).ok()?;
+    let modules = loader
+        .load(&arena, program)
+        .map_err(|errs| format!("jq parse error: {errs:?}"))?;
     let filter = Compiler::default()
         .with_funs(jaq_std::funs().chain(jaq_json::funs()))
         .compile(modules)
-        .ok()?;
+        .map_err(|errs| format!("jq compile error: {errs:?}"))?;
 
     let input = Val::from(value.clone());
     let inputs = RcIter::new(core::iter::empty());
@@ -259,11 +277,11 @@ fn apply_jq_filter(filter_code: &str, value: &serde_json::Value) -> Option<Strin
                 };
                 parts.push(s);
             }
-            Err(_) => return None,
+            Err(e) => return Err(format!("jq runtime error: {e}")),
         }
     }
 
-    Some(parts.join("\n"))
+    Ok(parts.join("\n"))
 }
 
 // ---------------------------------------------------------------------------
