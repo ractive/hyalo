@@ -11,7 +11,7 @@ Keep all documentation in `./hyalo-knowledgebase/` as `*.md` markdown files with
 Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-compatible.
 
 ## Dogfooding
-After an iteration or before starting one, build hyalo with "cargo build --relese".
+After an iteration or before starting one, build hyalo with "cargo build --release".
 Then use target/release/hyalo to work with the documentation in `./hyalo-knowledgebase/`. Mention issues you have using it, propose features you'd like to have.
 
 **Iteration file rules:**
