@@ -355,12 +355,19 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let lines: Vec<&str> = content.split('\n').collect();
+    // split('\n') produces a trailing empty element for files ending in '\n';
+    // exclude it from the line count so it matches 1-based scanner line numbers.
+    let line_count = if lines.last() == Some(&"") {
+        lines.len() - 1
+    } else {
+        lines.len()
+    };
 
-    if line == 0 || line > lines.len() {
+    if line == 0 || line > line_count {
         bail!(
             "line {} is out of range (file has {} lines)",
             line,
-            lines.len()
+            line_count
         );
     }
 
@@ -395,12 +402,17 @@ pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInf
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let lines: Vec<&str> = content.split('\n').collect();
+    let line_count = if lines.last() == Some(&"") {
+        lines.len() - 1
+    } else {
+        lines.len()
+    };
 
-    if line == 0 || line > lines.len() {
+    if line == 0 || line > line_count {
         bail!(
             "line {} is out of range (file has {} lines)",
             line,
-            lines.len()
+            line_count
         );
     }
 

@@ -45,4 +45,4 @@ Add `--brief` flag to `outline` that:
 Low priority — the current full output works fine and isn't excessively large for typical vaults. Revisit if vault size grows or token budgets become a concern.
 
 ## Won't do
-Since we now have --jq, you can define your own output format. Better then --brief
+Since we now have --jq, you can define your own output format. Better than --brief

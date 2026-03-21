@@ -1045,3 +1045,22 @@ fn tag_remove_without_file_or_glob_is_user_error() {
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains("rust"));
 }
+
+#[test]
+fn tags_rejects_parent_glob_with_subcommand() {
+    let tmp = TempDir::new().unwrap();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "tags",
+            "--glob",
+            "*.md",
+            "list",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--file/--glob must be placed after the subcommand"));
+}
