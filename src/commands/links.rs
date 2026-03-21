@@ -1,12 +1,12 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
-use serde_json::json;
 use std::path::Path;
 
 use crate::commands::resolve_error_to_outcome;
 use crate::discovery;
 use crate::links;
 use crate::output::{CommandOutcome, Format};
+use crate::types::{FileLinks, LinkInfo};
 
 /// Filter for link resolution status.
 #[derive(Clone, Copy)]
@@ -28,7 +28,7 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
 
     let extracted = links::extract_links_from_file(&full_path)?;
 
-    let link_values: Vec<serde_json::Value> = extracted
+    let links: Vec<LinkInfo> = extracted
         .iter()
         .map(|link| {
             let resolved = discovery::resolve_target(dir, &link.target);
@@ -39,20 +39,18 @@ pub fn links(dir: &Path, file: &str, filter: LinkFilter, format: Format) -> Resu
             LinkFilter::Resolved => resolved.is_some(),
             LinkFilter::Unresolved => resolved.is_none(),
         })
-        .map(|(link, resolved)| {
-            json!({
-                "target": &link.target,
-                "path": resolved,
-                "label": &link.label,
-            })
+        .map(|(link, resolved)| LinkInfo {
+            target: link.target.clone(),
+            path: resolved,
+            label: link.label.clone(),
         })
         .collect();
-    let result = json!({
-        "path": rel_path,
-        "links": link_values,
-    });
+    let result = FileLinks {
+        path: rel_path,
+        links,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::Success(crate::output::format_output(
         format, &result,
     )))
 }

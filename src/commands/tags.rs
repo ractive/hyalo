@@ -1,6 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
-use serde_json::json;
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -9,10 +8,11 @@ use crate::commands::properties::{
     ListOpResult, add_values_to_list_property, remove_values_from_list_property,
 };
 use crate::commands::{
-    FilesOrOutcome, build_find_json, build_list_mutation_json, collect_files, require_file_or_glob,
+    FilesOrOutcome, collect_files, require_file_or_glob, unwrap_single_file_result,
 };
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
+use crate::types::{FileTags, TagFindResult, TagMutationResult, TagSummary, TagSummaryEntry};
 
 // ---------------------------------------------------------------------------
 // Tag format validation
@@ -128,15 +128,15 @@ pub fn tags_summary(
         }
     }
 
-    let tags_json: Vec<serde_json::Value> = counts
+    let tags: Vec<TagSummaryEntry> = counts
         .into_iter()
-        .map(|(_, (name, count))| json!({"name": name, "count": count}))
+        .map(|(_, (name, count))| TagSummaryEntry { name, count })
         .collect();
 
-    let total = tags_json.len();
-    let result = json!({"tags": tags_json, "total": total});
+    let total = tags.len();
+    let result = TagSummary { tags, total };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::Success(crate::output::format_output(
         format, &result,
     )))
 }
@@ -159,21 +159,20 @@ pub fn tags_list(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut results = Vec::new();
+    let mut results: Vec<serde_json::Value> = Vec::new();
     for (full_path, rel_path) in &files {
         let props = frontmatter::read_frontmatter(full_path)?;
         let tags = extract_tags(&props);
-        let tags_json: Vec<serde_json::Value> =
-            tags.into_iter().map(serde_json::Value::String).collect();
-        results.push(json!({
-            "path": rel_path,
-            "tags": tags_json,
-        }));
+        let entry = FileTags {
+            path: rel_path.clone(),
+            tags,
+        };
+        results.push(serde_json::to_value(entry).unwrap_or_default());
     }
 
-    let json_output = crate::commands::unwrap_single_file_result(file, results);
+    let json_output = unwrap_single_file_result(file, results);
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::Success(crate::output::format_output(
         format,
         &json_output,
     )))
@@ -206,9 +205,15 @@ pub fn tag_find(
         }
     }
 
-    let result = build_find_json("tag", name, None, &matching_paths);
+    let total = matching_paths.len();
+    let result = TagFindResult {
+        tag: name.to_owned(),
+        value: None,
+        files: matching_paths,
+        total,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::Success(crate::output::format_output(
         format, &result,
     )))
 }
@@ -252,9 +257,15 @@ pub fn tag_add(
     let ListOpResult { modified, skipped } =
         add_values_to_list_property(&files, "tags", &[name.to_owned()])?;
 
-    let result = build_list_mutation_json("tag", name, None, None, &modified, &skipped);
+    let total = modified.len() + skipped.len();
+    let result = TagMutationResult {
+        tag: name.to_owned(),
+        modified,
+        skipped,
+        total,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::Success(crate::output::format_output(
         format, &result,
     )))
 }
@@ -284,9 +295,15 @@ pub fn tag_remove(
     let ListOpResult { modified, skipped } =
         remove_values_from_list_property(&files, "tags", &[name.to_owned()])?;
 
-    let result = build_list_mutation_json("tag", name, None, None, &modified, &skipped);
+    let total = modified.len() + skipped.len();
+    let result = TagMutationResult {
+        tag: name.to_owned(),
+        modified,
+        skipped,
+        total,
+    };
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::Success(crate::output::format_output(
         format, &result,
     )))
 }
