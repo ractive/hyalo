@@ -2,7 +2,7 @@
 date: 2026-03-21
 origin: iteration-02 known limitation, DEC-015
 priority: high
-status: ready
+status: done
 tags:
 - backlog
 - scanner
