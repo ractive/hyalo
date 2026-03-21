@@ -10,6 +10,10 @@ Keep all documentation in `./hyalo-knowledgebase/` as `*.md` markdown files with
 
 Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-compatible.
 
+## Dogfooding
+After an iteration or before starting one, build hyalo with "cargo build --relese".
+Then use target/release/hyalo to work with the documentation in `./hyalo-knowledgebase/`. Mention issues you have using it, propose features you'd like to have.
+
 **Iteration file rules:**
 - Always name `iteration-NN-slug.md` — no standalone plan files
 - Frontmatter must include: `title`, `type: iteration`, `date`, `tags`, `status`, `branch`
@@ -36,6 +40,7 @@ Before committing or creating a PR, run **in this order** and fix all issues:
 3. `cargo test --workspace`
 
 Never skip a step. Never commit code that fails any of these.
+Do *not* merge with "--squash".
 
 ## Code Patterns
 - No `.unwrap()` / `.expect()` outside of tests — use `anyhow::Context` with `?`
