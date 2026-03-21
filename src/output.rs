@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use jaq_core::load::{Arena, File, Loader};
+use jaq_core::load::{self, Arena, File, Loader};
 use jaq_core::{Compiler, Ctx, RcIter};
 use jaq_json::Val;
 use serde::Serialize;
@@ -98,10 +98,11 @@ pub fn format_error(
 
 /// `PropertyInfo`: `{name, type, value}`
 /// When value is an array (list type), join elements with ", " for readability.
-const PROPERTY_INFO_FILTER: &str = r#"  "\(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)""#;
+const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)""#;
 
 /// `FileProperties`: `{path, properties}`
 /// List-type values are joined with ", " for readability.
+/// Each property line is indented with two spaces for nesting under the file path.
 const FILE_PROPERTIES_FILTER: &str = r#""\(.path)\n\(.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)") | join("\n"))""#;
 
 /// `PropertySummaryEntry`: `{count, name, type}`
@@ -246,6 +247,39 @@ pub fn apply_jq_filter_result(
     run_jq_filter(filter_code, value)
 }
 
+/// Format a jaq load error (lex/parse/IO) into a human-readable string.
+///
+/// `load::Error<&str>` does not implement `Display`, so we extract the first
+/// error's kind and the offending source snippet manually.
+fn format_load_errors(errs: &load::Errors<&str, ()>) -> String {
+    // errs is Vec<(File<&str, ()>, load::Error<&str>)>
+    // We take the first entry and describe its error kind.
+    for (_file, err) in errs {
+        match err {
+            load::Error::Io(ios) => {
+                if let Some((_path, msg)) = ios.first() {
+                    return format!("jq filter error (IO): {msg}");
+                }
+            }
+            load::Error::Lex(lex_errs) => {
+                if let Some((expect, span)) = lex_errs.first() {
+                    return format!(
+                        "jq filter syntax error: expected {} near {:?}",
+                        expect.as_str(),
+                        span
+                    );
+                }
+            }
+            load::Error::Parse(parse_errs) => {
+                if let Some((expect, _token)) = parse_errs.first() {
+                    return format!("jq filter parse error: expected {}", expect.as_str());
+                }
+            }
+        }
+    }
+    "jq filter error: invalid filter syntax".to_owned()
+}
+
 /// Core jq execution logic shared by `apply_jq_filter` and `apply_jq_filter_result`.
 fn run_jq_filter(filter_code: &str, value: &serde_json::Value) -> Result<String, String> {
     let program = File {
@@ -257,11 +291,20 @@ fn run_jq_filter(filter_code: &str, value: &serde_json::Value) -> Result<String,
 
     let modules = loader
         .load(&arena, program)
-        .map_err(|errs| format!("jq parse error: {errs:?}"))?;
+        .map_err(|errs| format_load_errors(&errs))?;
     let filter = Compiler::default()
         .with_funs(jaq_std::funs().chain(jaq_json::funs()))
         .compile(modules)
-        .map_err(|errs| format!("jq compile error: {errs:?}"))?;
+        .map_err(|errs| {
+            // compile::Errors = Vec<(File<S,P>, Vec<(S, Undefined)>)>
+            // Extract the first undefined symbol name for a useful message.
+            let first = errs.iter().flat_map(|(_file, undefs)| undefs.iter()).next();
+            if let Some((name, undef)) = first {
+                format!("jq filter error: undefined {} {:?}", undef.as_str(), name)
+            } else {
+                "jq filter error: compilation failed".to_owned()
+            }
+        })?;
 
     let input = Val::from(value.clone());
     let inputs = RcIter::new(core::iter::empty());
@@ -303,7 +346,7 @@ fn format_value_as_text(value: &serde_json::Value) -> String {
             {
                 return output;
             }
-            // Fallback: generic key=value lines
+            // Fallback: generic key: value lines
             format_object_generic(map)
         }
         other => format_scalar(other),
