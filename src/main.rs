@@ -298,7 +298,7 @@ enum Commands {
         long_about = "List tasks (checkboxes) across one or more markdown files.\n\n\
             INPUT: Reads .md files filtered by --file or --glob (or all .md files if omitted).\n\
             OUTPUT: Array of objects, each with 'file', 'tasks' array, and 'total' count. Each task has 'line', 'status', 'text', and 'done' fields.\n\
-            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob. Tasks inside fenced code blocks are skipped.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --file or --glob. Tasks inside fenced code blocks and %%comment%% blocks are skipped.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to find, list, or count tasks across your vault."
     )]

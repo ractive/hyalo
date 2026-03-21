@@ -103,6 +103,8 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 
 **Why:** Adding comment tracking is straightforward (similar to fenced code block tracking) but wasn't needed for the initial link implementation. Documented as a known limitation. Can be added to the scanner in a future iteration since we control all the code.
 
+**Update (2026-03-21):** Resolved in iteration 10. Both block (`%%...%%`) and inline (`%%text%%`) comments are now tracked by the scanner.
+
 ## DEC-016: Single-File Only for `links` and `unresolved` Commands (2026-03-20)
 
 **Decision:** Both `links` and `unresolved` require exactly one file via `--file`. No vault-wide mode, no glob support.
