@@ -1,6 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
+use serde_yaml_ng::Value;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -124,7 +126,7 @@ pub(crate) fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -
 /// Strip inline code spans from a line, replacing their content with spaces
 /// to preserve byte positions for link parsing.
 /// Returns a borrowed reference when no backticks are present (zero allocation).
-pub(crate) fn strip_inline_code(line: &str) -> Cow<'_, str> {
+pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     if !line.contains('`') {
         return Cow::Borrowed(line);
     }
@@ -179,6 +181,256 @@ pub(crate) fn strip_inline_code(line: &str) -> Cow<'_, str> {
     // Only ASCII bytes (backticks and code content) were replaced with ASCII spaces,
     // so the result is always valid UTF-8.
     Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
+}
+
+// ---------------------------------------------------------------------------
+// Multi-visitor scanner
+// ---------------------------------------------------------------------------
+
+/// Trait for visitors that receive events from a single-pass file scan.
+///
+/// All methods have default no-op implementations, so visitors only need
+/// to override the events they care about.
+pub trait FileVisitor {
+    /// Called with parsed frontmatter properties (empty `BTreeMap` if none).
+    /// Return `ScanAction::Stop` to skip the body scan for this visitor.
+    fn on_frontmatter(&mut self, _props: &BTreeMap<String, Value>) -> ScanAction {
+        ScanAction::Continue
+    }
+
+    /// Called for each body line outside fenced code blocks.
+    /// Receives the **raw** line text (not stripped of inline code).
+    fn on_body_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {
+        ScanAction::Continue
+    }
+
+    /// Called when a fenced code block opens (e.g. `` ```rust ``).
+    fn on_code_fence_open(&mut self, _raw: &str, _language: &str, _line_num: usize) -> ScanAction {
+        ScanAction::Continue
+    }
+
+    /// Called when a fenced code block closes.
+    fn on_code_fence_close(&mut self, _line_num: usize) -> ScanAction {
+        ScanAction::Continue
+    }
+
+    /// Whether this visitor needs body events (`on_body_line`, `on_code_fence_*`).
+    /// If `false`, the visitor only receives `on_frontmatter` and is then stopped.
+    /// Default: `true`.
+    fn needs_body(&self) -> bool {
+        true
+    }
+}
+
+/// Extract the info-string (language tag) from a fenced code block opening line.
+/// E.g. `` ```rust `` → `"rust"`, `~~~` → `""`
+pub fn extract_fence_language(line: &str, fence_char: char, fence_count: usize) -> String {
+    let trimmed = line.trim_start();
+    let after_fence = &trimmed[fence_count * fence_char.len_utf8()..];
+    after_fence.trim().to_owned()
+}
+
+/// Scan a file with multiple visitors in a single pass.
+///
+/// Opens the file once, parses frontmatter, then streams body lines to all
+/// active visitors. Stops early when all visitors have returned `ScanAction::Stop`.
+///
+/// **Optimization**: if no visitor needs body events (all return `Stop` from
+/// `on_frontmatter` or have `needs_body() == false`), the body is never read.
+pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let reader = BufReader::new(file);
+    scan_reader_multi(reader, visitors)
+}
+
+/// Scan from any buffered reader with multiple visitors.
+pub fn scan_reader_multi<R: BufRead>(
+    mut reader: R,
+    visitors: &mut [&mut dyn FileVisitor],
+) -> Result<()> {
+    let num = visitors.len();
+    if num == 0 {
+        return Ok(());
+    }
+
+    let mut active: Vec<bool> = vec![true; num];
+    let mut buf = String::new();
+    let mut line_num: usize = 0;
+
+    // --- Phase 1: Frontmatter ---
+    buf.clear();
+    let n = reader.read_line(&mut buf).context("failed to read line")?;
+    if n == 0 {
+        // Empty file — deliver empty frontmatter
+        let empty = BTreeMap::new();
+        for (i, v) in visitors.iter_mut().enumerate() {
+            if v.on_frontmatter(&empty) == ScanAction::Stop {
+                active[i] = false;
+            }
+        }
+        return Ok(());
+    }
+    line_num += 1;
+
+    let first_trimmed = buf.trim_end_matches(['\n', '\r']).to_owned();
+
+    // Try to parse frontmatter
+    let (fm_props, fm_lines) = if first_trimmed.trim() == "---" {
+        // Collect YAML lines
+        let mut yaml = String::new();
+        let mut fm_line_count: usize = 1; // the opening `---`
+        let mut found_close = false;
+        loop {
+            buf.clear();
+            let n = reader.read_line(&mut buf).context("failed to read line")?;
+            if n == 0 {
+                break;
+            }
+            fm_line_count += 1;
+            let trimmed = buf.trim_end_matches(['\n', '\r']);
+            if trimmed.trim() == "---" {
+                found_close = true;
+                break;
+            }
+            yaml.push_str(trimmed);
+            yaml.push('\n');
+        }
+        let props: BTreeMap<String, Value> = if found_close && !yaml.trim().is_empty() {
+            serde_yaml_ng::from_str(&yaml).unwrap_or_default()
+        } else {
+            BTreeMap::new()
+        };
+        (props, fm_line_count)
+    } else {
+        (BTreeMap::new(), 0usize)
+    };
+
+    // Deliver frontmatter to all visitors
+    for (i, v) in visitors.iter_mut().enumerate() {
+        if v.on_frontmatter(&fm_props) == ScanAction::Stop || !v.needs_body() {
+            active[i] = false;
+        }
+    }
+
+    // If all visitors are done, skip the body
+    if !active.iter().any(|&a| a) {
+        return Ok(());
+    }
+
+    // --- Phase 2: Body ---
+    let mut fence: Option<(char, usize)> = None;
+
+    if fm_lines > 0 {
+        line_num = fm_lines;
+    }
+
+    // If the first line was not frontmatter, process it as a body line
+    if fm_lines == 0 {
+        dispatch_body_line(&first_trimmed, line_num, visitors, &mut active, &mut fence);
+        if !active.iter().any(|&a| a) {
+            return Ok(());
+        }
+    }
+
+    loop {
+        buf.clear();
+        let n = reader.read_line(&mut buf).context("failed to read line")?;
+        if n == 0 {
+            break;
+        }
+        line_num += 1;
+        let line = buf.trim_end_matches(['\n', '\r']);
+
+        dispatch_body_line(line, line_num, visitors, &mut active, &mut fence);
+        if !active.iter().any(|&a| a) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Dispatch a single body line to active visitors, handling code fence state.
+fn dispatch_body_line(
+    line: &str,
+    line_num: usize,
+    visitors: &mut [&mut dyn FileVisitor],
+    active: &mut [bool],
+    fence: &mut Option<(char, usize)>,
+) {
+    if let Some((fence_char, fence_count)) = *fence {
+        if is_closing_fence(line, fence_char, fence_count) {
+            *fence = None;
+            for (i, v) in visitors.iter_mut().enumerate() {
+                if active[i] && v.on_code_fence_close(line_num) == ScanAction::Stop {
+                    active[i] = false;
+                }
+            }
+        }
+        // Lines inside code blocks are not delivered as body lines
+        return;
+    }
+
+    if let Some((fc, count)) = detect_opening_fence(line) {
+        let lang = extract_fence_language(line, fc, count);
+        *fence = Some((fc, count));
+        for (i, v) in visitors.iter_mut().enumerate() {
+            if active[i] && v.on_code_fence_open(line, &lang, line_num) == ScanAction::Stop {
+                active[i] = false;
+            }
+        }
+        return;
+    }
+
+    // Normal body line
+    for (i, v) in visitors.iter_mut().enumerate() {
+        if active[i] && v.on_body_line(line, line_num) == ScanAction::Stop {
+            active[i] = false;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in visitors
+// ---------------------------------------------------------------------------
+
+/// Collects frontmatter properties from a file scan.
+pub struct FrontmatterCollector {
+    props: BTreeMap<String, Value>,
+    body_needed: bool,
+}
+
+impl FrontmatterCollector {
+    /// Create a new collector.
+    /// If `body_needed` is false, signals the scanner to skip the body after frontmatter.
+    #[must_use]
+    pub fn new(body_needed: bool) -> Self {
+        Self {
+            props: BTreeMap::new(),
+            body_needed,
+        }
+    }
+
+    /// Consume the collector and return the parsed properties.
+    #[must_use]
+    pub fn into_props(self) -> BTreeMap<String, Value> {
+        self.props
+    }
+}
+
+impl FileVisitor for FrontmatterCollector {
+    fn on_frontmatter(&mut self, props: &BTreeMap<String, Value>) -> ScanAction {
+        self.props = props.clone();
+        if self.body_needed {
+            ScanAction::Continue
+        } else {
+            ScanAction::Stop
+        }
+    }
+
+    fn needs_body(&self) -> bool {
+        self.body_needed
+    }
 }
 
 #[cfg(test)]
@@ -434,5 +686,195 @@ After
         let lines = collect_lines(&input);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].0.contains("[[link]]"));
+    }
+
+    // --- Multi-visitor scanner tests ---
+
+    /// Test visitor that collects body lines (raw text).
+    struct BodyCollector {
+        lines: Vec<(String, usize)>,
+    }
+
+    impl BodyCollector {
+        fn new() -> Self {
+            Self { lines: Vec::new() }
+        }
+    }
+
+    impl FileVisitor for BodyCollector {
+        fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+            self.lines.push((raw.to_owned(), line_num));
+            ScanAction::Continue
+        }
+    }
+
+    /// Test visitor that counts code fence events.
+    struct FenceCounter {
+        opens: Vec<(String, usize)>,
+        closes: Vec<usize>,
+    }
+
+    impl FenceCounter {
+        fn new() -> Self {
+            Self {
+                opens: Vec::new(),
+                closes: Vec::new(),
+            }
+        }
+    }
+
+    impl FileVisitor for FenceCounter {
+        fn on_code_fence_open(
+            &mut self,
+            _raw: &str,
+            language: &str,
+            line_num: usize,
+        ) -> ScanAction {
+            self.opens.push((language.to_owned(), line_num));
+            ScanAction::Continue
+        }
+
+        fn on_code_fence_close(&mut self, line_num: usize) -> ScanAction {
+            self.closes.push(line_num);
+            ScanAction::Continue
+        }
+    }
+
+    #[test]
+    fn multi_visitor_frontmatter_and_body() {
+        let input = md!(r"
+---
+title: Test
+tags:
+  - a
+---
+Line 6
+Line 7
+");
+        let mut fm = FrontmatterCollector::new(true);
+        let mut body = BodyCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut fm, &mut body]).unwrap();
+
+        let props = fm.into_props();
+        assert_eq!(props.get("title").unwrap().as_str(), Some("Test"));
+
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 6");
+        assert_eq!(body.lines[0].1, 6);
+        assert_eq!(body.lines[1].0, "Line 7");
+        assert_eq!(body.lines[1].1, 7);
+    }
+
+    #[test]
+    fn multi_visitor_frontmatter_only_skips_body() {
+        let input = md!(r"
+---
+title: Test
+---
+Line 4
+Line 5
+");
+        let mut fm = FrontmatterCollector::new(false);
+        let mut body = BodyCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut fm, &mut body]).unwrap();
+
+        let props = fm.into_props();
+        assert_eq!(props.get("title").unwrap().as_str(), Some("Test"));
+
+        // body collector has needs_body() == true, so it should still get body lines
+        assert_eq!(body.lines.len(), 2);
+    }
+
+    #[test]
+    fn multi_visitor_all_frontmatter_only_skips_body_read() {
+        // When ALL visitors don't need body, the body should not be read.
+        // We verify this by checking that FrontmatterCollector gets the right data
+        // and no panics occur.
+        let input = md!(r"
+---
+title: Test
+---
+Line 4
+");
+        let mut fm1 = FrontmatterCollector::new(false);
+        let mut fm2 = FrontmatterCollector::new(false);
+        scan_reader_multi(input.as_bytes(), &mut [&mut fm1, &mut fm2]).unwrap();
+
+        assert_eq!(
+            fm1.into_props().get("title").unwrap().as_str(),
+            Some("Test")
+        );
+        assert_eq!(
+            fm2.into_props().get("title").unwrap().as_str(),
+            Some("Test")
+        );
+    }
+
+    #[test]
+    fn multi_visitor_code_fence_events() {
+        let input = md!(r"
+Line 1
+```rust
+code line
+```
+Line 5
+");
+        let mut body = BodyCollector::new();
+        let mut fences = FenceCounter::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body, &mut fences]).unwrap();
+
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 1");
+        assert_eq!(body.lines[1].0, "Line 5");
+
+        assert_eq!(fences.opens.len(), 1);
+        assert_eq!(fences.opens[0].0, "rust");
+        assert_eq!(fences.opens[0].1, 2);
+
+        assert_eq!(fences.closes.len(), 1);
+        assert_eq!(fences.closes[0], 4);
+    }
+
+    #[test]
+    fn multi_visitor_no_frontmatter() {
+        let input = md!(r"
+Line 1
+Line 2
+");
+        let mut fm = FrontmatterCollector::new(true);
+        let mut body = BodyCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut fm, &mut body]).unwrap();
+
+        assert!(fm.into_props().is_empty());
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 1");
+        assert_eq!(body.lines[0].1, 1);
+    }
+
+    #[test]
+    fn multi_visitor_empty_file() {
+        let mut fm = FrontmatterCollector::new(true);
+        scan_reader_multi("".as_bytes(), &mut [&mut fm]).unwrap();
+        assert!(fm.into_props().is_empty());
+    }
+
+    #[test]
+    fn multi_visitor_no_visitors() {
+        scan_reader_multi("hello\n".as_bytes(), &mut []).unwrap();
+    }
+
+    #[test]
+    fn extract_fence_language_rust() {
+        assert_eq!(extract_fence_language("```rust", '`', 3), "rust");
+    }
+
+    #[test]
+    fn extract_fence_language_empty() {
+        assert_eq!(extract_fence_language("```", '`', 3), "");
+    }
+
+    #[test]
+    fn extract_fence_language_spaces() {
+        assert_eq!(extract_fence_language("```  sh  ", '`', 3), "sh");
     }
 }

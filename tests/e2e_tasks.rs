@@ -12,8 +12,7 @@ use tempfile::TempDir;
 /// 7 real tasks: [ ] open×2, [x] done, [-] cancelled, [?] question, [!] important, [X] done uppercase.
 /// Code-block task must NOT be counted.
 fn tasks_content() -> &'static str {
-    md!(
-        r#"
+    md!(r#"
 ---
 title: Test Tasks
 status: in-progress
@@ -38,8 +37,7 @@ Regular text (not a task)
 ```
 - [ ] Task inside code block (should be ignored)
 ```
-"#
-    )
+"#)
 }
 
 /// Write the standard fixture and return (TempDir, file path string).

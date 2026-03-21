@@ -202,3 +202,46 @@ pub struct TaskReadResult {
     pub text: String,
     pub done: bool,
 }
+
+// ---------------------------------------------------------------------------
+// Summary types (new in iteration 9)
+// ---------------------------------------------------------------------------
+
+/// High-level vault summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct VaultSummary {
+    pub files: FileCounts,
+    pub properties: Vec<PropertySummaryEntry>,
+    pub tags: TagSummary,
+    pub status: Vec<StatusGroup>,
+    pub tasks: TaskCount,
+    pub recent_files: Vec<RecentFile>,
+}
+
+/// File counts by directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileCounts {
+    pub total: usize,
+    pub by_directory: Vec<DirectoryCount>,
+}
+
+/// Count of files in a directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct DirectoryCount {
+    pub directory: String,
+    pub count: usize,
+}
+
+/// Files grouped by status property value.
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusGroup {
+    pub value: String,
+    pub files: Vec<String>,
+}
+
+/// A recently modified file.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentFile {
+    pub path: String,
+    pub modified: String,
+}

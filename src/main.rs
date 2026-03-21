@@ -4,8 +4,8 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 use hyalo::commands::{
-    links as link_commands, outline as outline_commands, properties, tags as tag_commands,
-    tasks as task_commands,
+    links as link_commands, outline as outline_commands, properties, summary as summary_commands,
+    tags as tag_commands, tasks as task_commands,
 };
 use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
 
@@ -37,7 +37,9 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result};
         Per-file tag detail:        hyalo tags list --glob 'notes/**/*.md'\n  \
         Find files by tag:          hyalo tag find --name project/backend\n  \
         Find broken links:          hyalo links --file index.md --unresolved\n  \
-        Document outline:           hyalo outline --file notes/meeting.md",
+        Document outline:           hyalo outline --file notes/meeting.md\n  \
+        List open tasks:            hyalo tasks --glob 'iterations/*.md' --todo\n  \
+        Vault overview:             hyalo summary --format text",
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Properties (list across files):\n  \
@@ -61,6 +63,14 @@ COMMAND REFERENCE:\n  \
     hyalo links               --file F [--unresolved | --resolved]\n\n  \
   Outline:\n  \
     hyalo outline             [--file F | --glob G]       Structure, tasks, links per section\n\n  \
+  Tasks (list across files):\n  \
+    hyalo tasks               [--file F | --glob G] [--done | --todo | --status C]\n\n  \
+  Task (single-task operations):\n  \
+    hyalo task read           --file F --line N           Read task at a line\n  \
+    hyalo task toggle         --file F --line N           Toggle completion\n  \
+    hyalo task set-status     --file F --line N --status C\n\n  \
+  Summary:\n  \
+    hyalo summary             [--glob G] [--recent N]     Vault overview\n\n  \
   Global flags (apply to all commands):\n  \
     --dir <DIR>         Root directory (default: .)\n  \
     --format json|text  Output format (default: json)\n  \
@@ -84,8 +94,12 @@ COOKBOOK:\n  \
   hyalo links --file index.md --unresolved\n\n  \
   # Get document structure: headings, tasks, code blocks\n  \
   hyalo outline --file notes/meeting.md --format text\n\n  \
+  # List incomplete tasks across iteration files\n  \
+  hyalo tasks --glob 'iterations/*.md' --todo --format text\n\n  \
+  # Quick vault overview\n  \
+  hyalo summary --format text\n\n  \
   # Count tasks across all files\n  \
-  hyalo outline --glob '**/*.md' --jq '[.[].sections[].tasks // empty] | map(.total) | add'\n\n  \
+  hyalo summary --jq '.tasks.total'\n\n  \
   # Extract just file paths from a tag search\n  \
   hyalo tag find --name backlog --jq '.files[]'\n\n  \
   # List all property names as a flat list\n  \
@@ -122,6 +136,14 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"file\": \"notes/todo.md\", \"properties\": [...], \"tags\": [...],\n   \
   \"sections\": [{\"level\": 1, \"heading\": \"Title\", \"line\": 5, \"links\": [],\n   \
                   \"tasks\": {\"total\": 3, \"done\": 1}, \"code_blocks\": [\"rust\"]}]}\n\n  \
+  # tasks (--file → bare object, --glob/default → array)\n  \
+  [{\"file\": \"todo.md\", \"tasks\": [{\"line\": 5, \"status\": \" \", \"text\": \"Fix bug\", \"done\": false}], \"total\": 1}]\n\n  \
+  # task read / toggle / set-status\n  \
+  {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}\n\n  \
+  # summary\n  \
+  {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},\n   \
+  \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},\n   \
+  \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}\n\n  \
   # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
   {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}\n\n  \
   # --format text produces human-readable output on all commands"
@@ -157,6 +179,12 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to discover what properties exist, audit frontmatter, or inspect per-file metadata.")]
     Properties {
+        /// Scan only this file (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to select files (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
         #[command(subcommand)]
         action: Option<PropertiesAction>,
     },
@@ -212,6 +240,12 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to see which tags exist, find popular/orphan tags, audit tag taxonomy, or inspect per-file tags.")]
     Tags {
+        /// Scan only this file (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "glob")]
+        file: Option<String>,
+        /// Glob pattern to filter which files to scan (forwarded to the default summary action)
+        #[arg(long, conflicts_with = "file")]
+        glob: Option<String>,
         #[command(subcommand)]
         action: Option<TagsAction>,
     },
@@ -299,6 +333,23 @@ enum Commands {
     Task {
         #[command(subcommand)]
         action: TaskAction,
+    },
+    /// Show a high-level vault summary: file counts, property/tag/status aggregation, tasks, recent files
+    #[command(long_about = "Show a high-level vault summary.\n\n\
+            OUTPUT: A single 'VaultSummary' object with file counts (total + by directory), \
+            property summary (unique names/types/counts), tag summary (unique tags/counts), \
+            status grouping (files grouped by frontmatter 'status' value), \
+            task counts (total/done), and recently modified files.\n\
+            SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
+            SIDE EFFECTS: None (read-only).\n\
+            USE WHEN: You need a quick overview of a vault's metadata landscape.")]
+    Summary {
+        /// Glob pattern to filter which files to include
+        #[arg(long)]
+        glob: Option<String>,
+        /// Number of recent files to show (default: 10)
+        #[arg(long, default_value = "10")]
+        recent: usize,
     },
 }
 
@@ -632,21 +683,35 @@ fn main() {
     let dir = &cli.dir;
 
     let result = match cli.command {
-        Commands::Properties { action: ref pa } => match pa {
-            None
-            | Some(PropertiesAction::Summary {
-                file: None,
-                glob: None,
-            }) => properties::properties_summary(dir, None, None, effective_format),
-            Some(PropertiesAction::Summary { file, glob }) => properties::properties_summary(
+        Commands::Properties {
+            ref file,
+            ref glob,
+            action: ref pa,
+        } => match pa {
+            None => properties::properties_summary(
                 dir,
                 file.as_deref(),
                 glob.as_deref(),
                 effective_format,
             ),
-            Some(PropertiesAction::List { file, glob }) => {
-                properties::properties_list(dir, file.as_deref(), glob.as_deref(), effective_format)
-            }
+            Some(PropertiesAction::Summary {
+                file: sub_file,
+                glob: sub_glob,
+            }) => properties::properties_summary(
+                dir,
+                sub_file.as_deref(),
+                sub_glob.as_deref(),
+                effective_format,
+            ),
+            Some(PropertiesAction::List {
+                file: sub_file,
+                glob: sub_glob,
+            }) => properties::properties_list(
+                dir,
+                sub_file.as_deref(),
+                sub_glob.as_deref(),
+                effective_format,
+            ),
         },
         Commands::Property { action } => match action {
             PropertyAction::Read { ref name, ref file } => {
@@ -722,18 +787,32 @@ fn main() {
             };
             link_commands::links(dir, file, filter, effective_format)
         }
-        Commands::Tags { action: ref ta } => match ta {
-            None
-            | Some(TagsAction::Summary {
-                file: None,
-                glob: None,
-            }) => tag_commands::tags_summary(dir, None, None, effective_format),
-            Some(TagsAction::Summary { file, glob }) => {
+        Commands::Tags {
+            ref file,
+            ref glob,
+            action: ref ta,
+        } => match ta {
+            None => {
                 tag_commands::tags_summary(dir, file.as_deref(), glob.as_deref(), effective_format)
             }
-            Some(TagsAction::List { file, glob }) => {
-                tag_commands::tags_list(dir, file.as_deref(), glob.as_deref(), effective_format)
-            }
+            Some(TagsAction::Summary {
+                file: sub_file,
+                glob: sub_glob,
+            }) => tag_commands::tags_summary(
+                dir,
+                sub_file.as_deref(),
+                sub_glob.as_deref(),
+                effective_format,
+            ),
+            Some(TagsAction::List {
+                file: sub_file,
+                glob: sub_glob,
+            }) => tag_commands::tags_list(
+                dir,
+                sub_file.as_deref(),
+                sub_glob.as_deref(),
+                effective_format,
+            ),
         },
         Commands::Tag { action } => match action {
             TagAction::Find {
@@ -840,6 +919,9 @@ fn main() {
                 )
             }
         },
+        Commands::Summary { ref glob, recent } => {
+            summary_commands::summary(dir, glob.as_deref(), recent, effective_format)
+        }
     };
 
     match result {

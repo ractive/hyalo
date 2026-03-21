@@ -69,6 +69,11 @@ fn long_help_command_reference_lists_all_commands() {
         "hyalo tag remove",
         "hyalo links",
         "hyalo outline",
+        "hyalo tasks",
+        "hyalo task read",
+        "hyalo task toggle",
+        "hyalo task set-status",
+        "hyalo summary",
     ];
 
     for cmd in expected {

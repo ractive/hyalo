@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::frontmatter;
-use crate::scanner;
+use crate::scanner::{self, FileVisitor, ScanAction};
 use crate::types::{TaskCount, TaskInfo};
 
 // ---------------------------------------------------------------------------
@@ -83,87 +83,85 @@ fn extract_task_text(line: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------------
-// Raw file scan (preserves original text, skips frontmatter and code blocks)
+// Visitors
 // ---------------------------------------------------------------------------
 
-/// Scan a file for tasks, preserving original line text.
-/// Skips frontmatter and fenced code blocks.
-fn scan_tasks_raw(path: &Path) -> Result<Vec<TaskInfo>> {
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut reader = BufReader::new(file);
+/// Visitor that collects all tasks with full detail.
+pub struct TaskCollector {
+    tasks: Vec<TaskInfo>,
+}
 
-    let mut line_num: usize = 0;
-    let mut buf = String::new();
-
-    // Read the first line to check for frontmatter
-    buf.clear();
-    let n = reader
-        .read_line(&mut buf)
-        .context("failed to read first line")?;
-    if n == 0 {
-        return Ok(Vec::new());
+impl Default for TaskCollector {
+    fn default() -> Self {
+        Self::new()
     }
-    line_num += 1;
+}
 
-    let first_trimmed = buf.trim_end_matches(['\n', '\r']).to_owned();
-    let fm_lines = frontmatter::skip_frontmatter(&mut reader, &first_trimmed)?;
-    if fm_lines > 0 {
-        line_num = fm_lines;
+impl TaskCollector {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { tasks: Vec::new() }
     }
 
-    let mut fence: Option<(char, usize)> = None;
-    let mut tasks: Vec<TaskInfo> = Vec::new();
-
-    // Process the first line if it was not frontmatter
-    if fm_lines == 0 {
-        if let Some(f) = scanner::detect_opening_fence(&first_trimmed) {
-            fence = Some(f);
-        } else {
-            if let Some((status_char, done)) = detect_task_checkbox(&first_trimmed) {
-                tasks.push(TaskInfo {
-                    line: line_num,
-                    status: status_char.to_string(),
-                    text: extract_task_text(&first_trimmed).to_owned(),
-                    done,
-                });
-            }
-        }
+    /// Consume and return collected tasks.
+    #[must_use]
+    pub fn into_tasks(self) -> Vec<TaskInfo> {
+        self.tasks
     }
+}
 
-    loop {
-        buf.clear();
-        let n = reader.read_line(&mut buf).context("failed to read line")?;
-        if n == 0 {
-            break; // EOF
-        }
-        line_num += 1;
-        let line = buf.trim_end_matches(['\n', '\r']);
-
-        // Handle fenced code block state
-        if let Some((fence_char, fence_count)) = fence {
-            if scanner::is_closing_fence(line, fence_char, fence_count) {
-                fence = None;
-            }
-            continue; // skip lines inside code blocks
-        }
-
-        if let Some(f) = scanner::detect_opening_fence(line) {
-            fence = Some(f);
-            continue;
-        }
-
-        // Normal text line — check for task checkbox
-        if let Some((status_char, done)) = detect_task_checkbox(line) {
-            tasks.push(TaskInfo {
+impl FileVisitor for TaskCollector {
+    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+        if let Some((status_char, done)) = detect_task_checkbox(raw) {
+            self.tasks.push(TaskInfo {
                 line: line_num,
                 status: status_char.to_string(),
-                text: extract_task_text(line).to_owned(),
+                text: extract_task_text(raw).to_owned(),
                 done,
             });
         }
+        ScanAction::Continue
+    }
+}
+
+/// Visitor that counts tasks without collecting details. Lightweight.
+pub struct TaskCounter {
+    total: usize,
+    done: usize,
+}
+
+impl Default for TaskCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TaskCounter {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { total: 0, done: 0 }
     }
 
-    Ok(tasks)
+    /// Return the counted totals.
+    #[must_use]
+    pub fn into_count(self) -> TaskCount {
+        TaskCount {
+            total: self.total,
+            done: self.done,
+        }
+    }
+}
+
+impl FileVisitor for TaskCounter {
+    fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+        if let Some((_status, is_done)) = detect_task_checkbox(raw) {
+            self.total += 1;
+            if is_done {
+                self.done += 1;
+            }
+        }
+        ScanAction::Continue
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,24 +172,16 @@ fn scan_tasks_raw(path: &Path) -> Result<Vec<TaskInfo>> {
 /// Returns tasks with 1-based line numbers, status chars, text, and done state.
 /// Skips frontmatter and fenced code blocks.
 pub fn extract_tasks(path: &Path) -> Result<Vec<TaskInfo>> {
-    scan_tasks_raw(path)
+    let mut collector = TaskCollector::new();
+    scanner::scan_file_multi(path, &mut [&mut collector])?;
+    Ok(collector.into_tasks())
 }
 
 /// Count tasks in a file without collecting details. Lightweight.
-/// Uses `scanner::scan_file` which handles frontmatter and code block skipping.
 pub fn count_tasks(path: &Path) -> Result<TaskCount> {
-    let mut total = 0usize;
-    let mut done = 0usize;
-    scanner::scan_file(path, |line, _line_num| {
-        if let Some((_status, is_done)) = detect_task_checkbox(line) {
-            total += 1;
-            if is_done {
-                done += 1;
-            }
-        }
-        scanner::ScanAction::Continue
-    })?;
-    Ok(TaskCount { total, done })
+    let mut counter = TaskCounter::new();
+    scanner::scan_file_multi(path, &mut [&mut counter])?;
+    Ok(counter.into_count())
 }
 
 /// Read a single task at a specific 1-based line number.
