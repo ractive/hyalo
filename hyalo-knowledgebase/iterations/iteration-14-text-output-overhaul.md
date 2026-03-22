@@ -50,15 +50,17 @@ This keeps the single rendering path through jaq — no special Rust-side format
 
 ### `find` — FileObject (per file)
 ```
-iterations/iteration-12-cli-redesign.md  (2026-03-22T16:18:20Z)
-  branch (text): iter-12/cli-redesign
-  date (date): 2026-03-22
-  status (text): completed
-  title (text): Iteration 12: CLI Redesign
-  tags: iteration, cli, search
-  # Iteration 12: CLI Redesign
-  ## Goal
-  ## Tasks [17/17]
+"iterations/iteration-12-cli-redesign.md"  (2026-03-22T16:18:20Z)
+  properties:
+    branch (text): iter-12/cli-redesign
+    date (date): 2026-03-22
+    status (text): completed
+    title (text): Iteration 12: CLI Redesign
+  tags: [iteration, cli, search]
+  sections:
+    # Iteration 12: CLI Redesign
+    ## Goal
+    ## Tasks [17/17]
   tasks:
     [x] Design `FileObject` struct (line 167)
     [ ] Some open task (line 42)

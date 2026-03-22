@@ -12,7 +12,7 @@ Organize in subfolders. Use `[[wikilinks]]` for cross-references. Keep Obsidian-
 
 ## Dogfooding
 After an iteration or before starting one, build hyalo with "cargo build --release".
-Then use target/release/hyalo to work with the documentation in `./hyalo-knowledgebase/`. Mention issues you have using it, propose features you'd like to have.
+Then use target/release/hyalo to work with the documentation in `./hyalo-knowledgebase/` to dogfood what you did. Mention issues you have using it, propose features you'd like to have.
 
 **Always use hyalo for knowledgebase interactions — never use Edit/Read/Grep directly:**
 - **Read**: `hyalo find`, `hyalo summary`, `hyalo properties`, `hyalo tags`
