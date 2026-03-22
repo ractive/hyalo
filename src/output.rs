@@ -131,29 +131,9 @@ pub fn format_error(
 /// When value is an array (list type), join elements with ", " for readability.
 const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)""#;
 
-/// `FileProperties`: `{path, properties}`
-/// List-type values are joined with ", " for readability.
-/// Each property line is indented with two spaces for nesting under the file path.
-const FILE_PROPERTIES_FILTER: &str = r#""\(.path)\n\(.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)") | join("\n"))""#;
-
 /// `PropertySummaryEntry`: `{count, name, type}`
 const PROPERTY_SUMMARY_ENTRY_FILTER: &str =
     r#""\(.name)\t\(.type)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
-
-/// `PropertyRemoved`: `{path, removed}`
-const PROPERTY_REMOVED_FILTER: &str = r#""Removed \"\(.removed)\" from \(.path)""#;
-
-/// `PropertyFindResult` without value: `{files, property, total}`
-const PROPERTY_FIND_RESULT_FILTER: &str = r#""\(.property): \(.total) \(if .total == 1 then "file" else "files" end)\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
-
-/// `PropertyFindResult` with value: `{files, property, total, value}`
-const PROPERTY_FIND_RESULT_WITH_VALUE_FILTER: &str = r#""\(.property)=\(.value): \(.total) \(if .total == 1 then "file" else "files" end)\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
-
-/// `PropertyMutationResult`: `{modified, property, skipped, total, values}`
-const PROPERTY_MUTATION_RESULT_FILTER: &str = r#""\(.property): \(.modified | length) modified, \(.skipped | length) skipped\(if (.modified | length) > 0 then "\n  modified: \(.modified | join(", "))" else "" end)\(if (.skipped | length) > 0 then "\n  skipped: \(.skipped | join(", "))" else "" end)""#;
-
-/// `FileTags`: `{path, tags}`
-const FILE_TAGS_FILTER: &str = r#""\(.path): \(.tags | join(", "))""#;
 
 /// `TagSummary`: `{tags, total}`
 const TAG_SUMMARY_FILTER: &str = r#""\(.total) unique \(if .total == 1 then "tag" else "tags" end)\n\(.tags | map("  \(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)") | join("\n"))""#;
@@ -161,12 +141,6 @@ const TAG_SUMMARY_FILTER: &str = r#""\(.total) unique \(if .total == 1 then "tag
 /// `TagSummaryEntry`: `{count, name}`
 const TAG_SUMMARY_ENTRY_FILTER: &str =
     r#""\(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
-
-/// `TagFindResult` without value: `{files, tag, total}`
-const TAG_FIND_RESULT_FILTER: &str = r#""\(.tag): \(.total) \(if .total == 1 then "file" else "files" end)\(if (.files | length) > 0 then "\n\(.files | map("  \(.)") | join("\n"))" else "" end)""#;
-
-/// `TagMutationResult`: `{modified, skipped, tag, total}`
-const TAG_MUTATION_RESULT_FILTER: &str = r#""\(.tag): \(.modified | length) modified, \(.skipped | length) skipped\(if (.modified | length) > 0 then "\n  modified: \(.modified | join(", "))" else "" end)\(if (.skipped | length) > 0 then "\n  skipped: \(.skipped | join(", "))" else "" end)""#;
 
 /// `LinkInfo` — just target: `{target}`
 const LINK_INFO_TARGET_FILTER: &str = r#""  \(.target) (unresolved)""#;
@@ -180,9 +154,6 @@ const LINK_INFO_LABEL_FILTER: &str = r#""  \(.target) (unresolved) [\(.label)]""
 /// `LinkInfo` with path and label: `{label, path, target}`
 const LINK_INFO_FULL_FILTER: &str = r#""  \(.target) → \(.path) [\(.label)]""#;
 
-/// `FileLinks`: `{links, path}`
-const FILE_LINKS_FILTER: &str = r#""\(.path): \(.links | length) \(if (.links | length) == 1 then "link" else "links" end)\(if (.links | length) > 0 then "\n\(.links | map("  \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)") | join("\n"))" else "" end)""#;
-
 /// `TaskCount`: `{done, total}`
 const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
 
@@ -192,15 +163,9 @@ const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-he
 /// `OutlineSection` with tasks: `{code_blocks, heading, level, line, links, tasks}`
 const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)") [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)""##;
 
-/// `FileOutline`: `{file, properties, sections, tags}`
-const FILE_OUTLINE_FILTER: &str = r##""\(.file)\(if (.tags | length) > 0 then "\n  tags: \(.tags | join(", "))" else "" end)\(if (.properties | length) > 0 then "\n  props: \(.properties | map("\(.name)=\(if (.value | type) == "array" then "[\(.value | join(", "))]" else .value end)") | join(", "))" else "" end)\n\(.sections | map("\("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)") | join("\n"))""##;
-
 /// `TaskInfo`: `{done, line, status, text}`
 const TASK_INFO_FILTER: &str =
     r#""line \(.line): [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
-
-/// `FileTasks`: `{file, tasks, total}`
-const FILE_TASKS_FILTER: &str = r#""\(.file) (\(.total) \(if .total == 1 then "task" else "tasks" end))\(if (.tasks | length) > 0 then "\n\(.tasks | map("  line \(.line): [\(.status)] \(.text)") | join("\n"))" else "" end)""#;
 
 /// `TaskReadResult`: `{done, file, line, status, text}`
 const TASK_READ_RESULT_FILTER: &str =
@@ -227,45 +192,24 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
     match key_sig {
         // PropertyInfo
         "name,type,value" => Some(PROPERTY_INFO_FILTER),
-        // FileProperties
-        "path,properties" => Some(FILE_PROPERTIES_FILTER),
         // PropertySummaryEntry
         "count,name,type" => Some(PROPERTY_SUMMARY_ENTRY_FILTER),
-        // PropertyRemoved
-        "path,removed" => Some(PROPERTY_REMOVED_FILTER),
-        // PropertyFindResult (with and without value)
-        "files,property,total" => Some(PROPERTY_FIND_RESULT_FILTER),
-        "files,property,total,value" => Some(PROPERTY_FIND_RESULT_WITH_VALUE_FILTER),
-        // PropertyMutationResult
-        "modified,property,skipped,total,values" => Some(PROPERTY_MUTATION_RESULT_FILTER),
-        // FileTags
-        "path,tags" => Some(FILE_TAGS_FILTER),
         // TagSummary
         "tags,total" => Some(TAG_SUMMARY_FILTER),
         // TagSummaryEntry
         "count,name" => Some(TAG_SUMMARY_ENTRY_FILTER),
-        // TagFindResult
-        "files,tag,total" => Some(TAG_FIND_RESULT_FILTER),
-        // TagMutationResult
-        "modified,skipped,tag,total" => Some(TAG_MUTATION_RESULT_FILTER),
         // LinkInfo variants (optional path and label → 4 combos)
         "target" => Some(LINK_INFO_TARGET_FILTER),
         "path,target" => Some(LINK_INFO_PATH_FILTER),
         "label,target" => Some(LINK_INFO_LABEL_FILTER),
         "label,path,target" => Some(LINK_INFO_FULL_FILTER),
-        // FileLinks
-        "links,path" => Some(FILE_LINKS_FILTER),
         // TaskCount
         "done,total" => Some(TASK_COUNT_FILTER),
         // OutlineSection (with and without tasks)
         "code_blocks,heading,level,line,links" => Some(OUTLINE_SECTION_FILTER),
         "code_blocks,heading,level,line,links,tasks" => Some(OUTLINE_SECTION_WITH_TASKS_FILTER),
-        // FileOutline
-        "file,properties,sections,tags" => Some(FILE_OUTLINE_FILTER),
         // TaskInfo
         "done,line,status,text" => Some(TASK_INFO_FILTER),
-        // FileTasks
-        "file,tasks,total" => Some(FILE_TASKS_FILTER),
         // TaskReadResult
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         // VaultSummary
@@ -514,81 +458,12 @@ mod tests {
     }
 
     #[test]
-    fn file_properties_filter() {
-        let val = json!({
-            "path": "notes/a.md",
-            "properties": [
-                {"name": "title", "type": "text", "value": "A"},
-                {"name": "status", "type": "text", "value": "draft"}
-            ]
-        });
-        let out = apply_jq_filter(FILE_PROPERTIES_FILTER, &val).unwrap();
-        assert!(out.contains("notes/a.md"));
-        assert!(out.contains("title"));
-        assert!(out.contains("status"));
-        assert!(out.contains("draft"));
-    }
-
-    #[test]
     fn property_summary_entry_filter() {
         let val = json!({"count": 7, "name": "title", "type": "text"});
         let out = apply_jq_filter(PROPERTY_SUMMARY_ENTRY_FILTER, &val).unwrap();
         assert!(out.contains("title"));
         assert!(out.contains("text"));
         assert!(out.contains("7 files"));
-    }
-
-    #[test]
-    fn property_find_result_filter() {
-        let val = json!({"files": ["a.md", "b.md"], "property": "status", "total": 2});
-        let out = apply_jq_filter(PROPERTY_FIND_RESULT_FILTER, &val).unwrap();
-        assert!(out.contains("status"));
-        assert!(out.contains("2 files"));
-        assert!(out.contains("a.md"));
-        assert!(out.contains("b.md"));
-    }
-
-    #[test]
-    fn property_find_result_with_value_filter() {
-        let val = json!({"files": ["a.md"], "property": "status", "total": 1, "value": "draft"});
-        let out = apply_jq_filter(PROPERTY_FIND_RESULT_WITH_VALUE_FILTER, &val).unwrap();
-        assert!(out.contains("status=draft"));
-        assert!(out.contains("1 file"));
-        assert!(!out.contains("1 files"));
-    }
-
-    #[test]
-    fn property_find_result_with_value_filter_plural() {
-        let val =
-            json!({"files": ["a.md", "b.md"], "property": "status", "total": 2, "value": "draft"});
-        let out = apply_jq_filter(PROPERTY_FIND_RESULT_WITH_VALUE_FILTER, &val).unwrap();
-        assert!(out.contains("2 files"));
-    }
-
-    #[test]
-    fn property_mutation_result_filter() {
-        let val = json!({
-            "modified": ["a.md"],
-            "property": "status",
-            "skipped": [],
-            "total": 1,
-            "values": ["draft"]
-        });
-        let out = apply_jq_filter(PROPERTY_MUTATION_RESULT_FILTER, &val).unwrap();
-        assert!(out.contains("status"));
-        assert!(out.contains("1 modified"));
-        assert!(out.contains("0 skipped"));
-    }
-
-    // --- tag type filters ---
-
-    #[test]
-    fn file_tags_filter() {
-        let val = json!({"path": "note.md", "tags": ["rust", "cli"]});
-        let out = apply_jq_filter(FILE_TAGS_FILTER, &val).unwrap();
-        assert!(out.contains("note.md"));
-        assert!(out.contains("rust"));
-        assert!(out.contains("cli"));
     }
 
     #[test]
@@ -601,31 +476,6 @@ mod tests {
         assert!(out.contains("2 unique tags"));
         assert!(out.contains("rust"));
         assert!(out.contains("3 files"));
-    }
-
-    #[test]
-    fn tag_find_result_filter() {
-        let val = json!({"files": ["a.md", "b.md"], "tag": "rust", "total": 2});
-        let out = apply_jq_filter(TAG_FIND_RESULT_FILTER, &val).unwrap();
-        assert!(out.contains("rust"));
-        assert!(out.contains("2 files"));
-        assert!(out.contains("a.md"));
-    }
-
-    #[test]
-    fn tag_mutation_result_filter() {
-        let val = json!({
-            "modified": ["a.md", "b.md"],
-            "skipped": [],
-            "tag": "rust",
-            "total": 2
-        });
-        let out = apply_jq_filter(TAG_MUTATION_RESULT_FILTER, &val).unwrap();
-        // Format is now "rust: N modified, N skipped" — no Tag prefix, no quotes
-        assert!(out.contains("rust"));
-        assert!(!out.contains("Tag "));
-        assert!(!out.contains("\"rust\""));
-        assert!(out.contains("2 modified"));
     }
 
     // --- link type filters ---
@@ -644,22 +494,6 @@ mod tests {
         let out = apply_jq_filter(LINK_INFO_PATH_FILTER, &val).unwrap();
         assert!(out.contains("note-b"));
         assert!(out.contains("note-b.md"));
-    }
-
-    #[test]
-    fn file_links_filter() {
-        let val = json!({
-            "links": [
-                {"target": "note-b", "path": "note-b.md"},
-                {"target": "broken"}
-            ],
-            "path": "note-a.md"
-        });
-        let out = apply_jq_filter(FILE_LINKS_FILTER, &val).unwrap();
-        assert!(out.contains("note-a.md"));
-        assert!(out.contains("2 links"));
-        assert!(out.contains("note-b.md"));
-        assert!(out.contains("unresolved"));
     }
 
     // --- outline type filters ---
@@ -702,39 +536,17 @@ mod tests {
         assert!(out.contains("[2/4]"));
     }
 
-    #[test]
-    fn file_outline_filter() {
-        let val = json!({
-            "file": "note.md",
-            "properties": [{"name": "title", "type": "text", "value": "My Note"}],
-            "sections": [
-                {
-                    "code_blocks": [],
-                    "heading": "Intro",
-                    "level": 1,
-                    "line": 5,
-                    "links": []
-                }
-            ],
-            "tags": ["rust", "cli"]
-        });
-        let out = apply_jq_filter(FILE_OUTLINE_FILTER, &val).unwrap();
-        assert!(out.contains("note.md"));
-        assert!(out.contains("rust"));
-        assert!(out.contains("cli"));
-        assert!(out.contains("# Intro"));
-    }
-
     // --- format_value_as_text integration ---
 
     #[test]
     fn format_value_as_text_uses_filter_for_known_shape() {
-        let val = json!({"path": "note.md", "tags": ["rust"]});
+        // PropertySummaryEntry has a known shape: {count, name, type}
+        let val = json!({"count": 3, "name": "status", "type": "text"});
         let out = format_value_as_text(&val);
-        assert!(out.contains("note.md"));
-        assert!(out.contains("rust"));
-        // Should NOT look like "path: note.md" (that's the generic fallback)
-        assert!(!out.contains("path: note.md"));
+        assert!(out.contains("status"));
+        assert!(out.contains("3 files"));
+        // Should NOT look like "count: 3" (that's the generic fallback)
+        assert!(!out.contains("count: 3"));
     }
 
     #[test]
