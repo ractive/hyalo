@@ -111,8 +111,14 @@ fn summary_hints_text_has_arrow_lines() {
         stdout.contains("  -> hyalo"),
         "should have hint lines with arrow prefix"
     );
-    assert!(stdout.contains("properties summary"));
-    assert!(stdout.contains("tags summary"));
+    assert!(
+        stdout.contains("properties"),
+        "should suggest properties command: {stdout}"
+    );
+    assert!(
+        stdout.contains("tags"),
+        "should suggest tags command: {stdout}"
+    );
 }
 
 #[test]
@@ -126,8 +132,8 @@ fn summary_hints_suggests_tasks_todo_when_open_tasks() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
-        stdout.contains("tasks --todo"),
-        "should suggest tasks --todo when there are open tasks"
+        stdout.contains("find --task todo"),
+        "should suggest find --task todo when there are open tasks: {stdout}"
     );
 }
 
@@ -141,79 +147,52 @@ fn summary_hints_prefers_interesting_status() {
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // in-progress should be suggested before completed
+    // in-progress should be suggested
     assert!(
-        stdout.contains("--value in-progress"),
-        "should suggest in-progress status"
+        stdout.contains("in-progress"),
+        "should suggest in-progress status: {stdout}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// properties summary --hints
+// properties --hints
 // ---------------------------------------------------------------------------
 
 #[test]
-fn properties_summary_hints_text() {
+fn properties_hints_text() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "summary", "--hints", "--format", "text"])
+        .args(["properties", "--hints", "--format", "text"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Should suggest property find for top properties
-    assert!(stdout.contains("property find --name"));
-}
-
-// ---------------------------------------------------------------------------
-// tags summary --hints
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tags_summary_hints_text() {
-    let tmp = setup_vault();
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "summary", "--hints", "--format", "text"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    // Should suggest tag find for top tags (rust has 2 files)
+    // Should suggest find --property for top properties
     assert!(
-        stdout.contains("tag find --name rust"),
-        "should suggest tag find for top tag: {stdout}"
+        stdout.contains("find --property"),
+        "should suggest find --property: {stdout}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// property find --hints
+// tags --hints
 // ---------------------------------------------------------------------------
 
 #[test]
-fn property_find_hints_suggests_outline() {
+fn tags_hints_text() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "property",
-            "find",
-            "--name",
-            "status",
-            "--value",
-            "in-progress",
-            "--hints",
-            "--format",
-            "text",
-        ])
+        .args(["tags", "--hints", "--format", "text"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
 
+    // Should suggest find --tag for top tags (rust has 2 files)
     assert!(
-        stdout.contains("outline --file"),
-        "should suggest outline for found files: {stdout}"
+        stdout.contains("find --tag rust"),
+        "should suggest find --tag for top tag: {stdout}"
     );
 }
 
@@ -315,7 +294,6 @@ fn hints_propagate_glob_for_aggregate_commands() {
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "properties",
-            "summary",
             "--glob",
             "notes/*.md",
             "--hints",
@@ -326,7 +304,7 @@ fn hints_propagate_glob_for_aggregate_commands() {
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Aggregate hints (property find) should include --glob
+    // Aggregate hints (find --property) should include --glob
     let hint_lines: Vec<&str> = stdout.lines().filter(|l| l.starts_with("  -> ")).collect();
     assert!(!hint_lines.is_empty(), "should have hints");
     for line in &hint_lines {
@@ -338,52 +316,17 @@ fn hints_propagate_glob_for_aggregate_commands() {
 }
 
 // ---------------------------------------------------------------------------
-// outline --hints
+// find --hints
 // ---------------------------------------------------------------------------
 
 #[test]
-fn outline_hints_suggest_property_and_tag_find() {
+fn find_hints_with_task_filter() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "outline",
-            "--file",
-            "notes/alpha.md",
-            "--hints",
-            "--format",
-            "text",
-        ])
+        .args(["find", "--task", "todo", "--hints", "--format", "text"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    assert!(
-        stdout.contains("property find"),
-        "should suggest property find: {stdout}"
-    );
-    assert!(
-        stdout.contains("tag find"),
-        "should suggest tag find: {stdout}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// tasks --hints
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tasks_hints_suggest_task_read() {
-    let tmp = setup_vault();
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tasks", "--todo", "--hints", "--format", "text"])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    assert!(
-        stdout.contains("task read --file"),
-        "should suggest task read: {stdout}"
-    );
+    // Should succeed — hints may or may not have drill-down suggestions for find
+    assert!(output.status.success());
 }

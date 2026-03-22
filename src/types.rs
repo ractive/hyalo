@@ -245,3 +245,46 @@ pub struct RecentFile {
     pub path: String,
     pub modified: String,
 }
+
+// ---------------------------------------------------------------------------
+// Find command types (iteration 12)
+// ---------------------------------------------------------------------------
+
+/// A single task with section context, used by the `find` command.
+/// Extends `TaskInfo` with section heading information.
+#[derive(Debug, Clone, Serialize)]
+pub struct FindTaskInfo {
+    pub line: usize,
+    pub section: String,
+    pub status: String,
+    pub text: String,
+    pub done: bool,
+}
+
+/// A content search match within a file body.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContentMatch {
+    pub line: usize,
+    pub section: String,
+    pub text: String,
+}
+
+/// The unified file object returned by the `find` command.
+/// Always returned in an array. Optional fields are controlled by `--fields`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileObject {
+    pub file: String,
+    pub modified: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<PropertyInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<OutlineSection>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<Vec<FindTaskInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<LinkInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matches: Option<Vec<ContentMatch>>,
+}
