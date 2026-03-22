@@ -129,7 +129,7 @@ pub fn format_error(
 
 /// `PropertyInfo`: `{name, type, value}`
 /// When value is an array (list type), join elements with ", " for readability.
-const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then (.value | join(", ")) else .value end)""#;
+const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)""#;
 
 /// `PropertySummaryEntry`: `{count, name, type}`
 const PROPERTY_SUMMARY_ENTRY_FILTER: &str =
@@ -174,6 +174,33 @@ const TASK_READ_RESULT_FILTER: &str =
 /// `VaultSummary`: `{files, properties, recent_files, status, tags, tasks}`
 const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then " (\(.files.by_directory | map("\(.directory): \(.count)") | join(", ")))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
 
+/// `FindTaskInfo`: `{done, line, section, status, text}`
+/// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
+const FIND_TASK_INFO_FILTER: &str =
+    r#""  [\(if .done then "x" else " " end)] \(.text) (line \(.line), \(.section))""#;
+
+/// `ContentMatch`: `{line, section, text}`
+/// Format: `  line N (section): text`
+const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""#;
+
+/// Mutation result with `property` + `value` fields:
+/// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
+/// Key signature: `modified,property,skipped,total,value`
+/// Format: `property=value: N/T modified` followed by modified file paths.
+const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \(.)") | join("\n"))" else "" end)""#;
+
+/// Mutation result with `property` only (no value field):
+/// covers `RemovePropertyResult` (without value).
+/// Key signature: `modified,property,skipped,total`
+/// Format: `property: N/T modified` followed by modified file paths.
+const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \(.)") | join("\n"))" else "" end)""#;
+
+/// Mutation result with `tag` field:
+/// covers `SetTagResult` and `RemoveTagResult`.
+/// Key signature: `modified,skipped,tag,total`
+/// Format: `tag: N/T modified` followed by modified file paths.
+const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \(.)") | join("\n"))" else "" end)""#;
+
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
 // ---------------------------------------------------------------------------
@@ -210,10 +237,21 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "code_blocks,heading,level,line,links,tasks" => Some(OUTLINE_SECTION_WITH_TASKS_FILTER),
         // TaskInfo
         "done,line,status,text" => Some(TASK_INFO_FILTER),
+        // FindTaskInfo
+        "done,line,section,status,text" => Some(FIND_TASK_INFO_FILTER),
+        // ContentMatch
+        "line,section,text" => Some(CONTENT_MATCH_FILTER),
         // TaskReadResult
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         // VaultSummary
         "files,properties,recent_files,status,tags,tasks" => Some(VAULT_SUMMARY_FILTER),
+        // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
+        // RemovePropertyResult with value)
+        "modified,property,skipped,total,value" => Some(PROPERTY_VALUE_MUTATION_FILTER),
+        // Mutation results with property only (RemovePropertyResult without value)
+        "modified,property,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
+        // Mutation results with tag (SetTagResult, RemoveTagResult)
+        "modified,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
         _ => None,
     }
 }
@@ -322,23 +360,104 @@ fn run_jq_filter(filter_code: &str, value: &serde_json::Value) -> Result<String,
 }
 
 // ---------------------------------------------------------------------------
+// FileObject dynamic filter builder
+// ---------------------------------------------------------------------------
+
+/// Build a jaq filter string for a `FileObject` by inspecting which optional
+/// fields are present in the JSON object.
+///
+/// The file header is always emitted. Each optional section (properties, tags,
+/// sections, tasks, matches, links) is included only when the key is present.
+///
+/// **How it works:** Each part is a jaq expression that either emits a string or
+/// `empty` (when the field is absent/empty). Parts are joined with `, ` — jaq's
+/// alternation operator — so the filter produces one output per present section.
+/// `run_jq_filter` then joins those outputs with `"\n"`, producing the final
+/// multi-line text block. This coupling is intentional: changing the separator
+/// in `run_jq_filter` would affect `FileObject` rendering.
+fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) -> String {
+    // Header: file path and modified timestamp — always present.
+    let mut parts = vec![r#""\(.file)  (\(.modified))""#.to_owned()];
+
+    // Properties: each rendered as "  name (type): value"
+    if map.contains_key("properties") {
+        parts.push(
+            r#"if .properties then (.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n")) else empty end"#.to_owned(),
+        );
+    }
+
+    // Tags: "  tags: [tag1, tag2, ...]"
+    if map.contains_key("tags") {
+        parts.push(
+            r#"if (.tags | length) > 0 then "  tags: [\(.tags | join(", "))]" else empty end"#
+                .to_owned(),
+        );
+    }
+
+    // Sections: each as "  ## Heading [done/total]" or "  ## Heading"
+    // Note: uses r##"..."## because the jq filter contains the sequence "#" (hash-quoted).
+    if map.contains_key("sections") {
+        parts.push(
+            r##"if .sections then (.sections | map("  \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n")) else empty end"##.to_owned(),
+        );
+    }
+
+    // Tasks: header then each as "    [x] text (line N)"
+    if map.contains_key("tasks") {
+        parts.push(
+            r#"if (.tasks | length) > 0 then "  tasks:\n\(.tasks | map("    [\(if .done then "x" else " " end)] \(.text) (line \(.line))") | join("\n"))" else empty end"#.to_owned(),
+        );
+    }
+
+    // Matches: header then each as "    line N (section): text"
+    if map.contains_key("matches") {
+        parts.push(
+            r#"if (.matches | length) > 0 then "  matches:\n\(.matches | map("    line \(.line) (\(.section)): \(.text)") | join("\n"))" else empty end"#.to_owned(),
+        );
+    }
+
+    // Links: header then each as "    target → path" or "    target (unresolved)"
+    if map.contains_key("links") {
+        parts.push(
+            r#"if (.links | length) > 0 then "  links:\n\(.links | map("    \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)") | join("\n"))" else empty end"#.to_owned(),
+        );
+    }
+
+    parts.join(", ")
+}
+
+// ---------------------------------------------------------------------------
 // Text formatting
 // ---------------------------------------------------------------------------
 
 /// Format a JSON value as human-readable text using jq filters where available.
 fn format_value_as_text(value: &serde_json::Value) -> String {
     match value {
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .map(format_value_as_text)
-            .collect::<Vec<_>>()
-            .join("\n"),
+        serde_json::Value::Array(arr) => {
+            // Use blank-line separator between FileObjects for readability.
+            let is_file_objects = arr
+                .first()
+                .and_then(|v| v.as_object())
+                .is_some_and(|m| m.contains_key("file") && m.contains_key("modified"));
+            let sep = if is_file_objects { "\n\n" } else { "\n" };
+            arr.iter()
+                .map(format_value_as_text)
+                .collect::<Vec<_>>()
+                .join(sep)
+        }
         serde_json::Value::Object(map) => {
             let sig = key_signature(map);
             if let Some(filter) = lookup_filter(&sig)
                 && let Some(output) = apply_jq_filter(filter, value)
             {
                 return output;
+            }
+            // FileObject: dynamically compose filter from present fields.
+            if map.contains_key("file") && map.contains_key("modified") {
+                let filter = build_file_object_filter(map);
+                if let Some(output) = apply_jq_filter(&filter, value) {
+                    return output;
+                }
             }
             // Fallback: generic key: value lines
             format_object_generic(map)
@@ -350,7 +469,7 @@ fn format_value_as_text(value: &serde_json::Value) -> String {
 /// Generic key: value rendering for unknown object shapes.
 fn format_object_generic(map: &serde_json::Map<String, serde_json::Value>) -> String {
     map.iter()
-        .map(|(k, v)| format!("{k}: {}", format_scalar(v)))
+        .map(|(k, v)| format!("{k}: {}", format_value_as_text(v)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -366,13 +485,7 @@ fn format_scalar(value: &serde_json::Value) -> String {
             let items: Vec<String> = arr.iter().map(format_scalar).collect();
             items.join(", ")
         }
-        serde_json::Value::Object(map) => {
-            let items: Vec<String> = map
-                .iter()
-                .map(|(k, v)| format!("{k}={}", format_scalar(v)))
-                .collect();
-            items.join(", ")
-        }
+        serde_json::Value::Object(_) => format_value_as_text(value),
     }
 }
 
@@ -452,8 +565,8 @@ mod tests {
         let out = apply_jq_filter(PROPERTY_INFO_FILTER, &val).unwrap();
         assert!(out.contains("tags"));
         assert!(out.contains("list"));
-        // Array values should be joined with ", " not rendered as JSON
-        assert!(out.contains("rust, cli") || (out.contains("rust") && out.contains("cli")));
+        // Array values should be wrapped in brackets and joined with ", "
+        assert!(out.contains("[rust, cli]"), "expected [rust, cli]: {out}");
         assert!(!out.contains("[\"rust\""));
     }
 
@@ -534,6 +647,384 @@ mod tests {
         assert!(out.contains("##"));
         assert!(out.contains("Tasks"));
         assert!(out.contains("[2/4]"));
+    }
+
+    // --- FindTaskInfo filter ---
+
+    #[test]
+    fn find_task_info_filter_done() {
+        let val = json!({
+            "done": true,
+            "line": 42,
+            "section": "Implementation",
+            "status": "x",
+            "text": "Write the tests"
+        });
+        let out = apply_jq_filter(FIND_TASK_INFO_FILTER, &val).unwrap();
+        assert!(out.contains("[x]"));
+        assert!(out.contains("Write the tests"));
+        assert!(out.contains("line 42"));
+        assert!(out.contains("Implementation"));
+    }
+
+    #[test]
+    fn find_task_info_filter_not_done() {
+        let val = json!({
+            "done": false,
+            "line": 7,
+            "section": "Todo",
+            "status": " ",
+            "text": "Review PR"
+        });
+        let out = apply_jq_filter(FIND_TASK_INFO_FILTER, &val).unwrap();
+        assert!(out.contains("[ ]"));
+        assert!(out.contains("Review PR"));
+        assert!(out.contains("line 7"));
+        assert!(out.contains("Todo"));
+    }
+
+    #[test]
+    fn find_task_info_via_format_value_as_text() {
+        // Verify that format_value_as_text dispatches to the correct filter.
+        let val = json!({
+            "done": true,
+            "line": 5,
+            "section": "Goals",
+            "status": "x",
+            "text": "Ship it"
+        });
+        let out = format_value_as_text(&val);
+        assert!(out.contains("[x]"));
+        assert!(out.contains("Ship it"));
+        assert!(
+            !out.contains("done: true"),
+            "should not use generic fallback"
+        );
+    }
+
+    // --- ContentMatch filter ---
+
+    #[test]
+    fn content_match_filter() {
+        let val = json!({
+            "line": 15,
+            "section": "Background",
+            "text": "This is the matching line"
+        });
+        let out = apply_jq_filter(CONTENT_MATCH_FILTER, &val).unwrap();
+        assert!(out.contains("line 15"));
+        assert!(out.contains("Background"));
+        assert!(out.contains("This is the matching line"));
+    }
+
+    #[test]
+    fn content_match_via_format_value_as_text() {
+        let val = json!({
+            "line": 3,
+            "section": "Intro",
+            "text": "hello world"
+        });
+        let out = format_value_as_text(&val);
+        assert!(out.contains("line 3"));
+        assert!(out.contains("hello world"));
+        assert!(!out.contains("line: 3"), "should not use generic fallback");
+    }
+
+    // --- Mutation result filters ---
+
+    #[test]
+    fn property_value_mutation_filter_with_modified() {
+        // SetPropertyResult / AppendPropertyResult / RemovePropertyResult (with value)
+        let val = json!({
+            "modified": ["note-a.md", "note-b.md"],
+            "property": "status",
+            "skipped": [],
+            "total": 2,
+            "value": "done"
+        });
+        let out = apply_jq_filter(PROPERTY_VALUE_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("status=done"));
+        assert!(out.contains("2/2 modified"));
+        assert!(out.contains("note-a.md"));
+        assert!(out.contains("note-b.md"));
+    }
+
+    #[test]
+    fn property_value_mutation_filter_all_skipped() {
+        let val = json!({
+            "modified": [],
+            "property": "priority",
+            "skipped": ["note-a.md"],
+            "total": 1,
+            "value": "high"
+        });
+        let out = apply_jq_filter(PROPERTY_VALUE_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("priority=high"));
+        assert!(out.contains("0/1 modified"));
+        // No file paths should appear when nothing was modified
+        assert!(!out.contains("note-a.md"));
+    }
+
+    #[test]
+    fn property_value_mutation_via_format_value_as_text() {
+        let val = json!({
+            "modified": ["notes/a.md"],
+            "property": "status",
+            "skipped": [],
+            "total": 1,
+            "value": "done"
+        });
+        let out = format_value_as_text(&val);
+        assert!(out.contains("status=done"));
+        assert!(
+            !out.contains("modified: "),
+            "should not use generic fallback"
+        );
+    }
+
+    #[test]
+    fn property_mutation_filter_no_value() {
+        // RemovePropertyResult without value
+        let val = json!({
+            "modified": ["note.md"],
+            "property": "draft",
+            "skipped": [],
+            "total": 1
+        });
+        let out = apply_jq_filter(PROPERTY_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("draft"));
+        assert!(out.contains("1/1 modified"));
+        assert!(out.contains("note.md"));
+    }
+
+    #[test]
+    fn tag_mutation_filter_with_modified() {
+        // SetTagResult / RemoveTagResult
+        let val = json!({
+            "modified": ["a.md", "b.md"],
+            "skipped": ["c.md"],
+            "tag": "rust",
+            "total": 3
+        });
+        let out = apply_jq_filter(TAG_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("rust"));
+        assert!(out.contains("2/3 modified"));
+        assert!(out.contains("a.md"));
+        assert!(out.contains("b.md"));
+        assert!(!out.contains("c.md"));
+    }
+
+    #[test]
+    fn tag_mutation_via_format_value_as_text() {
+        let val = json!({
+            "modified": [],
+            "skipped": ["note.md"],
+            "tag": "cli",
+            "total": 1
+        });
+        let out = format_value_as_text(&val);
+        assert!(out.contains("cli"));
+        assert!(!out.contains("tag: cli"), "should not use generic fallback");
+    }
+
+    // --- build_file_object_filter ---
+
+    #[test]
+    fn build_file_object_filter_minimal() {
+        // Only the required `file` and `modified` fields.
+        let map: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(r#"{"file": "notes/foo.md", "modified": "2024-01-01"}"#).unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({"file": "notes/foo.md", "modified": "2024-01-01"});
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("notes/foo.md"));
+        assert!(out.contains("2024-01-01"));
+    }
+
+    #[test]
+    fn build_file_object_filter_with_tags() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "tags": ["rust", "cli"]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({"file": "foo.md", "modified": "2024-01-01", "tags": ["rust", "cli"]});
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("tags: [rust, cli]"));
+    }
+
+    #[test]
+    fn build_file_object_filter_with_properties() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "properties": [{"name": "status", "type": "text", "value": "done"}]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({
+            "file": "foo.md",
+            "modified": "2024-01-01",
+            "properties": [{"name": "status", "type": "text", "value": "done"}]
+        });
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("status (text): done"));
+    }
+
+    #[test]
+    fn build_file_object_filter_with_tasks() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "tasks": [{"done": true, "line": 5, "section": "Goals", "status": "x", "text": "Ship it"}]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({
+            "file": "foo.md",
+            "modified": "2024-01-01",
+            "tasks": [{"done": true, "line": 5, "section": "Goals", "status": "x", "text": "Ship it"}]
+        });
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("tasks:"));
+        assert!(out.contains("[x] Ship it"));
+        assert!(out.contains("line 5"));
+    }
+
+    #[test]
+    fn build_file_object_filter_with_matches() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "matches": [{"line": 3, "section": "Intro", "text": "hello world"}]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({
+            "file": "foo.md",
+            "modified": "2024-01-01",
+            "matches": [{"line": 3, "section": "Intro", "text": "hello world"}]
+        });
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("matches:"));
+        assert!(out.contains("line 3 (Intro): hello world"));
+    }
+
+    #[test]
+    fn build_file_object_filter_with_links() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "links": [{"target": "bar", "path": "bar.md"}]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({
+            "file": "foo.md",
+            "modified": "2024-01-01",
+            "links": [{"target": "bar", "path": "bar.md"}]
+        });
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("links:"));
+        assert!(out.contains("bar → bar.md"));
+    }
+
+    #[test]
+    fn build_file_object_filter_unresolved_link() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "links": [{"target": "missing"}]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({
+            "file": "foo.md",
+            "modified": "2024-01-01",
+            "links": [{"target": "missing"}]
+        });
+        let out = apply_jq_filter(&filter, &val).unwrap();
+        assert!(out.contains("missing (unresolved)"));
+    }
+
+    // --- FileObject text rendering through format_value_as_text ---
+
+    #[test]
+    fn file_object_text_rendering_minimal() {
+        let val = json!({"file": "notes/foo.md", "modified": "2024-01-15"});
+        let out = format_value_as_text(&val);
+        assert!(out.contains("notes/foo.md"));
+        assert!(out.contains("2024-01-15"));
+        // Should not look like generic fallback
+        assert!(!out.contains("file: notes/foo.md"));
+    }
+
+    #[test]
+    fn file_object_text_rendering_full() {
+        let val = json!({
+            "file": "notes/project.md",
+            "modified": "2024-03-01",
+            "tags": ["rust", "work"],
+            "properties": [{"name": "status", "type": "text", "value": "active"}],
+            "tasks": [
+                {"done": false, "line": 10, "section": "Todo", "status": " ", "text": "Fix bug"},
+                {"done": true, "line": 20, "section": "Done", "status": "x", "text": "Write docs"}
+            ]
+        });
+        let out = format_value_as_text(&val);
+        assert!(out.contains("notes/project.md"));
+        assert!(out.contains("tags: [rust, work]"));
+        assert!(out.contains("status (text): active"));
+        assert!(out.contains("tasks:"));
+        assert!(out.contains("[ ] Fix bug"));
+        assert!(out.contains("[x] Write docs"));
+    }
+
+    // --- Array of FileObjects with blank-line separator ---
+
+    #[test]
+    fn array_of_file_objects_uses_blank_line_separator() {
+        let val = json!([
+            {"file": "a.md", "modified": "2024-01-01"},
+            {"file": "b.md", "modified": "2024-01-02"}
+        ]);
+        let out = format_value_as_text(&val);
+        assert!(out.contains("a.md"));
+        assert!(out.contains("b.md"));
+        // Should have a blank line between entries
+        assert!(
+            out.contains("\n\n"),
+            "expected blank-line separator between file objects"
+        );
+    }
+
+    #[test]
+    fn array_of_non_file_objects_uses_single_newline() {
+        let val = json!([
+            {"count": 1, "name": "status", "type": "text"},
+            {"count": 3, "name": "title", "type": "text"}
+        ]);
+        let out = format_value_as_text(&val);
+        assert!(out.contains("status"));
+        assert!(out.contains("title"));
+        // Should NOT have a blank line separator
+        assert!(
+            !out.contains("\n\n"),
+            "non-file-objects should use single newline"
+        );
+    }
+
+    // --- format_scalar nested object delegation ---
+
+    #[test]
+    fn format_scalar_delegates_nested_objects() {
+        // A nested object with a known shape should get its filter applied,
+        // not the k=v flat format.
+        let inner = json!({"count": 2, "name": "status", "type": "text"});
+        let out = format_scalar(&inner);
+        // Should NOT look like the old "count=2, name=status, type=text" format.
+        assert!(
+            !out.contains("count=2"),
+            "should delegate to format_value_as_text"
+        );
+        // Should look like the PropertySummaryEntry filter output.
+        assert!(out.contains("status"));
+        assert!(out.contains("2 files"));
     }
 
     // --- format_value_as_text integration ---
