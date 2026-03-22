@@ -149,6 +149,19 @@ Tasks: 89/174
 
 In JSON mode, `--hints` wraps the output in `{"data": ..., "hints": [...]}`. Hints are concrete, copy-pasteable commands — no templates or placeholders. Suppressed when combined with `--jq`.
 
+## Benchmarking
+
+On-demand performance benchmarks using [Criterion](https://github.com/bheisler/criterion.rs) and [Hyperfine](https://github.com/sharkdp/hyperfine):
+
+```sh
+cargo bench --bench micro                # pure-function micro-benchmarks
+cargo bench --bench vault                # vault-scale benchmarks (needs obsidian-hub)
+./bench-e2e.sh                           # end-to-end CLI benchmarks
+./bench-e2e.sh target/release/hyalo /tmp/hyalo-baseline   # A/B comparison
+```
+
+See `benches/README.md` for full setup, A/B comparison workflows, profiling with [samply](https://github.com/mstange/samply), and memory measurement.
+
 ## License
 
 MIT

@@ -23,8 +23,13 @@ pub fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
     Ok(links)
 }
 
-/// Extract links from a text segment (already cleaned of inline code spans).
-pub(crate) fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
+/// Extract links from a text segment and append them to `out`.
+///
+/// `text` must already be cleaned of inline code spans (e.g. via
+/// [`strip_inline_code`](crate::scanner::strip_inline_code)), otherwise links
+/// inside code spans will be incorrectly parsed. Existing contents of `out` are
+/// preserved; new links are appended.
+pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
     let bytes = text.as_bytes();
     let len = bytes.len();
     let mut i = 0;

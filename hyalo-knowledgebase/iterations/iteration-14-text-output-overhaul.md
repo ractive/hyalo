@@ -7,7 +7,7 @@ tags:
   - cli
   - ux
   - output
-status: in-progress
+status: completed
 branch: iter-14/text-output-overhaul
 ---
 
