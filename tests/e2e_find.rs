@@ -715,6 +715,32 @@ fn find_text_format_fields_properties_only() {
 }
 
 // ---------------------------------------------------------------------------
+// Path traversal: dotdot in filename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_file_with_dotdot_in_name_succeeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "etc..md",
+        md!(r"
+---
+title: Dotdot
+---
+# Dotdot file
+"),
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["--file", "etc..md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 result: {arr:?}");
+    assert_eq!(arr[0]["file"], "etc..md");
+}
+
+// ---------------------------------------------------------------------------
 // Error cases
 // ---------------------------------------------------------------------------
 

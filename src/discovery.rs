@@ -36,7 +36,7 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
     // Reject path traversal attempts
     if normalized.starts_with('/')
-        || normalized.contains("..")
+        || has_parent_traversal(&normalized)
         || Path::new(&normalized).is_absolute()
     {
         return Err(FileResolveError::NotFound { path: normalized });
@@ -59,6 +59,16 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
     }
 
     Ok((full, normalized))
+}
+
+/// Return true if the path contains any `..` (parent directory) component.
+/// This is the correct way to detect path traversal — checking for the `..`
+/// component directly rather than a substring match, which incorrectly rejects
+/// legitimate filenames like `etc..md`.
+fn has_parent_traversal(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
@@ -137,7 +147,8 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
 
     // Reject path traversal attempts
     let target = target.replace('\\', "/");
-    if target.starts_with('/') || target.contains("..") || Path::new(&target).is_absolute() {
+    if target.starts_with('/') || has_parent_traversal(&target) || Path::new(&target).is_absolute()
+    {
         return None;
     }
 
@@ -382,5 +393,51 @@ mod tests {
             resolve_target(tmp.path(), "image.png"),
             Some("image.png".to_owned())
         );
+    }
+
+    // --- path traversal: dotdot in filename should not be rejected ---
+
+    #[test]
+    fn resolve_file_accepts_dotdot_in_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("notes")).unwrap();
+        fs::write(tmp.path().join("notes/etc..md"), "# dotdot").unwrap();
+
+        let (path, rel) = resolve_file(tmp.path(), "notes/etc..md").unwrap();
+        assert!(path.is_file());
+        assert_eq!(rel, "notes/etc..md");
+    }
+
+    #[test]
+    fn resolve_file_rejects_parent_traversal_segments() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        assert!(matches!(
+            resolve_file(tmp.path(), "../secret.md"),
+            Err(FileResolveError::NotFound { .. })
+        ));
+
+        assert!(matches!(
+            resolve_file(tmp.path(), "sub/../../etc/passwd.md"),
+            Err(FileResolveError::NotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn resolve_target_accepts_dotdot_in_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["etc..md"]);
+
+        assert_eq!(
+            resolve_target(tmp.path(), "etc..md"),
+            Some("etc..md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_rejects_parent_traversal_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        assert_eq!(resolve_target(tmp.path(), "../secret.md"), None);
     }
 }

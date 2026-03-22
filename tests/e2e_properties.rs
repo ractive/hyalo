@@ -257,3 +257,58 @@ fn find_properties_file_without_frontmatter() {
     let props = json[0]["properties"].as_array().unwrap();
     assert!(props.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Malformed YAML resilience
+// ---------------------------------------------------------------------------
+
+/// `properties` skips a file with malformed YAML and still returns results
+/// for valid files. The warning is emitted to stderr but the command succeeds.
+#[test]
+fn properties_skips_malformed_yaml_file() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: Good
+status: draft
+---
+# Good
+"),
+    );
+    // Bare colon key: rejected by serde_yaml_ng.
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\n: invalid yaml [[[{\n---\n# Bad\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["properties"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let names: Vec<&str> = json.iter().map(|v| v["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"title"), "missing 'title' in {names:?}");
+    assert!(names.contains(&"status"), "missing 'status' in {names:?}");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "warning should name the bad file; got: {stderr}"
+    );
+}
