@@ -2,9 +2,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use hyalo::commands::find::find;
+use hyalo::commands::properties::properties_summary;
+use hyalo::commands::summary::summary;
+use hyalo::commands::tags::tags_summary;
 use hyalo::content_search::ContentSearchVisitor;
 use hyalo::discovery::discover_files;
+use hyalo::filter::Fields;
 use hyalo::frontmatter::read_frontmatter;
+use hyalo::output::Format;
 use hyalo::scanner::{FileVisitor, scan_file_multi};
 use hyalo::tasks::TaskCounter;
 
@@ -87,11 +93,112 @@ fn bench_scan_all_files(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Command-level benchmarks (exercise parallel processing)
+// ---------------------------------------------------------------------------
+
+fn bench_cmd_find(c: &mut Criterion) {
+    let Some(vault) = vault_path() else { return };
+    let fields = Fields::default();
+
+    let mut group = c.benchmark_group("cmd_find");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(30));
+    group.bench_function("all_files", |b| {
+        b.iter(|| {
+            find(
+                black_box(&vault),
+                None,
+                &[],
+                &[],
+                None,
+                None,
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap()
+        })
+    });
+    group.finish();
+}
+
+fn bench_cmd_find_content_search(c: &mut Criterion) {
+    let Some(vault) = vault_path() else { return };
+    let fields = Fields::default();
+
+    let mut group = c.benchmark_group("cmd_find");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(30));
+    group.bench_function("content_search", |b| {
+        b.iter(|| {
+            find(
+                black_box(&vault),
+                Some("obsidian"),
+                &[],
+                &[],
+                None,
+                None,
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap()
+        })
+    });
+    group.finish();
+}
+
+fn bench_cmd_properties(c: &mut Criterion) {
+    let Some(vault) = vault_path() else { return };
+
+    let mut group = c.benchmark_group("cmd_properties");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(30));
+    group.bench_function("all_files", |b| {
+        b.iter(|| properties_summary(black_box(&vault), None, None, Format::Json).unwrap())
+    });
+    group.finish();
+}
+
+fn bench_cmd_tags(c: &mut Criterion) {
+    let Some(vault) = vault_path() else { return };
+
+    let mut group = c.benchmark_group("cmd_tags");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(30));
+    group.bench_function("all_files", |b| {
+        b.iter(|| tags_summary(black_box(&vault), None, None, Format::Json).unwrap())
+    });
+    group.finish();
+}
+
+fn bench_cmd_summary(c: &mut Criterion) {
+    let Some(vault) = vault_path() else { return };
+
+    let mut group = c.benchmark_group("cmd_summary");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(30));
+    group.bench_function("all_files", |b| {
+        b.iter(|| summary(black_box(&vault), None, 10, Format::Json).unwrap())
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_discover_files,
     bench_read_frontmatter,
     bench_read_all_frontmatter,
     bench_scan_all_files,
+    bench_cmd_find,
+    bench_cmd_find_content_search,
+    bench_cmd_properties,
+    bench_cmd_tags,
+    bench_cmd_summary,
 );
 criterion_main!(benches);

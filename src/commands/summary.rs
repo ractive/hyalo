@@ -8,12 +8,21 @@ use crate::commands::tags::extract_tags;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::frontmatter::{infer_type, yaml_to_json};
 use crate::output::{CommandOutcome, Format};
+use crate::parallel::{FileResult, par_process_files};
 use crate::scanner::{FrontmatterCollector, scan_file_multi};
 use crate::tasks::TaskCounter;
 use crate::types::{
     DirectoryCount, FileCounts, PropertySummaryEntry, RecentFile, StatusGroup, TagSummary,
     TagSummaryEntry, TaskCount, VaultSummary,
 };
+
+struct SummaryFileResult {
+    rel_path: String,
+    dir_key: String,
+    props: BTreeMap<String, serde_yaml_ng::Value>,
+    task_count: TaskCount,
+    mtime_secs: Option<i64>,
+}
 
 /// Show a high-level vault summary.
 pub fn summary(
@@ -28,9 +37,43 @@ pub fn summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    // Aggregation state
-    let mut total_files: usize = 0;
-    // directory -> count
+    let file_results = par_process_files(&files, |full_path, rel_path| {
+        let dir_key = {
+            use std::path::Path as P;
+            let rel = P::new(rel_path);
+            match rel.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().into_owned(),
+                _ => ".".to_owned(),
+            }
+        };
+
+        let mut fm = FrontmatterCollector::new(true);
+        let mut counter = TaskCounter::new();
+        scan_file_multi(full_path, &mut [&mut fm, &mut counter])?;
+        let props = fm.into_props();
+        let task_count = counter.into_count();
+
+        let mtime_secs = std::fs::metadata(full_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .map(|mtime| {
+                mtime
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            });
+
+        Ok(FileResult::Ok(SummaryFileResult {
+            rel_path: rel_path.to_owned(),
+            dir_key,
+            props,
+            task_count,
+            mtime_secs,
+        }))
+    })?;
+
+    // Sequential aggregation over parallel results
+    let total_files = file_results.len();
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
     // (name, type) -> count
     let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -44,26 +87,18 @@ pub fn summary(
     // (mtime_secs_as_i64_negated, rel_path) for sorting most-recent first
     let mut recent_entries: Vec<(i64, String)> = Vec::new();
 
-    for (full_path, rel_path) in &files {
-        total_files += 1;
+    for result in file_results {
+        let SummaryFileResult {
+            rel_path,
+            dir_key,
+            props,
+            task_count,
+            mtime_secs,
+        } = result;
 
-        // Count by parent directory (relative to vault root)
-        let dir_key = {
-            use std::path::Path as P;
-            let rel = P::new(rel_path.as_str());
-            match rel.parent() {
-                Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().into_owned(),
-                _ => ".".to_owned(),
-            }
-        };
         *dir_counts.entry(dir_key).or_insert(0) += 1;
 
-        // Single-pass scan: collect frontmatter + count tasks
-        let mut fm = FrontmatterCollector::new(true);
-        let mut counter = TaskCounter::new();
-        scan_file_multi(full_path, &mut [&mut fm, &mut counter])?;
-        let props = fm.into_props();
-        let TaskCount { total, done } = counter.into_count();
+        let TaskCount { total, done } = task_count;
         total_tasks += total;
         done_tasks += done;
 
@@ -96,16 +131,10 @@ pub fn summary(
                 .push(rel_path.clone());
         }
 
-        // Recent files: get mtime
-        if let Ok(meta) = std::fs::metadata(full_path)
-            && let Ok(mtime) = meta.modified()
-        {
+        // Recent files: track mtime
+        if let Some(secs) = mtime_secs {
             // Negate so that sorting ascending gives most-recent first
-            let secs = mtime
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            recent_entries.push((-secs, rel_path.clone()));
+            recent_entries.push((-secs, rel_path));
         }
     }
 

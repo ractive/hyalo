@@ -7,6 +7,7 @@ use std::path::Path;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
+use crate::parallel::{FileResult, par_process_files};
 use crate::types::{TagSummary, TagSummaryEntry};
 
 // ---------------------------------------------------------------------------
@@ -109,19 +110,23 @@ pub fn tags_summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    let per_file_tags =
+        par_process_files(
+            &files,
+            |full_path, rel| match frontmatter::read_frontmatter(full_path) {
+                Ok(props) => Ok(FileResult::Ok(extract_tags(&props))),
+                Err(e) if frontmatter::is_parse_error(&e) => {
+                    eprintln!("warning: skipping {rel}: {e}");
+                    Ok(FileResult::Skipped)
+                }
+                Err(e) => Err(e),
+            },
+        )?;
+
     // Aggregate case-insensitively: use lowercase key, preserve first-seen casing for display
     let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-
-    for (full_path, rel) in &files {
-        let props = match frontmatter::read_frontmatter(full_path) {
-            Ok(p) => p,
-            Err(e) if frontmatter::is_parse_error(&e) => {
-                eprintln!("warning: skipping {rel}: {e}");
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
-        for tag in extract_tags(&props) {
+    for tags in per_file_tags {
+        for tag in tags {
             let key = tag.to_ascii_lowercase();
             counts
                 .entry(key)

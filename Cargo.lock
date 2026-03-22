@@ -456,6 +456,7 @@ dependencies = [
  "jaq-json",
  "jaq-std",
  "predicates",
+ "rayon",
  "serde",
  "serde_json",
  "serde_yaml_ng",

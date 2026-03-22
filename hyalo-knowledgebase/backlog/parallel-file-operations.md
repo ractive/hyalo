@@ -2,8 +2,8 @@
 title: "Parallel file operations with rayon"
 type: backlog
 date: 2026-03-21
-status: ready
-priority: medium
+status: shelved
+priority: low
 origin: research/performance-parallelization.md
 tags:
   - backlog
@@ -28,8 +28,13 @@ Scope:
 
 ## Trigger
 
-Implement when benchmarks on a real vault show latency above ~200ms for vault-wide commands. Not needed for small vaults (<100 files).
+Revisit when users report latency on vaults >20,000 files, or when per-file processing becomes heavier (indexing, link graph). For current vault sizes, sequential processing is fast enough.
+
+## Iteration 18 outcome
+
+Implemented and benchmarked — only 1-2x speedup on 6,540 files (I/O-dominated workload on SSD). Shelved due to poor complexity-to-gain ratio. Branch `iter-18/parallel-processing` has the full working implementation. See [[iterations/iteration-18-parallel-processing]] for details.
 
 ## References
 
-- [[research/performance-parallelization]]: full research with benchmark methodology
+- [[research/performance-parallelization]]: full research with benchmark results
+- [[iterations/iteration-18-parallel-processing]]: iteration details and decision rationale

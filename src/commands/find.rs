@@ -13,6 +13,7 @@ use crate::filter::{Fields, FindTaskFilter, PropertyFilter, SortField};
 use crate::frontmatter;
 use crate::links::Link;
 use crate::output::{CommandOutcome, Format};
+use crate::parallel::{FileResult, par_process_files};
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::tasks::TaskExtractor;
 use crate::types::{ContentMatch, FileObject, FindTaskInfo, LinkInfo, PropertyInfo};
@@ -55,103 +56,23 @@ pub fn find(
     let has_task_filter = task_filter.is_some();
     let body_needed = needs_body(fields, has_pattern, has_task_filter);
 
-    let mut results: Vec<FileObject> = Vec::new();
-
-    for (full_path, rel_path) in &files {
-        // --- Single-pass scan ---
-        let mut fm = FrontmatterCollector::new(body_needed);
-        let mut section_scanner = if body_needed && (fields.sections || fields.links) {
-            Some(SectionScanner::new())
-        } else {
-            None
-        };
-        let mut task_extractor = if body_needed && (fields.tasks || has_task_filter) {
-            Some(TaskExtractor::new())
-        } else {
-            None
-        };
-        let mut link_collector = if body_needed && fields.links {
-            Some(LinkCollector::new())
-        } else {
-            None
-        };
-        let mut content_visitor = if has_pattern {
-            Some(ContentSearchVisitor::new(pattern.unwrap_or("")))
-        } else {
-            None
-        };
-
-        // Build visitor slice dynamically — only include Some visitors.
-        {
-            let mut visitor_refs: Vec<&mut dyn FileVisitor> = Vec::new();
-            visitor_refs.push(&mut fm);
-            if let Some(ref mut ss) = section_scanner {
-                visitor_refs.push(ss);
-            }
-            if let Some(ref mut te) = task_extractor {
-                visitor_refs.push(te);
-            }
-            if let Some(ref mut lc) = link_collector {
-                visitor_refs.push(lc);
-            }
-            if let Some(ref mut cv) = content_visitor {
-                visitor_refs.push(cv);
-            }
-            scanner::scan_file_multi(full_path, &mut visitor_refs)?;
-        }
-
-        let props = fm.into_props();
-
-        // --- Apply frontmatter-based filters (early exit) ---
-        if !property_filters.iter().all(|f| f.matches(&props)) {
-            continue;
-        }
-
-        let tags = extract_tags(&props);
-        if !tag_filters.iter().all(|q| {
-            tags.iter()
-                .any(|t| crate::commands::tags::tag_matches(t, q))
-        }) {
-            continue;
-        }
-
-        // --- Collect tasks (needed for filter and/or output field) ---
-        // Consume the extractor now so we can both filter and include in output.
-        let collected_tasks: Option<Vec<FindTaskInfo>> =
-            task_extractor.map(TaskExtractor::into_tasks);
-
-        // --- Apply task filter ---
-        if let Some(filter) = task_filter {
-            let tasks_slice: &[FindTaskInfo] = collected_tasks.as_deref().unwrap_or(&[]);
-            if !matches_task_filter(tasks_slice, filter) {
-                continue;
-            }
-        }
-
-        // --- Apply content search filter ---
-        if has_pattern && content_visitor.as_ref().is_some_and(|cv| !cv.has_matches()) {
-            continue;
-        }
-
-        // --- Get modified time ---
-        let modified = format_modified(full_path)?;
-
-        // --- Build FileObject ---
-        let obj = build_file_object(
+    let mut results: Vec<FileObject> = par_process_files(&files, |full_path, rel_path| {
+        let opt = process_one_file(
+            full_path,
             rel_path,
-            &modified,
-            &props,
-            &tags,
-            fields,
-            section_scanner,
-            collected_tasks,
-            link_collector,
-            content_visitor,
             dir,
-        );
-
-        results.push(obj);
-    }
+            pattern,
+            property_filters,
+            tag_filters,
+            task_filter,
+            fields,
+            body_needed,
+        )?;
+        Ok(FileResult::Ok(opt))
+    })?
+    .into_iter()
+    .flatten()
+    .collect();
 
     // --- Sort ---
     match sort.unwrap_or(&SortField::File) {
@@ -184,6 +105,117 @@ pub fn find(
 /// Determine whether body scanning is needed at all.
 fn needs_body(fields: &Fields, has_pattern: bool, has_task_filter: bool) -> bool {
     fields.sections || fields.tasks || fields.links || has_pattern || has_task_filter
+}
+
+/// Process a single file and return a `FileObject` if it matches all filters,
+/// or `None` if it should be excluded from results.
+#[allow(clippy::too_many_arguments)]
+fn process_one_file(
+    full_path: &Path,
+    rel_path: &str,
+    dir: &Path,
+    pattern: Option<&str>,
+    property_filters: &[PropertyFilter],
+    tag_filters: &[String],
+    task_filter: Option<&FindTaskFilter>,
+    fields: &Fields,
+    body_needed: bool,
+) -> Result<Option<FileObject>> {
+    let has_pattern = pattern.is_some();
+    let has_task_filter = task_filter.is_some();
+
+    // --- Single-pass scan ---
+    let mut fm = FrontmatterCollector::new(body_needed);
+    let mut section_scanner = if body_needed && (fields.sections || fields.links) {
+        Some(SectionScanner::new())
+    } else {
+        None
+    };
+    let mut task_extractor = if body_needed && (fields.tasks || has_task_filter) {
+        Some(TaskExtractor::new())
+    } else {
+        None
+    };
+    let mut link_collector = if body_needed && fields.links {
+        Some(LinkCollector::new())
+    } else {
+        None
+    };
+    let mut content_visitor = if has_pattern {
+        Some(ContentSearchVisitor::new(pattern.unwrap_or("")))
+    } else {
+        None
+    };
+
+    // Build visitor slice dynamically — only include Some visitors.
+    {
+        let mut visitor_refs: Vec<&mut dyn FileVisitor> = Vec::new();
+        visitor_refs.push(&mut fm);
+        if let Some(ref mut ss) = section_scanner {
+            visitor_refs.push(ss);
+        }
+        if let Some(ref mut te) = task_extractor {
+            visitor_refs.push(te);
+        }
+        if let Some(ref mut lc) = link_collector {
+            visitor_refs.push(lc);
+        }
+        if let Some(ref mut cv) = content_visitor {
+            visitor_refs.push(cv);
+        }
+        scanner::scan_file_multi(full_path, &mut visitor_refs)?;
+    }
+
+    let props = fm.into_props();
+
+    // --- Apply frontmatter-based filters (early exit) ---
+    if !property_filters.iter().all(|f| f.matches(&props)) {
+        return Ok(None);
+    }
+
+    let tags = extract_tags(&props);
+    if !tag_filters.iter().all(|q| {
+        tags.iter()
+            .any(|t| crate::commands::tags::tag_matches(t, q))
+    }) {
+        return Ok(None);
+    }
+
+    // --- Collect tasks (needed for filter and/or output field) ---
+    // Consume the extractor now so we can both filter and include in output.
+    let collected_tasks: Option<Vec<FindTaskInfo>> = task_extractor.map(TaskExtractor::into_tasks);
+
+    // --- Apply task filter ---
+    if let Some(filter) = task_filter {
+        let tasks_slice: &[FindTaskInfo] = collected_tasks.as_deref().unwrap_or(&[]);
+        if !matches_task_filter(tasks_slice, filter) {
+            return Ok(None);
+        }
+    }
+
+    // --- Apply content search filter ---
+    if has_pattern && content_visitor.as_ref().is_some_and(|cv| !cv.has_matches()) {
+        return Ok(None);
+    }
+
+    // --- Get modified time ---
+    let modified = format_modified(full_path)?;
+
+    // --- Build FileObject ---
+    let obj = build_file_object(
+        rel_path,
+        &modified,
+        &props,
+        &tags,
+        fields,
+        section_scanner,
+        collected_tasks,
+        link_collector,
+        content_visitor,
+        dir,
+    );
+
+    Ok(Some(obj))
 }
 
 /// Return true if `tasks` satisfy `filter`.

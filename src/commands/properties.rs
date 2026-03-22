@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format, format_output};
+use crate::parallel::{FileResult, par_process_files};
 use crate::types::PropertySummaryEntry;
 
 /// Aggregate summary: unique property names with types and file counts.
@@ -21,19 +22,21 @@ pub fn properties_summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    let per_file_props =
+        par_process_files(&files, |fp, rel| match frontmatter::read_frontmatter(fp) {
+            Ok(p) => Ok(FileResult::Ok(p)),
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                eprintln!("warning: skipping {rel}: {e}");
+                Ok(FileResult::Skipped)
+            }
+            Err(e) => Err(e),
+        })?;
+
     // Aggregate: name -> (type, count)
     let mut agg: std::collections::BTreeMap<String, (String, usize)> =
         std::collections::BTreeMap::new();
 
-    for (fp, rel) in &files {
-        let props = match frontmatter::read_frontmatter(fp) {
-            Ok(p) => p,
-            Err(e) if frontmatter::is_parse_error(&e) => {
-                eprintln!("warning: skipping {rel}: {e}");
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
+    for props in per_file_props {
         for (key, value) in &props {
             agg.entry(key.clone())
                 .and_modify(|entry| entry.1 += 1)
