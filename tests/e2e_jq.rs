@@ -64,12 +64,12 @@ fn jq_works_on_properties_command() {
         "---\ntitle: Hello\nstatus: draft\n---\n# Body\n",
     );
 
-    // `properties summary` returns an array of {count, name, type} objects.
+    // `properties` returns an array of {count, name, type} objects.
     // Extract just the property names and sort them.
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "[.[].name] | sort | join(\", \")"])
-        .args(["properties", "summary"])
+        .arg("properties")
         .output()
         .unwrap();
 
@@ -83,15 +83,15 @@ fn jq_works_on_properties_command() {
 }
 
 #[test]
-fn jq_works_on_property_find() {
+fn jq_works_on_find_property_filter() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "---\nstatus: draft\n---\n");
     write_md(tmp.path(), "b.md", "---\nstatus: done\n---\n");
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".files[]"])
-        .args(["property", "find", "--name", "status", "--value", "draft"])
+        .args(["--jq", ".[].file"])
+        .args(["find", "--property", "status=draft"])
         .output()
         .unwrap();
 
@@ -102,11 +102,11 @@ fn jq_works_on_property_find() {
 }
 
 // ---------------------------------------------------------------------------
-// --jq on links and outline commands
+// --jq on find --fields links and find --fields sections
 // ---------------------------------------------------------------------------
 
 #[test]
-fn jq_works_on_links() {
+fn jq_works_on_find_links() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -117,8 +117,8 @@ fn jq_works_on_links() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".links | length"])
-        .args(["links", "--file", "source.md"])
+        .args(["--jq", ".[0].links | length"])
+        .args(["find", "--file", "source.md", "--fields", "links"])
         .output()
         .unwrap();
 
@@ -132,7 +132,7 @@ fn jq_works_on_links() {
 }
 
 #[test]
-fn jq_works_on_outline() {
+fn jq_works_on_find_sections() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -142,8 +142,8 @@ fn jq_works_on_outline() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".sections | length"])
-        .args(["outline", "--file", "doc.md"])
+        .args(["--jq", ".[0].sections | length"])
+        .args(["find", "--file", "doc.md", "--fields", "sections"])
         .output()
         .unwrap();
 

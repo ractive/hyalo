@@ -1,7 +1,11 @@
 #![allow(clippy::missing_errors_doc)]
+pub mod append;
+pub mod find;
 pub mod links;
 pub mod outline;
 pub mod properties;
+pub mod remove;
+pub mod set;
 pub mod summary;
 pub mod tags;
 pub mod tasks;

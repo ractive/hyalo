@@ -145,10 +145,10 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
     let mut hints = Vec::new();
 
     // Always suggest aggregate views.
-    hints.push(build_command_with_glob(ctx, &["properties", "summary"]));
-    hints.push(build_command_with_glob(ctx, &["tags", "summary"]));
+    hints.push(build_command_with_glob(ctx, &["properties"]));
+    hints.push(build_command_with_glob(ctx, &["tags"]));
 
-    // Suggest tasks --todo if there are open tasks.
+    // Suggest find --task todo if there are open tasks.
     let tasks_total = data
         .get("tasks")
         .and_then(|t| t.get("total"))
@@ -160,7 +160,7 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     if tasks_total > tasks_done {
-        hints.push(build_command_with_glob(ctx, &["tasks", "--todo"]));
+        hints.push(build_command_with_glob(ctx, &["find", "--task", "todo"]));
     }
 
     // Pick 1-2 most interesting status values.
@@ -176,10 +176,8 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
 
         let remaining = MAX_HINTS.saturating_sub(hints.len());
         for (value, _) in groups.into_iter().take(remaining.min(2)) {
-            hints.push(build_command_no_glob(
-                ctx,
-                &["property", "find", "--name", "status", "--value", value],
-            ));
+            let filter = format!("status={value}");
+            hints.push(build_command_no_glob(ctx, &["find", "--property", &filter]));
         }
     }
 
@@ -206,7 +204,7 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
     entries
         .into_iter()
         .take(3)
-        .map(|(name, _)| build_command_with_glob(ctx, &["property", "find", "--name", name]))
+        .map(|(name, _)| build_command_with_glob(ctx, &["find", "--property", name]))
         .collect()
 }
 
@@ -253,7 +251,7 @@ fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<St
     entries
         .into_iter()
         .take(3)
-        .map(|(name, _)| build_command_with_glob(ctx, &["tag", "find", "--name", name]))
+        .map(|(name, _)| build_command_with_glob(ctx, &["find", "--tag", name]))
         .collect()
 }
 
@@ -489,8 +487,8 @@ mod tests {
     fn build_command_no_flags() {
         let c = ctx(HintSource::Summary);
         assert_eq!(
-            build_command_no_glob(&c, &["properties", "summary"]),
-            "hyalo properties summary"
+            build_command_no_glob(&c, &["properties"]),
+            "hyalo properties"
         );
     }
 
@@ -498,8 +496,8 @@ mod tests {
     fn build_command_with_dir() {
         let c = ctx_with_dir(HintSource::Summary, "/my/vault");
         assert_eq!(
-            build_command_no_glob(&c, &["tags", "summary"]),
-            "hyalo --dir /my/vault tags summary"
+            build_command_no_glob(&c, &["tags"]),
+            "hyalo --dir /my/vault tags"
         );
     }
 
@@ -507,8 +505,8 @@ mod tests {
     fn build_command_with_glob_propagated() {
         let c = ctx_with_glob(HintSource::PropertiesSummary, "**/*.md");
         assert_eq!(
-            build_command_with_glob(&c, &["properties", "summary"]),
-            "hyalo --glob '**/*.md' properties summary"
+            build_command_with_glob(&c, &["properties"]),
+            "hyalo --glob '**/*.md' properties"
         );
     }
 
@@ -516,8 +514,8 @@ mod tests {
     fn build_command_no_glob_omits_glob() {
         let c = ctx_with_glob(HintSource::PropertiesList, "notes/*.md");
         assert_eq!(
-            build_command_no_glob(&c, &["outline", "--file", "note.md"]),
-            "hyalo outline --file note.md"
+            build_command_no_glob(&c, &["find", "--file", "note.md"]),
+            "hyalo find --file note.md"
         );
     }
 
@@ -545,8 +543,16 @@ mod tests {
             "recent_files": []
         });
         let hints = generate_hints(&c, &data);
-        assert!(hints.iter().any(|h| h.contains("properties summary")));
-        assert!(hints.iter().any(|h| h.contains("tags summary")));
+        assert!(
+            hints
+                .iter()
+                .any(|h| h == "hyalo properties" || h.contains("properties"))
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h == "hyalo tags" || h.contains("tags"))
+        );
     }
 
     #[test]
@@ -564,7 +570,7 @@ mod tests {
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("tasks") && h.contains("--todo"))
+                .any(|h| h.contains("find") && h.contains("--task") && h.contains("todo"))
         );
     }
 

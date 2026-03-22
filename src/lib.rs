@@ -1,5 +1,7 @@
 pub mod commands;
+pub mod content_search;
 pub mod discovery;
+pub mod filter;
 pub mod frontmatter;
 pub mod hints;
 pub mod links;
