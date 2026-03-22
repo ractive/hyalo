@@ -57,10 +57,21 @@ fn error_invalid_yaml() {
         .output()
         .unwrap();
 
-    // Malformed YAML should cause an error
-    assert!(!output.status.success());
+    // Malformed YAML is now gracefully skipped: command succeeds, warning on stderr.
+    assert!(
+        output.status.success(),
+        "expected graceful skip; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(!stderr.is_empty());
+    assert!(
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "warning should name the bad file; got: {stderr}"
+    );
 }
 
 #[test]

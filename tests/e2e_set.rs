@@ -351,3 +351,66 @@ title: Note
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.trim().is_empty(), "expected non-empty text output");
 }
+
+// ---------------------------------------------------------------------------
+// Malformed YAML resilience
+// ---------------------------------------------------------------------------
+
+/// `set --glob` skips a file with malformed YAML, modifies valid files, and
+/// emits a warning on stderr. The command still exits successfully.
+#[test]
+fn set_skips_malformed_yaml_file() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: Good
+---
+# Good
+"),
+    );
+    // Bare colon key: rejected by serde_yaml_ng.
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\n: invalid yaml [[[{\n---\n# Bad\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["set", "--property", "status=done", "--glob", "*.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Only the valid file should be modified.
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "only one file should be modified; json: {json}"
+    );
+    assert_eq!(json["modified"][0], "good.md");
+
+    // The valid file was updated on disk.
+    let content = fs::read_to_string(tmp.path().join("good.md")).unwrap();
+    assert!(content.contains("status: done"), "content:\n{content}");
+
+    // Warning emitted for the bad file.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "warning should name the bad file; got: {stderr}"
+    );
+}

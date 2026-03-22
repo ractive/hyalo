@@ -164,7 +164,13 @@ pub fn append(
 
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
-        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let mut props = match frontmatter::read_frontmatter(full_path) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("warning: skipping {rel_path}: {e}");
+                continue;
+            }
+        };
         let mut file_changed = false;
 
         for (i, (name, raw_value, new_val)) in parsed_args.iter().enumerate() {

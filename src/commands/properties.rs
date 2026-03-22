@@ -25,8 +25,14 @@ pub fn properties_summary(
     let mut agg: std::collections::BTreeMap<String, (String, usize)> =
         std::collections::BTreeMap::new();
 
-    for (fp, _) in &files {
-        let props = frontmatter::read_frontmatter(fp)?;
+    for (fp, rel) in &files {
+        let props = match frontmatter::read_frontmatter(fp) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("warning: skipping {}: {e}", rel);
+                continue;
+            }
+        };
         for (key, value) in &props {
             agg.entry(key.clone())
                 .and_modify(|entry| entry.1 += 1)
@@ -97,5 +103,36 @@ tags:
         let names: Vec<&str> = parsed.iter().map(|v| v["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"title"));
         assert!(names.contains(&"status"));
+    }
+
+    #[test]
+    fn properties_summary_skips_malformed_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Valid file with a known property.
+        fs::write(
+            tmp.path().join("good.md"),
+            md!(r"
+---
+title: Good Note
+---
+# Hello
+"),
+        )
+        .unwrap();
+        // Malformed YAML: a bare colon key is rejected by serde_yaml_ng.
+        fs::write(
+            tmp.path().join("bad.md"),
+            "---\n: invalid yaml [[[{\n---\n# Bad\n",
+        )
+        .unwrap();
+
+        let outcome = properties_summary(tmp.path(), None, None, Format::Json).unwrap();
+        let (out, ok) = unwrap_output(outcome);
+        assert!(ok, "expected Success, got UserError: {out}");
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        let names: Vec<&str> = parsed.iter().map(|v| v["name"].as_str().unwrap()).collect();
+        // The valid file's property must appear.
+        assert!(names.contains(&"title"), "missing 'title' in {names:?}");
     }
 }
