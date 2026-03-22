@@ -1,78 +1,84 @@
 ---
 title: "Performance: Parallel File Operations"
 type: research
-date: 2026-03-20
+date: 2026-03-22
 tags:
   - performance
   - parallelization
   - rayon
+  - research
 ---
 
 # Performance: Parallel File Operations
 
-## Current State (Iteration 1)
+## Current State
 
-All file operations are **sequential**. Commands like `properties` (no `--path`) and glob-matched `properties` iterate over every `.md` file one at a time:
+All file operations are **sequential**. Commands like `properties`, `tags`, `find`, and `summary` iterate over every `.md` file one at a time:
 
 ```
 discover_files(dir)  →  Vec<PathBuf>  (sequential walk)
     ↓
 for file in files {
-    read_frontmatter(file)  →  sequential I/O per file
+    read_frontmatter(file)  or  scan_file_multi(file)  →  sequential I/O per file
 }
 ```
 
-For a typical Obsidian vault with 100–500 files, this is fast enough (<100ms). For large vaults (5,000+ files), this becomes a bottleneck — each file requires an `open()` + `read()` syscall, and the CPU sits idle waiting for I/O between files.
+For a typical Obsidian vault with 100-500 files, this is fast enough (<50ms). For large vaults (5,000+ files), latency reaches 100-200ms.
 
-## Opportunity: rayon for Parallel File Reads
+## Experiment: rayon `par_iter()` (Iteration 18)
 
-The `properties_all` aggregation and `properties_glob` paths are embarrassingly parallel — each file read is independent, and the aggregation step is a simple merge.
+Full implementation on branch `iter-18/parallel-processing`. Replaced sequential for-loops with `par_iter().map().collect()` in all four read-only multi-file commands.
 
 ### Approach
 
-```rust
-use rayon::prelude::*;
+Created a shared utility `par_process_files<T, F>`:
 
-// Replace sequential loop:
-let results: Vec<_> = files
-    .par_iter()
-    .map(|file| frontmatter::read_frontmatter(file))
-    .collect::<Result<Vec<_>>>()?;
+```rust
+pub enum FileResult<T> { Ok(T), Skipped }
+
+pub fn par_process_files<T, F>(files: &[(PathBuf, String)], f: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(&Path, &str) -> Result<FileResult<T>> + Sync,
 ```
 
-### Expected Impact
+Each command provides a closure for per-file work. Errors propagated after parallel phase; skipped files (malformed YAML) emit warnings via `eprintln!`.
 
-| Vault size | Sequential (est.) | Parallel (est., 8 cores) | Speedup |
-|---|---|---|---|
-| 100 files | ~20ms | ~5ms | ~4x |
-| 1,000 files | ~200ms | ~30ms | ~6x |
-| 10,000 files | ~2s | ~300ms | ~6-7x |
+### Actual Benchmark Results (obsidian-hub, 6,540 files, Apple Silicon SSD)
 
-The speedup is sub-linear because:
-- I/O bandwidth is shared (SSD throughput is the ceiling)
-- Thread pool overhead for small workloads
-- The aggregation step is sequential
+| Command | Sequential | Parallel (rayon) | Speedup |
+|---------|-----------|-----------------|---------|
+| `find` (all) | ~195ms | 185ms | **1.05x** |
+| `find` (content) | ~215ms | 207ms | **1.04x** |
+| `properties` | ~135ms | 95ms | **1.4x** |
+| `tags` | ~135ms | 98ms | **1.4x** |
+| `summary` | ~195ms | 98ms | **2.0x** |
 
-### Implementation Notes
+### Why the Estimates Were Wrong
 
-- **Dependency:** `rayon = "1"` (~30s additional compile time, widely used, no transitive bloat)
-- **Error handling:** `par_iter().map().collect::<Result<Vec<_>>>()` short-circuits on first error, same as sequential
-- **Thread safety:** `read_frontmatter` is already `Send + Sync` — no shared mutable state
-- **Aggregation:** The `BTreeMap` merge after parallel reads stays sequential but is CPU-bound and fast
-- **Scope:** Only parallelize multi-file read paths (`properties_all`, `properties_glob`). Single-file commands (`property read/set/remove`) don't benefit.
+Original estimates predicted 4-7x speedup. The actual speedup was 1-2x because:
 
-### When to Implement
+1. **I/O-dominated, not CPU-dominated**: frontmatter parsing (`serde_yaml_ng`) is fast (~15µs per file). The bottleneck is `open()` + `read()` syscalls, which the OS already pipelines via readahead on SSDs
+2. **Warm page cache**: on repeated runs (and during normal use), files are already in the kernel page cache. The kernel serializes physical I/O regardless of thread count
+3. **Thread pool overhead**: rayon's work-stealing pool has non-trivial per-task overhead that offsets gains on cheap tasks
+4. **Small per-file work**: each file takes ~20-30µs to process. At this granularity, scheduling overhead is a significant fraction of useful work
 
-- Not needed for iteration 1 (correctness and API surface are the priority)
-- Consider for iteration 4 (search) where query performance across all files matters
-- Definitely needed if/when indexing (iteration plan: "Later") is deferred and full-scan remains the primary access pattern
+### Conclusion
 
-### Alternative: Indexing
+**Not worth the complexity for current vault sizes.** The added dependency (rayon + 4 transitive crates), new abstraction, and closure-based control flow don't justify 1-2x speedup when commands already complete in <200ms.
 
-For truly large vaults (50,000+ files), parallelization alone won't suffice. A persistent index (SQLite, see [[iteration-plan]]) that maps properties/tags/links with incremental mtime-based updates would eliminate the need to scan files at all. Parallelization and indexing are complementary — parallel reads for cold cache, index for warm.
+### When to Revisit
+
+- If users report latency on vaults >20,000 files
+- If per-file processing becomes heavier (e.g., full-text indexing, link graph construction)
+- If targeting cold cache scenarios (first run after reboot) where I/O parallelism helps more
+
+### Better Alternative: Indexing
+
+For truly large vaults, a persistent index (SQLite with mtime-based invalidation) would eliminate scanning entirely. This is fundamentally better than parallelizing the scan — O(1) lookups vs O(n) parallel reads. Parallelization and indexing are complementary: parallel reads for cold index rebuilds, index for warm queries.
 
 ## Other Performance Notes
 
-- **Streaming reader is already optimal for single-file reads.** `read_frontmatter` stops at the closing `---` and never reads the body. No further optimization needed there.
-- **`discover_files` uses the `ignore` crate** which is already fast (same engine as ripgrep). Parallelizing the walk itself is possible (`WalkBuilder::build_parallel()`) but unlikely to matter until vault sizes exceed 50,000 files.
-- **Avoid `String` allocations in hot loops.** The `properties_all` aggregation clones property keys for the `BTreeMap` entry API. With rayon, consider pre-sizing or using a `DashMap` for concurrent insertion, though the sequential merge may be simpler and fast enough.
+- **Streaming reader is already optimal for single-file reads.** `read_frontmatter` stops at the closing `---` and never reads the body
+- **`discover_files` uses the `ignore` crate** (same engine as ripgrep). Parallelizing the walk (`WalkBuilder::build_parallel()`) is unlikely to matter for <50,000 files
+- **Sequential baselines are already fast**: `properties`/`tags` complete in ~55ms on 6,540 files, `find`/`summary` in ~200ms
