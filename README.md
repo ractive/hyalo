@@ -14,6 +14,21 @@ All commands accept `--dir <path>` (default: `.`), `--format json|text` (default
 
 Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
 
+### Configuration
+
+Place a `.hyalo.toml` file in your working directory to set defaults for global flags:
+
+```toml
+# .hyalo.toml
+dir = "./my-vault"   # default: "."
+format = "text"      # default: "json"
+hints = true         # default: false
+```
+
+All fields are optional. CLI flags always take precedence over config values. Missing or malformed config files are handled gracefully — hyalo warns on stderr and falls back to built-in defaults.
+
+Use `--no-hints` to explicitly disable hints when the config file enables them.
+
 ### find
 
 Search and filter files. Returns an array of file objects, each containing frontmatter properties, tags, sections, tasks, and links.
