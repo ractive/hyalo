@@ -166,10 +166,11 @@ pub fn append(
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
-            Err(e) => {
+            Err(e) if frontmatter::is_parse_error(&e) => {
                 eprintln!("warning: skipping {rel_path}: {e}");
                 continue;
             }
+            Err(e) => return Err(e),
         };
         let mut file_changed = false;
 

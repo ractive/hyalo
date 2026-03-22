@@ -115,10 +115,11 @@ pub fn tags_summary(
     for (full_path, rel) in &files {
         let props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("warning: skipping {}: {e}", rel);
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                eprintln!("warning: skipping {rel}: {e}");
                 continue;
             }
+            Err(e) => return Err(e),
         };
         for tag in extract_tags(&props) {
             let key = tag.to_ascii_lowercase();
