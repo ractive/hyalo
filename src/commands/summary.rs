@@ -186,36 +186,7 @@ pub fn summary(
     )))
 }
 
-/// Format Unix timestamp (seconds since epoch) as ISO 8601 date-time string (UTC).
-/// Output: `YYYY-MM-DDTHH:MM:SSZ`
-fn format_iso8601(secs: u64) -> String {
-    // Manual implementation — avoids adding a time/chrono dependency.
-    // Gregorian calendar computation.
-    const SECS_PER_MIN: u64 = 60;
-    const SECS_PER_HOUR: u64 = 3600;
-    const SECS_PER_DAY: u64 = 86400;
-
-    let days = secs / SECS_PER_DAY;
-    let rem = secs % SECS_PER_DAY;
-    let hh = rem / SECS_PER_HOUR;
-    let mm = (rem % SECS_PER_HOUR) / SECS_PER_MIN;
-    let ss = rem % SECS_PER_MIN;
-
-    // Compute year/month/day from days since Unix epoch (1970-01-01)
-    // Using the algorithm from POSIX / Howard Hinnant's civil_from_days.
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hh, mm, ss)
-}
+use super::format_iso8601;
 
 // ---------------------------------------------------------------------------
 // Unit tests
@@ -408,16 +379,5 @@ No tasks here.
             }
             CommandOutcome::UserError(s) => panic!("expected success, got: {s}"),
         }
-    }
-
-    #[test]
-    fn format_iso8601_epoch() {
-        assert_eq!(format_iso8601(0), "1970-01-01T00:00:00Z");
-    }
-
-    #[test]
-    fn format_iso8601_known_date() {
-        // 2024-01-15T10:30:00Z = 1705314600 seconds
-        assert_eq!(format_iso8601(1_705_314_600), "2024-01-15T10:30:00Z");
     }
 }

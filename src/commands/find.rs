@@ -117,7 +117,8 @@ pub fn find(
 
         // --- Collect tasks (needed for filter and/or output field) ---
         // Consume the extractor now so we can both filter and include in output.
-        let collected_tasks: Option<Vec<FindTaskInfo>> = task_extractor.map(|te| te.into_tasks());
+        let collected_tasks: Option<Vec<FindTaskInfo>> =
+            task_extractor.map(TaskExtractor::into_tasks);
 
         // --- Apply task filter ---
         if let Some(filter) = task_filter {
@@ -191,7 +192,7 @@ fn matches_task_filter(tasks: &[FindTaskInfo], filter: &FindTaskFilter) -> bool 
         FindTaskFilter::Any => !tasks.is_empty(),
         FindTaskFilter::Todo => tasks.iter().any(|t| !t.done),
         FindTaskFilter::Done => tasks.iter().any(|t| t.done),
-        FindTaskFilter::Status(c) => tasks.iter().any(|t| t.status == c.to_string()),
+        FindTaskFilter::Status(c) => tasks.iter().any(|t| t.status.starts_with(*c)),
     }
 }
 
@@ -209,33 +210,7 @@ fn format_modified(path: &Path) -> Result<String> {
     Ok(format_iso8601(secs))
 }
 
-/// Format Unix timestamp (seconds since epoch) as ISO 8601 UTC.
-/// Output: `YYYY-MM-DDTHH:MM:SSZ`
-fn format_iso8601(secs: u64) -> String {
-    const SECS_PER_MIN: u64 = 60;
-    const SECS_PER_HOUR: u64 = 3600;
-    const SECS_PER_DAY: u64 = 86400;
-
-    let days = secs / SECS_PER_DAY;
-    let rem = secs % SECS_PER_DAY;
-    let hh = rem / SECS_PER_HOUR;
-    let mm = (rem % SECS_PER_HOUR) / SECS_PER_MIN;
-    let ss = rem % SECS_PER_MIN;
-
-    // Howard Hinnant's civil_from_days algorithm
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
-}
+use super::format_iso8601;
 
 /// Build a `FileObject` from the already-scanned data.
 #[allow(clippy::too_many_arguments)]
@@ -273,7 +248,7 @@ fn build_file_object(
     };
 
     let sections = if fields.sections {
-        section_scanner.map(|ss| ss.into_sections())
+        section_scanner.map(SectionScanner::into_sections)
     } else {
         None
     };
@@ -413,19 +388,6 @@ Just some text here.
         .unwrap();
 
         tmp
-    }
-
-    // --- format_iso8601 ---
-
-    #[test]
-    fn iso8601_epoch() {
-        assert_eq!(format_iso8601(0), "1970-01-01T00:00:00Z");
-    }
-
-    #[test]
-    fn iso8601_known_date() {
-        // 2024-01-15T10:30:00Z
-        assert_eq!(format_iso8601(1_705_314_600), "2024-01-15T10:30:00Z");
     }
 
     // --- find: basic ---
