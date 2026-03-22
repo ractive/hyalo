@@ -1120,8 +1120,15 @@ fn main() {
                 }
             } else if let Some(ctx) = &hint_ctx {
                 // Re-parse the output to generate hints, then format with them.
-                let value: serde_json::Value =
-                    serde_json::from_str(&output).unwrap_or(serde_json::Value::Null);
+                let value: serde_json::Value = match serde_json::from_str(&output) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        // Should not happen since effective_format is forced to JSON,
+                        // but fall through to plain output if it does.
+                        println!("{output}");
+                        process::exit(0);
+                    }
+                };
                 let hints = generate_hints(ctx, &value);
                 let formatted = format_with_hints(format, &value, &hints);
                 println!("{formatted}");
