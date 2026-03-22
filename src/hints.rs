@@ -15,11 +15,19 @@ pub enum HintSource {
 }
 
 /// Global flags to propagate into generated hint commands.
+///
+/// Each `Option` field is `Some` only when the user passed the flag explicitly
+/// on the CLI. Values that came from `.hyalo.toml` config are omitted so that
+/// the copy-pasted hint command inherits the same config automatically.
 pub struct HintContext {
     pub source: HintSource,
-    /// `None` means "." (default) — omit from hints to keep them short.
+    /// `None` means "." (default) or came from config — omit from hints.
     pub dir: Option<String>,
     pub glob: Option<String>,
+    /// Explicit `--format` from CLI (not from config).
+    pub format: Option<String>,
+    /// Explicit `--hints` from CLI (not from config).
+    pub hints: bool,
 }
 
 /// Generate concrete drill-down hints from a command's JSON output.
@@ -39,14 +47,25 @@ pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<String
 // Command builder
 // ---------------------------------------------------------------------------
 
-/// Build a command that intentionally omits `--glob` (for file-specific hints).
-fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
-    // We need a stripped context — easiest is to inline the logic without glob.
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+/// Push the global flags that were explicitly passed on the CLI.
+fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     if let Some(dir) = &ctx.dir {
         parts.push("--dir".to_owned());
         parts.push(shell_quote(dir));
     }
+    if let Some(fmt) = &ctx.format {
+        parts.push("--format".to_owned());
+        parts.push(shell_quote(fmt));
+    }
+    if ctx.hints {
+        parts.push("--hints".to_owned());
+    }
+}
+
+/// Build a command that intentionally omits `--glob` (for file-specific hints).
+fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    push_global_flags(&mut parts, ctx);
     for arg in args {
         parts.push(shell_quote(arg));
     }
@@ -56,20 +75,14 @@ fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
 /// Build a command that propagates `--glob` when present.
 fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
-
-    if let Some(dir) = &ctx.dir {
-        parts.push("--dir".to_owned());
-        parts.push(shell_quote(dir));
-    }
+    push_global_flags(&mut parts, ctx);
     if let Some(glob) = &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
     }
-
     for arg in args {
         parts.push(shell_quote(arg));
     }
-
     parts.join(" ")
 }
 
@@ -216,6 +229,8 @@ mod tests {
             source,
             dir: None,
             glob: None,
+            format: None,
+            hints: false,
         }
     }
 
@@ -224,6 +239,8 @@ mod tests {
             source,
             dir: Some(dir.to_owned()),
             glob: None,
+            format: None,
+            hints: false,
         }
     }
 
@@ -232,6 +249,8 @@ mod tests {
             source,
             dir: None,
             glob: Some(glob.to_owned()),
+            format: None,
+            hints: false,
         }
     }
 
