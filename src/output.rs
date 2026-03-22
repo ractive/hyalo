@@ -401,10 +401,11 @@ fn run_jq_filter_cached(
     value: &serde_json::Value,
     cache: &mut JaqFilterCache,
 ) -> Result<String, String> {
-    let filter = match cache.entry(filter_code.to_owned()) {
-        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-        std::collections::hash_map::Entry::Vacant(e) => e.insert(compile_jq_filter(filter_code)?),
-    };
+    if let Some(filter) = cache.get_mut(filter_code) {
+        return execute_jq_filter(filter, value);
+    }
+    let compiled = compile_jq_filter(filter_code)?;
+    let filter = cache.entry(filter_code.to_owned()).or_insert(compiled);
     execute_jq_filter(filter, value)
 }
 
