@@ -57,7 +57,9 @@ fn bench_read_all_frontmatter(c: &mut Criterion) {
     group.bench_function("all_files", |b| {
         b.iter(|| {
             for file in &files {
-                read_frontmatter(black_box(file)).unwrap();
+                // Some vault files may have malformed YAML — skip parse errors,
+                // but still measure the I/O and parsing attempt.
+                let _ = read_frontmatter(black_box(file));
             }
         })
     });
