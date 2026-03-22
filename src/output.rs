@@ -368,6 +368,13 @@ fn run_jq_filter(filter_code: &str, value: &serde_json::Value) -> Result<String,
 ///
 /// The file header is always emitted. Each optional section (properties, tags,
 /// sections, tasks, matches, links) is included only when the key is present.
+///
+/// **How it works:** Each part is a jaq expression that either emits a string or
+/// `empty` (when the field is absent/empty). Parts are joined with `, ` — jaq's
+/// alternation operator — so the filter produces one output per present section.
+/// `run_jq_filter` then joins those outputs with `"\n"`, producing the final
+/// multi-line text block. This coupling is intentional: changing the separator
+/// in `run_jq_filter` would affect `FileObject` rendering.
 fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) -> String {
     // Header: file path and modified timestamp — always present.
     let mut parts = vec![r#""\(.file)  (\(.modified))""#.to_owned()];
@@ -375,7 +382,7 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // Properties: each rendered as "  name (type): value"
     if map.contains_key("properties") {
         parts.push(
-            r##"if .properties then (.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n")) else empty end"##.to_owned(),
+            r#"if .properties then (.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n")) else empty end"#.to_owned(),
         );
     }
 
@@ -398,21 +405,21 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // Tasks: header then each as "    [x] text (line N)"
     if map.contains_key("tasks") {
         parts.push(
-            r##"if (.tasks | length) > 0 then "  tasks:\n\(.tasks | map("    [\(if .done then "x" else " " end)] \(.text) (line \(.line))") | join("\n"))" else empty end"##.to_owned(),
+            r#"if (.tasks | length) > 0 then "  tasks:\n\(.tasks | map("    [\(if .done then "x" else " " end)] \(.text) (line \(.line))") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
     // Matches: header then each as "    line N (section): text"
     if map.contains_key("matches") {
         parts.push(
-            r##"if (.matches | length) > 0 then "  matches:\n\(.matches | map("    line \(.line) (\(.section)): \(.text)") | join("\n"))" else empty end"##.to_owned(),
+            r#"if (.matches | length) > 0 then "  matches:\n\(.matches | map("    line \(.line) (\(.section)): \(.text)") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
     // Links: header then each as "    target → path" or "    target (unresolved)"
     if map.contains_key("links") {
         parts.push(
-            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)") | join("\n"))" else empty end"##.to_owned(),
+            r#"if (.links | length) > 0 then "  links:\n\(.links | map("    \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
@@ -431,8 +438,7 @@ fn format_value_as_text(value: &serde_json::Value) -> String {
             let is_file_objects = arr
                 .first()
                 .and_then(|v| v.as_object())
-                .map(|m| m.contains_key("file") && m.contains_key("modified"))
-                .unwrap_or(false);
+                .is_some_and(|m| m.contains_key("file") && m.contains_key("modified"));
             let sep = if is_file_objects { "\n\n" } else { "\n" };
             arr.iter()
                 .map(format_value_as_text)
