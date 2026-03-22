@@ -99,13 +99,19 @@ fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     parts.join(" ")
 }
 
-/// Wrap a string in double-quotes if it contains whitespace or shell-special chars.
+/// Wrap a string in single-quotes if it contains any shell-special characters.
+///
+/// Uses an allowlist of safe characters — anything not in the list triggers quoting.
+/// Single-quoting avoids variable expansion and is safer than double-quoting.
 fn shell_quote(s: &str) -> String {
-    let needs_quoting = s
-        .chars()
-        .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\' | '$' | '`' | '!'));
-    if needs_quoting {
-        format!("\"{}\"", s.replace('"', "\\\""))
+    if s.is_empty()
+        || s.chars().any(|c| {
+            !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '/' | ':' | '@' | '=' | ',' | '+')
+        })
+    {
+        // In single-quoted strings, the only character that needs escaping is '
+        // which is done by ending the quote, adding an escaped quote, and reopening.
+        format!("'{}'", s.replace('\'', "'\\''"))
     } else {
         s.to_owned()
     }
@@ -454,12 +460,27 @@ mod tests {
 
     #[test]
     fn shell_quote_string_with_space() {
-        assert_eq!(shell_quote("in progress"), "\"in progress\"");
+        assert_eq!(shell_quote("in progress"), "'in progress'");
     }
 
     #[test]
     fn shell_quote_string_with_special_chars() {
-        assert_eq!(shell_quote("foo$bar"), "\"foo$bar\"");
+        assert_eq!(shell_quote("foo$bar"), "'foo$bar'");
+    }
+
+    #[test]
+    fn shell_quote_string_with_single_quote() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn shell_quote_glob_chars() {
+        assert_eq!(shell_quote("**/*.md"), "'**/*.md'");
+    }
+
+    #[test]
+    fn shell_quote_empty_string() {
+        assert_eq!(shell_quote(""), "''");
     }
 
     // --- build_command ---
@@ -487,7 +508,7 @@ mod tests {
         let c = ctx_with_glob(HintSource::PropertiesSummary, "**/*.md");
         assert_eq!(
             build_command_with_glob(&c, &["properties", "summary"]),
-            "hyalo --glob **/*.md properties summary"
+            "hyalo --glob '**/*.md' properties summary"
         );
     }
 
