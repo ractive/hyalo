@@ -112,8 +112,14 @@ pub fn tags_summary(
     // Aggregate case-insensitively: use lowercase key, preserve first-seen casing for display
     let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
 
-    for (full_path, _) in &files {
-        let props = frontmatter::read_frontmatter(full_path)?;
+    for (full_path, rel) in &files {
+        let props = match frontmatter::read_frontmatter(full_path) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("warning: skipping {}: {e}", rel);
+                continue;
+            }
+        };
         for tag in extract_tags(&props) {
             let key = tag.to_ascii_lowercase();
             counts
@@ -336,5 +342,41 @@ tags:
         // tags_summary (read-only) still accepts no --file/--glob
         let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success(_)));
+    }
+
+    #[test]
+    fn tags_summary_skips_malformed_yaml() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Valid tagged file.
+        fs::write(
+            tmp.path().join("good.md"),
+            md!(r"
+---
+tags:
+  - rust
+---
+# Good
+"),
+        )
+        .unwrap();
+        // Malformed YAML: a bare colon key is rejected by serde_yaml_ng.
+        fs::write(
+            tmp.path().join("bad.md"),
+            "---\n: invalid yaml [[[{\n---\n# Bad\n",
+        )
+        .unwrap();
+
+        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
+        let out = match outcome {
+            CommandOutcome::Success(s) => s,
+            CommandOutcome::UserError(s) => panic!("unexpected UserError: {s}"),
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let tags = parsed["tags"].as_array().unwrap();
+        // The valid file's tag must appear.
+        assert!(
+            tags.iter().any(|t| t["name"] == "rust"),
+            "expected 'rust' tag in {parsed}"
+        );
     }
 }
