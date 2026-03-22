@@ -80,6 +80,14 @@ impl Document {
     }
 }
 
+/// Returns true if the error is a frontmatter parse/structure error (bad YAML, frontmatter
+/// too large) as opposed to an I/O error. Parse errors can be safely skipped when processing
+/// multiple files; I/O errors should be propagated.
+pub fn is_parse_error(err: &anyhow::Error) -> bool {
+    !err.chain()
+        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+}
+
 /// Read only the YAML frontmatter from a file, stopping as soon as the closing `---` is found.
 /// The body is never read into memory. Use this for read-only property operations.
 pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
@@ -831,5 +839,18 @@ Body.
                 .to_string()
                 .contains("frontmatter too large")
         );
+    }
+
+    #[test]
+    fn is_parse_error_true_for_yaml_error() {
+        let err =
+            read_frontmatter_from_reader("---\n: invalid [[[{\n---\n".as_bytes()).unwrap_err();
+        assert!(is_parse_error(&err), "expected parse error: {err}");
+    }
+
+    #[test]
+    fn is_parse_error_false_for_io_error() {
+        let err = read_frontmatter(Path::new("/nonexistent/path/file.md")).unwrap_err();
+        assert!(!is_parse_error(&err), "expected I/O error: {err}");
     }
 }
