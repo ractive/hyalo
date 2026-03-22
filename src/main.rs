@@ -91,7 +91,7 @@ COOKBOOK:\n  \
   # Tag all research notes in a folder\n  \
   hyalo set --tag reviewed --glob 'research/**/*.md'\n\n  \
   # Bulk-update a property across files\n  \
-  hyalo find --property status=draft --jq '.[].path' \\\n    \
+  hyalo find --property status=draft --jq '.[].file' \\\n    \
     | xargs -I{} hyalo set --property status=in-progress --file {}\n\n  \
   # Append to a list property\n  \
   hyalo append --property aliases='My Note' --file note.md\n\n  \

@@ -603,6 +603,117 @@ fn find_text_format_with_pattern() {
     );
 }
 
+// Text format: FileObject renders structured output with properties, tags, sections
+#[test]
+fn find_text_format_file_object_structure() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.args(["find", "--file", "alpha.md"]);
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // File path as header
+    assert!(stdout.contains("alpha.md"), "file path header: {stdout}");
+    // Properties with type annotations
+    assert!(
+        stdout.contains("title (text): Alpha"),
+        "property rendering: {stdout}"
+    );
+    assert!(
+        stdout.contains("status (text): planned"),
+        "status property: {stdout}"
+    );
+    // List-type property values use brackets
+    assert!(
+        stdout.contains("tags (list): [rust, cli]"),
+        "list property with brackets: {stdout}"
+    );
+    // Tags line (from --fields tags) also uses brackets
+    assert!(stdout.contains("tags: [rust, cli]"), "tags line: {stdout}");
+    // Section headings
+    assert!(stdout.contains("# Introduction"), "h1 section: {stdout}");
+    assert!(stdout.contains("## Tasks"), "h2 section: {stdout}");
+    // Tasks with checkbox notation
+    assert!(
+        stdout.contains("[ ] Write tests"),
+        "todo task checkbox: {stdout}"
+    );
+    assert!(
+        stdout.contains("[x] Write code"),
+        "done task checkbox: {stdout}"
+    );
+}
+
+// Text format: content search shows matches with line numbers
+#[test]
+fn find_text_format_content_matches() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.args(["find", "Rust programming"]);
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("beta.md"), "file header: {stdout}");
+    assert!(stdout.contains("matches:"), "matches header: {stdout}");
+    assert!(
+        stdout.contains("Rust programming is great"),
+        "match text: {stdout}"
+    );
+}
+
+// Text format: multiple FileObjects separated by blank lines
+#[test]
+fn find_text_format_multi_file_separation() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.arg("find");
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Multiple files should be separated by blank lines
+    assert!(
+        stdout.contains("\n\n"),
+        "expected blank line between file entries: {stdout}"
+    );
+}
+
+// Text format: find with --fields properties only shows properties
+#[test]
+fn find_text_format_fields_properties_only() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.args(["find", "--file", "alpha.md", "--fields", "properties"]);
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Should have properties
+    assert!(
+        stdout.contains("title (text): Alpha"),
+        "property present: {stdout}"
+    );
+    // Should NOT have sections (not requested)
+    assert!(
+        !stdout.contains("# Introduction"),
+        "sections should be absent: {stdout}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Error cases
 // ---------------------------------------------------------------------------
