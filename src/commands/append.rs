@@ -152,19 +152,32 @@ pub fn append(
         return Ok(outcome);
     }
 
-    // Validate all K=V args upfront (must have `=`)
+    // Validate all K=V args upfront (must have `=` and a non-empty key)
     for arg in property_args {
-        if !arg.contains('=') {
-            let out = crate::output::format_error(
-                format,
-                &format!(
-                    "invalid property argument '{arg}': expected K=V format (e.g. aliases=my-alias)"
-                ),
-                None,
-                None,
-                None,
-            );
-            return Ok(CommandOutcome::UserError(out));
+        match arg.find('=') {
+            None => {
+                let out = crate::output::format_error(
+                    format,
+                    &format!(
+                        "invalid property argument '{arg}': expected K=V format (e.g. aliases=my-alias)"
+                    ),
+                    None,
+                    None,
+                    None,
+                );
+                return Ok(CommandOutcome::UserError(out));
+            }
+            Some(pos) if arg[..pos].trim().is_empty() => {
+                let out = crate::output::format_error(
+                    format,
+                    &format!("invalid property argument '{arg}': property name cannot be empty"),
+                    None,
+                    None,
+                    None,
+                );
+                return Ok(CommandOutcome::UserError(out));
+            }
+            Some(_) => {}
         }
     }
 
@@ -436,6 +449,21 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["no-equals-sign".to_owned()],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn append_empty_key_returns_user_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: x\n---\n").unwrap();
+        let outcome = append(
+            tmp.path(),
+            &["=value".to_owned()],
             Some("note.md"),
             None,
             Format::Json,

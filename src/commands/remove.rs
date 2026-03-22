@@ -42,10 +42,19 @@ pub struct RemoveTagResult {
 /// Parse a `K` or `K=V` property-removal argument.
 ///
 /// Returns `(name, Some(value))` when an `=` is present, `(name, None)` otherwise.
-pub fn parse_kv_optional(s: &str) -> (&str, Option<&str>) {
+/// Returns an error if an `=` is present but the key portion is empty or all whitespace.
+pub fn parse_kv_optional(s: &str) -> Result<(&str, Option<&str>), String> {
     match s.find('=') {
-        Some(pos) => (&s[..pos], Some(&s[pos + 1..])),
-        None => (s, None),
+        Some(pos) => {
+            let key = &s[..pos];
+            if key.trim().is_empty() {
+                return Err(format!(
+                    "invalid property argument '{s}': property name cannot be empty"
+                ));
+            }
+            Ok((key, Some(&s[pos + 1..])))
+        }
+        None => Ok((s, None)),
     }
 }
 
@@ -193,6 +202,14 @@ pub fn remove(
         }
     }
 
+    // Validate all property args before touching files
+    for arg in property_args {
+        if let Err(msg) = parse_kv_optional(arg) {
+            let out = crate::output::format_error(format, &msg, None, None, None);
+            return Ok(CommandOutcome::UserError(out));
+        }
+    }
+
     let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
@@ -203,7 +220,7 @@ pub fn remove(
 
     // Handle --property K or K=V
     for arg in property_args {
-        let (name, opt_value) = parse_kv_optional(arg);
+        let (name, opt_value) = parse_kv_optional(arg).expect("already validated");
 
         let (modified, skipped) = match opt_value {
             None => remove_property_key(&files, name)?,
@@ -267,19 +284,31 @@ mod tests {
 
     #[test]
     fn parse_kv_optional_key_only() {
-        assert_eq!(parse_kv_optional("status"), ("status", None));
+        assert_eq!(parse_kv_optional("status").unwrap(), ("status", None));
     }
 
     #[test]
     fn parse_kv_optional_key_value() {
-        assert_eq!(parse_kv_optional("status=done"), ("status", Some("done")));
+        assert_eq!(
+            parse_kv_optional("status=done").unwrap(),
+            ("status", Some("done"))
+        );
     }
 
     #[test]
     fn parse_kv_optional_value_with_equals() {
         assert_eq!(
-            parse_kv_optional("url=http://x=y"),
+            parse_kv_optional("url=http://x=y").unwrap(),
             ("url", Some("http://x=y"))
+        );
+    }
+
+    #[test]
+    fn parse_kv_optional_empty_key_returns_error() {
+        let err = parse_kv_optional("=value").unwrap_err();
+        assert!(
+            err.contains("property name cannot be empty"),
+            "unexpected error: {err}"
         );
     }
 

@@ -226,6 +226,22 @@ fn remove_requires_file_or_glob() {
 }
 
 // ---------------------------------------------------------------------------
+// Guard: invalid K=V (empty key) returns error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_empty_property_name_returns_error() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["remove", "--property", "=value", "--file", "note.md"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
 // Guard: at least one --property or --tag required
 // ---------------------------------------------------------------------------
 
