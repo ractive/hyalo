@@ -1,9 +1,9 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde::Serialize;
+use serde_yaml_ng::Value;
 use std::path::Path;
 
-use crate::commands::properties::{ListOpResult, add_values_to_list_property};
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
@@ -52,6 +52,73 @@ pub fn parse_kv(s: &str) -> Result<(&str, &str), String> {
         None => Err(format!(
             "invalid property argument '{s}': expected K=V format (e.g. status=done)"
         )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory tag mutation helper
+// ---------------------------------------------------------------------------
+
+/// Add `tag` to the `tags` list in `props` (in memory only, no I/O).
+///
+/// Returns `true` if the tag was actually added (i.e. was not already present).
+///
+/// Mirrors the logic in `add_values_to_list_property` for the `tags` key, but
+/// operates on an already-loaded `BTreeMap` to avoid a second `read_frontmatter`
+/// call when processing multiple mutations for the same file.
+fn add_tag_in_memory(
+    props: &mut std::collections::BTreeMap<String, Value>,
+    tag: &str,
+) -> Result<bool> {
+    const KEY: &str = "tags";
+
+    // Guard: reject non-list scalar types that are neither string nor sequence.
+    match props.get(KEY) {
+        None | Some(Value::Null | Value::String(_) | Value::Sequence(_)) => {}
+        Some(existing) => {
+            let kind = match existing {
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "number",
+                Value::Mapping(_) => "mapping",
+                _ => "unknown",
+            };
+            anyhow::bail!(
+                "property 'tags' is a {kind} value, not a list — \
+                 use `set --property` to overwrite it explicitly"
+            );
+        }
+    }
+
+    if let Some(Value::Sequence(seq)) = props.get_mut(KEY) {
+        let already = seq.iter().any(|v| match v {
+            Value::String(s) => s.eq_ignore_ascii_case(tag),
+            Value::Number(n) => n.to_string().eq_ignore_ascii_case(tag),
+            Value::Bool(b) => b.to_string().eq_ignore_ascii_case(tag),
+            _ => false,
+        });
+        if already {
+            return Ok(false);
+        }
+        seq.push(Value::String(tag.to_owned()));
+        Ok(true)
+    } else {
+        // Absent / null / scalar-string: build a new list.
+        let existing_str = match props.get(KEY) {
+            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            _ => None,
+        };
+
+        // Duplicate check against existing scalar string (if any).
+        if let Some(ref s) = existing_str
+            && s.eq_ignore_ascii_case(tag)
+        {
+            return Ok(false);
+        }
+
+        let mut list: Vec<Value> = existing_str.map(Value::String).into_iter().collect();
+        list.push(Value::String(tag.to_owned()));
+        props.insert(KEY.to_owned(), Value::Sequence(list));
+        Ok(true)
     }
 }
 
@@ -114,52 +181,88 @@ pub fn set(
         }
     }
 
+    // Pre-parse all property values before touching files
+    // Each entry is (name, raw_value, parsed_value)
+    let parsed_props: Vec<(&str, &str, Value)> = {
+        let mut v = Vec::with_capacity(property_args.len());
+        for arg in property_args {
+            let (name, raw_value) = parse_kv(arg).expect("already validated");
+            let value = match frontmatter::parse_value(raw_value, None) {
+                Ok(val) => val,
+                Err(e) => {
+                    let out = crate::output::format_error(
+                        format,
+                        &format!("failed to parse value for property '{name}': {e}"),
+                        None,
+                        None,
+                        None,
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+            };
+            v.push((name, raw_value, value));
+        }
+        v
+    };
+
     let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let mut results: Vec<serde_json::Value> = Vec::new();
+    // Per-property result accumulators: (modified, skipped)
+    let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); parsed_props.len()];
+    // Per-tag result accumulators: (modified, skipped)
+    let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); tag_args.len()];
 
-    // Handle --property K=V args
-    for arg in property_args {
-        // Already validated above; safe to unwrap the parse
-        let (name, raw_value) = parse_kv(arg).expect("already validated");
-        let value = match frontmatter::parse_value(raw_value, None) {
-            Ok(v) => v,
-            Err(e) => {
-                let out = crate::output::format_error(
-                    format,
-                    &format!("failed to parse value for property '{name}': {e}"),
-                    None,
-                    None,
-                    None,
-                );
-                return Ok(CommandOutcome::UserError(out));
-            }
-        };
+    // Outer loop: one read-modify-write per file
+    for (full_path, rel_path) in &files {
+        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let mut file_changed = false;
 
-        let mut modified = Vec::new();
-        let mut skipped = Vec::new();
-
-        for (full_path, rel_path) in &files {
-            let mut props = frontmatter::read_frontmatter(full_path)?;
-            // Check if value is identical to what's already there
-            let already_same = props.get(name) == Some(&value);
+        // Apply all --property mutations
+        for (i, (name, _, value)) in parsed_props.iter().enumerate() {
+            let already_same = props.get(*name) == Some(value);
             if already_same {
-                skipped.push(rel_path.clone());
+                prop_results[i].1.push(rel_path.clone()); // skipped
             } else {
-                props.insert(name.to_owned(), value.clone());
-                frontmatter::write_frontmatter(full_path, &props)?;
-                modified.push(rel_path.clone());
+                props.insert((*name).to_owned(), value.clone());
+                prop_results[i].0.push(rel_path.clone()); // modified
+                file_changed = true;
             }
         }
 
+        // Apply all --tag mutations
+        for (i, tag) in tag_args.iter().enumerate() {
+            match add_tag_in_memory(&mut props, tag) {
+                Ok(true) => {
+                    tag_results[i].0.push(rel_path.clone()); // modified
+                    file_changed = true;
+                }
+                Ok(false) => {
+                    tag_results[i].1.push(rel_path.clone()); // skipped
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if file_changed {
+            frontmatter::write_frontmatter(full_path, &props)?;
+        }
+    }
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    for ((name, raw_value, _), (modified, skipped)) in
+        parsed_props.iter().zip(prop_results.into_iter())
+    {
         let total = modified.len() + skipped.len();
         let result = SetPropertyResult {
-            property: name.to_owned(),
-            value: raw_value.to_owned(),
+            property: (*name).to_owned(),
+            value: (*raw_value).to_owned(),
             modified,
             skipped,
             total,
@@ -168,10 +271,7 @@ pub fn set(
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
     }
 
-    // Handle --tag T args
-    for tag in tag_args {
-        let ListOpResult { modified, skipped } =
-            add_values_to_list_property(&files, "tags", std::slice::from_ref(tag))?;
+    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results.into_iter()) {
         let total = modified.len() + skipped.len();
         let result = SetTagResult {
             tag: tag.clone(),
@@ -506,5 +606,79 @@ title: Note
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    #[test]
+    fn set_multiple_properties_single_read_write() {
+        // Setting two properties on the same file should produce both mutations
+        // from a single read-modify-write cycle.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["status=done".to_owned(), "priority=high".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        // Both properties modified
+        assert_eq!(arr[0]["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(arr[1]["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("status: done"));
+        assert!(content.contains("priority: high"));
+    }
+
+    #[test]
+    fn set_property_and_tag_single_read_write() {
+        // Setting a property and a tag on the same file: both applied in one cycle.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["status=done".to_owned()],
+            &["rust".to_owned()],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("status: done"));
+        assert!(content.contains("rust"));
     }
 }

@@ -23,102 +23,81 @@ pub struct AppendPropertyResult {
 }
 
 // ---------------------------------------------------------------------------
-// Core per-file append helper
+// In-memory append helper
 // ---------------------------------------------------------------------------
 
-/// Append `new_value` to the list property `name` in each file.
+/// Append `raw_value` to property `name` in already-loaded `props` (no I/O).
 ///
-/// Promotion rules:
+/// Returns `true` if the value was actually appended (i.e. was not a duplicate),
+/// or an error if the property type prevents appending.
+///
+/// Promotion rules (same as the previous per-file helper):
 /// - Property absent or null: creates `[new_value]`
 /// - Property is a sequence: appends if not already present (case-insensitive for strings)
 /// - Property is a scalar string/number/bool: promotes to `[existing, new_value]`
 /// - Any other type (Mapping, Tagged): bail with an error
-fn append_value_to_property(
-    files: &[(std::path::PathBuf, String)],
+fn append_value_in_memory(
+    props: &mut std::collections::BTreeMap<String, Value>,
     name: &str,
     raw_value: &str,
-) -> Result<(Vec<String>, Vec<String>)> {
-    let new_val = frontmatter::parse_value(raw_value, None)
-        .map_err(|e| anyhow::anyhow!("failed to parse value for property '{name}': {e}"))?;
-    let new_str = raw_value; // used for case-insensitive duplicate detection
-
-    let mut modified = Vec::new();
-    let mut skipped = Vec::new();
-
-    for (full_path, rel_path) in files {
-        let mut props = frontmatter::read_frontmatter(full_path)?;
-
-        match props.get(name).cloned() {
-            None | Some(Value::Null) => {
-                // Create a new single-element list
-                props.insert(name.to_owned(), Value::Sequence(vec![new_val.clone()]));
-                frontmatter::write_frontmatter(full_path, &props)?;
-                modified.push(rel_path.clone());
-            }
-            Some(Value::Sequence(mut seq)) => {
-                // Duplicate detection: case-insensitive for strings, stringified for numbers/bools
-                let already_present = seq.iter().any(|v| match v {
-                    Value::String(s) => s.eq_ignore_ascii_case(new_str),
-                    Value::Number(n) => n.to_string().eq_ignore_ascii_case(new_str),
-                    Value::Bool(b) => b.to_string().eq_ignore_ascii_case(new_str),
-                    _ => false,
-                });
-                if already_present {
-                    skipped.push(rel_path.clone());
-                } else {
-                    seq.push(new_val.clone());
-                    props.insert(name.to_owned(), Value::Sequence(seq));
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                }
-            }
-            Some(Value::String(existing)) => {
-                // Promote scalar string → list
-                if existing.eq_ignore_ascii_case(new_str) {
-                    skipped.push(rel_path.clone());
-                } else {
-                    let list = Value::Sequence(vec![Value::String(existing), new_val.clone()]);
-                    props.insert(name.to_owned(), list);
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                }
-            }
-            Some(Value::Number(n)) => {
-                if n.to_string().eq_ignore_ascii_case(new_str) {
-                    skipped.push(rel_path.clone());
-                } else {
-                    let list = Value::Sequence(vec![Value::Number(n), new_val.clone()]);
-                    props.insert(name.to_owned(), list);
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                }
-            }
-            Some(Value::Bool(b)) => {
-                if b.to_string().eq_ignore_ascii_case(new_str) {
-                    skipped.push(rel_path.clone());
-                } else {
-                    let list = Value::Sequence(vec![Value::Bool(b), new_val.clone()]);
-                    props.insert(name.to_owned(), list);
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                }
-            }
-            Some(other) => {
-                // Mapping, Tagged — refuse to silently overwrite
-                let kind = match &other {
-                    Value::Mapping(_) => "mapping",
-                    Value::Tagged(_) => "tagged",
-                    _ => "unknown",
-                };
-                anyhow::bail!(
-                    "property '{name}' in '{rel_path}' is a {kind} value — \
-                     cannot append to it"
-                );
+    new_val: &Value,
+) -> Result<bool> {
+    match props.get(name).cloned() {
+        None | Some(Value::Null) => {
+            props.insert(name.to_owned(), Value::Sequence(vec![new_val.clone()]));
+            Ok(true)
+        }
+        Some(Value::Sequence(mut seq)) => {
+            let already_present = seq.iter().any(|v| match v {
+                Value::String(s) => s.eq_ignore_ascii_case(raw_value),
+                Value::Number(n) => n.to_string().eq_ignore_ascii_case(raw_value),
+                Value::Bool(b) => b.to_string().eq_ignore_ascii_case(raw_value),
+                _ => false,
+            });
+            if already_present {
+                Ok(false)
+            } else {
+                seq.push(new_val.clone());
+                props.insert(name.to_owned(), Value::Sequence(seq));
+                Ok(true)
             }
         }
+        Some(Value::String(existing)) => {
+            if existing.eq_ignore_ascii_case(raw_value) {
+                Ok(false)
+            } else {
+                let list = Value::Sequence(vec![Value::String(existing), new_val.clone()]);
+                props.insert(name.to_owned(), list);
+                Ok(true)
+            }
+        }
+        Some(Value::Number(n)) => {
+            if n.to_string().eq_ignore_ascii_case(raw_value) {
+                Ok(false)
+            } else {
+                let list = Value::Sequence(vec![Value::Number(n), new_val.clone()]);
+                props.insert(name.to_owned(), list);
+                Ok(true)
+            }
+        }
+        Some(Value::Bool(b)) => {
+            if b.to_string().eq_ignore_ascii_case(raw_value) {
+                Ok(false)
+            } else {
+                let list = Value::Sequence(vec![Value::Bool(b), new_val.clone()]);
+                props.insert(name.to_owned(), list);
+                Ok(true)
+            }
+        }
+        Some(other) => {
+            let kind = match &other {
+                Value::Mapping(_) => "mapping",
+                Value::Tagged(_) => "tagged",
+                _ => "unknown",
+            };
+            anyhow::bail!("property '{name}' is a {kind} value — cannot append to it");
+        }
     }
-
-    Ok((modified, skipped))
 }
 
 // ---------------------------------------------------------------------------
@@ -181,25 +160,62 @@ pub fn append(
         }
     }
 
+    // Pre-parse all values before touching files: (name, raw_value, parsed_value)
+    let parsed_args: Vec<(&str, &str, Value)> = {
+        let mut v = Vec::with_capacity(property_args.len());
+        for arg in property_args {
+            let eq = arg.find('=').expect("already validated");
+            let name = &arg[..eq];
+            let raw_value = &arg[eq + 1..];
+            let parsed = frontmatter::parse_value(raw_value, None)
+                .map_err(|e| anyhow::anyhow!("failed to parse value for property '{name}': {e}"))?;
+            v.push((name, raw_value, parsed));
+        }
+        v
+    };
+
     let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    // Per-property result accumulators: (modified, skipped)
+    let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); parsed_args.len()];
+
+    // Outer loop: one read-modify-write per file
+    for (full_path, rel_path) in &files {
+        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let mut file_changed = false;
+
+        for (i, (name, raw_value, new_val)) in parsed_args.iter().enumerate() {
+            match append_value_in_memory(&mut props, name, raw_value, new_val) {
+                Ok(true) => {
+                    prop_results[i].0.push(rel_path.clone()); // modified
+                    file_changed = true;
+                }
+                Ok(false) => {
+                    prop_results[i].1.push(rel_path.clone()); // skipped
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        if file_changed {
+            frontmatter::write_frontmatter(full_path, &props)?;
+        }
+    }
+
     let mut results: Vec<serde_json::Value> = Vec::new();
 
-    for arg in property_args {
-        // Already validated that `=` is present
-        let eq = arg.find('=').expect("already validated");
-        let name = &arg[..eq];
-        let raw_value = &arg[eq + 1..];
-
-        let (modified, skipped) = append_value_to_property(&files, name, raw_value)?;
+    for ((name, raw_value, _), (modified, skipped)) in
+        parsed_args.iter().zip(prop_results.into_iter())
+    {
         let total = modified.len() + skipped.len();
         let result = AppendPropertyResult {
-            property: name.to_owned(),
-            value: raw_value.to_owned(),
+            property: (*name).to_owned(),
+            value: (*raw_value).to_owned(),
             modified,
             skipped,
             total,
@@ -493,5 +509,38 @@ title: Note
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    #[test]
+    fn append_multiple_properties_single_read_write() {
+        // Two appends on the same file — both should be present after one write cycle.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = append(
+            tmp.path(),
+            &["aliases=a".to_owned(), "aliases=b".to_owned()],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains('a'));
+        assert!(content.contains('b'));
     }
 }
