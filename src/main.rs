@@ -393,11 +393,7 @@ fn build_hint_context(command: &Commands, dir: &std::path::Path) -> Option<HintC
             dir: dir_opt,
             glob: glob.clone(),
         }),
-        Commands::Find { glob, .. } => Some(HintContext {
-            source: HintSource::Summary, // Reuse summary hints for now; will be updated later
-            dir: dir_opt,
-            glob: glob.clone(),
-        }),
+        Commands::Find { .. } => None, // TODO: add HintSource::Find with find-relevant hints
         Commands::Task { .. } => None,
         Commands::Set { .. } | Commands::Remove { .. } | Commands::Append { .. } => None,
     }

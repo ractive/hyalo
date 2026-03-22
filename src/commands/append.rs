@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_yaml_ng::Value;
 use std::path::Path;
 
+use crate::commands::set::parse_kv;
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
@@ -133,30 +134,9 @@ pub fn append(
 
     // Validate all K=V args upfront (must have `=` and a non-empty key)
     for arg in property_args {
-        match arg.find('=') {
-            None => {
-                let out = crate::output::format_error(
-                    format,
-                    &format!(
-                        "invalid property argument '{arg}': expected K=V format (e.g. aliases=my-alias)"
-                    ),
-                    None,
-                    None,
-                    None,
-                );
-                return Ok(CommandOutcome::UserError(out));
-            }
-            Some(pos) if arg[..pos].trim().is_empty() => {
-                let out = crate::output::format_error(
-                    format,
-                    &format!("invalid property argument '{arg}': property name cannot be empty"),
-                    None,
-                    None,
-                    None,
-                );
-                return Ok(CommandOutcome::UserError(out));
-            }
-            Some(_) => {}
+        if let Err(msg) = parse_kv(arg) {
+            let out = crate::output::format_error(format, &msg, None, None, None);
+            return Ok(CommandOutcome::UserError(out));
         }
     }
 
@@ -164,9 +144,7 @@ pub fn append(
     let parsed_args: Vec<(&str, &str, Value)> = {
         let mut v = Vec::with_capacity(property_args.len());
         for arg in property_args {
-            let eq = arg.find('=').expect("already validated");
-            let name = &arg[..eq];
-            let raw_value = &arg[eq + 1..];
+            let (name, raw_value) = parse_kv(arg).expect("already validated");
             let parsed = frontmatter::parse_value(raw_value, None)
                 .map_err(|e| anyhow::anyhow!("failed to parse value for property '{name}': {e}"))?;
             v.push((name, raw_value, parsed));

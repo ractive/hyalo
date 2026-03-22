@@ -1,9 +1,8 @@
-//! Typed structs for all JSON output shapes.
+//! Shared typed structs for JSON output shapes.
 //!
-//! Every command serializes one of these types (or a `Vec` of them) as its
-//! JSON response. Using concrete types ensures that `find`, set/remove/append,
-//! properties, tags, task, and summary all share the same shapes for
-//! overlapping data (e.g. `PropertyInfo`).
+//! Commands use these types for overlapping data (e.g. `PropertyInfo`,
+//! `FileObject`). Some commands also define result structs in their own
+//! modules (e.g. `SetPropertyResult`, `RemoveTagResult`).
 
 use serde::Serialize;
 

@@ -124,6 +124,40 @@ pub fn unwrap_single_file_result(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shared time formatting
+// ---------------------------------------------------------------------------
+
+/// Format Unix timestamp (seconds since epoch) as ISO 8601 UTC.
+/// Output: `YYYY-MM-DDTHH:MM:SSZ`
+///
+/// Manual implementation to avoid adding a time/chrono dependency.
+/// Uses Howard Hinnant's civil_from_days algorithm.
+pub(crate) fn format_iso8601(secs: u64) -> String {
+    const SECS_PER_MIN: u64 = 60;
+    const SECS_PER_HOUR: u64 = 3600;
+    const SECS_PER_DAY: u64 = 86400;
+
+    let days = secs / SECS_PER_DAY;
+    let rem = secs % SECS_PER_DAY;
+    let hh = rem / SECS_PER_HOUR;
+    let mm = (rem % SECS_PER_HOUR) / SECS_PER_MIN;
+    let ss = rem % SECS_PER_MIN;
+
+    let z = days as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
 /// Convert a `FileResolveError` into a user-facing `CommandOutcome`.
 #[must_use]
 pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
@@ -140,5 +174,20 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
         FileResolveError::NotFound { path } => CommandOutcome::UserError(
             crate::output::format_error(format, "file not found", Some(&path), None, None),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iso8601_epoch() {
+        assert_eq!(format_iso8601(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn iso8601_known_date() {
+        assert_eq!(format_iso8601(1_705_314_600), "2024-01-15T10:30:00Z");
     }
 }

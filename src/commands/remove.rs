@@ -82,30 +82,34 @@ fn remove_value_in_memory(
     name: &str,
     target: &str,
 ) -> bool {
+    // Check what kind of value we have without cloning.
+    let is_sequence = matches!(props.get(name), Some(Value::Sequence(_)));
+
+    if is_sequence {
+        // Sequence arm: mutate in place, no clone needed.
+        let Some(Value::Sequence(seq)) = props.get_mut(name) else {
+            unreachable!()
+        };
+        let before = seq.len();
+        seq.retain(|v| match v {
+            Value::String(s) => !s.eq_ignore_ascii_case(target),
+            Value::Number(n) => !n.to_string().eq_ignore_ascii_case(target),
+            Value::Bool(b) => !b.to_string().eq_ignore_ascii_case(target),
+            _ => true, // keep unrecognised element types
+        });
+        let after = seq.len();
+        if after < before {
+            if after == 0 {
+                props.remove(name);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // Scalar arms: clone only the scalar (cheap) to release the borrow on props.
     match props.get(name).cloned() {
         None => false,
-        Some(Value::Sequence(_)) => {
-            // Inline list removal: retain elements that do NOT match target.
-            let Some(Value::Sequence(seq)) = props.get_mut(name) else {
-                return false;
-            };
-            let before = seq.len();
-            seq.retain(|v| match v {
-                Value::String(s) => !s.eq_ignore_ascii_case(target),
-                Value::Number(n) => !n.to_string().eq_ignore_ascii_case(target),
-                Value::Bool(b) => !b.to_string().eq_ignore_ascii_case(target),
-                _ => true, // keep unrecognised element types
-            });
-            let after = seq.len();
-            if after < before {
-                if after == 0 {
-                    props.remove(name);
-                }
-                true
-            } else {
-                false
-            }
-        }
         Some(Value::String(s)) => {
             if s.eq_ignore_ascii_case(target) {
                 props.remove(name);
@@ -131,7 +135,7 @@ fn remove_value_in_memory(
             }
         }
         Some(_) => {
-            // Null, Mapping, Tagged — no-op
+            // Null, Mapping, Tagged, Sequence (already handled above) — no-op
             false
         }
     }
