@@ -25,7 +25,7 @@ format = "text"      # default: "json"
 hints = true         # default: false
 ```
 
-All fields are optional. CLI flags always take precedence over config values. Missing or malformed config files are handled gracefully — hyalo warns on stderr and falls back to built-in defaults.
+All fields are optional. CLI flags always take precedence over config values. If `.hyalo.toml` is missing, hyalo silently uses built-in defaults; if the file is present but cannot be read or is malformed/invalid, hyalo warns on stderr and falls back to the built-in defaults.
 
 Use `--no-hints` to explicitly disable hints when the config file enables them.
 

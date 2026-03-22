@@ -391,7 +391,7 @@ fn main() {
     // can omit it when the user relies on .hyalo.toml.
     let dir_from_cli = cli.dir.is_some();
     let format_from_cli = cli.format.is_some();
-    let hints_from_cli = cli.hints || cli.no_hints;
+    let hints_from_cli = cli.hints;
     let dir = cli.dir.unwrap_or(config.dir);
     let format_str = cli.format.unwrap_or(config.format);
     let hints_flag = if cli.hints {
