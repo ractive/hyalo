@@ -4,7 +4,6 @@ use serde::Serialize;
 use serde_yaml_ng::Value;
 use std::path::Path;
 
-use crate::commands::properties::{ListOpResult, remove_values_from_list_property};
 use crate::commands::tags::validate_tag;
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
 use crate::frontmatter;
@@ -59,98 +58,90 @@ pub fn parse_kv_optional(s: &str) -> Result<(&str, Option<&str>), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Core per-file removal helpers
+// In-memory removal helpers
 // ---------------------------------------------------------------------------
 
-/// Remove a scalar property `name` from each file; skip files where it is absent.
-fn remove_property_key(
-    files: &[(std::path::PathBuf, String)],
-    name: &str,
-) -> Result<(Vec<String>, Vec<String>)> {
-    let mut modified = Vec::new();
-    let mut skipped = Vec::new();
-
-    for (full_path, rel_path) in files {
-        let mut props = frontmatter::read_frontmatter(full_path)?;
-        if props.remove(name).is_some() {
-            frontmatter::write_frontmatter(full_path, &props)?;
-            modified.push(rel_path.clone());
-        } else {
-            skipped.push(rel_path.clone());
-        }
-    }
-
-    Ok((modified, skipped))
+/// Remove scalar property `name` from `props` (in memory, no I/O).
+///
+/// Returns `true` if the key was present and removed, `false` if absent.
+fn remove_key_in_memory(props: &mut std::collections::BTreeMap<String, Value>, name: &str) -> bool {
+    props.remove(name).is_some()
 }
 
-/// Remove value `target` from property `name` in each file.
+/// Remove value `target` from property `name` in `props` (in memory, no I/O).
 ///
 /// Semantics:
-/// - If the property is a list:      remove `target` from the list (like `remove-from-list`).
-/// - If the property is a scalar and matches `target` (case-insensitive):  remove the key.
-/// - If the property is a scalar and does not match: skip the file.
-/// - If the property is absent: skip the file.
-fn remove_property_value(
-    files: &[(std::path::PathBuf, String)],
+/// - If the property is a list: remove `target` from the list; remove the key if list is empty.
+/// - If the property is a scalar and matches `target` (case-insensitive): remove the key.
+/// - If the property is a scalar and does not match: no-op.
+/// - If the property is absent: no-op.
+///
+/// Returns `true` if a mutation occurred, `false` otherwise.
+fn remove_value_in_memory(
+    props: &mut std::collections::BTreeMap<String, Value>,
     name: &str,
     target: &str,
-) -> Result<(Vec<String>, Vec<String>)> {
-    let mut modified = Vec::new();
-    let mut skipped = Vec::new();
-
-    for (full_path, rel_path) in files {
-        let mut props = frontmatter::read_frontmatter(full_path)?;
-
-        match props.get(name).cloned() {
-            None => {
-                skipped.push(rel_path.clone());
-            }
-            Some(Value::Sequence(_)) => {
-                // Delegate to the list-removal helper for this single file.
-                let single = vec![(full_path.clone(), rel_path.clone())];
-                let ListOpResult { modified: m, .. } =
-                    remove_values_from_list_property(&single, name, &[target.to_owned()])?;
-                if m.is_empty() {
-                    skipped.push(rel_path.clone());
-                } else {
-                    modified.push(rel_path.clone());
-                }
-            }
-            Some(Value::String(s)) => {
-                if s.eq_ignore_ascii_case(target) {
+) -> bool {
+    match props.get(name).cloned() {
+        None => false,
+        Some(Value::Sequence(_)) => {
+            // Inline list removal: retain elements that do NOT match target.
+            let Some(Value::Sequence(seq)) = props.get_mut(name) else {
+                return false;
+            };
+            let before = seq.len();
+            seq.retain(|v| match v {
+                Value::String(s) => !s.eq_ignore_ascii_case(target),
+                Value::Number(n) => !n.to_string().eq_ignore_ascii_case(target),
+                Value::Bool(b) => !b.to_string().eq_ignore_ascii_case(target),
+                _ => true, // keep unrecognised element types
+            });
+            let after = seq.len();
+            if after < before {
+                if after == 0 {
                     props.remove(name);
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                } else {
-                    skipped.push(rel_path.clone());
                 }
-            }
-            Some(Value::Number(n)) => {
-                if n.to_string().eq_ignore_ascii_case(target) {
-                    props.remove(name);
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                } else {
-                    skipped.push(rel_path.clone());
-                }
-            }
-            Some(Value::Bool(b)) => {
-                if b.to_string().eq_ignore_ascii_case(target) {
-                    props.remove(name);
-                    frontmatter::write_frontmatter(full_path, &props)?;
-                    modified.push(rel_path.clone());
-                } else {
-                    skipped.push(rel_path.clone());
-                }
-            }
-            Some(_) => {
-                // Null, Mapping, Tagged — skip silently
-                skipped.push(rel_path.clone());
+                true
+            } else {
+                false
             }
         }
+        Some(Value::String(s)) => {
+            if s.eq_ignore_ascii_case(target) {
+                props.remove(name);
+                true
+            } else {
+                false
+            }
+        }
+        Some(Value::Number(n)) => {
+            if n.to_string().eq_ignore_ascii_case(target) {
+                props.remove(name);
+                true
+            } else {
+                false
+            }
+        }
+        Some(Value::Bool(b)) => {
+            if b.to_string().eq_ignore_ascii_case(target) {
+                props.remove(name);
+                true
+            } else {
+                false
+            }
+        }
+        Some(_) => {
+            // Null, Mapping, Tagged — no-op
+            false
+        }
     }
+}
 
-    Ok((modified, skipped))
+/// Remove `tag` from the `tags` list in `props` (in memory, no I/O).
+///
+/// Returns `true` if the tag was present and removed.
+fn remove_tag_in_memory(props: &mut std::collections::BTreeMap<String, Value>, tag: &str) -> bool {
+    remove_value_in_memory(props, "tags", tag)
 }
 
 // ---------------------------------------------------------------------------
@@ -210,26 +201,68 @@ pub fn remove(
         }
     }
 
+    // Pre-parse property args: (name, opt_value)
+    let parsed_props: Vec<(&str, Option<&str>)> = property_args
+        .iter()
+        .map(|arg| parse_kv_optional(arg).expect("already validated"))
+        .collect();
+
     let files = collect_files(dir, file, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    // Per-property result accumulators: (modified, skipped)
+    let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); parsed_props.len()];
+    // Per-tag result accumulators: (modified, skipped)
+    let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); tag_args.len()];
+
+    // Outer loop: one read-modify-write per file
+    for (full_path, rel_path) in &files {
+        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let mut file_changed = false;
+
+        // Apply all --property mutations
+        for (i, (name, opt_value)) in parsed_props.iter().enumerate() {
+            let changed = match opt_value {
+                None => remove_key_in_memory(&mut props, name),
+                Some(target) => remove_value_in_memory(&mut props, name, target),
+            };
+            if changed {
+                prop_results[i].0.push(rel_path.clone()); // modified
+                file_changed = true;
+            } else {
+                prop_results[i].1.push(rel_path.clone()); // skipped
+            }
+        }
+
+        // Apply all --tag mutations
+        for (i, tag) in tag_args.iter().enumerate() {
+            if remove_tag_in_memory(&mut props, tag) {
+                tag_results[i].0.push(rel_path.clone()); // modified
+                file_changed = true;
+            } else {
+                tag_results[i].1.push(rel_path.clone()); // skipped
+            }
+        }
+
+        if file_changed {
+            frontmatter::write_frontmatter(full_path, &props)?;
+        }
+    }
+
     let mut results: Vec<serde_json::Value> = Vec::new();
 
-    // Handle --property K or K=V
-    for arg in property_args {
-        let (name, opt_value) = parse_kv_optional(arg).expect("already validated");
-
-        let (modified, skipped) = match opt_value {
-            None => remove_property_key(&files, name)?,
-            Some(target) => remove_property_value(&files, name, target)?,
-        };
-
+    // Build property results
+    for ((name, opt_value), (modified, skipped)) in
+        parsed_props.iter().zip(prop_results.into_iter())
+    {
         let total = modified.len() + skipped.len();
         let result = RemovePropertyResult {
-            property: name.to_owned(),
+            property: (*name).to_owned(),
             value: opt_value.map(str::to_owned),
             modified,
             skipped,
@@ -239,10 +272,8 @@ pub fn remove(
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
     }
 
-    // Handle --tag T
-    for tag in tag_args {
-        let ListOpResult { modified, skipped } =
-            remove_values_from_list_property(&files, "tags", std::slice::from_ref(tag))?;
+    // Build tag results
+    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results.into_iter()) {
         let total = modified.len() + skipped.len();
         let result = RemoveTagResult {
             tag: tag.clone(),
@@ -627,5 +658,45 @@ tags:
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    #[test]
+    fn remove_multiple_properties_single_read_write() {
+        // Remove two properties in one cycle — both should be gone.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+status: draft
+priority: low
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned(), "priority".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr[0]["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(arr[1]["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("status:"));
+        assert!(!content.contains("priority:"));
+        assert!(content.contains("title:"));
     }
 }
