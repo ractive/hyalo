@@ -77,7 +77,7 @@ An LLM agent consuming summary output can autonomously drill down without needin
 - For properties with common values, could also hint value-specific queries: `hyalo property find --name status --value "in-progress"`
 
 ## My Comments
-The tricky part could be to know the "context" and decide on what actual commands to propse. How to design a good heuristic for this?
+The tricky part could be to know the "context" and decide on what actual commands to propose. How to design a good heuristic for this?
 
 ## Resolution
 
