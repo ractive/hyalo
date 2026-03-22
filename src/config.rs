@@ -43,7 +43,7 @@ pub fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
         Ok(cwd) => load_config_from(&cwd),
         Err(e) => {
-            eprintln!("warning: could not read .hyalo.toml: {e}");
+            eprintln!("warning: could not determine current directory to locate .hyalo.toml: {e}");
             ResolvedDefaults::hardcoded()
         }
     }
