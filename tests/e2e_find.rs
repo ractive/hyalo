@@ -618,6 +618,15 @@ fn find_text_format_file_object_structure() {
 
     // File path as header
     assert!(stdout.contains("alpha.md"), "file path header: {stdout}");
+    // Group labels
+    assert!(
+        stdout.contains("properties:"),
+        "properties group label: {stdout}"
+    );
+    assert!(
+        stdout.contains("sections:"),
+        "sections group label: {stdout}"
+    );
     // Properties with type annotations
     assert!(
         stdout.contains("title (text): Alpha"),
@@ -702,7 +711,11 @@ fn find_text_format_fields_properties_only() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // Should have properties
+    // Should have properties with group label
+    assert!(
+        stdout.contains("properties:"),
+        "properties group label: {stdout}"
+    );
     assert!(
         stdout.contains("title (text): Alpha"),
         "property present: {stdout}"

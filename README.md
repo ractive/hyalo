@@ -150,7 +150,11 @@ Add `--hints` to any read-only command to get suggested drill-down commands:
 
 ```
 $ hyalo summary --format text --hints
-Files: 32 total (.: 5, backlog: 7, iterations: 12, research: 8)
+Files: 32 total
+  ".": 5
+  "backlog": 7
+  "iterations": 12
+  "research": 8
 Properties: 8 unique
 Tags: 15 unique
 Status: completed (10), in-progress (2), planned (2)
