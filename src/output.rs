@@ -436,7 +436,7 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // Properties: header then each as "    name (type): value"
     if map.contains_key("properties") {
         parts.push(
-            r#"if .properties then "  properties:\n\(.properties | map("    \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
+            r#"if (.properties | length) > 0 then "  properties:\n\(.properties | map("    \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
@@ -452,7 +452,7 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // Note: uses r##"..."## because the jq filter contains the sequence "#" (hash-quoted).
     if map.contains_key("sections") {
         parts.push(
-            r##"if .sections then "  sections:\n\(.sections | map("    \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.sections | length) > 0 then "  sections:\n\(.sections | map("    \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 
