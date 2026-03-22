@@ -1,0 +1,706 @@
+#![allow(clippy::missing_errors_doc)]
+use anyhow::Result;
+use serde::Serialize;
+use serde_yaml_ng::Value;
+use std::path::Path;
+
+use crate::commands::tags::validate_tag;
+use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
+use crate::frontmatter;
+use crate::output::{CommandOutcome, Format};
+
+// ---------------------------------------------------------------------------
+// Output types
+// ---------------------------------------------------------------------------
+
+/// Result of a `remove --property K` (or `K=V`) operation across files.
+#[derive(Debug, Serialize)]
+pub struct RemovePropertyResult {
+    pub property: String,
+    /// Present when `remove --property K=V` was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    pub modified: Vec<String>,
+    pub skipped: Vec<String>,
+    pub total: usize,
+}
+
+/// Result of a `remove --tag T` operation across files.
+#[derive(Debug, Serialize)]
+pub struct RemoveTagResult {
+    pub tag: String,
+    pub modified: Vec<String>,
+    pub skipped: Vec<String>,
+    pub total: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Parsing helper
+// ---------------------------------------------------------------------------
+
+/// Parse a `K` or `K=V` property-removal argument.
+///
+/// Returns `(name, Some(value))` when an `=` is present, `(name, None)` otherwise.
+/// Returns an error if an `=` is present but the key portion is empty or all whitespace.
+pub fn parse_kv_optional(s: &str) -> Result<(&str, Option<&str>), String> {
+    match s.find('=') {
+        Some(pos) => {
+            let key = &s[..pos];
+            if key.trim().is_empty() {
+                return Err(format!(
+                    "invalid property argument '{s}': property name cannot be empty"
+                ));
+            }
+            Ok((key, Some(&s[pos + 1..])))
+        }
+        None => Ok((s, None)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory removal helpers
+// ---------------------------------------------------------------------------
+
+/// Remove scalar property `name` from `props` (in memory, no I/O).
+///
+/// Returns `true` if the key was present and removed, `false` if absent.
+fn remove_key_in_memory(props: &mut std::collections::BTreeMap<String, Value>, name: &str) -> bool {
+    props.remove(name).is_some()
+}
+
+/// Remove value `target` from property `name` in `props` (in memory, no I/O).
+///
+/// Semantics:
+/// - If the property is a list: remove `target` from the list; remove the key if list is empty.
+/// - If the property is a scalar and matches `target` (case-insensitive): remove the key.
+/// - If the property is a scalar and does not match: no-op.
+/// - If the property is absent: no-op.
+///
+/// Returns `true` if a mutation occurred, `false` otherwise.
+fn remove_value_in_memory(
+    props: &mut std::collections::BTreeMap<String, Value>,
+    name: &str,
+    target: &str,
+) -> bool {
+    // Check what kind of value we have without cloning.
+    let is_sequence = matches!(props.get(name), Some(Value::Sequence(_)));
+
+    if is_sequence {
+        // Sequence arm: mutate in place, no clone needed.
+        let Some(Value::Sequence(seq)) = props.get_mut(name) else {
+            unreachable!()
+        };
+        let before = seq.len();
+        seq.retain(|v| match v {
+            Value::String(s) => !s.eq_ignore_ascii_case(target),
+            Value::Number(n) => !n.to_string().eq_ignore_ascii_case(target),
+            Value::Bool(b) => !b.to_string().eq_ignore_ascii_case(target),
+            _ => true, // keep unrecognised element types
+        });
+        let after = seq.len();
+        if after < before {
+            if after == 0 {
+                props.remove(name);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // Scalar arms: clone only the scalar (cheap) to release the borrow on props.
+    match props.get(name).cloned() {
+        None => false,
+        Some(Value::String(s)) => {
+            if s.eq_ignore_ascii_case(target) {
+                props.remove(name);
+                true
+            } else {
+                false
+            }
+        }
+        Some(Value::Number(n)) => {
+            if n.to_string().eq_ignore_ascii_case(target) {
+                props.remove(name);
+                true
+            } else {
+                false
+            }
+        }
+        Some(Value::Bool(b)) => {
+            if b.to_string().eq_ignore_ascii_case(target) {
+                props.remove(name);
+                true
+            } else {
+                false
+            }
+        }
+        Some(_) => {
+            // Null, Mapping, Tagged, Sequence (already handled above) — no-op
+            false
+        }
+    }
+}
+
+/// Remove `tag` from the `tags` list in `props` (in memory, no I/O).
+///
+/// Returns `true` if the tag was present and removed.
+fn remove_tag_in_memory(props: &mut std::collections::BTreeMap<String, Value>, tag: &str) -> bool {
+    remove_value_in_memory(props, "tags", tag)
+}
+
+// ---------------------------------------------------------------------------
+// `hyalo remove` command
+// ---------------------------------------------------------------------------
+
+/// Remove properties and/or tags across matched files.
+///
+/// - `property_args`: zero or more `"K"` (remove key) or `"K=V"` (remove value) strings
+/// - `tag_args`:      zero or more tag name strings to remove
+/// - Requires `--file` or `--glob`
+/// - At least one of `property_args` or `tag_args` must be non-empty
+pub fn remove(
+    dir: &Path,
+    property_args: &[String],
+    tag_args: &[String],
+    file: Option<&str>,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    if property_args.is_empty() && tag_args.is_empty() {
+        let out = crate::output::format_error(
+            format,
+            "remove requires at least one --property K or --tag T",
+            None,
+            Some("example: hyalo remove --property status --file note.md"),
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
+    if let Some(outcome) = require_file_or_glob(file, glob, "remove", format) {
+        return Ok(outcome);
+    }
+
+    // Validate tag names before touching files
+    for tag in tag_args {
+        if let Err(msg) = validate_tag(tag) {
+            let out = crate::output::format_error(
+                format,
+                &msg,
+                None,
+                Some(
+                    "tag names may contain letters, digits, _, -, / and must have at least one non-numeric character",
+                ),
+                None,
+            );
+            return Ok(CommandOutcome::UserError(out));
+        }
+    }
+
+    // Validate all property args before touching files
+    for arg in property_args {
+        if let Err(msg) = parse_kv_optional(arg) {
+            let out = crate::output::format_error(format, &msg, None, None, None);
+            return Ok(CommandOutcome::UserError(out));
+        }
+    }
+
+    // Pre-parse property args: (name, opt_value)
+    let parsed_props: Vec<(&str, Option<&str>)> = property_args
+        .iter()
+        .map(|arg| parse_kv_optional(arg).expect("already validated"))
+        .collect();
+
+    let files = collect_files(dir, file, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+
+    // Per-property result accumulators: (modified, skipped)
+    let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); parsed_props.len()];
+    // Per-tag result accumulators: (modified, skipped)
+    let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
+        vec![(Vec::new(), Vec::new()); tag_args.len()];
+
+    // Outer loop: one read-modify-write per file
+    for (full_path, rel_path) in &files {
+        let mut props = frontmatter::read_frontmatter(full_path)?;
+        let mut file_changed = false;
+
+        // Apply all --property mutations
+        for (i, (name, opt_value)) in parsed_props.iter().enumerate() {
+            let changed = match opt_value {
+                None => remove_key_in_memory(&mut props, name),
+                Some(target) => remove_value_in_memory(&mut props, name, target),
+            };
+            if changed {
+                prop_results[i].0.push(rel_path.clone()); // modified
+                file_changed = true;
+            } else {
+                prop_results[i].1.push(rel_path.clone()); // skipped
+            }
+        }
+
+        // Apply all --tag mutations
+        for (i, tag) in tag_args.iter().enumerate() {
+            if remove_tag_in_memory(&mut props, tag) {
+                tag_results[i].0.push(rel_path.clone()); // modified
+                file_changed = true;
+            } else {
+                tag_results[i].1.push(rel_path.clone()); // skipped
+            }
+        }
+
+        if file_changed {
+            frontmatter::write_frontmatter(full_path, &props)?;
+        }
+    }
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    // Build property results
+    for ((name, opt_value), (modified, skipped)) in
+        parsed_props.iter().zip(prop_results.into_iter())
+    {
+        let total = modified.len() + skipped.len();
+        let result = RemovePropertyResult {
+            property: (*name).to_owned(),
+            value: opt_value.map(str::to_owned),
+            modified,
+            skipped,
+            total,
+        };
+        results
+            .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
+    }
+
+    // Build tag results
+    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results.into_iter()) {
+        let total = modified.len() + skipped.len();
+        let result = RemoveTagResult {
+            tag: tag.clone(),
+            modified,
+            skipped,
+            total,
+        };
+        results
+            .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
+    }
+
+    let output = if results.len() == 1 {
+        results.pop().unwrap_or_default()
+    } else {
+        serde_json::json!(results)
+    };
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format, &output,
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    macro_rules! md {
+        ($s:expr) => {
+            $s.strip_prefix('\n').unwrap_or($s)
+        };
+    }
+
+    // --- parse_kv_optional ---
+
+    #[test]
+    fn parse_kv_optional_key_only() {
+        assert_eq!(parse_kv_optional("status").unwrap(), ("status", None));
+    }
+
+    #[test]
+    fn parse_kv_optional_key_value() {
+        assert_eq!(
+            parse_kv_optional("status=done").unwrap(),
+            ("status", Some("done"))
+        );
+    }
+
+    #[test]
+    fn parse_kv_optional_value_with_equals() {
+        assert_eq!(
+            parse_kv_optional("url=http://x=y").unwrap(),
+            ("url", Some("http://x=y"))
+        );
+    }
+
+    #[test]
+    fn parse_kv_optional_empty_key_returns_error() {
+        let err = parse_kv_optional("=value").unwrap_err();
+        assert!(
+            err.contains("property name cannot be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // --- remove --property K (key removal) ---
+
+    #[test]
+    fn remove_property_key_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+status: draft
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["property"], "status");
+        assert!(parsed.get("value").is_none() || parsed["value"].is_null());
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("status:"));
+        assert!(content.contains("title:"));
+    }
+
+    #[test]
+    fn remove_property_key_missing_skips() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+    }
+
+    // --- remove --property K=V (value removal from scalar) ---
+
+    #[test]
+    fn remove_property_value_scalar_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+status: draft
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status=draft".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("status:"));
+    }
+
+    #[test]
+    fn remove_property_value_scalar_no_match_skips() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+status: published
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status=draft".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+        // File should be unchanged
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("published"));
+    }
+
+    // --- remove --property K=V (value removal from list) ---
+
+    #[test]
+    fn remove_property_value_list_removes_element() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+aliases:
+  - old-name
+  - other
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["aliases=old-name".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("old-name"));
+        assert!(content.contains("other"));
+    }
+
+    // --- remove --tag T ---
+
+    #[test]
+    fn remove_tag_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+tags:
+  - rust
+  - cli
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &[],
+            &["rust".to_owned()],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["tag"], "rust");
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("rust"));
+        assert!(content.contains("cli"));
+    }
+
+    #[test]
+    fn remove_tag_not_present_skips() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+tags:
+  - cli
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &[],
+            &["rust".to_owned()],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_requires_file_or_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned()],
+            &[],
+            None,
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn remove_requires_at_least_one_arg() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = remove(tmp.path(), &[], &[], Some("note.md"), None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn remove_multiple_mutations_returns_array() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+status: draft
+tags:
+  - rust
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned()],
+            &["rust".to_owned()],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn remove_preserves_body() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = "# Heading\n\nSome content.\n";
+        fs::write(
+            tmp.path().join("note.md"),
+            format!("---\nstatus: draft\ntitle: Note\n---\n{body}"),
+        )
+        .unwrap();
+
+        remove(
+            tmp.path(),
+            &["status".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains(body), "body was corrupted:\n{content}");
+    }
+
+    #[test]
+    fn remove_multiple_properties_single_read_write() {
+        // Remove two properties in one cycle — both should be gone.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+status: draft
+priority: low
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned(), "priority".to_owned()],
+            &[],
+            Some("note.md"),
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr[0]["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(arr[1]["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("status:"));
+        assert!(!content.contains("priority:"));
+        assert!(content.contains("title:"));
+    }
+}

@@ -11,24 +11,7 @@ const MAX_HINTS: usize = 5;
 pub enum HintSource {
     Summary,
     PropertiesSummary,
-    PropertiesList,
     TagsSummary,
-    TagsList,
-    PropertyFind {
-        name: String,
-        value: Option<String>,
-    },
-    TagFind {
-        name: String,
-    },
-    /// Filter is "all", "done", "todo", or the status char.
-    Tasks {
-        filter: String,
-    },
-    Outline,
-    Links {
-        file: String,
-    },
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -47,16 +30,7 @@ pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<String
     let hints = match &ctx.source {
         HintSource::Summary => hints_for_summary(ctx, data),
         HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data),
-        HintSource::PropertiesList => hints_for_properties_list(ctx, data),
         HintSource::TagsSummary => hints_for_tags_summary(ctx, data),
-        HintSource::TagsList => hints_for_tags_list(ctx, data),
-        HintSource::PropertyFind { name, value } => {
-            hints_for_property_find(ctx, data, name, value.as_deref())
-        }
-        HintSource::TagFind { name } => hints_for_tag_find(ctx, data, name),
-        HintSource::Tasks { filter } => hints_for_tasks(ctx, data, filter),
-        HintSource::Outline => hints_for_outline(ctx, data),
-        HintSource::Links { file } => hints_for_links(ctx, data, file),
     };
     hints.into_iter().take(MAX_HINTS).collect()
 }
@@ -145,10 +119,10 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
     let mut hints = Vec::new();
 
     // Always suggest aggregate views.
-    hints.push(build_command_with_glob(ctx, &["properties", "summary"]));
-    hints.push(build_command_with_glob(ctx, &["tags", "summary"]));
+    hints.push(build_command_with_glob(ctx, &["properties"]));
+    hints.push(build_command_with_glob(ctx, &["tags"]));
 
-    // Suggest tasks --todo if there are open tasks.
+    // Suggest find --task todo if there are open tasks.
     let tasks_total = data
         .get("tasks")
         .and_then(|t| t.get("total"))
@@ -160,7 +134,7 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     if tasks_total > tasks_done {
-        hints.push(build_command_with_glob(ctx, &["tasks", "--todo"]));
+        hints.push(build_command_with_glob(ctx, &["find", "--task", "todo"]));
     }
 
     // Pick 1-2 most interesting status values.
@@ -176,10 +150,8 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
 
         let remaining = MAX_HINTS.saturating_sub(hints.len());
         for (value, _) in groups.into_iter().take(remaining.min(2)) {
-            hints.push(build_command_no_glob(
-                ctx,
-                &["property", "find", "--name", "status", "--value", value],
-            ));
+            let filter = format!("status={value}");
+            hints.push(build_command_no_glob(ctx, &["find", "--property", &filter]));
         }
     }
 
@@ -206,30 +178,7 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
     entries
         .into_iter()
         .take(3)
-        .map(|(name, _)| build_command_with_glob(ctx, &["property", "find", "--name", name]))
-        .collect()
-}
-
-fn hints_for_properties_list(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    let paths: Vec<&str> = match data {
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .filter_map(|e| e.get("path").and_then(|p| p.as_str()))
-            .collect(),
-        serde_json::Value::Object(_) => {
-            // Single file result.
-            data.get("path")
-                .and_then(|p| p.as_str())
-                .into_iter()
-                .collect()
-        }
-        _ => vec![],
-    };
-
-    paths
-        .into_iter()
-        .take(2)
-        .map(|path| build_command_no_glob(ctx, &["outline", "--file", path]))
+        .map(|(name, _)| build_command_with_glob(ctx, &["find", "--property", name]))
         .collect()
 }
 
@@ -253,174 +202,9 @@ fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<St
     entries
         .into_iter()
         .take(3)
-        .map(|(name, _)| build_command_with_glob(ctx, &["tag", "find", "--name", name]))
+        .map(|(name, _)| build_command_with_glob(ctx, &["find", "--tag", name]))
         .collect()
 }
-
-fn hints_for_tags_list(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    let paths: Vec<&str> = match data {
-        serde_json::Value::Array(arr) => arr
-            .iter()
-            .filter_map(|e| e.get("path").and_then(|p| p.as_str()))
-            .collect(),
-        serde_json::Value::Object(_) => data
-            .get("path")
-            .and_then(|p| p.as_str())
-            .into_iter()
-            .collect(),
-        _ => vec![],
-    };
-
-    paths
-        .into_iter()
-        .take(2)
-        .map(|path| build_command_no_glob(ctx, &["outline", "--file", path]))
-        .collect()
-}
-
-fn hints_for_property_find(
-    ctx: &HintContext,
-    data: &serde_json::Value,
-    name: &str,
-    value: Option<&str>,
-) -> Vec<String> {
-    let files = match data.get("files").and_then(|f| f.as_array()) {
-        Some(a) => a,
-        None => return vec![],
-    };
-
-    let file_paths: Vec<&str> = files.iter().filter_map(|f| f.as_str()).collect();
-
-    let mut hints = Vec::new();
-
-    // Suggest outline for first 2-3 files.
-    let outline_count = if value.is_none() { 2 } else { 3 };
-    for path in file_paths.iter().take(outline_count) {
-        hints.push(build_command_no_glob(ctx, &["outline", "--file", path]));
-    }
-
-    // If no --value was used, suggest reading the property from the first file.
-    if value.is_none()
-        && let Some(first_file) = file_paths.first()
-    {
-        hints.push(build_command_no_glob(
-            ctx,
-            &["property", "read", "--name", name, "--file", first_file],
-        ));
-    }
-
-    hints
-}
-
-fn hints_for_tag_find(ctx: &HintContext, data: &serde_json::Value, _name: &str) -> Vec<String> {
-    let files = match data.get("files").and_then(|f| f.as_array()) {
-        Some(a) => a,
-        None => return vec![],
-    };
-
-    files
-        .iter()
-        .filter_map(|f| f.as_str())
-        .take(3)
-        .map(|path| build_command_no_glob(ctx, &["outline", "--file", path]))
-        .collect()
-}
-
-fn hints_for_tasks(ctx: &HintContext, data: &serde_json::Value, filter: &str) -> Vec<String> {
-    let arr = match data.as_array() {
-        Some(a) => a,
-        None => return vec![],
-    };
-
-    let mut hints = Vec::new();
-
-    // Find first file with non-empty tasks and suggest reading its first task.
-    'outer: for entry in arr {
-        let file = match entry.get("file").and_then(|f| f.as_str()) {
-            Some(f) => f,
-            None => continue,
-        };
-        let tasks = match entry.get("tasks").and_then(|t| t.as_array()) {
-            Some(t) => t,
-            None => continue,
-        };
-        for task in tasks {
-            let line = match task.get("line").and_then(|l| l.as_u64()) {
-                Some(l) => l,
-                None => continue,
-            };
-            let line_str = line.to_string();
-            hints.push(build_command_no_glob(
-                ctx,
-                &["task", "read", "--file", file, "--line", &line_str],
-            ));
-            break 'outer;
-        }
-    }
-
-    // If showing all tasks, also suggest the todo view.
-    if filter == "all" {
-        hints.push(build_command_with_glob(ctx, &["tasks", "--todo"]));
-    }
-
-    hints
-}
-
-fn hints_for_outline(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    // Works for both a single FileOutline and an array of them.
-    let outlines: Vec<&serde_json::Value> = match data {
-        serde_json::Value::Array(arr) => arr.iter().collect(),
-        obj @ serde_json::Value::Object(_) => vec![obj],
-        _ => return vec![],
-    };
-
-    let mut hints = Vec::new();
-
-    if let Some(first) = outlines.first() {
-        // Suggest property find for first property in the first outline.
-        if let Some(props) = first.get("properties").and_then(|p| p.as_array())
-            && let Some(first_prop) = props.first()
-            && let Some(name) = first_prop.get("name").and_then(|n| n.as_str())
-        {
-            hints.push(build_command_with_glob(
-                ctx,
-                &["property", "find", "--name", name],
-            ));
-        }
-
-        // Suggest tag find for first tag in the first outline.
-        if let Some(tags) = first.get("tags").and_then(|t| t.as_array())
-            && let Some(first_tag) = tags.first()
-            && let Some(tag) = first_tag.as_str()
-        {
-            hints.push(build_command_with_glob(
-                ctx,
-                &["tag", "find", "--name", tag],
-            ));
-        }
-    }
-
-    hints
-}
-
-fn hints_for_links(ctx: &HintContext, data: &serde_json::Value, _file: &str) -> Vec<String> {
-    let links = match data.get("links").and_then(|l| l.as_array()) {
-        Some(a) => a,
-        None => return vec![],
-    };
-
-    // Only suggest outlines for resolved links (those with a `path` field).
-    links
-        .iter()
-        .filter_map(|link| link.get("path").and_then(|p| p.as_str()))
-        .take(2)
-        .map(|path| build_command_no_glob(ctx, &["outline", "--file", path]))
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -489,8 +273,8 @@ mod tests {
     fn build_command_no_flags() {
         let c = ctx(HintSource::Summary);
         assert_eq!(
-            build_command_no_glob(&c, &["properties", "summary"]),
-            "hyalo properties summary"
+            build_command_no_glob(&c, &["properties"]),
+            "hyalo properties"
         );
     }
 
@@ -498,8 +282,8 @@ mod tests {
     fn build_command_with_dir() {
         let c = ctx_with_dir(HintSource::Summary, "/my/vault");
         assert_eq!(
-            build_command_no_glob(&c, &["tags", "summary"]),
-            "hyalo --dir /my/vault tags summary"
+            build_command_no_glob(&c, &["tags"]),
+            "hyalo --dir /my/vault tags"
         );
     }
 
@@ -507,17 +291,8 @@ mod tests {
     fn build_command_with_glob_propagated() {
         let c = ctx_with_glob(HintSource::PropertiesSummary, "**/*.md");
         assert_eq!(
-            build_command_with_glob(&c, &["properties", "summary"]),
-            "hyalo --glob '**/*.md' properties summary"
-        );
-    }
-
-    #[test]
-    fn build_command_no_glob_omits_glob() {
-        let c = ctx_with_glob(HintSource::PropertiesList, "notes/*.md");
-        assert_eq!(
-            build_command_no_glob(&c, &["outline", "--file", "note.md"]),
-            "hyalo outline --file note.md"
+            build_command_with_glob(&c, &["properties"]),
+            "hyalo --glob '**/*.md' properties"
         );
     }
 
@@ -545,8 +320,16 @@ mod tests {
             "recent_files": []
         });
         let hints = generate_hints(&c, &data);
-        assert!(hints.iter().any(|h| h.contains("properties summary")));
-        assert!(hints.iter().any(|h| h.contains("tags summary")));
+        assert!(hints.iter().any(|h| {
+            h == "hyalo properties"
+                || (h.starts_with("hyalo --dir ") && h.ends_with(" properties"))
+                || (h.starts_with("hyalo --glob ") && h.ends_with(" properties"))
+        }));
+        assert!(hints.iter().any(|h| {
+            h == "hyalo tags"
+                || (h.starts_with("hyalo --dir ") && h.ends_with(" tags"))
+                || (h.starts_with("hyalo --glob ") && h.ends_with(" tags"))
+        }));
     }
 
     #[test]
@@ -564,7 +347,7 @@ mod tests {
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("tasks") && h.contains("--todo"))
+                .any(|h| h.contains("find") && h.contains("--task") && h.contains("todo"))
         );
     }
 
@@ -665,325 +448,6 @@ mod tests {
         assert!(hints[0].contains("notes/*.md"));
     }
 
-    // --- hints_for_properties_list ---
-
-    #[test]
-    fn properties_list_suggests_outline_for_first_2_files() {
-        let c = ctx(HintSource::PropertiesList);
-        let data = json!([
-            {"path": "a.md", "properties": []},
-            {"path": "b.md", "properties": []},
-            {"path": "c.md", "properties": []}
-        ]);
-        let hints = generate_hints(&c, &data);
-        assert_eq!(hints.len(), 2);
-        assert!(hints[0].contains("outline") && hints[0].contains("a.md"));
-        assert!(hints[1].contains("outline") && hints[1].contains("b.md"));
-        // c.md should not appear
-        assert!(!hints.iter().any(|h| h.contains("c.md")));
-    }
-
-    #[test]
-    fn properties_list_single_file_object() {
-        let c = ctx(HintSource::PropertiesList);
-        let data = json!({"path": "note.md", "properties": []});
-        let hints = generate_hints(&c, &data);
-        assert_eq!(hints.len(), 1);
-        assert!(hints[0].contains("outline") && hints[0].contains("note.md"));
-    }
-
-    #[test]
-    fn properties_list_glob_not_in_file_specific_hints() {
-        let c = ctx_with_glob(HintSource::PropertiesList, "**/*.md");
-        let data = json!([{"path": "note.md", "properties": []}]);
-        let hints = generate_hints(&c, &data);
-        assert!(!hints[0].contains("--glob"));
-    }
-
-    // --- hints_for_tags_summary ---
-
-    #[test]
-    fn tags_summary_top3_by_count() {
-        let c = ctx(HintSource::TagsSummary);
-        let data = json!({
-            "tags": [
-                {"name": "rust", "count": 20},
-                {"name": "cli", "count": 10},
-                {"name": "api", "count": 5},
-                {"name": "draft", "count": 2}
-            ],
-            "total": 4
-        });
-        let hints = generate_hints(&c, &data);
-        assert_eq!(hints.len(), 3);
-        assert!(hints[0].contains("rust"));
-        assert!(hints[1].contains("cli"));
-        assert!(hints[2].contains("api"));
-        assert!(!hints.iter().any(|h| h.contains("draft")));
-    }
-
-    #[test]
-    fn tags_summary_empty_tags() {
-        let c = ctx(HintSource::TagsSummary);
-        let data = json!({"tags": [], "total": 0});
-        let hints = generate_hints(&c, &data);
-        assert!(hints.is_empty());
-    }
-
-    // --- hints_for_tags_list ---
-
-    #[test]
-    fn tags_list_suggests_outline_for_first_2_files() {
-        let c = ctx(HintSource::TagsList);
-        let data = json!([
-            {"path": "a.md", "tags": ["rust"]},
-            {"path": "b.md", "tags": ["cli"]},
-            {"path": "c.md", "tags": ["api"]}
-        ]);
-        let hints = generate_hints(&c, &data);
-        assert_eq!(hints.len(), 2);
-        assert!(hints[0].contains("a.md"));
-        assert!(hints[1].contains("b.md"));
-    }
-
-    // --- hints_for_property_find ---
-
-    #[test]
-    fn property_find_with_value_suggests_outlines() {
-        let c = ctx(HintSource::PropertyFind {
-            name: "status".to_owned(),
-            value: Some("draft".to_owned()),
-        });
-        let data = json!({
-            "property": "status",
-            "value": "draft",
-            "files": ["a.md", "b.md", "c.md"],
-            "total": 3
-        });
-        let hints = generate_hints(&c, &data);
-        // With a value, we get up to 3 outlines, no property read
-        assert!(hints.iter().all(|h| h.contains("outline")));
-        assert_eq!(hints.len(), 3);
-        assert!(!hints.iter().any(|h| h.contains("property read")));
-    }
-
-    #[test]
-    fn property_find_without_value_suggests_outline_and_read() {
-        let c = ctx(HintSource::PropertyFind {
-            name: "status".to_owned(),
-            value: None,
-        });
-        let data = json!({
-            "property": "status",
-            "files": ["a.md", "b.md"],
-            "total": 2
-        });
-        let hints = generate_hints(&c, &data);
-        // 2 outlines + 1 property read
-        assert!(hints.iter().any(|h| h.contains("outline")));
-        assert!(
-            hints
-                .iter()
-                .any(|h| h.contains("property read") && h.contains("a.md"))
-        );
-    }
-
-    #[test]
-    fn property_find_empty_files() {
-        let c = ctx(HintSource::PropertyFind {
-            name: "status".to_owned(),
-            value: None,
-        });
-        let data = json!({"property": "status", "files": [], "total": 0});
-        let hints = generate_hints(&c, &data);
-        // No outlines possible, no read possible
-        assert!(hints.is_empty());
-    }
-
-    // --- hints_for_tag_find ---
-
-    #[test]
-    fn tag_find_suggests_outlines() {
-        let c = ctx(HintSource::TagFind {
-            name: "rust".to_owned(),
-        });
-        let data = json!({
-            "tag": "rust",
-            "files": ["a.md", "b.md", "c.md", "d.md"],
-            "total": 4
-        });
-        let hints = generate_hints(&c, &data);
-        // Up to 3 outlines
-        assert_eq!(hints.len(), 3);
-        assert!(hints.iter().all(|h| h.contains("outline")));
-        assert!(!hints.iter().any(|h| h.contains("d.md")));
-    }
-
-    // --- hints_for_tasks ---
-
-    #[test]
-    fn tasks_suggests_task_read_for_first_task() {
-        let c = ctx(HintSource::Tasks {
-            filter: "todo".to_owned(),
-        });
-        let data = json!([
-            {
-                "file": "todo.md",
-                "tasks": [{"line": 5, "status": " ", "text": "Fix bug", "done": false}],
-                "total": 1
-            }
-        ]);
-        let hints = generate_hints(&c, &data);
-        assert!(
-            hints
-                .iter()
-                .any(|h| h.contains("task read") && h.contains("todo.md") && h.contains("5"))
-        );
-    }
-
-    #[test]
-    fn tasks_all_filter_also_suggests_todo_view() {
-        let c = ctx(HintSource::Tasks {
-            filter: "all".to_owned(),
-        });
-        let data = json!([
-            {
-                "file": "todo.md",
-                "tasks": [{"line": 3, "status": " ", "text": "Work", "done": false}],
-                "total": 1
-            }
-        ]);
-        let hints = generate_hints(&c, &data);
-        assert!(
-            hints
-                .iter()
-                .any(|h| h.contains("tasks") && h.contains("--todo"))
-        );
-    }
-
-    #[test]
-    fn tasks_skips_files_with_empty_tasks() {
-        let c = ctx(HintSource::Tasks {
-            filter: "todo".to_owned(),
-        });
-        let data = json!([
-            {"file": "empty.md", "tasks": [], "total": 0},
-            {
-                "file": "has-tasks.md",
-                "tasks": [{"line": 7, "status": " ", "text": "Do it", "done": false}],
-                "total": 1
-            }
-        ]);
-        let hints = generate_hints(&c, &data);
-        assert!(hints.iter().any(|h| h.contains("has-tasks.md")));
-        assert!(!hints.iter().any(|h| h.contains("empty.md")));
-    }
-
-    #[test]
-    fn tasks_empty_array() {
-        let c = ctx(HintSource::Tasks {
-            filter: "todo".to_owned(),
-        });
-        let hints = generate_hints(&c, &json!([]));
-        assert!(hints.is_empty());
-    }
-
-    // --- hints_for_outline ---
-
-    #[test]
-    fn outline_suggests_property_find_and_tag_find() {
-        let c = ctx(HintSource::Outline);
-        let data = json!({
-            "file": "note.md",
-            "properties": [{"name": "status", "type": "text", "value": "draft"}],
-            "tags": ["rust", "cli"],
-            "sections": []
-        });
-        let hints = generate_hints(&c, &data);
-        assert!(
-            hints
-                .iter()
-                .any(|h| h.contains("property find") && h.contains("status"))
-        );
-        assert!(
-            hints
-                .iter()
-                .any(|h| h.contains("tag find") && h.contains("rust"))
-        );
-    }
-
-    #[test]
-    fn outline_array_uses_first_item() {
-        let c = ctx(HintSource::Outline);
-        let data = json!([
-            {
-                "file": "a.md",
-                "properties": [{"name": "title", "type": "text", "value": "A"}],
-                "tags": ["first"],
-                "sections": []
-            },
-            {
-                "file": "b.md",
-                "properties": [{"name": "other", "type": "text", "value": "B"}],
-                "tags": ["second"],
-                "sections": []
-            }
-        ]);
-        let hints = generate_hints(&c, &data);
-        // Properties and tags come from first item
-        assert!(hints.iter().any(|h| h.contains("title")));
-        assert!(hints.iter().any(|h| h.contains("first")));
-        assert!(!hints.iter().any(|h| h.contains("other")));
-        assert!(!hints.iter().any(|h| h.contains("second")));
-    }
-
-    #[test]
-    fn outline_no_properties_or_tags() {
-        let c = ctx(HintSource::Outline);
-        let data = json!({"file": "empty.md", "properties": [], "tags": [], "sections": []});
-        let hints = generate_hints(&c, &data);
-        assert!(hints.is_empty());
-    }
-
-    // --- hints_for_links ---
-
-    #[test]
-    fn links_suggests_outline_for_resolved_links() {
-        let c = ctx(HintSource::Links {
-            file: "index.md".to_owned(),
-        });
-        let data = json!({
-            "path": "index.md",
-            "links": [
-                {"target": "note-a", "path": "note-a.md"},
-                {"target": "note-b", "path": "note-b.md"},
-                {"target": "broken", "path": null}
-            ]
-        });
-        let hints = generate_hints(&c, &data);
-        assert_eq!(hints.len(), 2);
-        assert!(hints[0].contains("note-a.md"));
-        assert!(hints[1].contains("note-b.md"));
-        // Broken link should not appear
-        assert!(!hints.iter().any(|h| h.contains("broken")));
-    }
-
-    #[test]
-    fn links_only_unresolved_returns_empty() {
-        let c = ctx(HintSource::Links {
-            file: "index.md".to_owned(),
-        });
-        let data = json!({
-            "path": "index.md",
-            "links": [
-                {"target": "broken1"},
-                {"target": "broken2"}
-            ]
-        });
-        let hints = generate_hints(&c, &data);
-        assert!(hints.is_empty());
-    }
-
     // --- flag propagation ---
 
     #[test]
@@ -996,19 +460,5 @@ mod tests {
         let hints = generate_hints(&c, &data);
         assert!(hints[0].contains("--dir"));
         assert!(hints[0].contains("/vault"));
-    }
-
-    #[test]
-    fn glob_not_included_in_file_specific_hints() {
-        let c = ctx_with_glob(
-            HintSource::TagFind {
-                name: "rust".to_owned(),
-            },
-            "notes/*.md",
-        );
-        let data = json!({"tag": "rust", "files": ["a.md"], "total": 1});
-        let hints = generate_hints(&c, &data);
-        // outline hints are file-specific, should not have --glob
-        assert!(!hints.iter().any(|h| h.contains("--glob")));
     }
 }
