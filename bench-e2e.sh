@@ -25,21 +25,32 @@ run_bench() {
     local name="$1"; shift
 
     echo "  $name ..."
+
+    local current_cmd=( "$HYALO" --dir "$VAULT" "$@" )
+    local current_cmd_str
+    printf -v current_cmd_str '%q ' "${current_cmd[@]}"
+    current_cmd_str=${current_cmd_str% }
+
     if [[ -n "$HYALO_B" ]]; then
+        local baseline_cmd=( "$HYALO_B" --dir "$VAULT" "$@" )
+        local baseline_cmd_str
+        printf -v baseline_cmd_str '%q ' "${baseline_cmd[@]}"
+        baseline_cmd_str=${baseline_cmd_str% }
+
         hyperfine \
             --warmup "$WARMUP" \
             --runs "$RUNS" \
             --ignore-failure \
             --export-markdown "$OUTDIR/${name}.md" \
-            -n "current" "$HYALO --dir $VAULT $*" \
-            -n "baseline" "$HYALO_B --dir $VAULT $*"
+            -n "current" "$current_cmd_str" \
+            -n "baseline" "$baseline_cmd_str"
     else
         hyperfine \
             --warmup "$WARMUP" \
             --runs "$RUNS" \
             --ignore-failure \
             --export-markdown "$OUTDIR/${name}.md" \
-            -n "$name" "$HYALO --dir $VAULT $*"
+            -n "$name" "$current_cmd_str"
     fi
 }
 

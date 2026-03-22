@@ -57,7 +57,7 @@ fn bench_read_all_frontmatter(c: &mut Criterion) {
     group.bench_function("all_files", |b| {
         b.iter(|| {
             for file in &files {
-                let _ = read_frontmatter(black_box(file));
+                read_frontmatter(black_box(file)).unwrap();
             }
         })
     });
@@ -77,7 +77,8 @@ fn bench_scan_all_files(c: &mut Criterion) {
                 let mut counter = TaskCounter::new();
                 let mut search = ContentSearchVisitor::new("obsidian");
                 let visitors: &mut [&mut dyn FileVisitor] = &mut [&mut counter, &mut search];
-                let _ = scan_file_multi(black_box(file), visitors);
+                scan_file_multi(black_box(file), visitors)
+                    .expect("scan_file_multi failed during benchmark");
             }
         })
     });
