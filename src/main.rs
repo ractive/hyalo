@@ -40,7 +40,8 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         Find broken links:          hyalo links --file index.md --unresolved\n  \
         Document outline:           hyalo outline --file notes/meeting.md\n  \
         List open tasks:            hyalo tasks --glob 'iterations/*.md' --todo\n  \
-        Vault overview:             hyalo summary --format text",
+        Vault overview:             hyalo summary --format text\n  \
+        Overview with drill-down:   hyalo summary --format text --hints",
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Properties (list across files):\n  \
