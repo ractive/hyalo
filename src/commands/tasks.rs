@@ -30,7 +30,9 @@ pub fn task_read(
                 format,
                 &msg,
                 Some(&rel_path),
-                Some("use `hyalo tasks --file <path>` to list all tasks with their line numbers"),
+                Some(
+                    "use `hyalo find --task any --file <path>` to list all tasks with their line numbers",
+                ),
                 None,
             );
             Ok(CommandOutcome::UserError(out))

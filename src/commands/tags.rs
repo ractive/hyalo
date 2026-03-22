@@ -92,7 +92,7 @@ pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// `hyalo tags summary` — aggregate: unique tags with counts
+// `hyalo tags` — aggregate: unique tags with counts
 // ---------------------------------------------------------------------------
 
 /// Aggregate summary: unique tag names with file counts.
