@@ -218,6 +218,22 @@ fn append_invalid_kv_no_equals_returns_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Guard: invalid K=V (empty key) returns error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_empty_property_name_returns_error() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["append", "--property", "=value", "--file", "note.md"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
 // Body content is preserved after append
 // ---------------------------------------------------------------------------
 

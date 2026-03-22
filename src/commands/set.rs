@@ -40,7 +40,15 @@ pub struct SetTagResult {
 /// Returns a user-visible error if no `=` is found.
 pub fn parse_kv(s: &str) -> Result<(&str, &str), String> {
     match s.find('=') {
-        Some(pos) => Ok((&s[..pos], &s[pos + 1..])),
+        Some(pos) => {
+            let key = &s[..pos];
+            if key.trim().is_empty() {
+                return Err(format!(
+                    "invalid property argument '{s}': property name cannot be empty"
+                ));
+            }
+            Ok((key, &s[pos + 1..]))
+        }
         None => Err(format!(
             "invalid property argument '{s}': expected K=V format (e.g. status=done)"
         )),
@@ -218,6 +226,15 @@ mod tests {
     #[test]
     fn parse_kv_no_equals() {
         assert!(parse_kv("nodot").is_err());
+    }
+
+    #[test]
+    fn parse_kv_empty_key_returns_error() {
+        let err = parse_kv("=value").unwrap_err();
+        assert!(
+            err.contains("property name cannot be empty"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
