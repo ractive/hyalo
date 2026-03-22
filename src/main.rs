@@ -24,6 +24,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
+        CONFIG: Place a .hyalo.toml in the working directory to set defaults for --dir, --format, and --hints. CLI flags always take precedence.\n\n\
         COMMANDS:\n\
           find        Search and filter files by text, properties, tags, or tasks\n\
           set         Set (create or overwrite) properties and add tags\n\
@@ -70,10 +71,11 @@ COMMAND REFERENCE:\n  \
     hyalo task toggle     --file F --line N           Toggle completion\n  \
     hyalo task set-status --file F --line N --status C\n\n  \
   Global flags (apply to all commands):\n  \
-    --dir <DIR>         Root directory (default: .)\n  \
-    --format json|text  Output format (default: json)\n  \
+    --dir <DIR>         Root directory (default: ., override via .hyalo.toml)\n  \
+    --format json|text  Output format (default: json, override via .hyalo.toml)\n  \
     --jq <FILTER>       Apply a jq expression to JSON output\n  \
-    --hints             Append drill-down command hints to output\n\n\
+    --hints             Append drill-down hints (default: off, override via .hyalo.toml)\n  \
+    --no-hints          Disable hints (overrides .hyalo.toml)\n\n\
 COOKBOOK:\n  \
   # Discover what metadata exists in a vault\n  \
   hyalo properties\n  \
@@ -125,13 +127,15 @@ OUTPUT SHAPES (JSON, default):\n  \
   # --format text produces human-readable output on all commands"
 )]
 struct Cli {
-    /// Root directory for resolving all --file and --glob paths. Defaults to current directory
-    #[arg(long, global = true, default_value = ".")]
-    dir: PathBuf,
+    /// Root directory for resolving all --file and --glob paths.
+    /// Default: "." (Override via .hyalo.toml)
+    #[arg(long, global = true)]
+    dir: Option<PathBuf>,
 
-    /// Output format: "json" (structured, default) or "text" (human-readable). Applies to both stdout and stderr
-    #[arg(long, global = true, default_value = "json")]
-    format: String,
+    /// Output format: "json" or "text".
+    /// Default: "json" (Override via .hyalo.toml)
+    #[arg(long, global = true)]
+    format: Option<String>,
 
     /// Apply a jq filter expression to the JSON output of any command.
     /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
@@ -142,9 +146,14 @@ struct Cli {
     /// Append drill-down command hints to the output.
     /// Text mode: '-> hyalo ...' lines — concrete, copy-pasteable commands.
     /// JSON mode: wraps in {"data": ..., "hints": [...]}.
-    /// Suppressed when --jq is active
+    /// Suppressed when --jq is active.
+    /// Override via .hyalo.toml
     #[arg(long, global = true)]
     hints: bool,
+
+    /// Disable hints even when enabled in .hyalo.toml
+    #[arg(long, global = true, conflicts_with = "hints")]
+    no_hints: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -370,43 +379,33 @@ enum TaskAction {
     },
 }
 
-/// Build a `HintContext` from the parsed command, or `None` for mutation commands
-/// (set, remove, append, toggle, etc.) where drill-down hints don't make sense.
-fn build_hint_context(command: &Commands, dir: &std::path::Path) -> Option<HintContext> {
-    let dir_str = dir.to_str().map(|s| s.to_owned());
-    // Only pass --dir to hints if it's not the default "."
-    let dir_opt = dir_str.filter(|s| s != ".");
-
-    match command {
-        Commands::Summary { glob, .. } => Some(HintContext {
-            source: HintSource::Summary,
-            dir: dir_opt,
-            glob: glob.clone(),
-        }),
-        Commands::Properties { glob } => Some(HintContext {
-            source: HintSource::PropertiesSummary,
-            dir: dir_opt,
-            glob: glob.clone(),
-        }),
-        Commands::Tags { glob } => Some(HintContext {
-            source: HintSource::TagsSummary,
-            dir: dir_opt,
-            glob: glob.clone(),
-        }),
-        Commands::Find { .. } => None, // TODO: add HintSource::Find with find-relevant hints
-        Commands::Task { .. } => None,
-        Commands::Set { .. } | Commands::Remove { .. } | Commands::Append { .. } => None,
-    }
-}
-
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
 
-    let Some(format) = Format::from_str_opt(&cli.format) else {
+    // Load per-project config from .hyalo.toml in CWD
+    let config = hyalo::config::load_config();
+
+    // Merge: CLI args override config, config overrides hardcoded defaults.
+    // Track whether --dir was explicitly passed (not from config) so hints
+    // can omit it when the user relies on .hyalo.toml.
+    let dir_from_cli = cli.dir.is_some();
+    let format_from_cli = cli.format.is_some();
+    let hints_from_cli = cli.hints;
+    let dir = cli.dir.unwrap_or(config.dir);
+    let format_str = cli.format.unwrap_or(config.format);
+    let hints_flag = if cli.hints {
+        true
+    } else if cli.no_hints {
+        false
+    } else {
+        config.hints
+    };
+
+    let Some(format) = Format::from_str_opt(&format_str) else {
         eprintln!(
             "Error: invalid format '{}', expected 'json' or 'text'",
-            cli.format
+            format_str
         );
         process::exit(2);
     };
@@ -416,25 +415,59 @@ fn main() {
     if jq_filter.is_some() && format != Format::Json {
         eprintln!(
             "Error: --jq cannot be combined with --format {}",
-            cli.format
+            format_str
         );
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         process::exit(2);
     }
     // When --jq or --hints is active, force JSON internally so we can re-parse the output.
     // The user-requested format is applied afterwards.
-    let hints_active = cli.hints && jq_filter.is_none();
+    let hints_active = hints_flag && jq_filter.is_none();
     let effective_format = if jq_filter.is_some() || hints_active {
         Format::Json
     } else {
         format
     };
 
-    let dir = &cli.dir;
+    // Build hint context before the command dispatch.
+    // Only include CLI-explicit flags in hints — config values are inherited
+    // automatically when the user runs the hint command from the same CWD.
+    let hint_ctx = if hints_flag && jq_filter.is_none() {
+        let dir_hint = if dir_from_cli {
+            dir.to_str().map(|s| s.to_owned()).filter(|s| s != ".")
+        } else {
+            None
+        };
+        let format_hint = if format_from_cli {
+            Some(format_str.clone())
+        } else {
+            None
+        };
 
-    // Build hint context before the command dispatch (which moves cli.command fields).
-    let hint_ctx = if cli.hints && jq_filter.is_none() {
-        build_hint_context(&cli.command, dir)
+        match &cli.command {
+            Commands::Summary { glob, .. } => Some(HintContext {
+                source: HintSource::Summary,
+                dir: dir_hint,
+                glob: glob.clone(),
+                format: format_hint,
+                hints: hints_from_cli,
+            }),
+            Commands::Properties { glob } => Some(HintContext {
+                source: HintSource::PropertiesSummary,
+                dir: dir_hint,
+                glob: glob.clone(),
+                format: format_hint,
+                hints: hints_from_cli,
+            }),
+            Commands::Tags { glob } => Some(HintContext {
+                source: HintSource::TagsSummary,
+                dir: dir_hint,
+                glob: glob.clone(),
+                format: format_hint,
+                hints: hints_from_cli,
+            }),
+            _ => None,
+        }
     } else {
         None
     };
@@ -491,7 +524,7 @@ fn main() {
             };
 
             find_commands::find(
-                dir,
+                &dir,
                 pattern.as_deref(),
                 &prop_filters,
                 tag,
@@ -505,17 +538,17 @@ fn main() {
             )
         }
         Commands::Properties { ref glob } => {
-            properties::properties_summary(dir, None, glob.as_deref(), effective_format)
+            properties::properties_summary(&dir, None, glob.as_deref(), effective_format)
         }
         Commands::Tags { ref glob } => {
-            tag_commands::tags_summary(dir, None, glob.as_deref(), effective_format)
+            tag_commands::tags_summary(&dir, None, glob.as_deref(), effective_format)
         }
         Commands::Task { action } => match action {
             TaskAction::Read { ref file, line } => {
-                task_commands::task_read(dir, file, line, effective_format)
+                task_commands::task_read(&dir, file, line, effective_format)
             }
             TaskAction::Toggle { ref file, line } => {
-                task_commands::task_toggle(dir, file, line, effective_format)
+                task_commands::task_toggle(&dir, file, line, effective_format)
             }
             TaskAction::SetStatus {
                 ref file,
@@ -534,7 +567,7 @@ fn main() {
                     process::exit(1);
                 }
                 task_commands::task_set_status(
-                    dir,
+                    &dir,
                     file,
                     line,
                     status.chars().next().unwrap(),
@@ -543,7 +576,7 @@ fn main() {
             }
         },
         Commands::Summary { ref glob, recent } => {
-            summary_commands::summary(dir, glob.as_deref(), recent, effective_format)
+            summary_commands::summary(&dir, glob.as_deref(), recent, effective_format)
         }
         Commands::Set {
             ref properties,
@@ -551,7 +584,7 @@ fn main() {
             ref file,
             ref glob,
         } => set_commands::set(
-            dir,
+            &dir,
             properties,
             tag,
             file.as_deref(),
@@ -564,7 +597,7 @@ fn main() {
             ref file,
             ref glob,
         } => remove_commands::remove(
-            dir,
+            &dir,
             properties,
             tag,
             file.as_deref(),
@@ -576,7 +609,7 @@ fn main() {
             ref file,
             ref glob,
         } => append_commands::append(
-            dir,
+            &dir,
             properties,
             file.as_deref(),
             glob.as_deref(),
