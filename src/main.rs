@@ -103,7 +103,7 @@ COOKBOOK:\n  \
   hyalo properties --jq '[.[].name] | join(\", \")'\n\n\
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
-  [{\"path\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
+  [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
     \"properties\": [...], \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]\n\n  \
   # set / remove / append (mutation result)\n  \
   {\"property\": \"status\", \"value\": \"done\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \

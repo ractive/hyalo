@@ -139,7 +139,7 @@ hyalo append --property deps=serde --file F         # add "serde" to list proper
 ### `remove` Semantics
 
 - `remove --property K` (no value) → removes the property regardless of content
-- `remove --property K=V` (with value) → if list: removes V from list. If scalar and value matches: removes property. If scalar and value doesn't match: error.
+- `remove --property K=V` (with value) → if list: removes V from list. If scalar and value matches: removes property. If scalar and value doesn't match: leaves the property unchanged (file is skipped; no error).
 
 ## Commands Removed
 
