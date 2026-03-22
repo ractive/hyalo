@@ -28,10 +28,11 @@ pub fn properties_summary(
     for (fp, rel) in &files {
         let props = match frontmatter::read_frontmatter(fp) {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("warning: skipping {}: {e}", rel);
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                eprintln!("warning: skipping {rel}: {e}");
                 continue;
             }
+            Err(e) => return Err(e),
         };
         for (key, value) in &props {
             agg.entry(key.clone())
