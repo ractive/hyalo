@@ -54,26 +54,16 @@ fn long_help_command_reference_lists_all_commands() {
 
     // Verify every command/subcommand appears in the COMMAND REFERENCE
     let expected = [
-        "hyalo properties summary",
-        "hyalo properties list",
-        "hyalo property read",
-        "hyalo property set",
-        "hyalo property remove",
-        "hyalo property find",
-        "hyalo property add-to-list",
-        "hyalo property remove-from-list",
-        "hyalo tags summary",
-        "hyalo tags list",
-        "hyalo tag find",
-        "hyalo tag add",
-        "hyalo tag remove",
-        "hyalo links",
-        "hyalo outline",
-        "hyalo tasks",
+        "hyalo find",
+        "hyalo set",
+        "hyalo remove",
+        "hyalo append",
+        "hyalo properties",
+        "hyalo tags",
+        "hyalo summary",
         "hyalo task read",
         "hyalo task toggle",
         "hyalo task set-status",
-        "hyalo summary",
     ];
 
     for cmd in expected {
@@ -84,12 +74,12 @@ fn long_help_command_reference_lists_all_commands() {
 #[test]
 fn subcommand_help_unchanged_by_enriched_root() {
     // Subcommand --help should NOT contain root-level enriched sections
-    let output = hyalo().args(["property", "--help"]).output().unwrap();
+    let output = hyalo().args(["task", "--help"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
-        stdout.contains("Read, set, find, or remove frontmatter properties"),
+        stdout.contains("Read, toggle, or set status on a single task"),
         "subcommand --help should contain its own long_about"
     );
     assert!(

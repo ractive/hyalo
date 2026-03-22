@@ -9,14 +9,7 @@ fn error_nonexistent_file() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "property",
-            "read",
-            "--name",
-            "title",
-            "--file",
-            "missing.md",
-        ])
+        .args(["find", "--file", "missing.md"])
         .output()
         .unwrap();
 
@@ -85,7 +78,7 @@ title: Test
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--file", "note"])
+        .args(["find", "--file", "note"])
         .output()
         .unwrap();
 
@@ -102,7 +95,7 @@ fn error_json_structure() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["property", "read", "--name", "title", "--file", "nope.md"])
+        .args(["find", "--file", "nope.md"])
         .output()
         .unwrap();
 
@@ -125,10 +118,7 @@ fn error_text_format() {
             tmp.path().to_str().unwrap(),
             "--format",
             "text",
-            "property",
-            "read",
-            "--name",
-            "title",
+            "find",
             "--file",
             "nope.md",
         ])
