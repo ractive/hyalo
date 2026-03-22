@@ -256,3 +256,41 @@ fn append_preserves_file_body() {
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains(body), "body was corrupted:\n{content}");
 }
+
+// ---------------------------------------------------------------------------
+// --format text produces structured mutation output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_format_text_shows_counts() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+tags:
+  - rust
+---
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "text"])
+        .args(["append", "--property", "tags=cli", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Should show modified count
+    assert!(stdout.contains("1/1 modified"), "counts: {stdout}");
+    // Should list the file
+    assert!(stdout.contains("note.md"), "modified file: {stdout}");
+}
