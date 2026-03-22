@@ -160,25 +160,29 @@ const TAG_SUMMARY_ENTRY_FILTER: &str =
     r#""\(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
 
 /// `LinkInfo` — just target: `{target}`
-const LINK_INFO_TARGET_FILTER: &str = r#""  \(.target) (unresolved)""#;
+/// Format: `  "target" (unresolved)`
+const LINK_INFO_TARGET_FILTER: &str = r#""  \"\(.target)\" (unresolved)""#;
 
 /// `LinkInfo` with path: `{path, target}`
-const LINK_INFO_PATH_FILTER: &str = r#""  \(.target) → \(.path)""#;
+/// Format: `  "target" → "path"`
+const LINK_INFO_PATH_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\"""#;
 
 /// `LinkInfo` with label: `{label, target}`
-const LINK_INFO_LABEL_FILTER: &str = r#""  \(.target) (unresolved) [\(.label)]""#;
+/// Format: `  "target" (unresolved) [label]`
+const LINK_INFO_LABEL_FILTER: &str = r#""  \"\(.target)\" (unresolved) [\(.label)]""#;
 
 /// `LinkInfo` with path and label: `{label, path, target}`
-const LINK_INFO_FULL_FILTER: &str = r#""  \(.target) → \(.path) [\(.label)]""#;
+/// Format: `  "target" → "path" [label]`
+const LINK_INFO_FULL_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\" [\(.label)]""#;
 
 /// `TaskCount`: `{done, total}`
 const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
 
 /// `OutlineSection` without tasks: `{code_blocks, heading, level, line, links}`
-const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)")\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)""##;
+const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)")\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `OutlineSection` with tasks: `{code_blocks, heading, level, line, links, tasks}`
-const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)") [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n  → \(.links | join(", "))" else "" end)""##;
+const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)") [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `TaskInfo`: `{done, line, status, text}`
 const TASK_INFO_FILTER: &str =
@@ -186,10 +190,10 @@ const TASK_INFO_FILTER: &str =
 
 /// `TaskReadResult`: `{done, file, line, status, text}`
 const TASK_READ_RESULT_FILTER: &str =
-    r#""\(.file):\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
+    r#""\"\(.file)\":\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
 
 /// `VaultSummary`: `{files, properties, recent_files, status, tags, tasks}`
-const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then " (\(.files.by_directory | map("\(.directory): \(.count)") | join(", ")))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
+const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then "\n\(.files.by_directory | map("  \"\(.directory)\": \(.count)") | join("\n"))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nRecent:\(if (.recent_files | length) > 0 then "\n\(.recent_files | map("  \"\(.path)\"") | join("\n"))" else " (none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -203,20 +207,20 @@ const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
 /// Key signature: `modified,property,skipped,total,value`
-/// Format: `property=value: N/T modified` followed by modified file paths.
-const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \(.)") | join("\n"))" else "" end)""#;
+/// Format: `property=value: N/T modified` followed by quoted file paths on separate lines.
+const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `property` only (no value field):
 /// covers `RemovePropertyResult` (without value).
 /// Key signature: `modified,property,skipped,total`
-/// Format: `property: N/T modified` followed by modified file paths.
-const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \(.)") | join("\n"))" else "" end)""#;
+/// Format: `property: N/T modified` followed by quoted file paths on separate lines.
+const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `tag` field:
 /// covers `SetTagResult` and `RemoveTagResult`.
 /// Key signature: `modified,skipped,tag,total`
-/// Format: `tag: N/T modified` followed by modified file paths.
-const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \(.)") | join("\n"))" else "" end)""#;
+/// Format: `tag: N/T modified` followed by quoted file paths on separate lines.
+const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
@@ -427,12 +431,12 @@ fn run_jq_filter_cached(
 /// in `run_jq_filter` would affect `FileObject` rendering.
 fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) -> String {
     // Header: file path and modified timestamp — always present.
-    let mut parts = vec![r#""\(.file)  (\(.modified))""#.to_owned()];
+    let mut parts = vec![r#""\"\(.file)\"  (\(.modified))""#.to_owned()];
 
-    // Properties: each rendered as "  name (type): value"
+    // Properties: header then each as "    name (type): value"
     if map.contains_key("properties") {
         parts.push(
-            r#"if .properties then (.properties | map("  \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n")) else empty end"#.to_owned(),
+            r#"if (.properties | length) > 0 then "  properties:\n\(.properties | map("    \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
@@ -444,11 +448,11 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
         );
     }
 
-    // Sections: each as "  ## Heading [done/total]" or "  ## Heading"
+    // Sections: header then each as "    ## Heading [done/total]" or "    ## Heading"
     // Note: uses r##"..."## because the jq filter contains the sequence "#" (hash-quoted).
     if map.contains_key("sections") {
         parts.push(
-            r##"if .sections then (.sections | map("  \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n")) else empty end"##.to_owned(),
+            r##"if (.sections | length) > 0 then "  sections:\n\(.sections | map("    \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 
@@ -466,10 +470,10 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
         );
     }
 
-    // Links: header then each as "    target → path" or "    target (unresolved)"
+    // Links: header then each as "    \"target\" → \"path\"" or "    \"target\" (unresolved)"
     if map.contains_key("links") {
         parts.push(
-            r#"if (.links | length) > 0 then "  links:\n\(.links | map("    \(.target)\(if .path then " → \(.path)" else " (unresolved)" end)") | join("\n"))" else empty end"#.to_owned(),
+            r#"if (.links | length) > 0 then "  links:\n\(.links | map("    \"\(.target)\"\(if .path then " → \"\(.path)\"" else " (unresolved)" end)") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
@@ -934,6 +938,7 @@ mod tests {
         });
         let out = jq(&filter, &val).unwrap();
         assert!(out.contains("foo.md"));
+        assert!(out.contains("properties:"));
         assert!(out.contains("status (text): done"));
     }
 
@@ -954,6 +959,24 @@ mod tests {
         assert!(out.contains("tasks:"));
         assert!(out.contains("[x] Ship it"));
         assert!(out.contains("line 5"));
+    }
+
+    #[test]
+    fn build_file_object_filter_with_sections() {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            r#"{"file": "foo.md", "modified": "2024-01-01", "sections": [{"code_blocks": 0, "heading": "Intro", "level": 1, "line": 1, "links": []}]}"#,
+        )
+        .unwrap();
+        let filter = build_file_object_filter(&map);
+        let val = json!({
+            "file": "foo.md",
+            "modified": "2024-01-01",
+            "sections": [{"code_blocks": 0, "heading": "Intro", "level": 1, "line": 1, "links": []}]
+        });
+        let out = jq(&filter, &val).unwrap();
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("sections:"));
+        assert!(out.contains("# Intro"));
     }
 
     #[test]
@@ -989,7 +1012,7 @@ mod tests {
         let out = jq(&filter, &val).unwrap();
         assert!(out.contains("foo.md"));
         assert!(out.contains("links:"));
-        assert!(out.contains("bar → bar.md"));
+        assert!(out.contains(r#""bar" → "bar.md""#));
     }
 
     #[test]
@@ -1005,7 +1028,7 @@ mod tests {
             "links": [{"target": "missing"}]
         });
         let out = jq(&filter, &val).unwrap();
-        assert!(out.contains("missing (unresolved)"));
+        assert!(out.contains(r#""missing" (unresolved)"#));
     }
 
     // --- FileObject text rendering through format_value_as_text ---
@@ -1034,8 +1057,9 @@ mod tests {
         });
         let out = fmt(&val);
         assert!(out.contains("notes/project.md"));
-        assert!(out.contains("tags: [rust, work]"));
+        assert!(out.contains("properties:"));
         assert!(out.contains("status (text): active"));
+        assert!(out.contains("tags: [rust, work]"));
         assert!(out.contains("tasks:"));
         assert!(out.contains("[ ] Fix bug"));
         assert!(out.contains("[x] Write docs"));
