@@ -1,15 +1,15 @@
 ---
-title: "Iteration 12: CLI Redesign — find/set/remove"
-type: iteration
-date: 2026-03-22
-tags:
-  - iteration
-  - cli
-  - search
-  - llm
-  - ux
-status: completed
 branch: iter-12/cli-redesign
+date: 2026-03-22
+status: completed
+tags:
+- iteration
+- cli
+- search
+- llm
+- ux
+title: 'Iteration 12: CLI Redesign — find/set/remove'
+type: iteration
 ---
 
 # Iteration 12: CLI Redesign — find/set/remove
