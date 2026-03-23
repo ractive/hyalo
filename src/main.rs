@@ -62,28 +62,28 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
-    hyalo find [PATTERN | --regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
-               [--section HEADING ...] [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
+    hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]\n  \
+               [-s/--section HEADING ...] [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [-n/--limit N]\n\n  \
   Read (display file body content, read-only):\n  \
-    hyalo read --file F [--section HEADING] [--lines RANGE] [--frontmatter]\n\n  \
+    hyalo read -f/--file F [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]\n\n  \
   Set (create or overwrite, mutates files):\n  \
-    hyalo set  --property K=V [--property ...] [--tag T ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
+    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Remove (delete properties/tags, mutates files):\n  \
-    hyalo remove --property K [--property K=V ...] [--tag T ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
+    hyalo remove -p/--property K [-p K=V ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Append (add to list properties, mutates files):\n  \
-    hyalo append --property K=V [--property ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
+    hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Properties (aggregate summary, read-only):\n  \
-    hyalo properties [--glob G]   Unique property names, types, and file counts\n\n  \
+    hyalo properties [-g/--glob G]   Unique property names, types, and file counts\n\n  \
   Tags (aggregate summary, read-only):\n  \
-    hyalo tags [--glob G]         Unique tags with file counts\n\n  \
+    hyalo tags [-g/--glob G]         Unique tags with file counts\n\n  \
   Summary (vault overview, read-only):\n  \
-    hyalo summary [--glob G] [--recent N]\n\n  \
+    hyalo summary [-g/--glob G] [-n/--recent N]\n\n  \
   Task (single-task operations):\n  \
-    hyalo task read       --file F --line N           Read task at a line\n  \
-    hyalo task toggle     --file F --line N           Toggle completion\n  \
-    hyalo task set-status --file F --line N --status C\n\n  \
+    hyalo task read       -f/--file F -l/--line N           Read task at a line\n  \
+    hyalo task toggle     -f/--file F -l/--line N           Toggle completion\n  \
+    hyalo task set-status -f/--file F -l/--line N -s/--status C\n\n  \
   Global flags (apply to all commands):\n  \
-    --dir <DIR>         Root directory (default: ., override via .hyalo.toml)\n  \
+    -d/--dir <DIR>      Root directory (default: ., override via .hyalo.toml)\n  \
     --format json|text  Output format (default: json, override via .hyalo.toml)\n  \
     --jq <FILTER>       Apply a jq expression to JSON output\n  \
     --hints             Append drill-down hints (default: off, override via .hyalo.toml)\n  \
@@ -146,7 +146,7 @@ OUTPUT SHAPES (JSON, default):\n  \
 struct Cli {
     /// Root directory for resolving all --file and --glob paths.
     /// Default: "." (Override via .hyalo.toml)
-    #[arg(long, global = true)]
+    #[arg(short, long, global = true)]
     dir: Option<PathBuf>,
 
     /// Output format: "json" or "text".
@@ -203,23 +203,23 @@ enum Commands {
         #[arg(long, short = 'e', value_name = "REGEX")]
         regexp: Option<String>,
         /// Property filter: K=V (equals), K!=V (not equals), K>=V, K<=V, K>V, K<V, or K (exists). Repeatable (AND)
-        #[arg(long = "property", value_name = "FILTER")]
+        #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
         /// Tag filter: matches tag and all nested children. Repeatable (AND)
-        #[arg(long, value_name = "TAG")]
+        #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
         /// Task presence filter: 'todo', 'done', 'any', or a single status character
         #[arg(long, value_name = "STATUS")]
         task: Option<String>,
         /// Section heading filter: restrict body results to matching sections (case-insensitive whole-string match;
         /// use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR)
-        #[arg(long = "section", value_name = "HEADING")]
+        #[arg(short, long = "section", value_name = "HEADING")]
         sections: Vec<String>,
         /// Scan only this file (still returns an array)
-        #[arg(long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with = "glob")]
         file: Option<String>,
         /// Glob pattern to select files
-        #[arg(long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
         /// Comma-separated list of fields to include: properties, tags, sections, tasks, links (default: all). 'file' and 'modified' are always present
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
@@ -228,7 +228,7 @@ enum Commands {
         #[arg(long)]
         sort: Option<String>,
         /// Maximum number of results to return
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         limit: Option<usize>,
     },
     /// Read file body content, optionally filtered by section or line range (read-only)
@@ -243,14 +243,14 @@ enum Commands {
             SIDE EFFECTS: None (read-only).")]
     Read {
         /// Target file (relative to --dir)
-        #[arg(long)]
+        #[arg(short, long)]
         file: String,
         /// Extract the section(s) matching this heading (case-insensitive whole-string match;
         /// use leading '#' to pin heading level, e.g. '## Tasks'). Nested subsections are included
-        #[arg(long, value_name = "HEADING")]
+        #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
         /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
-        #[arg(long)]
+        #[arg(short, long)]
         lines: Option<String>,
         /// Include the YAML frontmatter in output
         #[arg(long)]
@@ -266,7 +266,7 @@ enum Commands {
     )]
     Properties {
         /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md')
-        #[arg(long)]
+        #[arg(short, long)]
         glob: Option<String>,
     },
     /// Show unique tags with file counts across matched files (read-only)
@@ -277,7 +277,7 @@ enum Commands {
             USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
     Tags {
         /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
-        #[arg(long)]
+        #[arg(short, long)]
         glob: Option<String>,
     },
     /// Read, toggle, or set status on a single task checkbox
@@ -306,10 +306,10 @@ enum Commands {
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
     Summary {
         /// Glob pattern to filter which files to include
-        #[arg(long)]
+        #[arg(short, long)]
         glob: Option<String>,
         /// Number of recent files to show (default: 10)
-        #[arg(long, default_value = "10")]
+        #[arg(short = 'n', long, default_value = "10")]
         recent: usize,
     },
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
@@ -336,16 +336,16 @@ Repeatable (AND).\n\
     )]
     Set {
         /// Property to set: K=V (type inferred from V). Repeatable
-        #[arg(long = "property", value_name = "K=V")]
+        #[arg(short, long = "property", value_name = "K=V")]
         properties: Vec<String>,
         /// Tag to add (idempotent). Repeatable
-        #[arg(long, value_name = "TAG")]
+        #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
         /// Target a single file
-        #[arg(long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with = "glob")]
         file: Option<String>,
         /// Glob pattern for multiple files
-        #[arg(long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
@@ -378,16 +378,16 @@ Repeatable (AND).\n\
     )]
     Remove {
         /// Property to remove: K (removes key) or K=V (removes value from list/scalar). Repeatable
-        #[arg(long = "property", value_name = "K or K=V")]
+        #[arg(short, long = "property", value_name = "K or K=V")]
         properties: Vec<String>,
         /// Tag to remove. Repeatable
-        #[arg(long, value_name = "TAG")]
+        #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
         /// Target a single file
-        #[arg(long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with = "glob")]
         file: Option<String>,
         /// Glob pattern for multiple files
-        #[arg(long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
@@ -432,13 +432,13 @@ Repeatable (AND).\n\
     )]
     Append {
         /// Property to append to: K=V. Repeatable
-        #[arg(long = "property", value_name = "K=V", required = true)]
+        #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
         /// Target a single file
-        #[arg(long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with = "glob")]
         file: Option<String>,
         /// Glob pattern for multiple files
-        #[arg(long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
@@ -459,10 +459,10 @@ enum TaskAction {
         USE WHEN: You need to inspect a task's current status before toggling or updating it.")]
     Read {
         /// File containing the task (relative to --dir)
-        #[arg(long)]
+        #[arg(short, long)]
         file: String,
         /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
-        #[arg(long)]
+        #[arg(short, long)]
         line: usize,
     },
     /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
@@ -475,10 +475,10 @@ enum TaskAction {
     )]
     Toggle {
         /// File containing the task (relative to --dir)
-        #[arg(long)]
+        #[arg(short, long)]
         file: String,
         /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
-        #[arg(long)]
+        #[arg(short, long)]
         line: usize,
     },
     /// Set a custom single-character status on a task
@@ -492,13 +492,13 @@ enum TaskAction {
     )]
     SetStatus {
         /// File containing the task (relative to --dir)
-        #[arg(long)]
+        #[arg(short, long)]
         file: String,
         /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
-        #[arg(long)]
+        #[arg(short, long)]
         line: usize,
         /// Single character to set as the task status (e.g. '?', '-', '!')
-        #[arg(long)]
+        #[arg(short, long)]
         status: String,
     },
 }
