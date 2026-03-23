@@ -952,6 +952,7 @@ Some notes with a TODO marker.
     );
 
     // other.md — has a Tasks section too (tests multi-file matching)
+    // Also has a ## Introduction (level-2) to test level-pinning against doc.md's # Introduction (level-1)
     write_md(
         tmp.path(),
         "other.md",
@@ -962,6 +963,10 @@ title: Other
 # Overview
 
 Overview text.
+
+## Introduction
+
+A level-2 introduction section.
 
 ## Tasks
 
@@ -1072,27 +1077,21 @@ fn section_filter_case_insensitive() {
 #[test]
 fn section_filter_level_pinned() {
     let tmp = setup_section_vault();
-    // "# Introduction" should only match level-1 heading, not ## Introduction
+    // doc.md has "# Introduction" (level 1); other.md has "## Introduction" (level 2).
+    // Using "# Introduction" should match only doc.md (level-pinned to 1) and exclude other.md.
     let (status, json, _) = find_json(
         &tmp,
-        &[
-            "--section",
-            "# Introduction",
-            "--file",
-            "doc.md",
-            "--fields",
-            "sections",
-        ],
+        &["--section", "# Introduction", "--fields", "sections"],
     );
     assert!(status.success());
     let arr = json.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    let sections = arr[0]["sections"].as_array().unwrap();
-    // Only the level-1 Introduction section should be returned
-    assert!(
-        sections.iter().all(|s| s["level"].as_u64().unwrap() == 1
-            || s["heading"].as_str().unwrap() != "Introduction")
+    // Only doc.md should be returned — other.md's ## Introduction is level 2, not level 1
+    assert_eq!(
+        arr.len(),
+        1,
+        "only doc.md should match a level-1 Introduction filter"
     );
+    assert_eq!(arr[0]["file"].as_str().unwrap(), "doc.md");
 }
 
 #[test]

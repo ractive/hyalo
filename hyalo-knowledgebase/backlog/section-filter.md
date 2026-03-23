@@ -4,9 +4,9 @@ origin: dogfooding post-iter-19
 priority: medium
 status: completed
 tags:
-- backlog
-- search
-- cli
+  - backlog
+  - search
+  - cli
 title: Section-scoped filter for find command
 type: backlog
 ---
