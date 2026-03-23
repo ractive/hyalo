@@ -1,13 +1,13 @@
 ---
-title: "Iteration 33 — Short Flag Aliases"
-type: iteration
-date: 2026-03-23
-tags:
-  - iteration
-  - cli
-  - ux
-status: in-progress
 branch: iter-33/short-flags
+date: 2026-03-23
+status: completed
+tags:
+- iteration
+- cli
+- ux
+title: Iteration 33 — Short Flag Aliases
+type: iteration
 ---
 
 # Iteration 33 — Short Flag Aliases
@@ -48,7 +48,7 @@ Add single-letter short aliases to frequently-used CLI flags for faster interact
 - [x] Add e2e tests for short flags (e2e_short_flags.rs)
 - [x] All quality gates pass (fmt, clippy, tests)
 - [x] Update knowledgebase iteration file
-- [ ] Create PR
+- [x] Create PR
 
 ## Acceptance Criteria
 
