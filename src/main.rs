@@ -25,7 +25,11 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
-        CONFIG: Place a .hyalo.toml in the working directory to set defaults for --dir, --format, and --hints. CLI flags always take precedence.\n\n\
+        CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
+  dir = \"vault/\"        # default --dir\n\
+  format = \"text\"       # default --format\n\
+  hints = true           # default --hints on\n\
+CLI flags always take precedence.\n\n\
         COMMANDS:\n\
           find        Search and filter files by text, properties, tags, or tasks\n\
           read        Read file body content, optionally filtered by section or line range\n\
@@ -41,6 +45,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         Filter by tag:                hyalo find --tag project\n  \
         Filter by task status:        hyalo find --task todo\n  \
         Full-text search:             hyalo find 'meeting notes'\n  \
+        Filter by section:            hyalo find --section 'Tasks' --task todo\n  \
         Read file content:            hyalo read --file notes/todo.md\n  \
         Read a section:               hyalo read --file notes/todo.md --section Proposal\n  \
         Set a property:               hyalo set --property status=done --file notes/todo.md\n  \
@@ -58,7 +63,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
 COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
     hyalo find [PATTERN | --regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
-               [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
+               [--section HEADING ...] [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
   Read (display file body content, read-only):\n  \
     hyalo read --file F [--section HEADING] [--lines RANGE] [--frontmatter]\n\n  \
   Set (create or overwrite, mutates files):\n  \
@@ -95,6 +100,10 @@ COOKBOOK:\n  \
   hyalo find --tag project\n\n  \
   # Find files with open tasks\n  \
   hyalo find --task todo\n\n  \
+  # Find files with a specific section heading\n  \
+  hyalo find --section 'Tasks'\n\n  \
+  # Find open tasks within a specific section\n  \
+  hyalo find --section '## Sprint' --task todo\n\n  \
   # Find broken [[wikilinks]] (fields=links, then filter in jq)\n  \
   hyalo find --fields links --jq '[.[] | select(.links | map(select(.path == null)) | length > 0)]'\n\n  \
   # Tag all research notes in a folder\n  \
@@ -211,7 +220,7 @@ leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subs
         /// Glob pattern to select files
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
-        /// Comma-separated list of fields to include: properties, tags, sections, tasks, links
+        /// Comma-separated list of fields to include. Available: properties, tags, sections, tasks, links. Default: all five. The 'file' and 'modified' fields are always included
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default) or 'modified'
@@ -226,15 +235,17 @@ leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subs
             Returns the raw text after the YAML frontmatter block. Use --section to extract a \
             specific section by heading, --lines to slice a line range, and --frontmatter to \
             include the YAML frontmatter.\n\n\
-            OUTPUT: Plain text by default (--format text is the default for this command). \
-            Use --format json for {\"file\": \"...\", \"content\": \"...\"}.\n\
+            OUTPUT: Plain text by default — this command defaults to --format text even though \
+            the global --format flag shows 'Default: json'. Pass --format json explicitly to get \
+            {\"file\": \"...\", \"content\": \"...\"}.\n\
             SIDE EFFECTS: None (read-only).")]
     Read {
         /// Target file (relative to --dir)
         #[arg(long)]
         file: String,
-        /// Extract only the section(s) under this heading (case-insensitive exact match)
-        #[arg(long)]
+        /// Extract only the section(s) under this heading (case-insensitive whole-string match;
+        /// use leading '#' to pin heading level, e.g. '## Tasks'). Nested subsections are included
+        #[arg(long, value_name = "HEADING")]
         section: Option<String>,
         /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
         #[arg(long)]
@@ -427,30 +438,49 @@ Repeatable (AND).\n\
 #[derive(Subcommand)]
 enum TaskAction {
     /// Show task details at a specific line number (read-only)
+    #[command(long_about = "Show task details at a specific line number.\n\n\
+        INPUT: --file and --line (1-based, counting from line 1 of the file including frontmatter).\n\
+        OUTPUT: {\"file\": \"...\", \"line\": N, \"status\": \"x\", \"text\": \"...\", \"done\": true}\n\
+        SIDE EFFECTS: None (read-only).\n\
+        USE WHEN: You need to inspect a task's current status before toggling or updating it.")]
     Read {
         /// File containing the task (relative to --dir)
         #[arg(long)]
         file: String,
-        /// 1-based line number of the task
+        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
         #[arg(long)]
         line: usize,
     },
     /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
+    #[command(
+        long_about = "Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x].\n\n\
+        INPUT: --file and --line (1-based, counting from line 1 of the file including frontmatter).\n\
+        OUTPUT: {\"file\": \"...\", \"line\": N, \"status\": \"x\", \"text\": \"...\", \"done\": true}\n\
+        SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
+        USE WHEN: You need to mark a task as done or re-open a completed task."
+    )]
     Toggle {
         /// File containing the task (relative to --dir)
         #[arg(long)]
         file: String,
-        /// 1-based line number of the task
+        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
         #[arg(long)]
         line: usize,
     },
     /// Set a custom single-character status on a task
-    #[command(name = "set-status")]
+    #[command(
+        name = "set-status",
+        long_about = "Set a custom single-character status on a task checkbox.\n\n\
+        INPUT: --file, --line (1-based, counting from line 1 of the file including frontmatter), and --status (single char).\n\
+        OUTPUT: {\"file\": \"...\", \"line\": N, \"status\": \"?\", \"text\": \"...\", \"done\": false}\n\
+        SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
+        USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important)."
+    )]
     SetStatus {
         /// File containing the task (relative to --dir)
         #[arg(long)]
         file: String,
-        /// 1-based line number of the task
+        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
         #[arg(long)]
         line: usize,
         /// Single character to set as the task status (e.g. '?', '-', '!')
