@@ -35,10 +35,11 @@ pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
 }
 
 /// Returns true if `tag` matches the query under Obsidian's nested tag rules.
-/// A tag matches if it equals the query or starts with `query/` (case-insensitive).
+/// A tag matches if it equals the query or starts with `query/` (case-insensitive,
+/// using ASCII-only case folding via `eq_ignore_ascii_case`).
 ///
-/// Uses byte-level ASCII comparison — safe because tag names are validated to only
-/// contain ASCII characters (letters, digits, `_`, `-`, `/`).
+/// Matching is performed at the byte level and is intended for tags that use
+/// ASCII-compatible characters (letters, digits, `_`, `-`, `/`).
 #[must_use]
 pub fn tag_matches(tag: &str, query: &str) -> bool {
     tag.eq_ignore_ascii_case(query)
@@ -192,6 +193,9 @@ impl PropertyFilter {
 /// All property filters are evaluated with AND semantics (every filter must pass).
 /// All tag filters are evaluated with AND semantics (every query tag must be present).
 /// Empty filter slices always pass.
+///
+/// Extracts tags internally. If the caller already has tags (e.g. for output),
+/// use [`matches_filters_with_tags`] to avoid double extraction.
 pub fn matches_frontmatter_filters(
     props: &BTreeMap<String, Value>,
     property_filters: &[PropertyFilter],
@@ -202,14 +206,35 @@ pub fn matches_frontmatter_filters(
     }
     if !tag_filters.is_empty() {
         let tags = extract_tags(props);
-        if !tag_filters
-            .iter()
-            .all(|q| tags.iter().any(|t| tag_matches(t, q)))
-        {
-            return false;
-        }
+        return matches_tag_filters(&tags, tag_filters);
     }
     true
+}
+
+/// Like [`matches_frontmatter_filters`] but accepts pre-extracted tags.
+///
+/// Use this when the caller needs the tags for other purposes (e.g. output)
+/// to avoid extracting them twice.
+pub fn matches_filters_with_tags(
+    props: &BTreeMap<String, Value>,
+    property_filters: &[PropertyFilter],
+    tags: &[String],
+    tag_filters: &[String],
+) -> bool {
+    if !property_filters.iter().all(|f| f.matches(props)) {
+        return false;
+    }
+    if !tag_filters.is_empty() {
+        return matches_tag_filters(tags, tag_filters);
+    }
+    true
+}
+
+/// Check that all tag filter queries match at least one tag.
+fn matches_tag_filters(tags: &[String], tag_filters: &[String]) -> bool {
+    tag_filters
+        .iter()
+        .all(|q| tags.iter().any(|t| tag_matches(t, q)))
 }
 
 // ---------------------------------------------------------------------------

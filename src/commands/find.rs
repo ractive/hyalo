@@ -120,12 +120,11 @@ pub fn find(
 
         let props = fm.into_props();
 
-        // --- Apply frontmatter-based filters (early exit) ---
-        if !filter::matches_frontmatter_filters(&props, property_filters, tag_filters) {
+        // --- Extract tags once and apply filters ---
+        let tags = extract_tags(&props);
+        if !filter::matches_filters_with_tags(&props, property_filters, &tags, tag_filters) {
             continue;
         }
-
-        let tags = extract_tags(&props);
 
         // --- Collect tasks (needed for filter and/or output field) ---
         // Consume the extractor now so we can both filter and include in output.
