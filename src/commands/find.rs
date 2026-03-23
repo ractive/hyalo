@@ -394,8 +394,8 @@ impl LinkCollector {
 
 impl FileVisitor for LinkCollector {
     fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
-        let cleaned = scanner::strip_inline_code(raw);
-        crate::links::extract_links_from_text(cleaned.as_ref(), &mut self.links);
+        // `dispatch_body_line` already stripped inline code spans.
+        crate::links::extract_links_from_text(raw, &mut self.links);
         ScanAction::Continue
     }
 }

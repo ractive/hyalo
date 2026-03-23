@@ -7,13 +7,25 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use crate::frontmatter;
-
 /// Controls whether the scanner should continue or stop early.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanAction {
     Continue,
     Stop,
+}
+
+/// Wraps a closure as a [`FileVisitor`].
+///
+/// [`dispatch_body_line`] strips both inline code spans and inline comments
+/// before calling visitors, so this wrapper is a trivial passthrough.
+struct ClosureVisitor<F: FnMut(&str, usize) -> ScanAction> {
+    visitor: F,
+}
+
+impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
+    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+        (self.visitor)(raw, line_num)
+    }
 }
 
 /// Callback-based scanner that streams through a markdown file.
@@ -29,88 +41,12 @@ where
 }
 
 /// Scan from any buffered reader (useful for testing without file I/O).
-pub fn scan_reader<R: BufRead, F>(mut reader: R, mut visitor: F) -> Result<()>
+pub fn scan_reader<R: BufRead, F>(reader: R, visitor: F) -> Result<()>
 where
     F: FnMut(&str, usize) -> ScanAction,
 {
-    let mut line_num: usize = 0;
-    let mut buf = String::new();
-
-    // Track fenced code block and comment block state
-    let mut fence: Option<(char, usize)> = None; // (fence_char, fence_count)
-    let mut in_comment = false;
-
-    // Read first line to check for frontmatter
-    buf.clear();
-    let n = reader.read_line(&mut buf).context("failed to read line")?;
-    if n == 0 {
-        return Ok(()); // empty file
-    }
-    line_num += 1;
-
-    let trimmed = buf.trim_end_matches(['\n', '\r']);
-    let fm_lines = frontmatter::skip_frontmatter(&mut reader, trimmed)?;
-    if fm_lines == 0 {
-        // First line is not frontmatter — check if it opens a code fence or comment
-        if let Some(f) = detect_opening_fence(trimmed) {
-            fence = Some(f);
-        } else if is_comment_fence(trimmed) {
-            in_comment = true;
-        } else {
-            let cleaned = strip_inline_code(trimmed);
-            let cleaned = strip_inline_comments(&cleaned);
-            if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
-                return Ok(());
-            }
-        }
-    } else {
-        line_num = fm_lines;
-    }
-
-    loop {
-        buf.clear();
-        let n = reader.read_line(&mut buf).context("failed to read line")?;
-        if n == 0 {
-            break; // EOF
-        }
-        line_num += 1;
-        let line = buf.trim_end_matches(['\n', '\r']);
-
-        // Check for fenced code block boundaries (highest priority)
-        if let Some((fence_char, fence_count)) = fence {
-            if is_closing_fence(line, fence_char, fence_count) {
-                fence = None;
-            }
-            continue; // skip lines inside code blocks
-        }
-
-        // Check for comment block boundaries
-        if in_comment {
-            if is_comment_fence(line) {
-                in_comment = false;
-            }
-            continue; // skip lines inside comment blocks
-        }
-
-        if let Some(f) = detect_opening_fence(line) {
-            fence = Some(f);
-            continue;
-        }
-
-        if is_comment_fence(line) {
-            in_comment = true;
-            continue;
-        }
-
-        // Normal text line — strip inline code spans and comments before passing to visitor
-        let cleaned = strip_inline_code(line);
-        let cleaned = strip_inline_comments(&cleaned);
-        if visitor(cleaned.as_ref(), line_num) == ScanAction::Stop {
-            return Ok(());
-        }
-    }
-
-    Ok(())
+    let mut wrapper = ClosureVisitor { visitor };
+    scan_reader_multi(reader, &mut [&mut wrapper])
 }
 
 /// Detect an opening fence (triple backtick or `~~~`) at the start of a line.
@@ -377,6 +313,9 @@ pub fn scan_reader_multi<R: BufRead>(
 
     // Try to parse frontmatter
     let (fm_props, fm_lines) = if first_trimmed.trim() == "---" {
+        const MAX_FRONTMATTER_LINES: usize = 100;
+        const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
         // Collect YAML lines
         let mut yaml = String::new();
         let mut fm_line_count: usize = 1; // the opening `---`
@@ -393,11 +332,22 @@ pub fn scan_reader_multi<R: BufRead>(
                 found_close = true;
                 break;
             }
+            // Content line count is fm_line_count - 1 (excludes the opening `---`)
+            if fm_line_count - 1 > MAX_FRONTMATTER_LINES
+                || yaml.len() + trimmed.len() > MAX_FRONTMATTER_BYTES
+            {
+                anyhow::bail!(
+                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                );
+            }
             yaml.push_str(trimmed);
             yaml.push('\n');
         }
-        let props: BTreeMap<String, Value> = if found_close && !yaml.trim().is_empty() {
-            serde_yaml_ng::from_str(&yaml).unwrap_or_default()
+        if !found_close {
+            anyhow::bail!("unclosed frontmatter (no closing `---` found)");
+        }
+        let props: BTreeMap<String, Value> = if !yaml.trim().is_empty() {
+            serde_yaml_ng::from_str(&yaml).context("failed to parse YAML frontmatter")?
         } else {
             BTreeMap::new()
         };
@@ -513,8 +463,11 @@ fn dispatch_body_line(
         return;
     }
 
-    // Normal body line — strip inline comments before delivering to visitors.
-    let cleaned = strip_inline_comments(line);
+    // Normal body line — strip inline code spans first, then inline comments.
+    // Inline code must be removed before comment stripping so that `%%` inside
+    // a backtick span is not mistakenly treated as a comment delimiter.
+    let cleaned = strip_inline_code(line);
+    let cleaned = strip_inline_comments(&cleaned);
     for (i, v) in visitors.iter_mut().enumerate() {
         if active[i] && v.on_body_line(&cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
@@ -993,6 +946,53 @@ Line 2
     #[test]
     fn multi_visitor_no_visitors() {
         scan_reader_multi("hello\n".as_bytes(), &mut []).unwrap();
+    }
+
+    #[test]
+    fn multi_visitor_malformed_yaml_returns_error() {
+        let input = b"---\n: invalid [[[{\n---\nBody\n";
+        let mut fm = FrontmatterCollector::new(true);
+        let result = scan_reader_multi(input.as_slice(), &mut [&mut fm]);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("failed to parse YAML frontmatter"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn multi_visitor_frontmatter_exceeds_budget_returns_error() {
+        // Build a frontmatter block with 101 content lines and no closing `---`,
+        // which exceeds the 100-line budget enforced by scan_reader_multi.
+        let mut input = String::from("---\n");
+        for i in 0..101usize {
+            input.push_str(&format!("k{i}: v\n"));
+        }
+        // Deliberately omit the closing `---` so the budget is hit before EOF.
+        let mut fm = FrontmatterCollector::new(true);
+        let result = scan_reader_multi(input.as_bytes(), &mut [&mut fm]);
+        assert!(result.is_err(), "expected error for oversized frontmatter");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("frontmatter too large"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn multi_visitor_unclosed_frontmatter_returns_error() {
+        // File starts with `---` but EOF is reached without a closing `---`.
+        // This must error rather than silently returning an empty property map.
+        let input = "---\ntitle: Test\n";
+        let mut fm = FrontmatterCollector::new(true);
+        let result = scan_reader_multi(input.as_bytes(), &mut [&mut fm]);
+        assert!(result.is_err(), "expected error for unclosed frontmatter");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("unclosed frontmatter"),
+            "unexpected error: {err_msg}"
+        );
     }
 
     #[test]

@@ -290,3 +290,18 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - New `format_with_hints()` in `src/output.rs` alongside existing `format_output()`
 - 37 unit tests + 14 e2e tests covering hint generation and flag interactions
 - Found and fixed tags summary sort bug during dogfooding (hints were showing alphabetically-first tags instead of most-used)
+
+## DEC-032: YAML Parse Errors Are Hard Errors (2026-03-23)
+
+**Context:** The codebase had two scan paths for reading markdown files: `read_frontmatter_from_reader` (used by `properties`, `tags`, mutation commands) and `scan_reader_multi` (used by `find`, `summary`, task extraction). The former propagated YAML parse errors via `?`; the latter silently swallowed them with `unwrap_or_default()`, returning an empty property map for malformed frontmatter. This inconsistency meant `hyalo find` would silently skip broken files while `hyalo properties` would warn about them.
+
+**Decision:** Both paths now treat malformed YAML frontmatter as a hard error, propagating via `anyhow::Context("failed to parse YAML frontmatter")`. Commands that want graceful degradation (like `properties summary`) catch the error at the command level using `is_parse_error()` and emit a warning — but the scanner itself always surfaces the error.
+
+**Why:** Silent data loss is worse than a noisy error. A user with a broken frontmatter file should learn about it immediately, not wonder why `find --property status=planned` returns fewer results than expected. Commands that aggregate across many files can opt into graceful skip at their own level.
+
+**Consequences:**
+- `scan_reader_multi` now returns `Err` on malformed YAML (was `Ok` with empty props)
+- `scan_reader` / `scan_file` (closure-based API) now delegates to `scan_reader_multi` via a `ClosureVisitor` wrapper, unifying the two code paths
+- The old 80-line `scan_reader` implementation and its dependency on `frontmatter::skip_frontmatter` are removed
+- `find` and `summary` commands now exit with an error on malformed YAML (previously silent)
+- `properties` and `tags` commands continue to warn-and-skip via their existing `is_parse_error()` handling
