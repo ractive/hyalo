@@ -95,9 +95,11 @@ fn find_json(
     cmd.arg("find");
     cmd.args(extra_args);
     let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"))
     } else {
         serde_json::Value::Null
     };
@@ -118,7 +120,10 @@ fn find_all_files_returns_sorted_array() {
     assert_eq!(arr.len(), 4, "expected 4 files, got: {arr:?}");
 
     // Verify sorted by file path
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     let mut sorted = files.clone();
     sorted.sort();
     assert_eq!(files, sorted, "results not sorted by file path");
@@ -132,7 +137,9 @@ fn find_all_files_have_required_fields() {
 
     for entry in json.as_array().unwrap() {
         assert!(entry["file"].is_string(), "missing file field in {entry}");
-        let modified = entry["modified"].as_str().unwrap();
+        let modified = entry["modified"]
+            .as_str()
+            .expect("field 'modified' should be a string");
         // ISO 8601: YYYY-MM-DDTHH:MM:SSZ = 20 chars
         assert_eq!(modified.len(), 20, "unexpected modified format: {modified}");
         assert!(modified.ends_with('Z'));
@@ -204,7 +211,10 @@ fn find_property_eq_status_planned() {
         2,
         "expected 2 files with status=planned: {arr:?}"
     );
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     assert!(files.contains(&"alpha.md"));
     assert!(files.contains(&"sub/nested.md"));
 }
@@ -218,7 +228,10 @@ fn find_property_neq_status_completed() {
     let arr = json.as_array().unwrap();
     // gamma has no status → filter returns false for !=; alpha+nested have status!=completed → 2 files
     assert_eq!(arr.len(), 2, "expected 2 files (alpha, nested): {arr:?}");
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     assert!(files.contains(&"alpha.md"));
     assert!(files.contains(&"sub/nested.md"));
 }
@@ -232,7 +245,10 @@ fn find_property_existence_status() {
     let arr = json.as_array().unwrap();
     // alpha, beta, nested have status; gamma does not
     assert_eq!(arr.len(), 3, "expected 3 files with status: {arr:?}");
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     assert!(files.contains(&"alpha.md"));
     assert!(files.contains(&"beta.md"));
     assert!(files.contains(&"sub/nested.md"));
@@ -439,7 +455,10 @@ fn find_tag_and_property_combined() {
 
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     assert!(files.contains(&"alpha.md"));
     assert!(files.contains(&"sub/nested.md"));
 }
@@ -496,8 +515,8 @@ fn find_fields_tasks_only() {
     let arr = json.as_array().unwrap();
     let alpha = arr
         .iter()
-        .find(|e| e["file"].as_str().unwrap() == "alpha.md")
-        .unwrap();
+        .find(|e| e["file"].as_str().expect("field 'file' should be a string") == "alpha.md")
+        .expect("alpha.md should be present in results");
     assert!(
         alpha["tasks"].is_array(),
         "alpha should have tasks array when tasks field requested"
@@ -519,7 +538,11 @@ fn find_sort_modified() {
 
     let times: Vec<&str> = arr
         .iter()
-        .map(|v| v["modified"].as_str().unwrap())
+        .map(|v| {
+            v["modified"]
+                .as_str()
+                .expect("field 'modified' should be a string")
+        })
         .collect();
     let mut sorted = times.clone();
     sorted.sort();
@@ -533,7 +556,10 @@ fn find_sort_file_default() {
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = json.as_array().unwrap();
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     let mut sorted = files.clone();
     sorted.sort();
     assert_eq!(files, sorted);
@@ -739,7 +765,10 @@ fn find_regexp_alternation_matches_multiple_files() {
 
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
-    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     assert!(files.contains(&"beta.md"));
     assert!(files.contains(&"gamma.md"));
 }
@@ -779,7 +808,9 @@ fn find_regexp_includes_matches_field() {
         arr[0]["matches"].is_array(),
         "matches field should be present with --regexp"
     );
-    let matches = arr[0]["matches"].as_array().unwrap();
+    let matches = arr[0]["matches"]
+        .as_array()
+        .expect("field 'matches' should be an array");
     assert!(!matches.is_empty(), "should have at least one match");
 }
 
@@ -994,10 +1025,14 @@ fn section_filter_scopes_tasks() {
     // Both files have ## Tasks sections with open tasks
     assert_eq!(arr.len(), 2);
     for entry in arr {
-        let tasks = entry["tasks"].as_array().unwrap();
+        let tasks = entry["tasks"]
+            .as_array()
+            .expect("field 'tasks' should be an array");
         for task in tasks {
             // All returned tasks must be in a section that starts with Tasks-related headings
-            let section = task["section"].as_str().unwrap();
+            let section = task["section"]
+                .as_str()
+                .expect("field 'section' should be a string");
             assert!(
                 section.contains("Tasks") || section.contains("Subtasks"),
                 "unexpected section: {section}"
@@ -1025,11 +1060,16 @@ fn section_filter_includes_nested_children() {
     assert!(status.success());
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    let tasks = arr[0]["tasks"].as_array().unwrap();
+    let tasks = arr[0]["tasks"]
+        .as_array()
+        .expect("field 'tasks' should be an array");
     // Should include: First task, Second task (## Tasks), Nested task (### Subtasks)
     // Should NOT include: Note task (## Notes)
     assert_eq!(tasks.len(), 3);
-    let texts: Vec<&str> = tasks.iter().map(|t| t["text"].as_str().unwrap()).collect();
+    let texts: Vec<&str> = tasks
+        .iter()
+        .map(|t| t["text"].as_str().expect("field 'text' should be a string"))
+        .collect();
     assert!(texts.contains(&"First task"));
     assert!(texts.contains(&"Second task"));
     assert!(texts.contains(&"Nested task"));
@@ -1052,13 +1092,20 @@ fn section_filter_nearest_heading_in_output() {
         ],
     );
     assert!(status.success());
-    let tasks = json.as_array().unwrap()[0]["tasks"].as_array().unwrap();
+    let tasks = json.as_array().unwrap()[0]["tasks"]
+        .as_array()
+        .expect("field 'tasks' should be an array");
     // The nested task should show "### Subtasks" as its section, not "## Tasks"
     let nested = tasks
         .iter()
-        .find(|t| t["text"].as_str().unwrap() == "Nested task")
-        .unwrap();
-    assert_eq!(nested["section"].as_str().unwrap(), "### Subtasks");
+        .find(|t| t["text"].as_str().expect("field 'text' should be a string") == "Nested task")
+        .expect("task 'Nested task' should be present");
+    assert_eq!(
+        nested["section"]
+            .as_str()
+            .expect("field 'section' should be a string"),
+        "### Subtasks"
+    );
 }
 
 #[test]
@@ -1091,7 +1138,12 @@ fn section_filter_level_pinned() {
         1,
         "only doc.md should match a level-1 Introduction filter"
     );
-    assert_eq!(arr[0]["file"].as_str().unwrap(), "doc.md");
+    assert_eq!(
+        arr[0]["file"]
+            .as_str()
+            .expect("field 'file' should be a string"),
+        "doc.md"
+    );
 }
 
 #[test]
@@ -1115,9 +1167,14 @@ fn section_filter_or_semantics() {
     assert!(status.success());
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    let tasks = arr[0]["tasks"].as_array().unwrap();
+    let tasks = arr[0]["tasks"]
+        .as_array()
+        .expect("field 'tasks' should be an array");
     // Should include tasks from both Tasks and Notes sections
-    let texts: Vec<&str> = tasks.iter().map(|t| t["text"].as_str().unwrap()).collect();
+    let texts: Vec<&str> = tasks
+        .iter()
+        .map(|t| t["text"].as_str().expect("field 'text' should be a string"))
+        .collect();
     assert!(texts.contains(&"First task"));
     assert!(texts.contains(&"Note task"));
 }
@@ -1139,10 +1196,17 @@ fn section_filter_content_search_scoped() {
     assert!(status.success());
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    let matches = arr[0]["matches"].as_array().unwrap();
+    let matches = arr[0]["matches"]
+        .as_array()
+        .expect("field 'matches' should be an array");
     // The TODO in Notes section should be found
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0]["section"].as_str().unwrap(), "## Notes");
+    assert_eq!(
+        matches[0]["section"]
+            .as_str()
+            .expect("field 'section' should be a string"),
+        "## Notes"
+    );
 }
 
 #[test]

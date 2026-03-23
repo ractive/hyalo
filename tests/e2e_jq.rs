@@ -287,6 +287,93 @@ fn jq_filter_error_is_json_when_format_json() {
 }
 
 // ---------------------------------------------------------------------------
+// --jq on mutation commands (set, remove, append)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn jq_works_on_set_command() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n# Body\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".modified | length"])
+        .args(["set", "--property", "status=done", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "1",
+        "expected 1 modified file, got: {stdout}"
+    );
+}
+
+#[test]
+fn jq_works_on_remove_command() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\nstatus: draft\n---\n# Body\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".modified | length"])
+        .args(["remove", "--property", "status", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "1",
+        "expected 1 modified file, got: {stdout}"
+    );
+}
+
+#[test]
+fn jq_works_on_append_command() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\naliases:\n  - old\n---\n# Body\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".modified | length"])
+        .args(["append", "--property", "aliases=new", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "1",
+        "expected 1 modified file, got: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Filter producing multiple output values
 // ---------------------------------------------------------------------------
 

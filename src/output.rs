@@ -20,10 +20,19 @@ use serde_json::json;
 type JaqFilterCache = HashMap<String, jaq_core::Filter<Native<Val>>>;
 
 /// Output format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Format {
     Json,
     Text,
+}
+
+impl std::fmt::Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Format::Json => f.write_str("json"),
+            Format::Text => f.write_str("text"),
+        }
+    }
 }
 
 /// Result of a command execution: either success (exit 0) or a user-facing error (exit 1).

@@ -152,7 +152,7 @@ struct Cli {
     /// Output format: "json" or "text".
     /// Default: "json" (Override via .hyalo.toml)
     #[arg(long, global = true)]
-    format: Option<String>,
+    format: Option<Format>,
 
     /// Apply a jq filter expression to the JSON output of any command.
     /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
@@ -531,21 +531,18 @@ fn main() {
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
     let dir = cli.dir.unwrap_or(config.dir);
-    let format_str = cli.format.unwrap_or(config.format);
+    // CLI --format is already validated by Clap; fall back to config (String) with runtime parse.
+    let format = if let Some(f) = cli.format {
+        f
+    } else {
+        Format::from_str_opt(&config.format).unwrap_or(Format::Json)
+    };
     let hints_flag = if cli.hints {
         true
     } else if cli.no_hints {
         false
     } else {
         config.hints
-    };
-
-    let Some(format) = Format::from_str_opt(&format_str) else {
-        eprintln!(
-            "Error: invalid format '{}', expected 'json' or 'text'",
-            format_str
-        );
-        process::exit(2);
     };
 
     // --jq operates on JSON, so it conflicts with an explicit --format text.
@@ -562,10 +559,7 @@ fn main() {
         format
     };
     if jq_filter.is_some() && format != Format::Json {
-        eprintln!(
-            "Error: --jq cannot be combined with --format {}",
-            format_str
-        );
+        eprintln!("Error: --jq cannot be combined with --format {}", format);
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         process::exit(2);
     }
@@ -588,7 +582,7 @@ fn main() {
             None
         };
         let format_hint = if format_from_cli {
-            Some(format_str.clone())
+            Some(format.to_string())
         } else {
             None
         };

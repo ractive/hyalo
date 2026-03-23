@@ -42,12 +42,18 @@ priority: 1
     assert!(output.status.success());
     let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
 
-    let names: Vec<&str> = json.iter().map(|v| v["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = json
+        .iter()
+        .map(|v| v["name"].as_str().expect("field 'name' should be a string"))
+        .collect();
     assert!(names.contains(&"title"));
     assert!(names.contains(&"status"));
     assert!(names.contains(&"priority"));
 
-    let title_entry = json.iter().find(|v| v["name"] == "title").unwrap();
+    let title_entry = json
+        .iter()
+        .find(|v| v["name"] == "title")
+        .expect("'title' property should be present");
     assert_eq!(title_entry["count"], 2);
     assert_eq!(title_entry["type"], "text");
 
@@ -101,7 +107,10 @@ only_in_sub: yes
 
     assert!(output.status.success());
     let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    let names: Vec<&str> = json.iter().map(|v| v["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = json
+        .iter()
+        .map(|v| v["name"].as_str().expect("field 'name' should be a string"))
+        .collect();
     assert!(names.contains(&"only_in_sub"));
 }
 
@@ -182,8 +191,15 @@ fn find_properties_single_file() {
     let entry = &json[0];
     assert_eq!(entry["file"], "file.md");
 
-    let props = entry["properties"].as_array().unwrap();
-    let find_prop = |name: &str| props.iter().find(|p| p["name"] == name).unwrap();
+    let props = entry["properties"]
+        .as_array()
+        .expect("field 'properties' should be an array");
+    let find_prop = |name: &str| {
+        props
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("property '{name}' should be present"))
+    };
     assert_eq!(find_prop("title")["type"], "text");
     assert_eq!(find_prop("title")["value"], "My Note");
     assert_eq!(find_prop("priority")["type"], "number");
@@ -239,7 +255,10 @@ title: Sub B
     let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json.len(), 2);
 
-    let paths: Vec<&str> = json.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    let paths: Vec<&str> = json
+        .iter()
+        .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
     assert!(paths.iter().all(|p| p.starts_with("sub/")));
 }
 
