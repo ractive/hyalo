@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
-use crate::heading::parse_atx_heading;
-use crate::links;
-use crate::scanner::{FileVisitor, ScanAction};
-use crate::types::{OutlineSection, TaskCount};
+use hyalo_core::heading::parse_atx_heading;
+use hyalo_core::links;
+use hyalo_core::scanner::{FileVisitor, ScanAction};
+use hyalo_core::types::{OutlineSection, TaskCount};
 
 // ---------------------------------------------------------------------------
 // SectionScanner visitor
@@ -123,7 +123,7 @@ impl FileVisitor for SectionScanner {
             self.current.links.push(formatted);
         }
 
-        if let Some((_status, done)) = crate::tasks::detect_task_checkbox(raw) {
+        if let Some((_status, done)) = hyalo_core::tasks::detect_task_checkbox(raw) {
             self.current.task_total += 1;
             if done {
                 self.current.task_done += 1;
@@ -173,7 +173,7 @@ fn format_link_string(link: &links::Link) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner;
+    use hyalo_core::scanner;
     use std::fs;
 
     macro_rules! md {

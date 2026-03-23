@@ -449,16 +449,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a7763b98ba8a24f59e698bf9ab197e7676c640d6455d1580b4ce7dc560f0f0d"
 
 [[package]]
-name = "hyalo"
+name = "hyalo-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
- "criterion",
- "dunce",
- "globset",
- "ignore",
+ "hyalo-core",
  "jaq-core",
  "jaq-json",
  "jaq-std",
@@ -469,6 +466,22 @@ dependencies = [
  "serde_yaml_ng",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "hyalo-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "dunce",
+ "globset",
+ "ignore",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
 ]
 
 [[package]]

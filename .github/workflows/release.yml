@@ -21,7 +21,7 @@ jobs:
       - name: Verify tag matches Cargo.toml version
         run: |
           TAG="${{ github.event.release.tag_name }}"
-          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hyalo-cli") | .version')
           TAG_VERSION="${TAG#v}"
           echo "Git tag version:   $TAG_VERSION"
           echo "Cargo.toml version: $CARGO_VERSION"
@@ -95,7 +95,7 @@ jobs:
 
       - name: Verify CLI runs
         if: "!matrix.cross"
-        run: cargo run --release --target ${{ matrix.target }} -- --help
+        run: cargo run --release --target ${{ matrix.target }} -p hyalo-cli -- --help
 
       - name: Package (Unix)
         if: runner.os != 'Windows'

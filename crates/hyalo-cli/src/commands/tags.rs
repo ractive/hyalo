@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
-use crate::filter::extract_tags;
-use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
-use crate::types::{TagSummary, TagSummaryEntry};
+use hyalo_core::filter::extract_tags;
+use hyalo_core::frontmatter;
+use hyalo_core::types::{TagSummary, TagSummaryEntry};
 
 // ---------------------------------------------------------------------------
 // Tag format validation
@@ -101,7 +101,7 @@ pub fn tags_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::filter::tag_matches;
+    use hyalo_core::filter::tag_matches;
     use serde_yaml_ng::Value;
     use std::fs;
 

@@ -1,7 +1,7 @@
 ---
 branch: iter-30/workspace-split
 date: 2026-03-23
-status: planned
+status: completed
 tags:
 - iteration
 - architecture
@@ -19,31 +19,31 @@ Split the single crate into a workspace with `hyalo-core` (library) and `hyalo-c
 ## Tasks
 
 ### Workspace setup
-- [ ] Create `crates/hyalo-core/` with its own `Cargo.toml`
-- [ ] Create `crates/hyalo-cli/` with its own `Cargo.toml`
-- [ ] Convert root `Cargo.toml` to workspace manifest with `[workspace]` members
+- [x] Create `crates/hyalo-core/` with its own `Cargo.toml`
+- [x] Create `crates/hyalo-cli/` with its own `Cargo.toml`
+- [x] Convert root `Cargo.toml` to workspace manifest with `[workspace]` members
 
 ### Move core modules to hyalo-core
-- [ ] Move: `scanner.rs`, `frontmatter.rs`, `filter.rs`, `tasks.rs`, `links.rs`, `heading.rs`, `content_search.rs`, `discovery.rs`, `types.rs`
-- [ ] Create `crates/hyalo-core/src/lib.rs` with public module exports
-- [ ] Ensure `hyalo-core` has zero CLI dependencies (no `clap`, no `output`, no `hints`)
+- [x] Move: `scanner.rs`, `frontmatter.rs`, `filter.rs`, `tasks.rs`, `links.rs`, `heading.rs`, `content_search.rs`, `discovery.rs`, `types.rs`
+- [x] Create `crates/hyalo-core/src/lib.rs` with public module exports
+- [x] Ensure `hyalo-core` has zero CLI dependencies (no `clap`, no `output`, no `hints`)
 
 ### Move CLI modules to hyalo-cli
-- [ ] Move: `main.rs`, `commands/`, `output.rs`, `hints.rs`, `config.rs`, `fs_util.rs`
-- [ ] Add `hyalo-core` as dependency of `hyalo-cli`
-- [ ] Update all `use` paths in CLI code to reference `hyalo_core::`
+- [x] Move: `main.rs`, `commands/`, `output.rs`, `hints.rs`, `config.rs`, `fs_util.rs`
+- [x] Add `hyalo-core` as dependency of `hyalo-cli`
+- [x] Update all `use` paths in CLI code to reference `hyalo_core::`
 
 ### Test migration
-- [ ] Keep e2e tests in `crates/hyalo-cli/tests/`
-- [ ] Move unit tests with their modules
-- [ ] Move benchmarks to appropriate crate (micro → core, vault → core or cli)
+- [x] Keep e2e tests in `crates/hyalo-cli/tests/`
+- [x] Move unit tests with their modules
+- [x] Move benchmarks to appropriate crate (micro → core, vault → core or cli)
 
 ### Verify
-- [ ] `cargo build --workspace`
-- [ ] `cargo test --workspace`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] Update CI/release workflows if paths changed
-- [ ] Dogfood the new binary
+- [x] `cargo build --workspace`
+- [x] `cargo test --workspace`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] Update CI/release workflows if paths changed
+- [x] Dogfood the new binary
 
 ## Risk
 
@@ -51,8 +51,8 @@ Split the single crate into a workspace with `hyalo-core` (library) and `hyalo-c
 
 ## Acceptance Criteria
 
-- [ ] Workspace builds successfully with two crates
-- [ ] `hyalo-core` compiles independently with no CLI dependencies
-- [ ] All existing tests pass unchanged (or with minimal path updates)
-- [ ] Binary name remains `hyalo`
-- [ ] All quality gates pass
+- [x] Workspace builds successfully with two crates
+- [x] `hyalo-core` compiles independently with no CLI dependencies
+- [x] All existing tests pass unchanged (or with minimal path updates)
+- [x] Binary name remains `hyalo`
+- [x] All quality gates pass

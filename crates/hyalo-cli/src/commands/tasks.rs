@@ -3,9 +3,9 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::commands::resolve_error_to_outcome;
-use crate::discovery;
 use crate::output::{CommandOutcome, Format};
-use crate::types::TaskReadResult;
+use hyalo_core::discovery;
+use hyalo_core::types::TaskReadResult;
 
 // ---------------------------------------------------------------------------
 // `hyalo task read` — read single task at a line
@@ -23,7 +23,7 @@ pub fn task_read(
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
 
-    match crate::tasks::read_task(&full_path, line)? {
+    match hyalo_core::tasks::read_task(&full_path, line)? {
         None => {
             let msg = format!("line {line} is not a task");
             let out = crate::output::format_error(
@@ -68,7 +68,7 @@ pub fn task_toggle(
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
 
-    match crate::tasks::toggle_task(&full_path, line) {
+    match hyalo_core::tasks::toggle_task(&full_path, line) {
         Ok(info) => {
             let result = TaskReadResult {
                 file: rel_path,
@@ -111,7 +111,7 @@ pub fn task_set_status(
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
 
-    match crate::tasks::set_task_status(&full_path, line, status) {
+    match hyalo_core::tasks::set_task_status(&full_path, line, status) {
         Ok(info) => {
             let result = TaskReadResult {
                 file: rel_path,

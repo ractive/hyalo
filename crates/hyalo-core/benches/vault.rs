@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use hyalo::content_search::ContentSearchVisitor;
-use hyalo::discovery::discover_files;
-use hyalo::frontmatter::read_frontmatter;
-use hyalo::scanner::{FileVisitor, scan_file_multi};
-use hyalo::tasks::TaskCounter;
+use hyalo_core::content_search::ContentSearchVisitor;
+use hyalo_core::discovery::discover_files;
+use hyalo_core::frontmatter::read_frontmatter;
+use hyalo_core::scanner::{FileVisitor, scan_file_multi};
+use hyalo_core::tasks::TaskCounter;
 
 fn vault_path() -> Option<PathBuf> {
     let path = std::env::var("HYALO_BENCH_VAULT")

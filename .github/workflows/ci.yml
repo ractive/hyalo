@@ -16,7 +16,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
           components: rustfmt
-      - run: cargo fmt --check
+      - run: cargo fmt --all --check
 
   clippy:
     runs-on: ubuntu-latest
@@ -40,4 +40,4 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo test --workspace
       - name: Verify CLI runs
-        run: cargo run -- --help
+        run: cargo run -p hyalo-cli -- --help
