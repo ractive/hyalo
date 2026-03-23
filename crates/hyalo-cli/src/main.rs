@@ -115,7 +115,7 @@ COOKBOOK:\n  \
   hyalo properties --jq '[.[].name] | join(\", \")'\n\n  \
   # Get just file paths (no metadata)\n  \
   hyalo find --property status=draft --jq '[.[].file]'\n\n  \
-  # Pipe file paths for scripting\n  \
+  # Pipe file paths for scripting (Unix)\n  \
   hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}\n\n\
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
