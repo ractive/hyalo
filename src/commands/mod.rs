@@ -3,6 +3,7 @@ pub mod append;
 pub mod find;
 pub mod outline;
 pub mod properties;
+pub mod read;
 pub mod remove;
 pub mod set;
 pub mod summary;
