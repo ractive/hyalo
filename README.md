@@ -279,6 +279,10 @@ See `benches/README.md` for full setup, A/B comparison workflows, profiling with
 
 The [release workflow](.github/workflows/release.yml) automatically builds binaries for all platforms, uploads them to the release, and updates the Homebrew formula.
 
+## AI Notice
+
+This project is built with the assistance of AI (Claude Code by Anthropic). AI is used for code generation, documentation, and development workflow automation.
+
 ## License
 
 MIT
