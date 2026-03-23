@@ -58,6 +58,12 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
         return Err(FileResolveError::NotFound { path: normalized });
     }
 
+    // After confirming the file exists, canonicalize to resolve symlinks and
+    // verify the real path stays within the vault directory.
+    ensure_within_vault(dir, &full).map_err(|_| FileResolveError::OutsideVault {
+        path: normalized.clone(),
+    })?;
+
     Ok((full, normalized))
 }
 
@@ -69,6 +75,24 @@ fn has_parent_traversal(path: &str) -> bool {
     Path::new(path)
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// Verify that `full` resolves to a path within `dir` after following symlinks.
+///
+/// Uses `dunce::canonicalize` to resolve symlinks and normalize the path, then
+/// checks that the canonical path starts with the canonical vault directory.
+/// This prevents symlink-based escapes where a link inside the vault points
+/// to a file outside it.
+fn ensure_within_vault(dir: &Path, full: &Path) -> Result<()> {
+    let canonical_dir = dunce::canonicalize(dir)
+        .with_context(|| format!("failed to canonicalize vault dir: {}", dir.display()))?;
+    let canonical_full = dunce::canonicalize(full)
+        .with_context(|| format!("failed to canonicalize path: {}", full.display()))?;
+    anyhow::ensure!(
+        canonical_full.starts_with(&canonical_dir),
+        "path resolves outside vault boundary"
+    );
+    Ok(())
 }
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
@@ -121,6 +145,7 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
 pub enum FileResolveError {
     NotFound { path: String },
     MissingExtension { path: String, hint: String },
+    OutsideVault { path: String },
 }
 
 impl std::fmt::Display for FileResolveError {
@@ -129,6 +154,9 @@ impl std::fmt::Display for FileResolveError {
             Self::NotFound { path } => write!(f, "file not found: {path}"),
             Self::MissingExtension { path, hint } => {
                 write!(f, "file not found: {path} (did you mean {hint}?)")
+            }
+            Self::OutsideVault { path } => {
+                write!(f, "file resolves outside vault boundary: {path}")
             }
         }
     }
@@ -152,8 +180,12 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
         return None;
     }
 
-    if dir.join(&target).is_file() {
-        return Some(target.clone());
+    let full = dir.join(&target);
+    if full.is_file() {
+        if ensure_within_vault(dir, &full).is_ok() {
+            return Some(target.clone());
+        }
+        return None;
     }
 
     if !std::path::Path::new(&target)
@@ -161,8 +193,12 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
     {
         let with_ext = format!("{target}.md");
-        if dir.join(&with_ext).is_file() {
-            return Some(with_ext);
+        let full = dir.join(&with_ext);
+        if full.is_file() {
+            if ensure_within_vault(dir, &full).is_ok() {
+                return Some(with_ext);
+            }
+            return None;
         }
     }
 
@@ -269,7 +305,7 @@ mod tests {
                 assert_eq!(path, "note");
                 assert_eq!(hint, "note.md");
             }
-            other @ FileResolveError::NotFound { .. } => {
+            other => {
                 panic!("expected MissingExtension, got {other:?}")
             }
         }
@@ -439,5 +475,53 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         assert_eq!(resolve_target(tmp.path(), "../secret.md"), None);
+    }
+
+    // --- symlink escape tests ---
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_file_rejects_symlink_escape() {
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.md"), "# Secret").unwrap();
+
+        // Create a symlink inside vault that points outside
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("linked")).unwrap();
+
+        let err = resolve_file(vault.path(), "linked/secret.md").unwrap_err();
+        assert!(
+            matches!(err, FileResolveError::OutsideVault { .. }),
+            "expected OutsideVault, got {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_target_rejects_symlink_escape() {
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.md"), "# Secret").unwrap();
+
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("linked")).unwrap();
+
+        assert_eq!(resolve_target(vault.path(), "linked/secret"), None);
+        assert_eq!(resolve_target(vault.path(), "linked/secret.md"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_file_allows_symlink_within_vault() {
+        let vault = tempfile::tempdir().unwrap();
+        let subdir = vault.path().join("notes");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("real.md"), "# Real").unwrap();
+
+        // Symlink within the vault is fine
+        std::os::unix::fs::symlink(&subdir, vault.path().join("alias")).unwrap();
+
+        let (path, rel) = resolve_file(vault.path(), "alias/real.md").unwrap();
+        assert!(path.is_file());
+        assert_eq!(rel, "alias/real.md");
     }
 }

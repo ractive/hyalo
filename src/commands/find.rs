@@ -61,7 +61,10 @@ pub fn find(
     let compiled_regex = match regexp {
         Some(re) => {
             let effective = format!("(?i){re}");
-            match regex::Regex::new(&effective) {
+            match regex::RegexBuilder::new(&effective)
+                .size_limit(1 << 20)
+                .build()
+            {
                 Ok(r) => Some(r),
                 Err(e) => {
                     return Ok(CommandOutcome::UserError(format!(
