@@ -16,10 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
       - name: Verify tag matches Cargo.toml version
         run: |
           TAG="${{ github.event.release.tag_name }}"
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           TAG_VERSION="${TAG#v}"
           echo "Git tag version:   $TAG_VERSION"
           echo "Cargo.toml version: $CARGO_VERSION"
