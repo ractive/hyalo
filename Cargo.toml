@@ -25,6 +25,12 @@ assert_cmd = "2"
 criterion = { version = "0.5", features = ["html_reports"] }
 predicates = "3"
 
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true
+
 [profile.bench]
 codegen-units = 1
 lto = true
