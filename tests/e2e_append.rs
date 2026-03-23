@@ -164,6 +164,135 @@ author: Alice
 }
 
 // ---------------------------------------------------------------------------
+// --where-property / --where-tag filter tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_where_property_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+status: review
+aliases:
+  - original-name
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "skip.md",
+        md!(r"
+---
+title: Skip
+status: draft
+aliases:
+  - other-name
+---
+"),
+    );
+
+    let (status, json, stderr) = append_json(
+        &tmp,
+        &[
+            "--property",
+            "aliases=canonical-name",
+            "--where-property",
+            "status=review",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected 1 modified: {json}"
+    );
+    assert_eq!(
+        json["skipped"].as_array().unwrap().len(),
+        0,
+        "expected 0 skipped (skip.md was filtered out, not skipped): {json}"
+    );
+
+    let target_content = fs::read_to_string(tmp.path().join("target.md")).unwrap();
+    assert!(
+        target_content.contains("canonical-name"),
+        "target.md should have alias appended:\n{target_content}"
+    );
+    assert!(
+        target_content.contains("original-name"),
+        "target.md should retain original alias:\n{target_content}"
+    );
+
+    let skip_content = fs::read_to_string(tmp.path().join("skip.md")).unwrap();
+    assert!(
+        !skip_content.contains("canonical-name"),
+        "skip.md should be untouched:\n{skip_content}"
+    );
+}
+
+#[test]
+fn append_where_tag_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "tagged.md",
+        md!(r"
+---
+title: Tagged
+tags:
+  - backend
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "untagged.md",
+        md!(r"
+---
+title: Untagged
+---
+"),
+    );
+
+    let (status, json, stderr) = append_json(
+        &tmp,
+        &[
+            "--property",
+            "aliases=backend-note",
+            "--where-tag",
+            "backend",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected only tagged file to be modified: {json}"
+    );
+
+    let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
+    assert!(
+        tagged_content.contains("backend-note"),
+        "tagged.md should have alias appended:\n{tagged_content}"
+    );
+
+    let untagged_content = fs::read_to_string(tmp.path().join("untagged.md")).unwrap();
+    assert!(
+        !untagged_content.contains("backend-note"),
+        "untagged.md should be untouched:\n{untagged_content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Guard: --file or --glob required
 // ---------------------------------------------------------------------------
 

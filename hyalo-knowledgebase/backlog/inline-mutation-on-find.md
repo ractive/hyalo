@@ -1,14 +1,14 @@
 ---
-title: "Inline mutation on find results (find-and-set)"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: low
 origin: dogfooding post-iter-19
+priority: low
+status: completed
 tags:
-  - backlog
-  - cli
-  - ux
+- backlog
+- cli
+- ux
+title: Inline mutation on find results (find-and-set)
+type: backlog
 ---
 
 # Inline mutation on find results (find-and-set)

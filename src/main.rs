@@ -40,6 +40,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         Filter by task status:        hyalo find --task todo\n  \
         Full-text search:             hyalo find 'meeting notes'\n  \
         Set a property:               hyalo set --property status=done --file notes/todo.md\n  \
+        Bulk-set with filter:         hyalo set --property status=done --where-property status=draft --glob '**/*.md'\n  \
         Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'\n  \
         Remove a property:            hyalo remove --property status --file notes/todo.md\n  \
         Remove a tag from files:      hyalo remove --tag draft --glob '**/*.md'\n  \
@@ -55,11 +56,11 @@ COMMAND REFERENCE:\n  \
     hyalo find [PATTERN | --regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
                [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
   Set (create or overwrite, mutates files):\n  \
-    hyalo set  --property K=V [--property ...] [--tag T ...] [--file F | --glob G]\n\n  \
+    hyalo set  --property K=V [--property ...] [--tag T ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Remove (delete properties/tags, mutates files):\n  \
-    hyalo remove --property K [--property K=V ...] [--tag T ...] [--file F | --glob G]\n\n  \
+    hyalo remove --property K [--property K=V ...] [--tag T ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Append (add to list properties, mutates files):\n  \
-    hyalo append --property K=V [--property ...] [--file F | --glob G]\n\n  \
+    hyalo append --property K=V [--property ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Properties (aggregate summary, read-only):\n  \
     hyalo properties [--glob G]   Unique property names, types, and file counts\n\n  \
   Tags (aggregate summary, read-only):\n  \
@@ -92,9 +93,10 @@ COOKBOOK:\n  \
   hyalo find --fields links --jq '[.[] | select(.links | map(select(.path == null)) | length > 0)]'\n\n  \
   # Tag all research notes in a folder\n  \
   hyalo set --tag reviewed --glob 'research/**/*.md'\n\n  \
-  # Bulk-update a property across files\n  \
-  hyalo find --property status=draft --jq '.[].file' \\\n    \
-    | xargs -I{} hyalo set --property status=in-progress --file {}\n\n  \
+  # Bulk-update a property across matching files\n  \
+  hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\n  \
+  # Add a tag to files matching a tag filter\n  \
+  hyalo set --tag reviewed --where-tag research --glob '**/*.md'\n\n  \
   # Append to a list property\n  \
   hyalo append --property aliases='My Note' --file note.md\n\n  \
   # Quick vault overview\n  \
@@ -273,6 +275,13 @@ enum Commands {
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            FILTERS (optional, narrow which files are mutated):\n\
+            - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
+K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
+element matches. Repeatable (AND).\n\
+            - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
+Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
             USE WHEN: You need to create or overwrite frontmatter properties or add tags, \
             possibly across many files at once."
@@ -290,6 +299,12 @@ enum Commands {
         /// Glob pattern for multiple files
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
+        /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
+        #[arg(long = "where-property", value_name = "FILTER")]
+        where_properties: Vec<String>,
+        /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
+        #[arg(long = "where-tag", value_name = "TAG")]
+        where_tags: Vec<String>,
     },
     /// Remove frontmatter properties and/or tags from file(s)
     #[command(
@@ -303,6 +318,13 @@ enum Commands {
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, [\"value\": V,] \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            FILTERS (optional, narrow which files are mutated):\n\
+            - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
+K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
+element matches. Repeatable (AND).\n\
+            - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
+Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
             USE WHEN: You need to delete properties or remove tags from one or more files."
     )]
@@ -319,6 +341,12 @@ enum Commands {
         /// Glob pattern for multiple files
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
+        /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
+        #[arg(long = "where-property", value_name = "FILTER")]
+        where_properties: Vec<String>,
+        /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
+        #[arg(long = "where-tag", value_name = "TAG")]
+        where_tags: Vec<String>,
     },
     /// Append values to list properties in file(s) frontmatter, promoting scalars to lists
     #[command(
@@ -331,6 +359,13 @@ enum Commands {
             - Property is a mapping: returns an error.\n\
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            FILTERS (optional, narrow which files are mutated):\n\
+            - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
+K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
+element matches. Repeatable (AND).\n\
+            - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
+Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \
             without overwriting the existing list."
@@ -345,6 +380,12 @@ enum Commands {
         /// Glob pattern for multiple files
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
+        /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
+        #[arg(long = "where-property", value_name = "FILTER")]
+        where_properties: Vec<String>,
+        /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
+        #[arg(long = "where-tag", value_name = "TAG")]
+        where_tags: Vec<String>,
     },
 }
 
@@ -381,6 +422,32 @@ enum TaskAction {
         #[arg(long)]
         status: String,
     },
+}
+
+/// Parse `--where-property` filters and validate `--where-tag` names.
+/// Exits with code 1 on invalid input.
+fn parse_where_filters(
+    where_properties: &[String],
+    where_tags: &[String],
+) -> Vec<filter::PropertyFilter> {
+    let filters = match where_properties
+        .iter()
+        .map(|s| filter::parse_property_filter(s))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+    for tag in where_tags {
+        if let Err(msg) = hyalo::commands::tags::validate_tag(tag) {
+            eprintln!("Error: {msg}");
+            process::exit(1);
+        }
+    }
+    filters
 }
 
 #[allow(clippy::too_many_lines)]
@@ -589,38 +656,59 @@ fn main() {
             ref tag,
             ref file,
             ref glob,
-        } => set_commands::set(
-            &dir,
-            properties,
-            tag,
-            file.as_deref(),
-            glob.as_deref(),
-            effective_format,
-        ),
+            ref where_properties,
+            ref where_tags,
+        } => {
+            let where_prop_filters = parse_where_filters(where_properties, where_tags);
+            set_commands::set(
+                &dir,
+                properties,
+                tag,
+                file.as_deref(),
+                glob.as_deref(),
+                &where_prop_filters,
+                where_tags,
+                effective_format,
+            )
+        }
         Commands::Remove {
             ref properties,
             ref tag,
             ref file,
             ref glob,
-        } => remove_commands::remove(
-            &dir,
-            properties,
-            tag,
-            file.as_deref(),
-            glob.as_deref(),
-            effective_format,
-        ),
+            ref where_properties,
+            ref where_tags,
+        } => {
+            let where_prop_filters = parse_where_filters(where_properties, where_tags);
+            remove_commands::remove(
+                &dir,
+                properties,
+                tag,
+                file.as_deref(),
+                glob.as_deref(),
+                &where_prop_filters,
+                where_tags,
+                effective_format,
+            )
+        }
         Commands::Append {
             ref properties,
             ref file,
             ref glob,
-        } => append_commands::append(
-            &dir,
-            properties,
-            file.as_deref(),
-            glob.as_deref(),
-            effective_format,
-        ),
+            ref where_properties,
+            ref where_tags,
+        } => {
+            let where_prop_filters = parse_where_filters(where_properties, where_tags);
+            append_commands::append(
+                &dir,
+                properties,
+                file.as_deref(),
+                glob.as_deref(),
+                &where_prop_filters,
+                where_tags,
+                effective_format,
+            )
+        }
     };
 
     match result {
