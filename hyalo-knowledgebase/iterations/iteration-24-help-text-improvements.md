@@ -1,14 +1,14 @@
 ---
-title: "Iteration 24: Help text improvements"
-type: iteration
+branch: iter-23/help-text-improvements
 date: 2026-03-23
+status: in-progress
 tags:
 - iteration
 - cli
 - ux
 - llm
-status: in-progress
-branch: iter-23/help-text-improvements
+title: 'Iteration 23b: Help text improvements'
+type: iteration
 ---
 
 ## Goal
