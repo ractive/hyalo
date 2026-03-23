@@ -196,7 +196,7 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 
 **Context:** All commands built JSON output dynamically using `serde_json::json!()` macros and manual `serde_json::Map` construction. Shapes were implicit — defined only by the code that constructed them and the tests that parsed them. The outline command needed to reuse the same property and tag shapes as existing commands.
 
-**Decision:** Introduce `src/types.rs` with `#[derive(Serialize)]` structs for all JSON output shapes. Refactor all existing commands to construct typed structs instead of ad-hoc `json!()` values. Add `format_output<T: Serialize>()` to `output.rs` as the standard serialization path.
+**Decision:** Introduce `crates/hyalo-core/src/types.rs` with `#[derive(Serialize)]` structs for all JSON output shapes. Refactor all existing commands to construct typed structs instead of ad-hoc `json!()` values. Add `format_output<T: Serialize>()` to `output.rs` as the standard serialization path.
 
 **Types introduced:** `PropertyInfo`, `FileProperties`, `PropertySummaryEntry`, `PropertyRemoved`, `PropertyFindResult`, `PropertyMutationResult`, `FileTags`, `TagSummary`, `TagSummaryEntry`, `TagFindResult`, `TagMutationResult`, `LinkInfo`, `FileLinks`, `FileOutline`, `OutlineSection`, `TaskCount`.
 
@@ -286,8 +286,8 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - Flag propagation (`--dir`, `--glob`) in hints ensures suggested commands work in the caller's current context without manual flag copying.
 
 **Consequences:**
-- New `src/hints.rs` module with `HintSource`, `HintContext`, and `generate_hints()` function
-- New `format_with_hints()` in `src/output.rs` alongside existing `format_output()`
+- New `crates/hyalo-cli/src/hints.rs` module with `HintSource`, `HintContext`, and `generate_hints()` function
+- New `format_with_hints()` in `crates/hyalo-cli/src/output.rs` alongside existing `format_output()`
 - 37 unit tests + 14 e2e tests covering hint generation and flag interactions
 - Found and fixed tags summary sort bug during dogfooding (hints were showing alphabetically-first tags instead of most-used)
 
