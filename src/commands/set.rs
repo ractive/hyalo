@@ -21,6 +21,7 @@ pub struct SetPropertyResult {
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub total: usize,
+    pub scanned: usize,
 }
 
 /// Result of a `set --tag T` operation across files.
@@ -30,6 +31,7 @@ pub struct SetTagResult {
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub total: usize,
+    pub scanned: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +216,7 @@ pub fn set(
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
+    let scanned = files.len();
 
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
@@ -283,6 +286,7 @@ pub fn set(
             modified,
             skipped,
             total,
+            scanned,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -295,6 +299,7 @@ pub fn set(
             modified,
             skipped,
             total,
+            scanned,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -393,6 +398,8 @@ title: Note
         assert_eq!(parsed["property"], "status");
         assert_eq!(parsed["value"], "done");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 1);
+        assert_eq!(parsed["scanned"], parsed["total"]);
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains("status: done"));
@@ -458,6 +465,7 @@ status: done
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["scanned"], parsed["total"]);
     }
 
     #[test]
@@ -763,6 +771,9 @@ title: Note
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 0);
+        // 2 files scanned, 1 passed the where-filter (total = modified + skipped)
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
+        assert!(parsed["scanned"].as_u64().unwrap() > parsed["total"].as_u64().unwrap());
 
         let match_content = fs::read_to_string(tmp.path().join("match.md")).unwrap();
         assert!(match_content.contains("priority: high"));
@@ -793,6 +804,9 @@ title: Note
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        // 2 files scanned, 1 passed the where-filter
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
+        assert!(parsed["scanned"].as_u64().unwrap() > parsed["total"].as_u64().unwrap());
 
         let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
         assert!(tagged_content.contains("status: reviewed"));

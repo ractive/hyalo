@@ -1,10 +1,10 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
-use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
+use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 use crate::types::{TagSummary, TagSummaryEntry};
@@ -40,55 +40,6 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Nested tag matching
-// ---------------------------------------------------------------------------
-
-/// Returns true if `tag` matches the query under Obsidian's nested tag rules.
-/// A tag matches if it equals the query or starts with `query/` (case-insensitive).
-///
-/// Uses byte-level ASCII comparison — safe because tag names are validated to only
-/// contain ASCII characters (letters, digits, `_`, `-`, `/`).
-#[must_use]
-pub fn tag_matches(tag: &str, query: &str) -> bool {
-    tag.eq_ignore_ascii_case(query)
-        || (tag.len() > query.len()
-            && tag.as_bytes()[query.len()] == b'/'
-            && tag[..query.len()].eq_ignore_ascii_case(query))
-}
-
-// ---------------------------------------------------------------------------
-// Tag extraction
-// ---------------------------------------------------------------------------
-
-/// Extract the `tags` list from a parsed frontmatter map.
-/// Handles:
-/// - Missing `tags` key → empty vec
-/// - `tags` as a YAML sequence → collect string items
-/// - `tags` as a scalar string → single-element vec
-/// - `tags` as empty sequence → empty vec
-#[must_use]
-pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
-    match props.get("tags") {
-        Some(Value::Sequence(seq)) => seq
-            .iter()
-            .filter_map(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                Value::Number(n) => Some(n.to_string()),
-                _ => None,
-            })
-            .collect(),
-        Some(Value::String(s)) => {
-            if s.is_empty() {
-                vec![]
-            } else {
-                vec![s.clone()]
-            }
-        }
-        _ => vec![],
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +101,8 @@ pub fn tags_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::tag_matches;
+    use serde_yaml_ng::Value;
     use std::fs;
 
     macro_rules! md {

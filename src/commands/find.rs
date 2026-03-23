@@ -5,11 +5,10 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use crate::commands::outline::SectionScanner;
-use crate::commands::tags::extract_tags;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::content_search::ContentSearchVisitor;
 use crate::discovery;
-use crate::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField};
+use crate::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
 use crate::frontmatter;
 use crate::links::Link;
 use crate::output::{CommandOutcome, Format};
