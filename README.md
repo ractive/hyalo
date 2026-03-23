@@ -41,6 +41,11 @@ hyalo find
 hyalo find "retry backoff"
 hyalo find "retry" --tag research
 
+# Regex content search (case-insensitive by default)
+hyalo find --regexp "retry.*backoff"
+hyalo find -e "TODO|FIXME|HACK"
+hyalo find -e "fn\s+\w+_test" --tag rust
+
 # Filter by property (operator: =, !=, >, >=, <, <=, or existence)
 hyalo find --property status=draft
 hyalo find --property status!=done
