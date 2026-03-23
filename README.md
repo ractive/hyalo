@@ -100,22 +100,22 @@ hyalo find
 
 # Content search (case-insensitive substring)
 hyalo find "retry backoff"
-hyalo find "retry" -t research
+hyalo find "retry" --tag research
 
 # Regex content search (case-insensitive by default)
-hyalo find -e "retry.*backoff"
+hyalo find --regexp "retry.*backoff"
 hyalo find -e "TODO|FIXME|HACK"
-hyalo find -e "fn\s+\w+_test" -t rust
+hyalo find -e "fn\s+\w+_test" --tag rust
 
 # Filter by property (operator: =, !=, >, >=, <, <=, or existence)
-hyalo find -p status=draft
-hyalo find -p status!=done
-hyalo find -p priority>=3
-hyalo find -p status                  # existence check (has this property)
-hyalo find -p status=draft -p topic=cli   # AND
+hyalo find --property status=draft
+hyalo find --property status!=done
+hyalo find --property priority>=3
+hyalo find --property status          # existence check (has this property)
+hyalo find --property status=draft --property topic=cli   # AND
 
-# Filter by tag (prefix-matches hierarchy: -t inbox matches inbox/processing)
-hyalo find -t inbox
+# Filter by tag (prefix-matches hierarchy: --tag inbox matches inbox/processing)
+hyalo find --tag inbox
 
 # Filter by task status
 hyalo find --task todo    # open tasks
@@ -123,21 +123,21 @@ hyalo find --task done    # completed tasks
 hyalo find --task any     # any tasks
 
 # Filter by section heading (case-insensitive whole-string match)
-hyalo find -s "Tasks" --task todo             # open tasks in ## Tasks sections
-hyalo find -s "## Design" "TODO"              # content search scoped to level-2 Design sections
-hyalo find -s "# Introduction" --fields sections  # level-pinned: only # Introduction, not ## Introduction
-hyalo find -s "Tasks" -s "Notes"              # OR: match either section
+hyalo find --section "Tasks" --task todo          # open tasks in ## Tasks sections
+hyalo find --section "## Design" "TODO"           # content search scoped to level-2 Design sections
+hyalo find --section "# Introduction" --fields sections  # level-pinned: only # Introduction, not ## Introduction
+hyalo find --section "Tasks" --section "Notes"    # OR: match either section
 
 # Scope to file(s)
-hyalo find -f path/to/note.md
-hyalo find -g "notes/*.md"
+hyalo find --file path/to/note.md
+hyalo find --glob "notes/*.md"
 
 # Control returned fields (default: all)
 hyalo find --fields properties,tags
 hyalo find --fields sections,tasks,links
 
 # Sort and limit
-hyalo find --sort modified -n 10
+hyalo find --sort modified --limit 10
 ```
 
 ### read
@@ -146,23 +146,23 @@ Read the body content of a markdown file, optionally filtered by section or line
 
 ```sh
 # Read full body (text output)
-hyalo read -f path/to/note.md
+hyalo read --file path/to/note.md
 
 # Read a specific section
-hyalo read -f path/to/note.md -s "Proposal"
-hyalo read -f path/to/note.md -s "## Proposal"
+hyalo read --file path/to/note.md --section "Proposal"
+hyalo read --file path/to/note.md --section "## Proposal"
 
 # Read a line range (1-based, inclusive)
-hyalo read -f path/to/note.md -l 5:10
-hyalo read -f path/to/note.md -l 5:
-hyalo read -f path/to/note.md -l :10
+hyalo read --file path/to/note.md --lines 5:10
+hyalo read --file path/to/note.md --lines 5:
+hyalo read --file path/to/note.md --lines :10
 
 # Show frontmatter only
-hyalo read -f path/to/note.md --frontmatter
+hyalo read --file path/to/note.md --frontmatter
 
 # JSON output
-hyalo read -f path/to/note.md --format json
-hyalo read -f path/to/note.md --format json --jq '.content'
+hyalo read --file path/to/note.md --format json
+hyalo read --file path/to/note.md --format json --jq '.content'
 ```
 
 ### properties
@@ -171,7 +171,7 @@ Aggregate summary of unique property names with inferred types and file counts.
 
 ```sh
 hyalo properties
-hyalo properties -g "notes/*.md"
+hyalo properties --glob "notes/*.md"
 ```
 
 ### tags
@@ -180,7 +180,7 @@ Aggregate summary of unique tags with file counts.
 
 ```sh
 hyalo tags
-hyalo tags -g "notes/*.md"
+hyalo tags --glob "notes/*.md"
 ```
 
 ### summary
@@ -189,8 +189,8 @@ High-level vault overview: file counts, property and tag aggregates, status grou
 
 ```sh
 hyalo summary
-hyalo summary -g "notes/*.md"
-hyalo summary -n 5                # control how many recent files to show (default: 10)
+hyalo summary --glob "notes/*.md"
+hyalo summary --recent 5          # control how many recent files to show (default: 10)
 hyalo summary --format text
 hyalo summary --jq '.tasks.total'
 hyalo summary --format text --hints
@@ -201,16 +201,16 @@ hyalo summary --format text --hints
 Set (create or overwrite) frontmatter properties and/or add tags across one or more files.
 
 ```sh
-hyalo set -p status=done -f path/to/note.md
-hyalo set -p status=active -g "notes/*.md"
-hyalo set -t cli -f path/to/note.md
-hyalo set -p status=done -t reviewed -f path/to/note.md
+hyalo set --property status=done --file path/to/note.md
+hyalo set --property status=active --glob "notes/*.md"
+hyalo set --tag cli --file path/to/note.md
+hyalo set --property status=done --tag reviewed --file path/to/note.md
 
 # Bulk-update: set status on files matching a filter
-hyalo set -p status=completed --where-property status=done -g '**/*.md'
+hyalo set --property status=completed --where-property status=done --glob '**/*.md'
 
 # Add tag to files matching a tag filter
-hyalo set -t reviewed --where-tag research -g '**/*.md'
+hyalo set --tag reviewed --where-tag research --glob '**/*.md'
 ```
 
 ### remove
@@ -218,13 +218,13 @@ hyalo set -t reviewed --where-tag research -g '**/*.md'
 Remove frontmatter properties and/or tags from file(s).
 
 ```sh
-hyalo remove -p status -f path/to/note.md              # remove property
-hyalo remove -p tags=serde -f path/to/note.md          # remove value from list
-hyalo remove -t cli -f path/to/note.md
-hyalo remove -p status -g "draft/*.md"
+hyalo remove --property status --file path/to/note.md          # remove property
+hyalo remove --property tags=serde --file path/to/note.md      # remove value from list
+hyalo remove --tag cli --file path/to/note.md
+hyalo remove --property status --glob "draft/*.md"
 
 # Remove tag from files matching a property filter
-hyalo remove -t deprecated --where-property status=completed -g '**/*.md'
+hyalo remove --tag deprecated --where-property status=completed --glob '**/*.md'
 ```
 
 `remove --property K` (no value) removes the property entirely. `remove --property K=V` removes V from a list property, or removes the property if it is a scalar matching V.
@@ -234,11 +234,11 @@ hyalo remove -t deprecated --where-property status=completed -g '**/*.md'
 Append values to list properties, promoting scalars to lists if needed.
 
 ```sh
-hyalo append -p tags=serde -f path/to/note.md
-hyalo append -p tags=serde -g "crates/*.md"
+hyalo append --property tags=serde --file path/to/note.md
+hyalo append --property tags=serde --glob "crates/*.md"
 
 # Append to list property on files matching a tag
-hyalo append -p aliases=old-name --where-tag renamed -g '**/*.md'
+hyalo append --property aliases=old-name --where-tag renamed --glob '**/*.md'
 ```
 
 ### task
@@ -246,9 +246,9 @@ hyalo append -p aliases=old-name --where-tag renamed -g '**/*.md'
 Read, toggle, or set the status of a single task checkbox by line number.
 
 ```sh
-hyalo task read -f path/to/note.md -l 42
-hyalo task toggle -f path/to/note.md -l 42
-hyalo task set-status -f path/to/note.md -l 42 -s /
+hyalo task read --file path/to/note.md --line 42
+hyalo task toggle --file path/to/note.md --line 42
+hyalo task set-status --file path/to/note.md --line 42 --status /
 ```
 
 Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored.
