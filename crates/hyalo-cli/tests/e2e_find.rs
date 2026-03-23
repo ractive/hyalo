@@ -1231,3 +1231,52 @@ fn section_filter_invalid_exits_1() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn empty_text_result_prints_notice_on_stderr() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "find",
+        "--property",
+        "status=nonexistent",
+        "--format",
+        "text",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stdout.trim().is_empty(),
+        "stdout should be empty for zero results, got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("No files matched"),
+        "stderr should contain 'No files matched' notice, got: {stderr}"
+    );
+}
+
+#[test]
+fn empty_json_result_returns_empty_array_no_stderr() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "find",
+        "--property",
+        "status=nonexistent",
+        "--format",
+        "json",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stdout.trim(), "[]");
+    assert!(
+        !stderr.contains("No files matched"),
+        "JSON mode should not print 'No files matched' notice"
+    );
+}

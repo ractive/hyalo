@@ -234,6 +234,15 @@ pub fn find(
         .into_iter()
         .map(|obj| serde_json::to_value(obj).expect("derived Serialize impl should not fail"))
         .collect();
+
+    // In text mode, an empty result set produces no stdout output, which an
+    // LLM (or script) cannot distinguish from a silent failure.  Emit an
+    // explicit notice on stderr so the caller knows the query succeeded but
+    // matched nothing.  JSON mode keeps the empty array on stdout unchanged.
+    if format == crate::output::Format::Text && json_array.is_empty() {
+        eprintln!("No files matched.");
+    }
+
     let json_output = serde_json::Value::Array(json_array);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
