@@ -52,7 +52,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
-    hyalo find [PATTERN] [--regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
+    hyalo find [PATTERN | --regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
                [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
   Set (create or overwrite, mutates files):\n  \
     hyalo set  --property K=V [--property ...] [--tag T ...] [--file F | --glob G]\n\n  \

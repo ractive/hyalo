@@ -58,13 +58,21 @@ pub fn find(
     let body_needed = needs_body(fields, has_content_search, has_task_filter);
 
     // Compile the regex once (if any), then clone cheaply per file.
-    let compiled_regex = regexp
-        .map(|re| {
+    // Invalid regex is a user error (exit 1), not an internal error (exit 2).
+    let compiled_regex = match regexp {
+        Some(re) => {
             let effective = format!("(?i){re}");
-            regex::Regex::new(&effective)
-                .with_context(|| format!("invalid regular expression: {re}"))
-        })
-        .transpose()?;
+            match regex::Regex::new(&effective) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    return Ok(CommandOutcome::UserError(format!(
+                        "invalid regular expression: {re}\n{e}"
+                    )));
+                }
+            }
+        }
+        None => None,
+    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
