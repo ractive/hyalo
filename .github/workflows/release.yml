@@ -67,6 +67,8 @@ jobs:
             cross: true
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
           - target: x86_64-pc-windows-msvc
             os: windows-latest
 
@@ -139,3 +141,108 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.event.release.tag_name }}" artifacts/*
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download SHA256SUMS from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.event.release.tag_name }}" \
+            --pattern "SHA256SUMS" --dir .
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "ERROR: HOMEBREW_TAP_TOKEN secret is not set"
+            exit 1
+          fi
+
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+
+          get_sha() {
+            awk -v file="$1" '$2 == file {print $1}' SHA256SUMS
+          }
+
+          SHA_MACOS_ARM64=$(get_sha "hyalo-aarch64-apple-darwin.tar.gz")
+          SHA_MACOS_X86=$(get_sha "hyalo-x86_64-apple-darwin.tar.gz")
+          SHA_LINUX_ARM64=$(get_sha "hyalo-aarch64-unknown-linux-gnu.tar.gz")
+          SHA_LINUX_X86=$(get_sha "hyalo-x86_64-unknown-linux-gnu.tar.gz")
+
+          for var in SHA_MACOS_ARM64 SHA_MACOS_X86 SHA_LINUX_ARM64 SHA_LINUX_X86; do
+            if [ -z "${!var}" ]; then
+              echo "ERROR: missing SHA256 checksum for $var"
+              exit 1
+            fi
+          done
+
+          cat > formula.rb <<FORMULA
+          # typed: false
+          # frozen_string_literal: true
+
+          # Homebrew formula for hyalo — a CLI for exploring and managing Markdown knowledge bases.
+          # Auto-updated by the release workflow in ractive/hyalo.
+          class Hyalo < Formula
+            desc "CLI for exploring and managing Markdown knowledge bases"
+            homepage "https://github.com/ractive/hyalo"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/ractive/hyalo/releases/download/v#{version}/hyalo-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_ARM64}"
+              end
+
+              on_intel do
+                url "https://github.com/ractive/hyalo/releases/download/v#{version}/hyalo-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_X86}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/ractive/hyalo/releases/download/v#{version}/hyalo-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              end
+
+              on_intel do
+                url "https://github.com/ractive/hyalo/releases/download/v#{version}/hyalo-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_LINUX_X86}"
+              end
+            end
+
+            def install
+              bin.install "hyalo"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/hyalo --version")
+            end
+          end
+          FORMULA
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' formula.rb
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ractive/homebrew-tap.git" tap
+          cp formula.rb tap/Formula/hyalo.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/hyalo.rb
+          if git diff --cached --quiet; then
+            echo "Formula unchanged, skipping commit"
+          else
+            git commit -m "Update hyalo to ${VERSION}"
+            git push
+          fi

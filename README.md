@@ -2,6 +2,25 @@
 
 A self-contained command line tool for exploring and managing Markdown knowledge bases. Compatible with [Obsidian](https://obsidian.md/) vaults — no running Obsidian instance required.
 
+## Installation
+
+### Homebrew (macOS & Linux)
+
+```sh
+brew tap ractive/tap
+brew install ractive/tap/hyalo
+```
+
+### Cargo
+
+```sh
+cargo install --git https://github.com/ractive/hyalo.git --locked
+```
+
+### Manual download
+
+Download pre-built binaries from the [GitHub Releases](https://github.com/ractive/hyalo/releases) page.
+
 ## Build
 
 ```sh
@@ -251,6 +270,14 @@ cargo bench --bench vault                # vault-scale benchmarks (needs obsidia
 ```
 
 See `benches/README.md` for full setup, A/B comparison workflows, profiling with [samply](https://github.com/mstange/samply), and memory measurement.
+
+## Releasing
+
+1. Bump the version in `Cargo.toml`
+2. Commit: `git commit -am "Bump version to X.Y.Z"`
+3. Create a GitHub release with tag `vX.Y.Z` (must match `Cargo.toml`)
+
+The [release workflow](.github/workflows/release.yml) automatically builds binaries for all platforms, uploads them to the release, and updates the Homebrew formula.
 
 ## License
 
