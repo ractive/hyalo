@@ -50,8 +50,10 @@ mod tests {
 
     #[test]
     fn atomic_write_fails_if_parent_missing() {
-        let target = Path::new("/nonexistent/dir/file.txt");
-        let err = atomic_write(target, b"data").unwrap_err();
+        let tmp = tempfile::tempdir().unwrap();
+        // The "missing" subdirectory does not exist, so the temp file cannot be created.
+        let target = tmp.path().join("missing").join("file.txt");
+        let err = atomic_write(&target, b"data").unwrap_err();
         assert!(
             err.to_string().contains("failed to create temp file"),
             "got: {err}"
