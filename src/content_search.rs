@@ -91,6 +91,9 @@ impl ContentSearchVisitor {
 
 /// Case-insensitive ASCII substring check without allocation.
 ///
+/// Uses ASCII-only case folding (`to_ascii_lowercase`). For Unicode case
+/// folding (e.g. `ß` → `ss`), use the regex search mode instead.
+///
 /// `needle` must already be lowercased. Each byte of the haystack window is
 /// folded to lowercase before comparison, so no temporary `String` is created.
 fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
@@ -351,5 +354,51 @@ mod tests {
             .join("|");
         let result = ContentSearchVisitor::regex(&huge);
         assert!(result.is_err(), "oversized pattern should be rejected");
+    }
+
+    // --- contains_ignore_ascii_case ---
+
+    #[test]
+    fn ascii_case_empty_needle() {
+        assert!(super::contains_ignore_ascii_case("anything", ""));
+        assert!(super::contains_ignore_ascii_case("", ""));
+    }
+
+    #[test]
+    fn ascii_case_needle_longer_than_haystack() {
+        assert!(!super::contains_ignore_ascii_case("ab", "abc"));
+    }
+
+    #[test]
+    fn ascii_case_exact_match() {
+        assert!(super::contains_ignore_ascii_case("hello", "hello"));
+    }
+
+    #[test]
+    fn ascii_case_mixed_case_match() {
+        assert!(super::contains_ignore_ascii_case("Hello WORLD", "lo wor"));
+    }
+
+    #[test]
+    fn ascii_case_no_match() {
+        assert!(!super::contains_ignore_ascii_case("hello world", "xyz"));
+    }
+
+    #[test]
+    fn ascii_case_multibyte_utf8_in_haystack() {
+        // Multi-byte chars in the haystack should not break the search
+        assert!(super::contains_ignore_ascii_case("café latte", "latte"));
+        assert!(super::contains_ignore_ascii_case("über cool", "cool"));
+    }
+
+    #[test]
+    fn ascii_case_match_at_end() {
+        assert!(super::contains_ignore_ascii_case("say HELLO", "hello"));
+    }
+
+    #[test]
+    fn ascii_case_single_char() {
+        assert!(super::contains_ignore_ascii_case("A", "a"));
+        assert!(!super::contains_ignore_ascii_case("A", "b"));
     }
 }

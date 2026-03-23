@@ -264,6 +264,7 @@ fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
 }
 
 /// Parse a bool from filter strings: true/false/yes/no/1/0.
+/// Uses ASCII-only case folding (sufficient for these fixed keywords).
 fn parse_bool_filter(s: &str) -> Option<bool> {
     if s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes") || s == "1" {
         Some(true)
@@ -276,6 +277,12 @@ fn parse_bool_filter(s: &str) -> Option<bool> {
 
 /// Ordering comparison between a YAML value and a string filter value.
 /// Tries numeric comparison first, then falls back to string.
+///
+/// Note: `filter` arrives pre-lowercased from [`parse_property_filter`], so
+/// string ordering compares the raw YAML value against a lowercased filter.
+/// This is acceptable because ordering filters are primarily used on numeric
+/// and date values (both case-insensitive). Pure-alphabetic ordering across
+/// mixed case is not a supported use case.
 fn yaml_cmp(yaml: &Value, filter: &str) -> Option<std::cmp::Ordering> {
     // Numeric comparison.
     if let Some(nv) = yaml.as_f64()
