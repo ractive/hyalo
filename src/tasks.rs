@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::frontmatter;
+use crate::heading::parse_atx_heading;
 use crate::scanner::{self, FileVisitor, ScanAction};
 use crate::types::{TaskCount, TaskInfo};
 
@@ -203,7 +204,7 @@ impl FileVisitor for TaskExtractor {
     fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
         // Track current heading
         if raw.starts_with('#')
-            && let Some((level, text)) = detect_atx_heading(raw)
+            && let Some((level, text)) = parse_atx_heading(raw)
         {
             self.current_section = format!("{} {}", "#".repeat(level as usize), text);
         }
@@ -218,30 +219,6 @@ impl FileVisitor for TaskExtractor {
             });
         }
         ScanAction::Continue
-    }
-}
-
-/// Parse an ATX heading line (`# Heading`, `## Sub`, etc.).
-/// Returns `(level, heading_text)` or `None`.
-fn detect_atx_heading(line: &str) -> Option<(u8, &str)> {
-    let bytes = line.as_bytes();
-    if bytes.first() != Some(&b'#') {
-        return None;
-    }
-    let level = bytes.iter().take_while(|&&b| b == b'#').count();
-    if level > 6 {
-        return None;
-    }
-    let rest = &line[level..];
-    if rest.is_empty() {
-        #[allow(clippy::cast_possible_truncation)]
-        Some((level as u8, ""))
-    } else if rest.starts_with(' ') || rest.starts_with('\t') {
-        let text = rest[1..].trim_end_matches('#').trim();
-        #[allow(clippy::cast_possible_truncation)]
-        Some((level as u8, text))
-    } else {
-        None
     }
 }
 

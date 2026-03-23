@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod filter;
 pub mod frontmatter;
 pub mod fs_util;
+pub mod heading;
 pub mod hints;
 pub mod links;
 pub mod output;

@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 
-use crate::commands::outline::parse_atx_heading;
 use crate::discovery;
 use crate::frontmatter;
+use crate::heading::{SectionFilter, parse_atx_heading};
 use crate::output::{CommandOutcome, Format, format_error, format_success};
 use crate::scanner;
 use anyhow::{Context, Result};
@@ -86,22 +86,11 @@ fn apply_line_range<'a>(lines: &'a [String], range: &LineRange) -> &'a [String] 
 // Section extraction
 // ---------------------------------------------------------------------------
 
-/// Extract all sections matching `query` (case-insensitive exact match on heading text).
-/// If query starts with `#`, parse the heading level and text from it.
-/// Returns a `Vec<Vec<String>>`, where each inner `Vec<String>` contains the lines of a
-/// matched section, from the heading through to (but not including) the next heading of
-/// equal or higher level.
-fn extract_sections(body_lines: &[String], query: &str) -> Vec<Vec<String>> {
-    // Parse query: strip leading `#` characters if present
-    let (query_level, query_text) = if query.starts_with('#') {
-        match parse_atx_heading(query) {
-            Some((level, text)) => (Some(level), text),
-            None => (None, query.to_owned()),
-        }
-    } else {
-        (None, query.to_owned())
-    };
-
+/// Extract all sections matching `filter` (case-insensitive exact match on heading text,
+/// optional level pinning). Returns a `Vec<Vec<String>>`, where each inner `Vec<String>`
+/// contains the lines of a matched section, from the heading through to (but not including)
+/// the next heading of equal or higher level.
+fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<String>> {
     let mut sections: Vec<Vec<String>> = Vec::new();
     let mut current_section: Option<(u8, Vec<String>)> = None;
     let mut fence: Option<(char, usize)> = None;
@@ -139,11 +128,7 @@ fn extract_sections(body_lines: &[String], query: &str) -> Vec<Vec<String>> {
                 }
             }
 
-            // Check if this heading matches the query
-            let text_matches = text.eq_ignore_ascii_case(&query_text);
-            let level_matches = query_level.is_none_or(|ql| ql == level);
-
-            if text_matches && level_matches {
+            if filter.matches(level, text) {
                 current_section = Some((level, vec![line.clone()]));
             }
         } else if let Some((_, ref mut lines)) = current_section {
@@ -275,7 +260,19 @@ pub fn run(
 
     // Apply section filter
     if let Some(query) = section {
-        let sections = extract_sections(&content_lines, query);
+        let filter = match SectionFilter::parse(query) {
+            Ok(f) => f,
+            Err(e) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format,
+                    &e,
+                    Some(&rel_path),
+                    None,
+                    None,
+                )));
+            }
+        };
+        let sections = extract_sections(&content_lines, &filter);
         if sections.is_empty() {
             let available = collect_headings(&content_lines);
             let hint = if available.is_empty() {
@@ -472,7 +469,8 @@ mod tests {
             "## Solution".into(),
             "solution text".into(),
         ];
-        let sections = extract_sections(&lines, "Problem");
+        let filter = SectionFilter::parse("Problem").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].len(), 2);
         assert_eq!(sections[0][0], "## Problem");
@@ -482,21 +480,24 @@ mod tests {
     #[test]
     fn extract_section_case_insensitive() {
         let lines: Vec<String> = vec!["## Problem".into(), "text".into(), "## Other".into()];
-        let sections = extract_sections(&lines, "problem");
+        let filter = SectionFilter::parse("problem").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
     }
 
     #[test]
     fn extract_section_with_hashes() {
         let lines: Vec<String> = vec!["## Problem".into(), "text".into(), "## Other".into()];
-        let sections = extract_sections(&lines, "## Problem");
+        let filter = SectionFilter::parse("## Problem").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
     }
 
     #[test]
     fn extract_section_no_match_substring() {
         let lines: Vec<String> = vec!["## Problems".into(), "text".into()];
-        let sections = extract_sections(&lines, "Problem");
+        let filter = SectionFilter::parse("Problem").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert!(sections.is_empty());
     }
 
@@ -509,7 +510,8 @@ mod tests {
             "sub text".into(),
             "## Next".into(),
         ];
-        let sections = extract_sections(&lines, "Section");
+        let filter = SectionFilter::parse("Section").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].len(), 4); // heading + text + sub heading + sub text
     }
@@ -524,7 +526,8 @@ mod tests {
             "## Notes".into(),
             "second notes".into(),
         ];
-        let sections = extract_sections(&lines, "Notes");
+        let filter = SectionFilter::parse("Notes").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 2);
     }
 
@@ -536,7 +539,8 @@ mod tests {
             "## Last".into(),
             "last text".into(),
         ];
-        let sections = extract_sections(&lines, "Last");
+        let filter = SectionFilter::parse("Last").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].len(), 2);
     }
@@ -553,7 +557,8 @@ mod tests {
             "after code".into(),
             "## Next".into(),
         ];
-        let sections = extract_sections(&lines, "Proposal");
+        let filter = SectionFilter::parse("Proposal").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].len(), 7); // heading + intro + code block (4 lines) + after code
         assert!(sections[0].contains(&"# This is a comment, not a heading".to_owned()));
