@@ -747,7 +747,8 @@ fn find_regexp_alternation_matches_multiple_files() {
 #[test]
 fn find_regexp_short_flag_e_works() {
     let tmp = setup_vault();
-    let (status, json, stderr) = find_json(&tmp, &["-e", "Rust.*great"]);
+    // Use lowercase to verify -e applies case-insensitive matching by default
+    let (status, json, stderr) = find_json(&tmp, &["-e", "rust.*great"]);
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = json.as_array().unwrap();
@@ -800,7 +801,7 @@ fn find_regexp_combined_with_tag() {
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = json.as_array().unwrap();
-    // beta has "Content" in body + rust tag; nested has "content" in body + rust tag
+    // beta has "Content" in heading + rust tag; nested has "content" in body text + rust tag
     assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
 }
 
