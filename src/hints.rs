@@ -110,14 +110,19 @@ fn shell_quote(s: &str) -> String {
 
 /// Priority rank for a status value: lower = more interesting.
 fn status_priority(value: &str) -> u8 {
-    let lower = value.to_lowercase();
-    if lower == "in-progress" || lower == "in progress" || lower == "active" {
+    if value.eq_ignore_ascii_case("in-progress")
+        || value.eq_ignore_ascii_case("in progress")
+        || value.eq_ignore_ascii_case("active")
+    {
         0
-    } else if lower == "planned" || lower == "todo" {
+    } else if value.eq_ignore_ascii_case("planned") || value.eq_ignore_ascii_case("todo") {
         1
-    } else if lower == "draft" || lower == "idea" {
+    } else if value.eq_ignore_ascii_case("draft") || value.eq_ignore_ascii_case("idea") {
         2
-    } else if lower == "completed" || lower == "done" || lower == "archived" {
+    } else if value.eq_ignore_ascii_case("completed")
+        || value.eq_ignore_ascii_case("done")
+        || value.eq_ignore_ascii_case("archived")
+    {
         4
     } else {
         3

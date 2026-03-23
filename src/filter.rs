@@ -105,14 +105,23 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
             bail!("property filter name must not be empty");
         }
 
+        // Pre-lowercase the value for equality/inequality ops to avoid
+        // per-comparison allocations. Ordering ops keep original casing so
+        // that string comparisons are not asymmetrically folded.
+        let stored_value = match op {
+            FilterOp::Eq | FilterOp::NotEq => value.to_lowercase(),
+            _ => value,
+        };
+
         return Ok(PropertyFilter {
             name: name.to_owned(),
             op,
-            value: Some(value),
+            value: Some(stored_value),
         });
     }
 
     // No `=` found — check for bare `>` or `<`.
+    // Ordering ops preserve original casing (see note above).
     if let Some(gt_pos) = input.find('>') {
         let name = &input[..gt_pos];
         let value = &input[gt_pos + 1..];
@@ -240,9 +249,13 @@ fn matches_tag_filters(tags: &[String], tag_filters: &[String]) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Case-insensitive equality check between a YAML value and a string filter value.
+///
+/// `filter` is pre-lowercased for equality/inequality ops. Uses an ASCII
+/// fast-path (`eq_ignore_ascii_case`) and falls back to Unicode `to_lowercase()`
+/// only when the value contains non-ASCII bytes.
 fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
     match yaml {
-        Value::String(s) => s.to_lowercase() == filter.to_lowercase(),
+        Value::String(s) => str_eq_ignore_case(s, filter),
         Value::Number(n) => {
             if let Ok(fv) = filter.parse::<f64>() {
                 n.as_f64()
@@ -258,22 +271,38 @@ fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
         Value::Sequence(seq) => seq.iter().any(|item| yaml_value_eq(item, filter)),
         _ => yaml
             .as_str()
-            .map(|s| s.to_lowercase() == filter.to_lowercase())
+            .map(|s| str_eq_ignore_case(s, filter))
             .unwrap_or(false),
     }
 }
 
+/// Case-insensitive string comparison. `filter` must be pre-lowercased.
+///
+/// ASCII fast-path avoids allocation; falls back to Unicode `to_lowercase()`
+/// only when the value contains non-ASCII bytes.
+fn str_eq_ignore_case(value: &str, filter: &str) -> bool {
+    if value.is_ascii() {
+        value.eq_ignore_ascii_case(filter)
+    } else {
+        value.to_lowercase() == filter
+    }
+}
+
 /// Parse a bool from filter strings: true/false/yes/no/1/0.
+/// Uses ASCII-only case folding (sufficient for these fixed keywords).
 fn parse_bool_filter(s: &str) -> Option<bool> {
-    match s.to_lowercase().as_str() {
-        "true" | "yes" | "1" => Some(true),
-        "false" | "no" | "0" => Some(false),
-        _ => None,
+    if s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes") || s == "1" {
+        Some(true)
+    } else if s.eq_ignore_ascii_case("false") || s.eq_ignore_ascii_case("no") || s == "0" {
+        Some(false)
+    } else {
+        None
     }
 }
 
 /// Ordering comparison between a YAML value and a string filter value.
-/// Tries numeric comparison first, then falls back to string.
+/// Tries numeric comparison first, then falls back to case-sensitive string
+/// comparison. The filter value preserves its original casing for ordering ops.
 fn yaml_cmp(yaml: &Value, filter: &str) -> Option<std::cmp::Ordering> {
     // Numeric comparison.
     if let Some(nv) = yaml.as_f64()

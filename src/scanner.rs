@@ -196,9 +196,16 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
         }
     }
 
-    // Only ASCII bytes (backticks and code content) were replaced with ASCII spaces,
-    // so the result is always valid UTF-8.
-    Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
+    // SAFETY: `result` starts as an exact byte-for-byte copy of the valid UTF-8
+    // input `line`. We only mutate `result` by overwriting contiguous spans
+    // `start..i` with ASCII space bytes (0x20). Both `start` and `i` are
+    // indices of backtick delimiters (0x60), which are single-byte ASCII
+    // characters and therefore always lie on UTF-8 code-point boundaries.
+    // Each modified span is completely replaced by a run of ASCII bytes (valid
+    // single-byte UTF-8 code points), while the prefix and suffix outside the
+    // span remain unchanged valid UTF-8. Concatenating unchanged valid UTF-8
+    // segments with runs of ASCII bytes yields valid UTF-8 overall.
+    Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
 }
 
 /// Check if a line is an Obsidian comment fence (`%%` on its own line).
@@ -263,12 +270,17 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     if result == bytes {
         Cow::Borrowed(line)
     } else {
-        // Comment regions are overwritten with ASCII spaces, regardless of their
-        // original contents, so the resulting byte sequence is always valid UTF-8.
-        Cow::Owned(
-            String::from_utf8(result)
-                .expect("overwriting comment bytes with spaces preserves UTF-8"),
-        )
+        // SAFETY: `result` starts as an exact byte-for-byte copy of the valid
+        // UTF-8 input `line`. We only mutate `result` by overwriting contiguous
+        // spans `open..i+2` with ASCII space bytes (0x20). Both `open` and the
+        // closing `%%` position are indices of percent-sign delimiters (0x25),
+        // which are single-byte ASCII characters and therefore always lie on
+        // UTF-8 code-point boundaries. Each modified span is completely replaced
+        // by a run of ASCII bytes (valid single-byte UTF-8 code points), while
+        // the prefix and suffix outside the span remain unchanged valid UTF-8.
+        // Concatenating unchanged valid UTF-8 segments with runs of ASCII bytes
+        // yields valid UTF-8 overall.
+        Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
     }
 }
 
