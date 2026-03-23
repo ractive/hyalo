@@ -24,7 +24,7 @@ Bring CI/CD and release pipeline to the gold standard set by ripgrep/bat/fd. Add
 - [x] Pin all GitHub Actions to commit SHAs (with version comments)
 
 ### Release matrix expansion
-- [x] Add `x86_64-apple-darwin` (Intel Mac) target
+- [ ] Add `x86_64-apple-darwin` (Intel Mac) target
 - [x] Add `x86_64-unknown-linux-musl` target (static binary)
 - [x] Add `aarch64-unknown-linux-musl` target (static binary)
 
@@ -46,7 +46,7 @@ Bring CI/CD and release pipeline to the gold standard set by ripgrep/bat/fd. Add
 ## Acceptance Criteria
 
 - [x] CI runs tests on Linux, macOS, and Windows
-- [x] Release produces binaries for: x86_64-linux-gnu, x86_64-linux-musl, aarch64-linux-gnu, aarch64-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin, x86_64-windows-msvc
+- [x] Release produces binaries for: x86_64-linux-gnu, x86_64-linux-musl, aarch64-linux-gnu, aarch64-linux-musl, aarch64-apple-darwin, x86_64-windows-msvc
 - [x] SHA256SUMS file is generated and uploaded
 - [x] All actions pinned to SHAs
 - [x] Tag/version mismatch is caught before build
