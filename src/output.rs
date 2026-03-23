@@ -207,22 +207,22 @@ const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
 /// Key signature: `modified,property,scanned,skipped,total,value`
-/// Format: `property=value: N/T modified (S scanned)` when filters narrowed the set,
-/// or `property=value: N/T modified` when scanned == total.
+/// Format: `property=value: N/T modified (S scanned)` when not all scanned files were
+/// processed (e.g. where-filters or parse errors), or `property=value: N/T modified` otherwise.
 const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `property` only (no value field):
 /// covers `RemovePropertyResult` (without value).
 /// Key signature: `modified,property,scanned,skipped,total`
-/// Format: `property: N/T modified (S scanned)` when filters narrowed the set,
-/// or `property: N/T modified` when scanned == total.
+/// Format: `property: N/T modified (S scanned)` when not all scanned files were
+/// processed (e.g. where-filters or parse errors), or `property: N/T modified` otherwise.
 const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `tag` field:
 /// covers `SetTagResult` and `RemoveTagResult`.
 /// Key signature: `modified,scanned,skipped,tag,total`
-/// Format: `tag: N/T modified (S scanned)` when filters narrowed the set,
-/// or `tag: N/T modified` when scanned == total.
+/// Format: `tag: N/T modified (S scanned)` when not all scanned files were
+/// processed (e.g. where-filters or parse errors), or `tag: N/T modified` otherwise.
 const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 // ---------------------------------------------------------------------------

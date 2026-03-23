@@ -95,7 +95,7 @@ COOKBOOK:\n  \
   hyalo set --tag reviewed --glob 'research/**/*.md'\n\n  \
   # Bulk-update a property across matching files\n  \
   hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\n  \
-  # Add a tag to files matching a property filter\n  \
+  # Add a tag to files matching a tag filter\n  \
   hyalo set --tag reviewed --where-tag research --glob '**/*.md'\n\n  \
   # Append to a list property\n  \
   hyalo append --property aliases='My Note' --file note.md\n\n  \
@@ -277,8 +277,9 @@ enum Commands {
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
-K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). If the property is a list, matches if any element matches. \
-Repeatable (AND).\n\
+K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
+element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
@@ -319,8 +320,9 @@ Repeatable (AND).\n\
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
-K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). If the property is a list, matches if any element matches. \
-Repeatable (AND).\n\
+K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
+element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
@@ -359,8 +361,9 @@ Repeatable (AND).\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
-K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). If the property is a list, matches if any element matches. \
-Repeatable (AND).\n\
+K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
+element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk.\n\
