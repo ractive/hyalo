@@ -5,6 +5,7 @@ use serde_yaml_ng::Value;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
+use crate::filter::{self, PropertyFilter};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
@@ -132,12 +133,15 @@ fn add_tag_in_memory(
 /// - `tag_args`:      zero or more tag name strings
 /// - Requires `--file` or `--glob`
 /// - At least one of `property_args` or `tag_args` must be non-empty
+#[allow(clippy::too_many_arguments)]
 pub fn set(
     dir: &Path,
     property_args: &[String],
     tag_args: &[String],
     file: Option<&str>,
     glob: Option<&str>,
+    where_property_filters: &[PropertyFilter],
+    where_tag_filters: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     // At least one mutation target required
@@ -228,6 +232,12 @@ pub fn set(
             }
             Err(e) => return Err(e),
         };
+
+        // Apply --where-* filters: skip files that don't match
+        if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
+            continue;
+        }
+
         let mut file_changed = false;
 
         // Apply all --property mutations
@@ -370,6 +380,8 @@ title: Note
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -405,6 +417,8 @@ status: draft
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -433,6 +447,8 @@ status: done
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -463,6 +479,8 @@ title: Note
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -497,6 +515,8 @@ tags:
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -526,6 +546,8 @@ title: Note
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -546,6 +568,8 @@ title: Note
             &[],
             None,
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -555,7 +579,17 @@ title: Note
     #[test]
     fn set_requires_at_least_one_arg() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = set(tmp.path(), &[], &[], Some("note.md"), None, Format::Json).unwrap();
+        let outcome = set(
+            tmp.path(),
+            &[],
+            &[],
+            Some("note.md"),
+            None,
+            &[],
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -569,6 +603,8 @@ title: Note
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -585,6 +621,8 @@ title: Note
             &["1984".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -607,6 +645,8 @@ title: Note
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -636,6 +676,8 @@ title: Note
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -675,6 +717,8 @@ title: Note
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -687,5 +731,72 @@ title: Note
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains("status: done"));
         assert!(content.contains("rust"));
+    }
+
+    #[test]
+    fn set_where_property_filter_skips_nonmatching() {
+        // Files that don't match --where-property are not mutated.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("match.md"), "---\nstatus: draft\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("no-match.md"),
+            "---\nstatus: published\n---\n",
+        )
+        .unwrap();
+
+        use crate::filter::parse_property_filter;
+        let filter = parse_property_filter("status=draft").unwrap();
+        let outcome = set(
+            tmp.path(),
+            &["priority=high".to_owned()],
+            &[],
+            None,
+            Some("*.md"),
+            &[filter],
+            &[],
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 0);
+
+        let match_content = fs::read_to_string(tmp.path().join("match.md")).unwrap();
+        assert!(match_content.contains("priority: high"));
+        let no_match_content = fs::read_to_string(tmp.path().join("no-match.md")).unwrap();
+        assert!(!no_match_content.contains("priority"));
+    }
+
+    #[test]
+    fn set_where_tag_filter_skips_nonmatching() {
+        // Files without the required tag are not mutated.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("tagged.md"), "---\ntags:\n  - rust\n---\n").unwrap();
+        fs::write(tmp.path().join("untagged.md"), "---\ntitle: Other\n---\n").unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["status=reviewed".to_owned()],
+            &[],
+            None,
+            Some("*.md"),
+            &[],
+            &["rust".to_owned()],
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
+        assert!(tagged_content.contains("status: reviewed"));
+        let untagged_content = fs::read_to_string(tmp.path().join("untagged.md")).unwrap();
+        assert!(!untagged_content.contains("status"));
     }
 }

@@ -113,6 +113,12 @@ hyalo set --property status=done --file path/to/note.md
 hyalo set --property status=active --glob "notes/*.md"
 hyalo set --tag cli --file path/to/note.md
 hyalo set --property status=done --tag reviewed --file path/to/note.md
+
+# Bulk-update: set status on files matching a filter
+hyalo set --property status=completed --where-property status=done --glob '**/*.md'
+
+# Add tag to files matching a tag filter
+hyalo set --tag reviewed --where-tag research --glob '**/*.md'
 ```
 
 ### remove
@@ -124,6 +130,9 @@ hyalo remove --property status --file path/to/note.md          # remove property
 hyalo remove --property tags=serde --file path/to/note.md      # remove value from list
 hyalo remove --tag cli --file path/to/note.md
 hyalo remove --property status --glob "draft/*.md"
+
+# Remove tag from files matching a property filter
+hyalo remove --tag deprecated --where-property status=completed --glob '**/*.md'
 ```
 
 `remove --property K` (no value) removes the property entirely. `remove --property K=V` removes V from a list property, or removes the property if it is a scalar matching V.
@@ -135,6 +144,9 @@ Append values to list properties, promoting scalars to lists if needed.
 ```sh
 hyalo append --property tags=serde --file path/to/note.md
 hyalo append --property tags=serde --glob "crates/*.md"
+
+# Append to list property on files matching a tag
+hyalo append --property aliases=old-name --where-tag renamed --glob '**/*.md'
 ```
 
 ### task

@@ -2,6 +2,8 @@ use anyhow::{Result, bail};
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 
+use crate::commands::tags::{extract_tags, tag_matches};
+
 /// Comparison operator for property filters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilterOp {
@@ -139,6 +141,35 @@ impl PropertyFilter {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if the frontmatter properties satisfy all property and tag filters.
+///
+/// All property filters are evaluated with AND semantics (every filter must pass).
+/// All tag filters are evaluated with AND semantics (every query tag must be present).
+/// Empty filter slices always pass.
+pub fn matches_frontmatter_filters(
+    props: &BTreeMap<String, Value>,
+    property_filters: &[PropertyFilter],
+    tag_filters: &[String],
+) -> bool {
+    if !property_filters.iter().all(|f| f.matches(props)) {
+        return false;
+    }
+    if !tag_filters.is_empty() {
+        let tags = extract_tags(props);
+        if !tag_filters
+            .iter()
+            .all(|q| tags.iter().any(|t| tag_matches(t, q)))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------
 
 /// Case-insensitive equality check between a YAML value and a string filter value.
 fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
@@ -591,5 +622,97 @@ mod tests {
     fn sort_unknown_errors() {
         assert!(parse_sort("name").is_err());
         assert!(parse_sort("").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // matches_frontmatter_filters
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn matches_frontmatter_filters_empty_filters() {
+        // No filters → always true, regardless of props content.
+        let p = props(&[("status", Value::String("anything".into()))]);
+        assert!(matches_frontmatter_filters(&p, &[], &[]));
+
+        let empty = props(&[]);
+        assert!(matches_frontmatter_filters(&empty, &[], &[]));
+    }
+
+    #[test]
+    fn matches_frontmatter_filters_scalar_property() {
+        let p = props(&[("status", Value::String("planned".into()))]);
+        let filters = [parse_property_filter("status=planned").unwrap()];
+
+        assert!(matches_frontmatter_filters(&p, &filters, &[]));
+
+        let no_match = [parse_property_filter("status=completed").unwrap()];
+        assert!(!matches_frontmatter_filters(&p, &no_match, &[]));
+    }
+
+    #[test]
+    fn matches_frontmatter_filters_list_property() {
+        // Value is a YAML sequence — filter matches any element.
+        let p = props(&[(
+            "tags",
+            Value::Sequence(vec![
+                Value::String("rust".into()),
+                Value::String("cli".into()),
+            ]),
+        )]);
+        let filters = [parse_property_filter("tags=rust").unwrap()];
+        assert!(matches_frontmatter_filters(&p, &filters, &[]));
+
+        let filters_cli = [parse_property_filter("tags=cli").unwrap()];
+        assert!(matches_frontmatter_filters(&p, &filters_cli, &[]));
+
+        let no_match = [parse_property_filter("tags=python").unwrap()];
+        assert!(!matches_frontmatter_filters(&p, &no_match, &[]));
+    }
+
+    #[test]
+    fn matches_frontmatter_filters_tag_match() {
+        // Nested tag: query "inbox" matches tag "inbox/processing".
+        let p = props(&[(
+            "tags",
+            Value::Sequence(vec![Value::String("inbox/processing".into())]),
+        )]);
+        let tag_filters = vec!["inbox".to_owned()];
+        assert!(matches_frontmatter_filters(&p, &[], &tag_filters));
+
+        // Exact match also works.
+        let exact = vec!["inbox/processing".to_owned()];
+        assert!(matches_frontmatter_filters(&p, &[], &exact));
+
+        // Non-matching query.
+        let miss = vec!["project".to_owned()];
+        assert!(!matches_frontmatter_filters(&p, &[], &miss));
+    }
+
+    #[test]
+    fn matches_frontmatter_filters_combined_and() {
+        // Both property and tag filters must pass.
+        let p = props(&[
+            ("status", Value::String("done".into())),
+            ("tags", Value::Sequence(vec![Value::String("rust".into())])),
+        ]);
+        let prop_filters = [parse_property_filter("status=done").unwrap()];
+        let tag_filters = vec!["rust".to_owned()];
+
+        assert!(matches_frontmatter_filters(&p, &prop_filters, &tag_filters));
+
+        // Prop matches but tag doesn't.
+        let wrong_tag = vec!["python".to_owned()];
+        assert!(!matches_frontmatter_filters(&p, &prop_filters, &wrong_tag));
+
+        // Tag matches but prop doesn't.
+        let wrong_prop = [parse_property_filter("status=pending").unwrap()];
+        assert!(!matches_frontmatter_filters(&p, &wrong_prop, &tag_filters));
+    }
+
+    #[test]
+    fn matches_frontmatter_filters_no_match() {
+        let p = props(&[("status", Value::String("active".into()))]);
+        let filters = [parse_property_filter("status=archived").unwrap()];
+        assert!(!matches_frontmatter_filters(&p, &filters, &[]));
     }
 }
