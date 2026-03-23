@@ -196,14 +196,15 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
         }
     }
 
-    // SAFETY: The input `line` is valid UTF-8. We iterate byte-by-byte starting
-    // from ASCII backtick delimiters, replacing bytes within matched code spans
-    // (delimiters and content between them) with ASCII spaces (0x20). Each
-    // replacement position is a valid byte boundary because: (1) the scan starts
-    // at ASCII bytes which are always single-byte in UTF-8, and (2) we advance
-    // one byte at a time through the span. Replacing any byte in a valid UTF-8
-    // sequence with an ASCII byte (0x00–0x7F) preserves validity, because ASCII
-    // bytes never appear as continuation bytes (0x80–0xBF) in multi-byte sequences.
+    // SAFETY: `result` starts as an exact byte-for-byte copy of the valid UTF-8
+    // input `line`. We only mutate `result` by overwriting contiguous spans
+    // `start..i` with ASCII space bytes (0x20). Both `start` and `i` are
+    // indices of backtick delimiters (0x60), which are single-byte ASCII
+    // characters and therefore always lie on UTF-8 code-point boundaries.
+    // Each modified span is completely replaced by a run of ASCII bytes (valid
+    // single-byte UTF-8 code points), while the prefix and suffix outside the
+    // span remain unchanged valid UTF-8. Concatenating unchanged valid UTF-8
+    // segments with runs of ASCII bytes yields valid UTF-8 overall.
     Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
 }
 
@@ -269,17 +270,16 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     if result == bytes {
         Cow::Borrowed(line)
     } else {
-        // Comment regions are overwritten with ASCII spaces, regardless of their
-        // original contents, so the resulting byte sequence is always valid UTF-8.
-        // SAFETY: The input `line` is valid UTF-8. We iterate byte-by-byte starting
-        // from ASCII `%%` delimiters, replacing bytes within matched comment spans
-        // (delimiters and content between them) with ASCII spaces (0x20). Each
-        // replacement position is a valid byte boundary because: (1) the scan starts
-        // at ASCII percent bytes which are always single-byte in UTF-8, and (2) we
-        // advance one byte at a time through the span. Replacing any byte in a valid
-        // UTF-8 sequence with an ASCII byte (0x00–0x7F) preserves validity, because
-        // ASCII bytes never appear as continuation bytes (0x80–0xBF) in multi-byte
-        // sequences.
+        // SAFETY: `result` starts as an exact byte-for-byte copy of the valid
+        // UTF-8 input `line`. We only mutate `result` by overwriting contiguous
+        // spans `open..i+2` with ASCII space bytes (0x20). Both `open` and the
+        // closing `%%` position are indices of percent-sign delimiters (0x25),
+        // which are single-byte ASCII characters and therefore always lie on
+        // UTF-8 code-point boundaries. Each modified span is completely replaced
+        // by a run of ASCII bytes (valid single-byte UTF-8 code points), while
+        // the prefix and suffix outside the span remain unchanged valid UTF-8.
+        // Concatenating unchanged valid UTF-8 segments with runs of ASCII bytes
+        // yields valid UTF-8 overall.
         Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
     }
 }

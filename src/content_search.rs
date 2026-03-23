@@ -30,7 +30,7 @@ impl ContentSearchVisitor {
     #[must_use]
     pub fn new(pattern: &str) -> Self {
         Self {
-            mode: SearchMode::Substring(pattern.to_lowercase()),
+            mode: SearchMode::Substring(pattern.to_ascii_lowercase()),
             current_section: String::new(),
             matches: Vec::new(),
         }
