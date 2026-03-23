@@ -57,6 +57,15 @@ pub fn find(
     let has_task_filter = task_filter.is_some();
     let body_needed = needs_body(fields, has_content_search, has_task_filter);
 
+    // Compile the regex once (if any), then clone cheaply per file.
+    let compiled_regex = regexp
+        .map(|re| {
+            let effective = format!("(?i){re}");
+            regex::Regex::new(&effective)
+                .with_context(|| format!("invalid regular expression: {re}"))
+        })
+        .transpose()?;
+
     let mut results: Vec<FileObject> = Vec::new();
 
     for (full_path, rel_path) in &files {
@@ -77,8 +86,8 @@ pub fn find(
         } else {
             None
         };
-        let mut content_visitor = if let Some(re) = regexp {
-            Some(ContentSearchVisitor::regex(re)?)
+        let mut content_visitor = if let Some(ref re) = compiled_regex {
+            Some(ContentSearchVisitor::from_compiled(re.clone()))
         } else {
             pattern.map(ContentSearchVisitor::new)
         };

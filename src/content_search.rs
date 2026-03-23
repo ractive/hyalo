@@ -35,16 +35,14 @@ impl ContentSearchVisitor {
         }
     }
 
-    /// Create a visitor that searches with a **regular expression**.
+    /// Compile a **regular expression** for content search.
     ///
-    /// The pattern is automatically made case-insensitive (prefixed with
-    /// `(?i)`) unless it already contains an inline flag group.
+    /// The pattern is always prefixed with `(?i)` to make it case-insensitive
+    /// by default. Users can override this for all or part of their pattern
+    /// with `(?-i)` — the regex crate resolves nested flags correctly.
+    #[must_use = "returns a compiled regex visitor; call has no side effects"]
     pub fn regex(pattern: &str) -> Result<Self> {
-        let effective = if pattern.starts_with("(?") {
-            pattern.to_owned()
-        } else {
-            format!("(?i){pattern}")
-        };
+        let effective = format!("(?i){pattern}");
         let re = Regex::new(&effective)
             .with_context(|| format!("invalid regular expression: {pattern}"))?;
         Ok(Self {
@@ -52,6 +50,19 @@ impl ContentSearchVisitor {
             current_section: String::new(),
             matches: Vec::new(),
         })
+    }
+
+    /// Create a visitor from an already-compiled `Regex`.
+    ///
+    /// Use this to avoid recompiling the same regex for each file.
+    /// The `Regex` is internally reference-counted, so cloning is cheap.
+    #[must_use]
+    pub fn from_compiled(re: Regex) -> Self {
+        Self {
+            mode: SearchMode::Regex(re),
+            current_section: String::new(),
+            matches: Vec::new(),
+        }
     }
 
     /// Returns `true` if any matches were collected.
@@ -279,8 +290,8 @@ mod tests {
     }
 
     #[test]
-    fn regex_preserves_user_flags() {
-        // Pattern already starts with (? — we don't double-prefix
+    fn regex_user_flag_overrides_default() {
+        // (?-i) in the user pattern overrides the auto-prepended (?i)
         let matches = run_regex_visitor("Hello WORLD\nGoodbye world\n", "(?-i)world");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].text, "Goodbye world");
@@ -301,6 +312,20 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("invalid regular expression"), "got: {err}");
+    }
+
+    #[test]
+    fn regex_non_capturing_group_still_case_insensitive() {
+        // (?:...) is a non-capturing group, not a flag group — must still be case-insensitive
+        let matches = run_regex_visitor("Hello WORLD\nGoodbye world\n", "(?:world)");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn regex_empty_pattern_matches_everything() {
+        // Empty regex compiles to (?i) which matches every line
+        let matches = run_regex_visitor("line one\nline two\n", "");
+        assert_eq!(matches.len(), 2);
     }
 
     #[test]
