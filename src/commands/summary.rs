@@ -67,8 +67,8 @@ pub fn summary(
         total_tasks += total;
         done_tasks += done;
 
-        // Properties aggregation
-        for (name, value) in &props {
+        // Properties aggregation (skip "tags" — they have a dedicated section)
+        for (name, value) in props.iter().filter(|(n, _)| n.as_str() != "tags") {
             let prop_type = infer_type(value).to_owned();
             *property_counts
                 .entry((name.clone(), prop_type))
