@@ -26,10 +26,10 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
-  dir = \"vault/\"        # default --dir\n\
-  format = \"text\"       # default --format\n\
-  hints = true           # default --hints on\n\
-CLI flags always take precedence.\n\n\
+        \u{00a0} dir = \"vault/\"        # default --dir\n\
+        \u{00a0} format = \"text\"       # default --format\n\
+        \u{00a0} hints = true           # default --hints on\n\
+        CLI flags always take precedence.\n\n\
         COMMANDS:\n\
           find        Search and filter files by text, properties, tags, or tasks\n\
           read        Read file body content, optionally filtered by section or line range\n\
@@ -188,9 +188,10 @@ enum Commands {
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, or bare name for existence)\n\
             - --tag T: tag filter (supports nested matching: 'project' matches 'project/backend')\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
-            - --section HEADING: section scope filter (exclude files without a matching section; within matching \
-files, restrict tasks and content matches to the section scope; case-insensitive whole-string match; use \
-leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subsections are included.\n\n\
+            - --section HEADING: section scope filter (exclude files without a matching section; within \
+            matching files, restrict tasks and content matches to the section scope; case-insensitive \
+            whole-string match; use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). \
+            Nested subsections are included.\n\n\
             OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
             FIELDS: Use --fields to limit which fields appear (default: all).\n\
             SIDE EFFECTS: None (read-only).")]
@@ -220,7 +221,7 @@ leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subs
         /// Glob pattern to select files
         #[arg(long, conflicts_with = "file")]
         glob: Option<String>,
-        /// Comma-separated list of fields to include. Available: properties, tags, sections, tasks, links. Default: all five. The 'file' and 'modified' fields are always included
+        /// Comma-separated list of fields to include: properties, tags, sections, tasks, links (default: all). 'file' and 'modified' are always present
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default) or 'modified'
@@ -233,8 +234,9 @@ leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subs
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(long_about = "Read the body content of a markdown file.\n\n\
             Returns the raw text after the YAML frontmatter block. Use --section to extract a \
-            specific section by heading, --lines to slice a line range, and --frontmatter to \
-            include the YAML frontmatter.\n\n\
+            specific section by heading (case-insensitive whole-string match; use leading '#' to \
+            pin heading level, e.g. '## Tasks'; nested subsections are included), \
+            --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Plain text by default — this command defaults to --format text even though \
             the global --format flag shows 'Default: json'. Pass --format json explicitly to get \
             {\"file\": \"...\", \"content\": \"...\"}.\n\
@@ -243,7 +245,7 @@ leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subs
         /// Target file (relative to --dir)
         #[arg(long)]
         file: String,
-        /// Extract only the section(s) under this heading (case-insensitive whole-string match;
+        /// Extract the section(s) matching this heading (case-insensitive whole-string match;
         /// use leading '#' to pin heading level, e.g. '## Tasks'). Nested subsections are included
         #[arg(long, value_name = "HEADING")]
         section: Option<String>,
