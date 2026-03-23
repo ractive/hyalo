@@ -11,7 +11,26 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install security tools
+        run: cargo install cargo-audit cargo-deny --locked
+
+      - name: Audit dependencies for known vulnerabilities
+        run: cargo audit
+
+      - name: Check licenses, advisories, bans, and sources
+        run: cargo deny check
+
   build:
+    needs: security
     strategy:
       fail-fast: false
       matrix:

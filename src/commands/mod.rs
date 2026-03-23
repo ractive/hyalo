@@ -175,6 +175,15 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
         FileResolveError::NotFound { path } => CommandOutcome::UserError(
             crate::output::format_error(format, "file not found", Some(&path), None, None),
         ),
+        FileResolveError::OutsideVault { path } => {
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                "file resolves outside vault boundary",
+                Some(&path),
+                None,
+                None,
+            ))
+        }
     }
 }
 

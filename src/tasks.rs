@@ -479,7 +479,7 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
         parts.join("\n")
     };
 
-    std::fs::write(path, &new_content)
+    crate::fs_util::atomic_write(path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(info)
@@ -519,7 +519,7 @@ pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInf
         parts.join("\n")
     };
 
-    std::fs::write(path, &new_content)
+    crate::fs_util::atomic_write(path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(info)
