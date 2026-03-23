@@ -24,6 +24,7 @@ use crate::types::{ContentMatch, FileObject, FindTaskInfo, LinkInfo, PropertyInf
 /// Find files matching the given filters and return them as a JSON array.
 ///
 /// - `pattern`            — case-insensitive content search substring
+/// - `regexp`             — regex content search (mutually exclusive with `pattern`)
 /// - `property_filters`  — all must match (AND semantics)
 /// - `tag_filters`        — all must be present (AND semantics, nested tag rules)
 /// - `task_filter`        — file-level task presence/status filter
@@ -35,6 +36,7 @@ use crate::types::{ContentMatch, FileObject, FindTaskInfo, LinkInfo, PropertyInf
 pub fn find(
     dir: &Path,
     pattern: Option<&str>,
+    regexp: Option<&str>,
     property_filters: &[PropertyFilter],
     tag_filters: &[String],
     task_filter: Option<&FindTaskFilter>,
@@ -51,9 +53,26 @@ pub fn find(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    let has_pattern = pattern.is_some();
+    let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
-    let body_needed = needs_body(fields, has_pattern, has_task_filter);
+    let body_needed = needs_body(fields, has_content_search, has_task_filter);
+
+    // Compile the regex once (if any), then clone cheaply per file.
+    // Invalid regex is a user error (exit 1), not an internal error (exit 2).
+    let compiled_regex = match regexp {
+        Some(re) => {
+            let effective = format!("(?i){re}");
+            match regex::Regex::new(&effective) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    return Ok(CommandOutcome::UserError(format!(
+                        "invalid regular expression: {re}\n{e}"
+                    )));
+                }
+            }
+        }
+        None => None,
+    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -75,10 +94,10 @@ pub fn find(
         } else {
             None
         };
-        let mut content_visitor = if has_pattern {
-            Some(ContentSearchVisitor::new(pattern.unwrap_or("")))
+        let mut content_visitor = if let Some(ref re) = compiled_regex {
+            Some(ContentSearchVisitor::from_compiled(re.clone()))
         } else {
-            None
+            pattern.map(ContentSearchVisitor::new)
         };
 
         // Build visitor slice dynamically — only include Some visitors.
@@ -129,7 +148,7 @@ pub fn find(
         }
 
         // --- Apply content search filter ---
-        if has_pattern && content_visitor.as_ref().is_some_and(|cv| !cv.has_matches()) {
+        if has_content_search && content_visitor.as_ref().is_some_and(|cv| !cv.has_matches()) {
             continue;
         }
 
@@ -182,8 +201,8 @@ pub fn find(
 // ---------------------------------------------------------------------------
 
 /// Determine whether body scanning is needed at all.
-fn needs_body(fields: &Fields, has_pattern: bool, has_task_filter: bool) -> bool {
-    fields.sections || fields.tasks || fields.links || has_pattern || has_task_filter
+fn needs_body(fields: &Fields, has_content_search: bool, has_task_filter: bool) -> bool {
+    fields.sections || fields.tasks || fields.links || has_content_search || has_task_filter
 }
 
 /// Return true if `tasks` satisfy `filter`.
@@ -401,6 +420,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -425,6 +445,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -453,6 +474,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -488,6 +510,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[filter],
                 &[],
                 None,
@@ -514,6 +537,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[filter],
                 &[],
@@ -543,6 +567,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[],
                 &["cli".to_owned()],
                 None,
@@ -568,6 +593,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &["nonexistent-tag".to_owned()],
@@ -596,6 +622,7 @@ Just some text here.
             find(
                 tmp.path(),
                 Some("Rust programming"),
+                None,
                 &[],
                 &[],
                 None,
@@ -622,6 +649,7 @@ Just some text here.
             find(
                 tmp.path(),
                 Some("Rust"),
+                None,
                 &[],
                 &[],
                 None,
@@ -650,6 +678,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -680,6 +709,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[],
                 &[],
                 Some(&FindTaskFilter::Todo),
@@ -706,6 +736,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -734,6 +765,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -765,6 +797,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -801,6 +834,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -833,6 +867,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -859,6 +894,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 &[],
                 &[],
@@ -894,6 +930,7 @@ Just some text here.
             find(
                 tmp.path(),
                 None,
+                None,
                 &[filter],
                 &[],
                 None,
@@ -918,6 +955,7 @@ Just some text here.
         let fields = Fields::default();
         let result = find(
             tmp.path(),
+            None,
             None,
             &[],
             &[],

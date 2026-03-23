@@ -52,7 +52,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
-    hyalo find [PATTERN] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
+    hyalo find [PATTERN | --regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
                [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
   Set (create or overwrite, mutates files):\n  \
     hyalo set  --property K=V [--property ...] [--tag T ...] [--file F | --glob G]\n\n  \
@@ -167,6 +167,7 @@ enum Commands {
             and optionally: frontmatter properties, tags, document sections, tasks, and links.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - PATTERN (positional): case-insensitive body text search\n\
+            - --regexp/-e REGEX: regex body text search (case-insensitive by default; mutually exclusive with PATTERN)\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, or bare name for existence)\n\
             - --tag T: tag filter (supports nested matching: 'project' matches 'project/backend')\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\n\
@@ -175,8 +176,11 @@ enum Commands {
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)
-        #[arg(value_name = "PATTERN")]
+        #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
+        /// Regex body text search (case-insensitive by default; use (?-i) to override). Mutually exclusive with PATTERN
+        #[arg(long, short = 'e', value_name = "REGEX")]
+        regexp: Option<String>,
         /// Property filter: K=V (equals), K!=V (not equals), K>=V, K<=V, K>V, K<V, or K (exists). Repeatable (AND)
         #[arg(long = "property", value_name = "FILTER")]
         properties: Vec<String>,
@@ -475,6 +479,7 @@ fn main() {
     let result = match cli.command {
         Commands::Find {
             ref pattern,
+            ref regexp,
             ref properties,
             ref tag,
             ref task,
@@ -526,6 +531,7 @@ fn main() {
             find_commands::find(
                 &dir,
                 pattern.as_deref(),
+                regexp.as_deref(),
                 &prop_filters,
                 tag,
                 task_filter.as_ref(),
