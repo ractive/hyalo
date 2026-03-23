@@ -196,9 +196,13 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
         }
     }
 
-    // Only ASCII bytes (backticks and code content) were replaced with ASCII spaces,
-    // so the result is always valid UTF-8.
-    Cow::Owned(String::from_utf8(result).expect("replacing ASCII with spaces preserves UTF-8"))
+    // SAFETY: The input `line` is valid UTF-8. We only replaced ASCII bytes
+    // (backticks and code span content) with ASCII spaces (0x20).
+    // Replacing any ASCII byte with another ASCII byte in a valid UTF-8
+    // sequence always produces valid UTF-8, because ASCII bytes (0x00–0x7F)
+    // are never part of a multi-byte UTF-8 sequence's continuation bytes
+    // (0x80–0xBF).
+    Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
 }
 
 /// Check if a line is an Obsidian comment fence (`%%` on its own line).
@@ -265,10 +269,13 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     } else {
         // Comment regions are overwritten with ASCII spaces, regardless of their
         // original contents, so the resulting byte sequence is always valid UTF-8.
-        Cow::Owned(
-            String::from_utf8(result)
-                .expect("overwriting comment bytes with spaces preserves UTF-8"),
-        )
+        // SAFETY: The input `line` is valid UTF-8. We only replaced ASCII bytes
+        // (percent signs and comment content between `%%` markers) with ASCII spaces (0x20).
+        // Replacing any ASCII byte with another ASCII byte in a valid UTF-8
+        // sequence always produces valid UTF-8, because ASCII bytes (0x00–0x7F)
+        // are never part of a multi-byte UTF-8 sequence's continuation bytes
+        // (0x80–0xBF).
+        Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
     }
 }
 

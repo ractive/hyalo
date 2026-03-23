@@ -108,7 +108,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         return Ok(PropertyFilter {
             name: name.to_owned(),
             op,
-            value: Some(value),
+            value: Some(value.to_lowercase()),
         });
     }
 
@@ -122,7 +122,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         return Ok(PropertyFilter {
             name: name.to_owned(),
             op: FilterOp::Gt,
-            value: Some(value.to_owned()),
+            value: Some(value.to_lowercase()),
         });
     }
 
@@ -135,7 +135,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         return Ok(PropertyFilter {
             name: name.to_owned(),
             op: FilterOp::Lt,
-            value: Some(value.to_owned()),
+            value: Some(value.to_lowercase()),
         });
     }
 
@@ -242,7 +242,7 @@ fn matches_tag_filters(tags: &[String], tag_filters: &[String]) -> bool {
 /// Case-insensitive equality check between a YAML value and a string filter value.
 fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
     match yaml {
-        Value::String(s) => s.to_lowercase() == filter.to_lowercase(),
+        Value::String(s) => s.to_lowercase() == *filter,
         Value::Number(n) => {
             if let Ok(fv) = filter.parse::<f64>() {
                 n.as_f64()
@@ -258,17 +258,19 @@ fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
         Value::Sequence(seq) => seq.iter().any(|item| yaml_value_eq(item, filter)),
         _ => yaml
             .as_str()
-            .map(|s| s.to_lowercase() == filter.to_lowercase())
+            .map(|s| s.to_lowercase() == *filter)
             .unwrap_or(false),
     }
 }
 
 /// Parse a bool from filter strings: true/false/yes/no/1/0.
 fn parse_bool_filter(s: &str) -> Option<bool> {
-    match s.to_lowercase().as_str() {
-        "true" | "yes" | "1" => Some(true),
-        "false" | "no" | "0" => Some(false),
-        _ => None,
+    if s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes") || s == "1" {
+        Some(true)
+    } else if s.eq_ignore_ascii_case("false") || s.eq_ignore_ascii_case("no") || s == "0" {
+        Some(false)
+    } else {
+        None
     }
 }
 

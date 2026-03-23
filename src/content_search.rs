@@ -83,10 +83,35 @@ impl ContentSearchVisitor {
     /// Check whether a line matches the current mode.
     fn is_match(&self, line: &str) -> bool {
         match &self.mode {
-            SearchMode::Substring(pat) => line.to_lowercase().contains(pat),
+            SearchMode::Substring(pat) => contains_ignore_ascii_case(line, pat),
             SearchMode::Regex(re) => re.is_match(line),
         }
     }
+}
+
+/// Case-insensitive ASCII substring check without allocation.
+///
+/// `needle` must already be lowercased. Each byte of the haystack window is
+/// folded to lowercase before comparison, so no temporary `String` is created.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if haystack_bytes.len() < needle_bytes.len() {
+        return false;
+    }
+    for i in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+        if haystack_bytes[i..i + needle_bytes.len()]
+            .iter()
+            .zip(needle_bytes)
+            .all(|(h, n)| h.to_ascii_lowercase() == *n)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 impl FileVisitor for ContentSearchVisitor {
