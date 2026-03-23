@@ -19,7 +19,10 @@ fn set_json(
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+        })
     } else {
         serde_json::Value::Null
     };
@@ -697,6 +700,86 @@ priority: 5
     assert!(
         !low_content.contains("urgent"),
         "low.md should be untouched:\n{low_content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Type inference: numbers, booleans, text
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_property_infers_number_type() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+"),
+    );
+
+    let (status, _json, stderr) =
+        set_json(&tmp, &["--property", "priority=42", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    // YAML number: no quotes around the value
+    assert!(
+        content.contains("priority: 42"),
+        "expected unquoted number in YAML:\n{content}"
+    );
+}
+
+#[test]
+fn set_property_infers_boolean_type() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+"),
+    );
+
+    let (status, _json, stderr) =
+        set_json(&tmp, &["--property", "draft=true", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    // YAML boolean: no quotes
+    assert!(
+        content.contains("draft: true"),
+        "expected unquoted boolean in YAML:\n{content}"
+    );
+}
+
+#[test]
+fn set_property_infers_text_type() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+"),
+    );
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "status=in-progress", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("status: in-progress"),
+        "expected text value in YAML:\n{content}"
     );
 }
 

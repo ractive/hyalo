@@ -1,7 +1,7 @@
 ---
 branch: iter-26/hot-path-performance
 date: 2026-03-23
-status: in-progress
+status: completed
 tags:
 - iteration
 - performance

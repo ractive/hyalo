@@ -450,6 +450,52 @@ fn read_empty_file() {
 }
 
 #[test]
+fn read_frontmatter_only_file_returns_empty_body() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "fm-only.md",
+        "---\ntitle: Frontmatter Only\nstatus: draft\n---\n",
+    );
+
+    // Text output: body should be empty
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "fm-only.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.trim().is_empty(),
+        "expected empty body for frontmatter-only file, got: {stdout:?}"
+    );
+
+    // JSON output: content field should be empty
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "fm-only.md", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\nstdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let content = json["content"]
+        .as_str()
+        .expect("field 'content' should be a string");
+    assert!(
+        content.trim().is_empty(),
+        "expected empty content for frontmatter-only file, got: {content:?}"
+    );
+}
+
+#[test]
 fn read_with_jq_explicit_json() {
     let tmp = setup();
     let output = hyalo()

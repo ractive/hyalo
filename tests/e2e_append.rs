@@ -19,7 +19,10 @@ fn append_json(
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+        })
     } else {
         serde_json::Value::Null
     };
@@ -384,6 +387,53 @@ fn append_preserves_file_body() {
 
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains(body), "body was corrupted:\n{content}");
+}
+
+// ---------------------------------------------------------------------------
+// Append on file with no frontmatter (creates frontmatter)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_on_file_with_no_frontmatter_creates_frontmatter() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bare.md",
+        "# No frontmatter\n\nJust body text.\n",
+    );
+
+    let (status, json, stderr) =
+        append_json(&tmp, &["--property", "aliases=test", "--file", "bare.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"]
+            .as_array()
+            .expect("field 'modified' should be an array")
+            .len(),
+        1,
+        "expected 1 modified: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("bare.md")).unwrap();
+    // Should have created frontmatter with the list property
+    assert!(
+        content.contains("---"),
+        "expected frontmatter delimiters:\n{content}"
+    );
+    assert!(
+        content.contains("test"),
+        "expected appended value in frontmatter:\n{content}"
+    );
+    // Body should be preserved
+    assert!(
+        content.contains("# No frontmatter"),
+        "body should be preserved:\n{content}"
+    );
+    assert!(
+        content.contains("Just body text."),
+        "body content should be preserved:\n{content}"
+    );
 }
 
 // ---------------------------------------------------------------------------

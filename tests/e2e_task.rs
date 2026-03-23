@@ -59,7 +59,8 @@ fn run_task_read_json(
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
     let (status, stdout, stderr) = run_task_read(tmp, file, line);
     let json: serde_json::Value = if status.success() {
-        serde_json::from_str(&stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"))
     } else {
         serde_json::Value::Null
     };
@@ -86,10 +87,12 @@ fn run_task_toggle(
         &line.to_string(),
     ]);
     let output = cmd.output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_str(&stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+        })
     } else {
         serde_json::Value::Null
     };
@@ -119,10 +122,12 @@ fn run_task_set_status(
         status_char,
     ]);
     let output = cmd.output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_str(&stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+        })
     } else {
         serde_json::Value::Null
     };
@@ -394,6 +399,24 @@ fn task_set_status_multi_char_status_exits_1() {
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
+}
+
+// ---------------------------------------------------------------------------
+// task read — line 0 boundary case
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_read_line_zero_exits_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+
+    let (status, _stdout, stderr) = run_task_read(&tmp, "tasks.md", 0);
+    assert!(!status.success(), "expected failure for line 0");
+    assert_eq!(status.code(), Some(1));
+    assert!(
+        stderr.contains("not a task"),
+        "expected 'not a task' error, got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

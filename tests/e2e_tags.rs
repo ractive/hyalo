@@ -64,9 +64,9 @@ fn tags_with_glob() {
     assert_eq!(json["total"], 2);
     let names: Vec<&str> = json["tags"]
         .as_array()
-        .unwrap()
+        .expect("field 'tags' should be an array")
         .iter()
-        .map(|t| t["name"].as_str().unwrap())
+        .map(|t| t["name"].as_str().expect("field 'name' should be a string"))
         .collect();
     assert!(names.contains(&"alpha"));
     assert!(names.contains(&"beta"));

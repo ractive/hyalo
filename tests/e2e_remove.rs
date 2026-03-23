@@ -19,7 +19,10 @@ fn remove_json(
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+        })
     } else {
         serde_json::Value::Null
     };

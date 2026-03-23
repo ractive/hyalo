@@ -138,7 +138,11 @@ fn summary_file_counts_by_directory() {
     // Should have entries for ".", "notes", "docs"
     let dir_names: Vec<&str> = by_dir
         .iter()
-        .map(|d| d["directory"].as_str().unwrap())
+        .map(|d| {
+            d["directory"]
+                .as_str()
+                .expect("field 'directory' should be a string")
+        })
         .collect();
     assert!(dir_names.contains(&"notes"));
     assert!(dir_names.contains(&"docs"));
@@ -182,13 +186,25 @@ fn summary_status_groups() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let status = json["status"].as_array().unwrap();
-    let draft_group = status.iter().find(|g| g["value"] == "draft").unwrap();
-    let draft_files = draft_group["files"].as_array().unwrap();
+    let status = json["status"]
+        .as_array()
+        .expect("field 'status' should be an array");
+    let draft_group = status
+        .iter()
+        .find(|g| g["value"] == "draft")
+        .expect("'draft' status group should be present");
+    let draft_files = draft_group["files"]
+        .as_array()
+        .expect("field 'files' should be an array");
     assert_eq!(draft_files.len(), 2);
 
-    let published_group = status.iter().find(|g| g["value"] == "published").unwrap();
-    let published_files = published_group["files"].as_array().unwrap();
+    let published_group = status
+        .iter()
+        .find(|g| g["value"] == "published")
+        .expect("'published' status group should be present");
+    let published_files = published_group["files"]
+        .as_array()
+        .expect("field 'files' should be an array");
     assert_eq!(published_files.len(), 1);
 }
 
@@ -211,9 +227,19 @@ fn summary_tag_counts() {
     let total = tags["total"].as_u64().unwrap();
     assert_eq!(total, 3); // rust, cli, docs
 
-    let tag_entries = tags["tags"].as_array().unwrap();
-    let rust_entry = tag_entries.iter().find(|t| t["name"] == "rust").unwrap();
-    assert_eq!(rust_entry["count"].as_u64().unwrap(), 2); // alpha + beta
+    let tag_entries = tags["tags"]
+        .as_array()
+        .expect("field 'tags' should be an array");
+    let rust_entry = tag_entries
+        .iter()
+        .find(|t| t["name"] == "rust")
+        .expect("'rust' tag should be present");
+    assert_eq!(
+        rust_entry["count"]
+            .as_u64()
+            .expect("field 'count' should be a number"),
+        2
+    ); // alpha + beta
 }
 
 #[test]
@@ -231,9 +257,19 @@ fn summary_property_summary() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let props = json["properties"].as_array().unwrap();
-    let title_prop = props.iter().find(|p| p["name"] == "title").unwrap();
-    assert_eq!(title_prop["count"].as_u64().unwrap(), 3); // alpha, beta, readme
+    let props = json["properties"]
+        .as_array()
+        .expect("field 'properties' should be an array");
+    let title_prop = props
+        .iter()
+        .find(|p| p["name"] == "title")
+        .expect("'title' property should be present");
+    assert_eq!(
+        title_prop["count"]
+            .as_u64()
+            .expect("field 'count' should be a number"),
+        3
+    ); // alpha, beta, readme
     assert_eq!(title_prop["type"], "text");
 }
 
