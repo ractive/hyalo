@@ -2,6 +2,25 @@
 
 A self-contained command line tool for exploring and managing Markdown knowledge bases. Compatible with [Obsidian](https://obsidian.md/) vaults — no running Obsidian instance required.
 
+## Installation
+
+### Homebrew (macOS & Linux)
+
+```sh
+brew tap ractive/tap
+brew install ractive/tap/hyalo
+```
+
+### Cargo
+
+```sh
+cargo install hyalo
+```
+
+### Manual download
+
+Download pre-built binaries from the [GitHub Releases](https://github.com/ractive/hyalo/releases) page.
+
 ## Build
 
 ```sh
