@@ -286,7 +286,7 @@ fn set_short_p_t_f() {
 fn remove_short_p_t_f() {
     let dir = setup();
     // First set a tag
-    hyalo()
+    let precondition = hyalo()
         .args([
             "set",
             "-t",
@@ -298,6 +298,10 @@ fn remove_short_p_t_f() {
         ])
         .output()
         .unwrap();
+    assert!(
+        precondition.status.success(),
+        "precondition: set tag failed"
+    );
 
     // Now remove it with short flags
     let output = hyalo()

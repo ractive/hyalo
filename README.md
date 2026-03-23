@@ -100,12 +100,12 @@ hyalo find
 
 # Content search (case-insensitive substring)
 hyalo find "retry backoff"
-hyalo find "retry" --tag research
+hyalo find "retry" -t research
 
 # Regex content search (case-insensitive by default)
-hyalo find --regexp "retry.*backoff"
+hyalo find -e "retry.*backoff"
 hyalo find -e "TODO|FIXME|HACK"
-hyalo find -e "fn\s+\w+_test" --tag rust
+hyalo find -e "fn\s+\w+_test" -t rust
 
 # Filter by property (operator: =, !=, >, >=, <, <=, or existence)
 hyalo find -p status=draft

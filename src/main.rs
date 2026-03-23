@@ -69,7 +69,7 @@ COMMAND REFERENCE:\n  \
   Set (create or overwrite, mutates files):\n  \
     hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Remove (delete properties/tags, mutates files):\n  \
-    hyalo remove -p/--property K [-p K=V ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
+    hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Append (add to list properties, mutates files):\n  \
     hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Properties (aggregate summary, read-only):\n  \
