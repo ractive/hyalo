@@ -97,7 +97,6 @@ Think like an attacker who has access to this CLI tool. What could they do that 
 
 **Privilege escalation:**
 - Could a low-privilege API key be used to discover or access resources it shouldn't?
-- Are storage zone passwords exposed in API responses that get displayed?
 
 **Supply chain:**
 - Could malicious shell completions be generated?

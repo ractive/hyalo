@@ -16,11 +16,11 @@
     },
     {
       "id": 2,
-      "prompt": "Review the bunny-api-compute crate",
-      "expected_output": "Focused review of the compute crate covering API design, error handling, and Rust best practices",
+      "prompt": "Review the hyalo-scanner crate",
+      "expected_output": "Focused review of the scanner module covering API design, error handling, and Rust best practices",
       "files": [],
       "expectations": [
-        "Reads and reviews files in crates/bunny-api-compute/",
+        "Reads and reviews files in src/scanner.rs",
         "Evaluates public API surface and trait implementations",
         "Checks error type quality (implements std::error::Error, Display, Debug)",
         "Assesses test coverage",
@@ -29,12 +29,12 @@
     },
     {
       "id": 3,
-      "prompt": "Review the error handling across all the API client crates",
-      "expected_output": "Cross-cutting review comparing error handling patterns across bunny-api-core, bunny-api-compute, bunny-api-storage, bunny-api-stream, bunny-api-shield",
+      "prompt": "Review the error handling across all modules",
+      "expected_output": "Cross-cutting review comparing error handling patterns across the codebase",
       "files": [],
       "expectations": [
-        "Reads error types from multiple crates, not just one",
-        "Compares error handling consistency across crates",
+        "Reads error types from multiple modules, not just one",
+        "Compares error handling consistency across modules",
         "Checks for unwrap/expect usage in library code",
         "Evaluates whether error types implement standard traits",
         "Uses structured output format"

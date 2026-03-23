@@ -17,7 +17,7 @@ Research into how to measure, compare, and track hyalo's performance using a rea
 
 ## Test Bed: obsidian-hub
 
-Cloned to `/Users/james/devel/obsidian-hub`. Key characteristics:
+Cloned locally. Key characteristics:
 
 | Metric | Value |
 |--------|-------|

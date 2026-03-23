@@ -53,7 +53,7 @@ Do *not* merge with "--squash".
 - No `clone()` unless the borrow checker demands it — try references first
 - No unnecessary `pub` on struct fields
 - All code stays in Rust — no polyglot tooling (no Bun, Node, Python scripts)
-- New crates go in `crates/` with naming convention `bunny-api-<domain>`
+- New crates go in `crates/` with naming convention `hyalo-<domain>`
 
 ## PR Discipline
 - One iteration = one branch = one PR
