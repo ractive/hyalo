@@ -185,8 +185,8 @@ impl PropertyFilter {
                 yaml_cmp(yaml_val, filter_val),
                 Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
             ),
-            // Exists is handled by the early return above
-            FilterOp::Exists => false,
+            // SAFETY: Exists is handled by the early return above
+            FilterOp::Exists => unreachable!("Exists handled by early return"),
         }
     }
 }
