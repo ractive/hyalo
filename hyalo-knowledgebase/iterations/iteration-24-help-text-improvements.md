@@ -1,7 +1,7 @@
 ---
 branch: iter-23/help-text-improvements
 date: 2026-03-23
-status: in-progress
+status: completed
 tags:
 - iteration
 - cli

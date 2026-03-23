@@ -1,0 +1,48 @@
+---
+branch: iter-31/homebrew-distribution
+date: 2026-03-23
+status: planned
+tags:
+- iteration
+- distribution
+- homebrew
+title: 'Iteration 31: Homebrew Tap & Distribution'
+type: iteration
+---
+
+# Iteration 31: Homebrew Tap & Distribution
+
+## Goal
+
+Set up a Homebrew tap so macOS (and Linux Homebrew) users can `brew install ractive/tap/hyalo`. Auto-update the formula on each GitHub Release.
+
+## Tasks
+
+### Create Homebrew tap repository
+- [ ] Create `ractive/homebrew-tap` repository on GitHub
+- [ ] Add initial `Formula/hyalo.rb` with placeholder version
+- [ ] Formula should download the correct binary for the platform (macOS ARM64, macOS x86_64, Linux x86_64)
+- [ ] Include SHA256 checksums (from the SHA256SUMS artifact added in iter-25)
+
+### Auto-update workflow
+- [ ] Add a job to the release workflow (`release.yml`) that updates the Homebrew formula after binaries are uploaded
+- [ ] Use `mislav/bump-homebrew-formula-action` or a custom script that:
+  - Downloads SHA256SUMS from the release
+  - Updates version, URL, and sha256 in the formula
+  - Commits and pushes to the tap repo
+- [ ] Requires a PAT or fine-grained token with push access to the tap repo
+
+### Test
+- [ ] `brew tap ractive/tap`
+- [ ] `brew install ractive/tap/hyalo`
+- [ ] `hyalo --help` works from Homebrew-installed binary
+- [ ] Test on both ARM64 and Intel Mac if possible
+
+### Documentation
+- [ ] Add installation instructions to README.md (Homebrew, cargo install, manual download)
+
+## Acceptance Criteria
+
+- [ ] `brew install ractive/tap/hyalo` works on macOS ARM64
+- [ ] Formula auto-updates on each new GitHub Release
+- [ ] README has installation instructions for all methods
