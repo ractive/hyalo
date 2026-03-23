@@ -34,7 +34,7 @@ pub fn properties_summary(
             }
             Err(e) => return Err(e),
         };
-        for (key, value) in &props {
+        for (key, value) in props.iter().filter(|(k, _)| k.as_str() != "tags") {
             agg.entry(key.clone())
                 .and_modify(|entry| entry.1 += 1)
                 .or_insert_with(|| (frontmatter::infer_type(value).to_owned(), 1));

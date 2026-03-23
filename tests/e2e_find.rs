@@ -636,12 +636,11 @@ fn find_text_format_file_object_structure() {
         stdout.contains("status (text): planned"),
         "status property: {stdout}"
     );
-    // List-type property values use brackets
+    // Tags are shown as a dedicated field, not duplicated under properties
     assert!(
-        stdout.contains("tags (list): [rust, cli]"),
-        "list property with brackets: {stdout}"
+        !stdout.contains("tags (list):"),
+        "tags should not appear as a property: {stdout}"
     );
-    // Tags line (from --fields tags) also uses brackets
     assert!(stdout.contains("tags: [rust, cli]"), "tags line: {stdout}");
     // Section headings
     assert!(stdout.contains("# Introduction"), "h1 section: {stdout}");

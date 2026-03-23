@@ -191,7 +191,11 @@ fn find_properties_single_file() {
     assert_eq!(find_prop("draft")["type"], "checkbox");
     assert_eq!(find_prop("draft")["value"], true);
     assert_eq!(find_prop("created")["type"], "date");
-    assert_eq!(find_prop("tags")["type"], "list");
+    // "tags" should not appear as a property (it has its own dedicated field)
+    assert!(
+        props.iter().all(|p| p["name"] != "tags"),
+        "tags should not be in properties: {props:?}"
+    );
 }
 
 #[test]

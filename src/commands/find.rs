@@ -230,6 +230,7 @@ fn build_file_object(
         Some(
             props
                 .iter()
+                .filter(|(name, _)| name.as_str() != "tags")
                 .map(|(name, value)| PropertyInfo {
                     name: name.clone(),
                     prop_type: frontmatter::infer_type(value).to_owned(),
