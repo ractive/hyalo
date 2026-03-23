@@ -4,9 +4,9 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 use hyalo::commands::{
-    append as append_commands, find as find_commands, properties, read as read_commands,
-    remove as remove_commands, set as set_commands, summary as summary_commands,
-    tags as tag_commands, tasks as task_commands,
+    append as append_commands, find as find_commands, init as init_commands, properties,
+    read as read_commands, remove as remove_commands, set as set_commands,
+    summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use hyalo::filter;
 use hyalo::hints::{HintContext, HintSource, generate_hints};
@@ -396,6 +396,18 @@ Repeatable (AND).\n\
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
     },
+    /// Initialize hyalo configuration and optional tool integrations
+    #[command(
+        long_about = "Create .hyalo.toml and optionally set up Claude Code integration.\n\n\
+            Without flags, creates a .hyalo.toml config file.\n\
+            With --claude, also installs the hyalo skill for Claude Code.\n\n\
+            Use the global --dir flag to specify the markdown directory to record in .hyalo.toml."
+    )]
+    Init {
+        /// Set up Claude Code integration (skill + CLAUDE.md hint)
+        #[arg(long)]
+        claude: bool,
+    },
     /// Append values to list properties in file(s) frontmatter, promoting scalars to lists
     #[command(
         long_about = "Append values to list properties in file(s) frontmatter.\n\n\
@@ -520,6 +532,27 @@ fn parse_where_filters(
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
+
+    // `init` operates on CWD directly and needs no config or format resolution.
+    // Dispatch it before the rest of the setup.
+    // The global --dir flag is used as the dir value for .hyalo.toml.
+    if let Commands::Init { claude } = cli.command {
+        let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
+        match init_commands::run_init(init_dir, claude) {
+            Ok(CommandOutcome::Success(output)) => {
+                println!("{output}");
+                process::exit(0);
+            }
+            Ok(CommandOutcome::UserError(output)) => {
+                eprintln!("{output}");
+                process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(2);
+            }
+        }
+    }
 
     // Load per-project config from .hyalo.toml in CWD
     let config = hyalo::config::load_config();
@@ -814,6 +847,8 @@ fn main() {
                 effective_format,
             )
         }
+        // `Init` is handled as an early return before this match is reached.
+        Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
     };
 
     match result {

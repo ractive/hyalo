@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 pub mod append;
 pub mod find;
+pub mod init;
 pub mod outline;
 pub mod properties;
 pub mod read;

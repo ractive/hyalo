@@ -29,6 +29,29 @@ All fields are optional. CLI flags always take precedence over config values. If
 
 Use `--no-hints` to explicitly disable hints when the config file enables them.
 
+### init
+
+Initialize hyalo in the current project. Creates a `.hyalo.toml` config file with a `dir` setting pointing to your markdown directory.
+
+```sh
+# Basic init — creates .hyalo.toml
+hyalo init
+
+# Specify the markdown directory explicitly
+hyalo init --dir my-vault
+
+# Also set up Claude Code integration (skill + CLAUDE.md hint)
+hyalo init --claude
+```
+
+Without `--dir`, hyalo auto-detects common documentation directories (`docs/`, `knowledgebase/`, `wiki/`, `notes/`, `content/`, `pages/`) by looking for a subdirectory that contains `.md` files. Falls back to `.` if none is found.
+
+With `--claude`, hyalo additionally:
+- Creates `.claude/skills/hyalo/SKILL.md` so Claude Code automatically uses hyalo for markdown operations
+- Appends a hyalo usage hint to `.claude/CLAUDE.md`
+
+All steps are idempotent — existing files are skipped, and duplicate hints are not added.
+
 ### find
 
 Search and filter files. Returns an array of file objects, each containing frontmatter properties, tags, sections, tasks, and links.
