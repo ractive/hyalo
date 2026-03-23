@@ -14,22 +14,17 @@ pub enum ScanAction {
     Stop,
 }
 
-/// Wraps a closure as a [`FileVisitor`], applying the same inline-code stripping
-/// that the old closure-based `scan_reader` did before the unification.
+/// Wraps a closure as a [`FileVisitor`].
 ///
-/// [`dispatch_body_line`] only strips inline Obsidian comments; this wrapper adds
-/// the `strip_inline_code` pass so callers that relied on `scan_file`/`scan_reader`
-/// continue to receive text free of both inline code spans and inline comments.
+/// [`dispatch_body_line`] strips both inline code spans and inline comments
+/// before calling visitors, so this wrapper is a trivial passthrough.
 struct ClosureVisitor<F: FnMut(&str, usize) -> ScanAction> {
     visitor: F,
 }
 
 impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
     fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
-        // `dispatch_body_line` already stripped inline comments; strip inline
-        // code spans here to match the behaviour of the old `scan_reader`.
-        let cleaned = strip_inline_code(raw);
-        (self.visitor)(cleaned.as_ref(), line_num)
+        (self.visitor)(raw, line_num)
     }
 }
 
@@ -348,7 +343,10 @@ pub fn scan_reader_multi<R: BufRead>(
             yaml.push_str(trimmed);
             yaml.push('\n');
         }
-        let props: BTreeMap<String, Value> = if found_close && !yaml.trim().is_empty() {
+        if !found_close {
+            anyhow::bail!("unclosed frontmatter (no closing `---` found)");
+        }
+        let props: BTreeMap<String, Value> = if !yaml.trim().is_empty() {
             serde_yaml_ng::from_str(&yaml).context("failed to parse YAML frontmatter")?
         } else {
             BTreeMap::new()
@@ -465,8 +463,11 @@ fn dispatch_body_line(
         return;
     }
 
-    // Normal body line — strip inline comments before delivering to visitors.
-    let cleaned = strip_inline_comments(line);
+    // Normal body line — strip inline code spans first, then inline comments.
+    // Inline code must be removed before comment stripping so that `%%` inside
+    // a backtick span is not mistakenly treated as a comment delimiter.
+    let cleaned = strip_inline_code(line);
+    let cleaned = strip_inline_comments(&cleaned);
     for (i, v) in visitors.iter_mut().enumerate() {
         if active[i] && v.on_body_line(&cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
@@ -975,6 +976,21 @@ Line 2
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("frontmatter too large"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn multi_visitor_unclosed_frontmatter_returns_error() {
+        // File starts with `---` but EOF is reached without a closing `---`.
+        // This must error rather than silently returning an empty property map.
+        let input = "---\ntitle: Test\n";
+        let mut fm = FrontmatterCollector::new(true);
+        let result = scan_reader_multi(input.as_bytes(), &mut [&mut fm]);
+        assert!(result.is_err(), "expected error for unclosed frontmatter");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("unclosed frontmatter"),
             "unexpected error: {err_msg}"
         );
     }

@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use crate::heading::parse_atx_heading;
 use crate::links;
-use crate::scanner::{self, FileVisitor, ScanAction};
+use crate::scanner::{FileVisitor, ScanAction};
 use crate::types::{OutlineSection, TaskCount};
 
 // ---------------------------------------------------------------------------
@@ -114,9 +114,9 @@ impl FileVisitor for SectionScanner {
         }
 
         // Normal text line — extract links and count tasks
-        let cleaned = scanner::strip_inline_code(raw);
+        // (`dispatch_body_line` already stripped inline code spans)
         let mut line_links: Vec<links::Link> = Vec::new();
-        links::extract_links_from_text(cleaned.as_ref(), &mut line_links);
+        links::extract_links_from_text(raw, &mut line_links);
 
         for link in line_links {
             let formatted = format_link_string(&link);
@@ -173,6 +173,7 @@ fn format_link_string(link: &links::Link) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scanner;
     use std::fs;
 
     macro_rules! md {
