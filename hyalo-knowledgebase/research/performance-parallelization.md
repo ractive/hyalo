@@ -1,12 +1,13 @@
 ---
-title: "Performance: Parallel File Operations"
-type: research
 date: 2026-03-22
+status: completed
 tags:
-  - performance
-  - parallelization
-  - rayon
-  - research
+- performance
+- parallelization
+- rayon
+- research
+title: 'Performance: Parallel File Operations'
+type: research
 ---
 
 # Performance: Parallel File Operations

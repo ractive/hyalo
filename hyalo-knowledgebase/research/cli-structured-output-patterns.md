@@ -1,8 +1,14 @@
 ---
+date: 2026-03-21
+status: completed
+tags:
+- cli
+- output
+- filtering
+- ux
+- structured-data
 title: CLI Structured Output & Filtering Patterns
 type: research
-date: 2026-03-21
-tags: [cli, output, filtering, ux, structured-data]
 ---
 
 # CLI Structured Output & Filtering Patterns
