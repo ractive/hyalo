@@ -61,7 +61,10 @@ pub fn find(
     let compiled_regex = match regexp {
         Some(re) => {
             let effective = format!("(?i){re}");
-            match regex::Regex::new(&effective) {
+            match regex::RegexBuilder::new(&effective)
+                .size_limit(1 << 20)
+                .build()
+            {
                 Ok(r) => Some(r),
                 Err(e) => {
                     return Ok(CommandOutcome::UserError(format!(
@@ -72,6 +75,10 @@ pub fn find(
         }
         None => None,
     };
+
+    // Canonicalize the vault directory once so that resolve_target (called
+    // per-link inside the loop) can avoid repeated canonicalization.
+    let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -158,7 +165,7 @@ pub fn find(
             collected_tasks,
             link_collector,
             content_visitor,
-            dir,
+            &canonical_dir,
         );
 
         results.push(obj);
@@ -224,6 +231,10 @@ fn format_modified(path: &Path) -> Result<String> {
 use super::format_iso8601;
 
 /// Build a `FileObject` from the already-scanned data.
+///
+/// `canonical_dir` must be a pre-canonicalized vault path (see
+/// `discovery::canonicalize_vault_dir`). It is passed directly to
+/// `resolve_target` to avoid per-link re-canonicalization.
 #[allow(clippy::too_many_arguments)]
 fn build_file_object(
     rel_path: &str,
@@ -235,7 +246,7 @@ fn build_file_object(
     collected_tasks: Option<Vec<FindTaskInfo>>,
     link_collector: Option<LinkCollector>,
     content_visitor: Option<ContentSearchVisitor>,
-    dir: &Path,
+    canonical_dir: &Path,
 ) -> FileObject {
     let properties = if fields.properties {
         Some(
@@ -272,7 +283,7 @@ fn build_file_object(
             lc.into_links()
                 .into_iter()
                 .map(|link| {
-                    let path = discovery::resolve_target(dir, &link.target);
+                    let path = discovery::resolve_target(canonical_dir, &link.target);
                     LinkInfo {
                         target: link.target,
                         path,
