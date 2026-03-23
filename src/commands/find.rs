@@ -9,7 +9,7 @@ use crate::commands::tags::extract_tags;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::content_search::ContentSearchVisitor;
 use crate::discovery;
-use crate::filter::{Fields, FindTaskFilter, PropertyFilter, SortField};
+use crate::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField};
 use crate::frontmatter;
 use crate::links::Link;
 use crate::output::{CommandOutcome, Format};
@@ -122,17 +122,11 @@ pub fn find(
         let props = fm.into_props();
 
         // --- Apply frontmatter-based filters (early exit) ---
-        if !property_filters.iter().all(|f| f.matches(&props)) {
+        if !filter::matches_frontmatter_filters(&props, property_filters, tag_filters) {
             continue;
         }
 
         let tags = extract_tags(&props);
-        if !tag_filters.iter().all(|q| {
-            tags.iter()
-                .any(|t| crate::commands::tags::tag_matches(t, q))
-        }) {
-            continue;
-        }
 
         // --- Collect tasks (needed for filter and/or output field) ---
         // Consume the extractor now so we can both filter and include in output.

@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::commands::set::parse_kv;
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
+use crate::filter::{self, PropertyFilter};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
@@ -115,6 +116,8 @@ pub fn append(
     property_args: &[String],
     file: Option<&str>,
     glob: Option<&str>,
+    where_property_filters: &[PropertyFilter],
+    where_tag_filters: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() {
@@ -172,6 +175,12 @@ pub fn append(
             }
             Err(e) => return Err(e),
         };
+
+        // Apply --where-* filters: skip files that don't match
+        if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
+            continue;
+        }
+
         let mut file_changed = false;
 
         for (i, (name, raw_value, new_val)) in parsed_args.iter().enumerate() {
@@ -255,6 +264,8 @@ title: Note
             &["aliases=my-note".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -291,6 +302,8 @@ aliases:
             &["aliases=new-name".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -319,6 +332,8 @@ aliases:
             &["aliases=my-note".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -350,6 +365,8 @@ author: Alice
             &["author=Bob".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -379,6 +396,8 @@ author: Alice
             &["author=Alice".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -409,6 +428,8 @@ title: Note
             &["aliases=a".to_owned(), "tags=rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -430,6 +451,8 @@ title: Note
             &["aliases=x".to_owned()],
             None,
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -439,7 +462,16 @@ title: Note
     #[test]
     fn append_requires_at_least_one_property() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = append(tmp.path(), &[], Some("note.md"), None, Format::Json).unwrap();
+        let outcome = append(
+            tmp.path(),
+            &[],
+            Some("note.md"),
+            None,
+            &[],
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -452,6 +484,8 @@ title: Note
             &["no-equals-sign".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -467,6 +501,8 @@ title: Note
             &["=value".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -488,6 +524,8 @@ title: Note
             &["aliases=my-note".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -515,6 +553,8 @@ title: Note
             &["aliases=a".to_owned(), "aliases=b".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -527,5 +567,69 @@ title: Note
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(content.contains('a'));
         assert!(content.contains('b'));
+    }
+
+    #[test]
+    fn append_where_property_filter_skips_nonmatching() {
+        // Only files matching --where-property are mutated.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("match.md"), "---\nstatus: draft\n---\n").unwrap();
+        fs::write(
+            tmp.path().join("no-match.md"),
+            "---\nstatus: published\n---\n",
+        )
+        .unwrap();
+
+        use crate::filter::parse_property_filter;
+        let filter = parse_property_filter("status=draft").unwrap();
+        let outcome = append(
+            tmp.path(),
+            &["aliases=draft-copy".to_owned()],
+            None,
+            Some("*.md"),
+            &[filter],
+            &[],
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let match_content = fs::read_to_string(tmp.path().join("match.md")).unwrap();
+        assert!(match_content.contains("draft-copy"));
+        let no_match_content = fs::read_to_string(tmp.path().join("no-match.md")).unwrap();
+        assert!(!no_match_content.contains("draft-copy"));
+    }
+
+    #[test]
+    fn append_where_tag_filter_skips_nonmatching() {
+        // Only files with the required tag are mutated.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("tagged.md"), "---\ntags:\n  - rust\n---\n").unwrap();
+        fs::write(tmp.path().join("untagged.md"), "---\ntitle: Other\n---\n").unwrap();
+
+        let outcome = append(
+            tmp.path(),
+            &["aliases=rust-note".to_owned()],
+            None,
+            Some("*.md"),
+            &[],
+            &["rust".to_owned()],
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
+        assert!(tagged_content.contains("rust-note"));
+        let untagged_content = fs::read_to_string(tmp.path().join("untagged.md")).unwrap();
+        assert!(!untagged_content.contains("rust-note"));
     }
 }
