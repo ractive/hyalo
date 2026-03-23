@@ -61,6 +61,12 @@ hyalo find --task todo    # open tasks
 hyalo find --task done    # completed tasks
 hyalo find --task any     # any tasks
 
+# Filter by section heading (case-insensitive whole-string match)
+hyalo find --section "Tasks" --task todo          # open tasks in ## Tasks sections
+hyalo find --section "## Design" "TODO"           # content search scoped to level-2 Design sections
+hyalo find --section "# Introduction" --fields sections  # level-pinned: only # Introduction, not ## Introduction
+hyalo find --section "Tasks" --section "Notes"    # OR: match either section
+
 # Scope to file(s)
 hyalo find --file path/to/note.md
 hyalo find --glob "notes/*.md"
