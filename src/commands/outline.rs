@@ -147,7 +147,7 @@ impl FileVisitor for SectionScanner {
 /// Parse an ATX heading line (`# Heading`, `## Sub`, etc.).
 /// Returns `(level, heading_text)` if the line is a valid ATX heading,
 /// or `None` otherwise.
-fn parse_atx_heading(line: &str) -> Option<(u8, String)> {
+pub(crate) fn parse_atx_heading(line: &str) -> Option<(u8, String)> {
     let bytes = line.as_bytes();
     if bytes.first() != Some(&b'#') {
         return None;

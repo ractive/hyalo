@@ -1,15 +1,15 @@
 ---
-title: "Read command — display file body content"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: high
 origin: dogfooding post-iter-10, dogfooding post-iter-19, iteration-13
+priority: high
+status: completed
 tags:
-  - backlog
-  - cli
-  - ux
-  - llm
+- backlog
+- cli
+- ux
+- llm
+title: Read command — display file body content
+type: backlog
 ---
 
 # Read command — display file body content

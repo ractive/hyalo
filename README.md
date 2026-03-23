@@ -73,6 +73,31 @@ hyalo find --fields sections,tasks,links
 hyalo find --sort modified --limit 10
 ```
 
+### read
+
+Read the body content of a markdown file, optionally filtered by section or line range. Defaults to plain text output.
+
+```sh
+# Read full body (text output)
+hyalo read --file path/to/note.md
+
+# Read a specific section
+hyalo read --file path/to/note.md --section "Proposal"
+hyalo read --file path/to/note.md --section "## Proposal"
+
+# Read a line range (1-based, inclusive)
+hyalo read --file path/to/note.md --lines 5:10
+hyalo read --file path/to/note.md --lines 5:
+hyalo read --file path/to/note.md --lines :10
+
+# Show frontmatter only
+hyalo read --file path/to/note.md --frontmatter
+
+# JSON output
+hyalo read --file path/to/note.md --format json
+hyalo read --file path/to/note.md --format json --jq '.content'
+```
+
 ### properties
 
 Aggregate summary of unique property names with inferred types and file counts.
