@@ -178,7 +178,9 @@ enum Commands {
             - --regexp/-e REGEX: regex body text search (case-insensitive by default; mutually exclusive with PATTERN)\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, or bare name for existence)\n\
             - --tag T: tag filter (supports nested matching: 'project' matches 'project/backend')\n\
-            - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\n\
+            - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
+            - --section HEADING: section scope filter (restrict body results to matching sections; case-insensitive \
+whole-string match; use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR).\n\n\
             OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
             FIELDS: Use --fields to limit which fields appear (default: all).\n\
             SIDE EFFECTS: None (read-only).")]
@@ -198,6 +200,10 @@ enum Commands {
         /// Task presence filter: 'todo', 'done', 'any', or a single status character
         #[arg(long, value_name = "STATUS")]
         task: Option<String>,
+        /// Section heading filter: restrict body results to matching sections (case-insensitive whole-string match;
+        /// use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR)
+        #[arg(long = "section", value_name = "HEADING")]
+        sections: Vec<String>,
         /// Scan only this file (still returns an array)
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,
@@ -589,6 +595,7 @@ fn main() {
             ref properties,
             ref tag,
             ref task,
+            ref sections,
             ref file,
             ref glob,
             ref fields,
@@ -633,6 +640,18 @@ fn main() {
                 }
                 None => None,
             };
+            // Parse section filters
+            let section_filters: Vec<hyalo::heading::SectionFilter> = match sections
+                .iter()
+                .map(|s| hyalo::heading::SectionFilter::parse(s))
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            };
 
             find_commands::find(
                 &dir,
@@ -641,6 +660,7 @@ fn main() {
                 &prop_filters,
                 tag,
                 task_filter.as_ref(),
+                &section_filters,
                 file.as_deref(),
                 glob.as_deref(),
                 &parsed_fields,

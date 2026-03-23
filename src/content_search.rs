@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use regex::Regex;
 
+use crate::heading::parse_atx_heading;
 use crate::scanner::{FileVisitor, ScanAction};
 use crate::types::ContentMatch;
 
@@ -89,7 +90,7 @@ impl ContentSearchVisitor {
 impl FileVisitor for ContentSearchVisitor {
     fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
         // Check for ATX heading and update section context.
-        if let Some((level, heading_text)) = detect_heading(raw) {
+        if let Some((level, heading_text)) = parse_atx_heading(raw) {
             self.current_section = format!("{} {}", "#".repeat(level as usize), heading_text);
         }
 
@@ -103,26 +104,6 @@ impl FileVisitor for ContentSearchVisitor {
         }
 
         ScanAction::Continue
-    }
-}
-
-/// Parse an ATX heading line and return `(level, heading_text)`.
-/// Returns `None` if the line is not a valid ATX heading.
-fn detect_heading(line: &str) -> Option<(u8, &str)> {
-    if !line.starts_with('#') {
-        return None;
-    }
-    let level = line.bytes().take_while(|&b| b == b'#').count();
-    if level > 6 {
-        return None;
-    }
-    let rest = &line[level..];
-    if rest.is_empty() {
-        Some((level as u8, ""))
-    } else if rest.starts_with(' ') || rest.starts_with('\t') {
-        Some((level as u8, rest[1..].trim_end_matches('#').trim()))
-    } else {
-        None
     }
 }
 

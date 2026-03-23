@@ -1,4 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
+use crate::heading::parse_atx_heading;
 use crate::links;
 use crate::scanner::{self, FileVisitor, ScanAction};
 use crate::types::{OutlineSection, TaskCount};
@@ -97,7 +98,7 @@ impl FileVisitor for SectionScanner {
         if let Some((level, heading_text)) = parse_atx_heading(raw) {
             let finished = std::mem::replace(
                 &mut self.current,
-                SectionBuilder::new(level, Some(heading_text), line_num),
+                SectionBuilder::new(level, Some(heading_text.to_owned()), line_num),
             );
 
             let should_emit = finished.level > 0
@@ -144,43 +145,6 @@ impl FileVisitor for SectionScanner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Parse an ATX heading line (`# Heading`, `## Sub`, etc.).
-/// Returns `(level, heading_text)` if the line is a valid ATX heading,
-/// or `None` otherwise.
-pub(crate) fn parse_atx_heading(line: &str) -> Option<(u8, String)> {
-    let bytes = line.as_bytes();
-    if bytes.first() != Some(&b'#') {
-        return None;
-    }
-
-    // Count leading `#` characters (maximum 6 for ATX headings)
-    let level = bytes.iter().take_while(|&&b| b == b'#').count();
-    if level > 6 {
-        return None;
-    }
-
-    let after_hashes = &line[level..];
-
-    // An ATX heading requires either:
-    // - A space (or tab) after the hashes: `## Heading`
-    // - Nothing after the hashes (empty heading): `##`
-    let heading_text = if after_hashes.is_empty() {
-        String::new()
-    } else if after_hashes.starts_with(' ') || after_hashes.starts_with('\t') {
-        // Strip the leading space/tab, then trim trailing spaces and optional closing `#`s
-        let inner = after_hashes[1..].trim_end();
-        // Remove optional trailing `#` sequence (ATX closing sequence)
-        let inner = inner.trim_end_matches('#').trim_end();
-        inner.to_owned()
-    } else {
-        // Characters directly after `#` with no space — not a valid ATX heading
-        return None;
-    };
-
-    #[allow(clippy::cast_possible_truncation)] // level is guaranteed ≤ 6 by the check above
-    Some((level as u8, heading_text))
-}
-
 /// Format a `Link` into a human-readable string for storage in the outline.
 fn format_link_string(link: &links::Link) -> String {
     // Heuristic: targets containing '://' are URLs from markdown links.
@@ -224,58 +188,7 @@ mod tests {
         ss.into_sections()
     }
 
-    // --- parse_atx_heading ---
-
-    #[test]
-    fn heading_level_1() {
-        let h = parse_atx_heading("# Hello").unwrap();
-        assert_eq!(h.0, 1);
-        assert_eq!(h.1, "Hello");
-    }
-
-    #[test]
-    fn heading_level_3() {
-        let h = parse_atx_heading("### Sub section").unwrap();
-        assert_eq!(h.0, 3);
-        assert_eq!(h.1, "Sub section");
-    }
-
-    #[test]
-    fn heading_max_level_6() {
-        let h = parse_atx_heading("###### Deep").unwrap();
-        assert_eq!(h.0, 6);
-        assert_eq!(h.1, "Deep");
-    }
-
-    #[test]
-    fn heading_7_hashes_not_heading() {
-        assert!(parse_atx_heading("####### Too deep").is_none());
-    }
-
-    #[test]
-    fn heading_no_space_not_heading() {
-        assert!(parse_atx_heading("#NoSpace").is_none());
-    }
-
-    #[test]
-    fn heading_empty() {
-        let h = parse_atx_heading("##").unwrap();
-        assert_eq!(h.0, 2);
-        assert_eq!(h.1, "");
-    }
-
-    #[test]
-    fn heading_with_closing_hashes() {
-        let h = parse_atx_heading("## Section ##").unwrap();
-        assert_eq!(h.0, 2);
-        assert_eq!(h.1, "Section");
-    }
-
-    #[test]
-    fn not_a_heading() {
-        assert!(parse_atx_heading("Normal text").is_none());
-        assert!(parse_atx_heading("").is_none());
-    }
+    // parse_atx_heading tests are in src/heading.rs
 
     // --- extract_fence_language ---
 

@@ -10,11 +10,14 @@ use crate::content_search::ContentSearchVisitor;
 use crate::discovery;
 use crate::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
 use crate::frontmatter;
+use crate::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
 use crate::links::Link;
 use crate::output::{CommandOutcome, Format};
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::tasks::TaskExtractor;
-use crate::types::{ContentMatch, FileObject, FindTaskInfo, LinkInfo, PropertyInfo};
+use crate::types::{
+    ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
+};
 
 // ---------------------------------------------------------------------------
 // Public command entry point
@@ -27,6 +30,7 @@ use crate::types::{ContentMatch, FileObject, FindTaskInfo, LinkInfo, PropertyInf
 /// - `property_filters`  — all must match (AND semantics)
 /// - `tag_filters`        — all must be present (AND semantics, nested tag rules)
 /// - `task_filter`        — file-level task presence/status filter
+/// - `section_filters`   — restrict body results to matching sections (OR semantics)
 /// - `file` / `glob`      — scope limiting
 /// - `fields`             — controls which fields appear in each `FileObject`
 /// - `sort`               — sort order; defaults to ascending by file path
@@ -39,6 +43,7 @@ pub fn find(
     property_filters: &[PropertyFilter],
     tag_filters: &[String],
     task_filter: Option<&FindTaskFilter>,
+    section_filters: &[SectionFilter],
     file: Option<&str>,
     glob: Option<&str>,
     fields: &Fields,
@@ -54,7 +59,13 @@ pub fn find(
 
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
-    let body_needed = needs_body(fields, has_content_search, has_task_filter);
+    let has_section_filter = !section_filters.is_empty();
+    let body_needed = needs_body(
+        fields,
+        has_content_search,
+        has_task_filter,
+        has_section_filter,
+    );
 
     // Compile the regex once (if any), then clone cheaply per file.
     // Invalid regex is a user error (exit 1), not an internal error (exit 2).
@@ -78,11 +89,12 @@ pub fn find(
     for (full_path, rel_path) in &files {
         // --- Single-pass scan ---
         let mut fm = FrontmatterCollector::new(body_needed);
-        let mut section_scanner = if body_needed && (fields.sections || fields.links) {
-            Some(SectionScanner::new())
-        } else {
-            None
-        };
+        let mut section_scanner =
+            if body_needed && (fields.sections || fields.links || has_section_filter) {
+                Some(SectionScanner::new())
+            } else {
+                None
+            };
         let mut task_extractor = if body_needed && (fields.tasks || has_task_filter) {
             Some(TaskExtractor::new())
         } else {
@@ -126,10 +138,50 @@ pub fn find(
             continue;
         }
 
+        // --- Consume section scanner to get outline sections ---
+        // Must happen before scope building and before build_file_object.
+        let outline_sections: Option<Vec<OutlineSection>> =
+            section_scanner.map(SectionScanner::into_sections);
+
+        // --- Build section scope ranges (if section filter is active) ---
+        let scope_ranges: Vec<SectionRange> = if has_section_filter {
+            if let Some(ref sections) = outline_sections {
+                build_section_scope(sections, section_filters, usize::MAX)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         // --- Collect tasks (needed for filter and/or output field) ---
         // Consume the extractor now so we can both filter and include in output.
-        let collected_tasks: Option<Vec<FindTaskInfo>> =
+        let mut collected_tasks: Option<Vec<FindTaskInfo>> =
             task_extractor.map(TaskExtractor::into_tasks);
+
+        // --- Collect content matches early so we can apply section scope ---
+        let mut content_matches: Option<Vec<ContentMatch>> =
+            content_visitor.map(|cv| cv.into_matches());
+
+        // --- Apply section scope filter to body results ---
+        if has_section_filter {
+            if scope_ranges.is_empty() {
+                // No section matched — discard all body results
+                if let Some(ref mut tasks) = collected_tasks {
+                    tasks.clear();
+                }
+                if let Some(ref mut matches) = content_matches {
+                    matches.clear();
+                }
+            } else {
+                if let Some(ref mut tasks) = collected_tasks {
+                    tasks.retain(|t| in_scope(&scope_ranges, t.line));
+                }
+                if let Some(ref mut matches) = content_matches {
+                    matches.retain(|m| in_scope(&scope_ranges, m.line));
+                }
+            }
+        }
 
         // --- Apply task filter ---
         if let Some(filter) = task_filter {
@@ -140,7 +192,7 @@ pub fn find(
         }
 
         // --- Apply content search filter ---
-        if has_content_search && content_visitor.as_ref().is_some_and(|cv| !cv.has_matches()) {
+        if has_content_search && content_matches.as_ref().is_some_and(|m| m.is_empty()) {
             continue;
         }
 
@@ -154,10 +206,11 @@ pub fn find(
             &props,
             &tags,
             fields,
-            section_scanner,
+            outline_sections,
+            &scope_ranges,
             collected_tasks,
             link_collector,
-            content_visitor,
+            content_matches,
             dir,
         );
 
@@ -193,8 +246,18 @@ pub fn find(
 // ---------------------------------------------------------------------------
 
 /// Determine whether body scanning is needed at all.
-fn needs_body(fields: &Fields, has_content_search: bool, has_task_filter: bool) -> bool {
-    fields.sections || fields.tasks || fields.links || has_content_search || has_task_filter
+fn needs_body(
+    fields: &Fields,
+    has_content_search: bool,
+    has_task_filter: bool,
+    has_section_filter: bool,
+) -> bool {
+    fields.sections
+        || fields.tasks
+        || fields.links
+        || has_content_search
+        || has_task_filter
+        || has_section_filter
 }
 
 /// Return true if `tasks` satisfy `filter`.
@@ -231,10 +294,11 @@ fn build_file_object(
     props: &BTreeMap<String, serde_yaml_ng::Value>,
     tags: &[String],
     fields: &Fields,
-    section_scanner: Option<SectionScanner>,
+    outline_sections: Option<Vec<OutlineSection>>,
+    scope_ranges: &[SectionRange],
     collected_tasks: Option<Vec<FindTaskInfo>>,
     link_collector: Option<LinkCollector>,
-    content_visitor: Option<ContentSearchVisitor>,
+    content_matches: Option<Vec<ContentMatch>>,
     dir: &Path,
 ) -> FileObject {
     let properties = if fields.properties {
@@ -260,7 +324,12 @@ fn build_file_object(
     };
 
     let sections = if fields.sections {
-        section_scanner.map(SectionScanner::into_sections)
+        outline_sections.map(|mut secs| {
+            if !scope_ranges.is_empty() {
+                secs.retain(|s| in_scope(scope_ranges, s.line));
+            }
+            secs
+        })
     } else {
         None
     };
@@ -285,7 +354,7 @@ fn build_file_object(
         None
     };
 
-    let matches: Option<Vec<ContentMatch>> = content_visitor.map(|cv| cv.into_matches());
+    let matches: Option<Vec<ContentMatch>> = content_matches;
 
     FileObject {
         file: rel_path.to_owned(),
@@ -416,6 +485,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -442,6 +512,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -471,6 +542,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -506,6 +578,7 @@ Just some text here.
                 &[filter],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -534,6 +607,7 @@ Just some text here.
                 &[filter],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -563,6 +637,7 @@ Just some text here.
                 &[],
                 &["cli".to_owned()],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -590,6 +665,7 @@ Just some text here.
                 &[],
                 &["nonexistent-tag".to_owned()],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -618,6 +694,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -645,6 +722,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -675,6 +753,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -705,6 +784,7 @@ Just some text here.
                 &[],
                 &[],
                 Some(&FindTaskFilter::Todo),
+                &[],
                 None,
                 None,
                 &fields,
@@ -733,6 +813,7 @@ Just some text here.
                 &[],
                 &[],
                 Some(&FindTaskFilter::Any),
+                &[],
                 None,
                 None,
                 &fields,
@@ -762,6 +843,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -794,6 +876,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -830,6 +913,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 Some("alpha.md"),
                 None,
                 &fields,
@@ -863,6 +947,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -891,6 +976,7 @@ Just some text here.
                 &[],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -926,6 +1012,7 @@ Just some text here.
                 &[filter],
                 &[],
                 None,
+                &[],
                 None,
                 None,
                 &fields,
@@ -952,6 +1039,7 @@ Just some text here.
             &[],
             &[],
             None,
+            &[],
             Some("does-not-exist.md"),
             None,
             &fields,
@@ -974,7 +1062,7 @@ Just some text here.
             tasks: false,
             links: false,
         };
-        assert!(!needs_body(&fields, false, false));
+        assert!(!needs_body(&fields, false, false, false));
     }
 
     #[test]
@@ -986,7 +1074,7 @@ Just some text here.
             tasks: false,
             links: false,
         };
-        assert!(needs_body(&fields, true, false));
+        assert!(needs_body(&fields, true, false, false));
     }
 
     #[test]
@@ -998,7 +1086,7 @@ Just some text here.
             tasks: false,
             links: false,
         };
-        assert!(needs_body(&fields, false, false));
+        assert!(needs_body(&fields, false, false, false));
     }
 
     // --- matches_task_filter ---
@@ -1047,5 +1135,231 @@ Just some text here.
         let tasks = vec![make_task(false, '~')];
         assert!(matches_task_filter(&tasks, &FindTaskFilter::Status('~')));
         assert!(!matches_task_filter(&tasks, &FindTaskFilter::Status('!')));
+    }
+
+    // --- find: --section filter ---
+
+    fn setup_sectioned_vault() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // File with two top-level sections, tasks only in "Tasks"
+        fs::write(
+            tmp.path().join("notes.md"),
+            md!(r"
+---
+title: Notes
+status: active
+---
+# Introduction
+
+Some intro text.
+
+## Tasks
+
+- [ ] First task
+- [x] Done task
+
+## Background
+
+Background information here.
+"),
+        )
+        .unwrap();
+
+        // File without a Tasks section
+        fs::write(
+            tmp.path().join("empty.md"),
+            md!(r"
+---
+title: Empty
+---
+# Introduction
+
+Just intro, no tasks section.
+"),
+        )
+        .unwrap();
+
+        tmp
+    }
+
+    #[test]
+    fn find_section_filter_restricts_tasks_to_matching_section() {
+        let tmp = setup_sectioned_vault();
+        let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
+        let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &section_filters,
+                Some("notes.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let tasks = arr[0]["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2, "should have 2 tasks in Tasks section");
+    }
+
+    #[test]
+    fn find_section_filter_no_match_excludes_tasks() {
+        let tmp = setup_sectioned_vault();
+        let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
+        // Filter on a section that does not exist
+        let section_filters = vec![SectionFilter::parse("Nonexistent").unwrap()];
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &section_filters,
+                Some("notes.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        // File is still returned (section filter only scopes body results, not file inclusion)
+        assert_eq!(arr.len(), 1);
+        let tasks = arr[0]["tasks"].as_array().unwrap();
+        assert!(
+            tasks.is_empty(),
+            "tasks outside matched section should be empty"
+        );
+    }
+
+    #[test]
+    fn find_section_filter_restricts_content_matches() {
+        let tmp = setup_sectioned_vault();
+        let fields = Fields::default();
+        // "Background" text only appears in ## Background, not ## Tasks
+        let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                Some("background"),
+                None,
+                &[],
+                &[],
+                None,
+                &section_filters,
+                None,
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        // "background" only appears in ## Background section, not in ## Tasks, so no match
+        assert!(
+            arr.is_empty(),
+            "no files should match: 'background' is not in the Tasks section"
+        );
+    }
+
+    #[test]
+    fn find_section_filter_sections_field_filtered() {
+        let tmp = setup_sectioned_vault();
+        let fields = Fields::parse(&["sections".to_owned()]).unwrap();
+        let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &section_filters,
+                Some("notes.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let sections = arr[0]["sections"].as_array().unwrap();
+        // Only the "Tasks" section (and its heading line) should be included
+        assert!(
+            sections.iter().all(|s| {
+                s["heading"]
+                    .as_str()
+                    .is_some_and(|h| h.eq_ignore_ascii_case("tasks"))
+            }),
+            "sections output should only contain the matched section"
+        );
+    }
+
+    #[test]
+    fn find_section_filter_empty_no_section_returns_file_with_empty_tasks() {
+        let tmp = setup_sectioned_vault();
+        let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
+        let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &section_filters,
+                Some("empty.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        // empty.md has no Tasks section — tasks list should be empty
+        assert_eq!(arr.len(), 1);
+        let tasks = arr[0]["tasks"].as_array().unwrap();
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn needs_body_true_when_section_filter() {
+        let fields = Fields {
+            properties: false,
+            tags: false,
+            sections: false,
+            tasks: false,
+            links: false,
+        };
+        assert!(needs_body(&fields, false, false, true));
+        assert!(!needs_body(&fields, false, false, false));
     }
 }

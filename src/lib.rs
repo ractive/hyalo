@@ -4,6 +4,7 @@ pub mod content_search;
 pub mod discovery;
 pub mod filter;
 pub mod frontmatter;
+pub mod heading;
 pub mod hints;
 pub mod links;
 pub mod output;
