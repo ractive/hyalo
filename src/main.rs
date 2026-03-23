@@ -4,8 +4,9 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 use hyalo::commands::{
-    append as append_commands, find as find_commands, properties, remove as remove_commands,
-    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    append as append_commands, find as find_commands, properties, read as read_commands,
+    remove as remove_commands, set as set_commands, summary as summary_commands,
+    tags as tag_commands, tasks as task_commands,
 };
 use hyalo::filter;
 use hyalo::hints::{HintContext, HintSource, generate_hints};
@@ -27,6 +28,7 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         CONFIG: Place a .hyalo.toml in the working directory to set defaults for --dir, --format, and --hints. CLI flags always take precedence.\n\n\
         COMMANDS:\n\
           find        Search and filter files by text, properties, tags, or tasks\n\
+          read        Read file body content, optionally filtered by section or line range\n\
           set         Set (create or overwrite) properties and add tags\n\
           remove      Remove properties or tags from file(s)\n\
           append      Append values to list properties\n\
@@ -39,6 +41,8 @@ use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_
         Filter by tag:                hyalo find --tag project\n  \
         Filter by task status:        hyalo find --task todo\n  \
         Full-text search:             hyalo find 'meeting notes'\n  \
+        Read file content:            hyalo read --file notes/todo.md\n  \
+        Read a section:               hyalo read --file notes/todo.md --section Proposal\n  \
         Set a property:               hyalo set --property status=done --file notes/todo.md\n  \
         Bulk-set with filter:         hyalo set --property status=done --where-property status=draft --glob '**/*.md'\n  \
         Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'\n  \
@@ -55,6 +59,8 @@ COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
     hyalo find [PATTERN | --regexp/-e REGEX] [--property K=V ...] [--tag T ...] [--task STATUS]\n  \
                [--file F | --glob G] [--fields ...] [--sort ...] [--limit N]\n\n  \
+  Read (display file body content, read-only):\n  \
+    hyalo read --file F [--section HEADING] [--lines RANGE] [--frontmatter]\n\n  \
   Set (create or overwrite, mutates files):\n  \
     hyalo set  --property K=V [--property ...] [--tag T ...] [--file F | --glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Remove (delete properties/tags, mutates files):\n  \
@@ -207,6 +213,28 @@ enum Commands {
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<usize>,
+    },
+    /// Read file body content, optionally filtered by section or line range (read-only)
+    #[command(long_about = "Read the body content of a markdown file.\n\n\
+            Returns the raw text after the YAML frontmatter block. Use --section to extract a \
+            specific section by heading, --lines to slice a line range, and --frontmatter to \
+            include the YAML frontmatter.\n\n\
+            OUTPUT: Plain text by default (--format text is the default for this command). \
+            Use --format json for {\"file\": \"...\", \"content\": \"...\"}.\n\
+            SIDE EFFECTS: None (read-only).")]
+    Read {
+        /// Target file (relative to --dir)
+        #[arg(long)]
+        file: String,
+        /// Extract only the section(s) under this heading (case-insensitive exact match)
+        #[arg(long)]
+        section: Option<String>,
+        /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
+        #[arg(long)]
+        lines: Option<String>,
+        /// Include the YAML frontmatter in output
+        #[arg(long)]
+        frontmatter: bool,
     },
     /// Show unique property names with types and file counts across matched files (read-only)
     #[command(
@@ -483,6 +511,17 @@ fn main() {
 
     // --jq operates on JSON, so it conflicts with an explicit --format text.
     let jq_filter = cli.jq.as_deref();
+
+    // `read` defaults to text output (unlike other commands which default to json).
+    // Skip the override when --jq is active (jq needs JSON).
+    let format = if !format_from_cli
+        && jq_filter.is_none()
+        && matches!(cli.command, Commands::Read { .. })
+    {
+        Format::Text
+    } else {
+        format
+    };
     if jq_filter.is_some() && format != Format::Json {
         eprintln!(
             "Error: --jq cannot be combined with --format {}",
@@ -610,6 +649,19 @@ fn main() {
                 effective_format,
             )
         }
+        Commands::Read {
+            ref file,
+            ref section,
+            ref lines,
+            frontmatter,
+        } => read_commands::run(
+            &dir,
+            file,
+            section.as_deref(),
+            lines.as_deref(),
+            frontmatter,
+            effective_format,
+        ),
         Commands::Properties { ref glob } => {
             properties::properties_summary(&dir, None, glob.as_deref(), effective_format)
         }
