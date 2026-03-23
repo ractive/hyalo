@@ -11,11 +11,13 @@ brew tap ractive/tap
 brew install ractive/tap/hyalo
 ```
 
-### Cargo
+### Cargo (Intel Mac & other platforms)
 
 ```sh
 cargo install --git https://github.com/ractive/hyalo.git --locked
 ```
+
+> **Intel Mac users:** Homebrew bottles and pre-built binaries are only provided for Apple Silicon. If you're on an Intel Mac, use `cargo install` above.
 
 ### Manual download
 

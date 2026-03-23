@@ -67,8 +67,6 @@ jobs:
             cross: true
           - target: aarch64-apple-darwin
             os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-13
           - target: x86_64-pc-windows-msvc
             os: windows-latest
 
@@ -174,11 +172,10 @@ jobs:
           }
 
           SHA_MACOS_ARM64=$(get_sha "hyalo-aarch64-apple-darwin.tar.gz")
-          SHA_MACOS_X86=$(get_sha "hyalo-x86_64-apple-darwin.tar.gz")
           SHA_LINUX_ARM64=$(get_sha "hyalo-aarch64-unknown-linux-gnu.tar.gz")
           SHA_LINUX_X86=$(get_sha "hyalo-x86_64-unknown-linux-gnu.tar.gz")
 
-          for var in SHA_MACOS_ARM64 SHA_MACOS_X86 SHA_LINUX_ARM64 SHA_LINUX_X86; do
+          for var in SHA_MACOS_ARM64 SHA_LINUX_ARM64 SHA_LINUX_X86; do
             if [ -z "${!var}" ]; then
               echo "ERROR: missing SHA256 checksum for $var"
               exit 1
@@ -201,11 +198,6 @@ jobs:
               on_arm do
                 url "https://github.com/ractive/hyalo/releases/download/v#{version}/hyalo-aarch64-apple-darwin.tar.gz"
                 sha256 "${SHA_MACOS_ARM64}"
-              end
-
-              on_intel do
-                url "https://github.com/ractive/hyalo/releases/download/v#{version}/hyalo-x86_64-apple-darwin.tar.gz"
-                sha256 "${SHA_MACOS_X86}"
               end
             end
 
