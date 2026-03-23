@@ -1,11 +1,12 @@
 ---
-title: "Obsidian Markdown Compatibility"
-type: research
 date: 2026-03-20
+status: reference
 tags:
-  - research
-  - markdown
-  - obsidian
+- research
+- markdown
+- obsidian
+title: Obsidian Markdown Compatibility
+type: research
 ---
 
 # Obsidian Markdown Compatibility

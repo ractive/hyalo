@@ -1,8 +1,14 @@
 ---
-title: "CLI Discoverable Drill-Down Commands"
-type: research
 date: 2026-03-21
-tags: [cli, ux, discoverability, progressive-disclosure, command-suggestion]
+status: completed
+tags:
+- cli
+- ux
+- discoverability
+- progressive-disclosure
+- command-suggestion
+title: CLI Discoverable Drill-Down Commands
+type: research
 ---
 
 # CLI Discoverable Drill-Down Commands

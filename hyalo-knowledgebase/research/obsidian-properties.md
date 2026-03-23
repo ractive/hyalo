@@ -1,12 +1,13 @@
 ---
-title: "Obsidian Properties (Frontmatter)"
-type: research
 date: 2026-03-20
+status: reference
 tags:
-  - research
-  - frontmatter
-  - properties
-  - obsidian
+- research
+- frontmatter
+- properties
+- obsidian
+title: Obsidian Properties (Frontmatter)
+type: research
 ---
 
 # Obsidian Properties (Frontmatter)

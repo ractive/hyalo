@@ -1,12 +1,13 @@
 ---
-title: "Obsidian CLI & Search Reference"
-type: research
 date: 2026-03-20
+status: reference
 tags:
-  - research
-  - cli
-  - search
-  - obsidian
+- research
+- cli
+- search
+- obsidian
+title: Obsidian CLI & Search Reference
+type: research
 ---
 
 # Obsidian CLI & Search Reference

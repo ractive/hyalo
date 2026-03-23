@@ -1,13 +1,14 @@
 ---
-title: "Performance Benchmarking: Tools, Strategy & Test Plan"
-type: research
 date: 2026-03-22
+status: completed
 tags:
-  - performance
-  - benchmarking
-  - testing
-  - criterion
-  - hyperfine
+- performance
+- benchmarking
+- testing
+- criterion
+- hyperfine
+title: 'Performance Benchmarking: Tools, Strategy & Test Plan'
+type: research
 ---
 
 # Performance Benchmarking: Tools, Strategy & Test Plan

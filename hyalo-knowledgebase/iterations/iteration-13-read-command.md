@@ -1,13 +1,13 @@
 ---
-title: "Iteration 13: Read Command — Display File Content"
-type: iteration
-date: 2026-03-22
-tags:
-  - iteration
-  - cli
-  - ux
-status: planned
 branch: iter-13/read-command
+date: 2026-03-22
+status: deferred
+tags:
+- iteration
+- cli
+- ux
+title: 'Iteration 13: Read Command — Display File Content'
+type: iteration
 ---
 
 # Iteration 13: Read Command — Display File Content

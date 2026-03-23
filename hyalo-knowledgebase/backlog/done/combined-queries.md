@@ -1,14 +1,14 @@
 ---
-title: "Combined queries across properties, tags, and content"
-type: backlog
 date: 2026-03-21
-status: planned
-priority: high
 origin: dogfooding iteration-06
+priority: high
+status: completed
 tags:
-  - backlog
-  - search
-  - cli
+- backlog
+- search
+- cli
+title: Combined queries across properties, tags, and content
+type: backlog
 ---
 
 # Combined queries across properties, tags, and content

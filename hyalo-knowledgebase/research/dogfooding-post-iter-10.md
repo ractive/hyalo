@@ -1,12 +1,13 @@
 ---
-title: "Dogfooding Report: Post-Iteration 10"
-type: research
 date: 2026-03-21
+status: superseded
 tags:
-  - research
-  - cli
-  - ux
-  - llm
+- research
+- cli
+- ux
+- llm
+title: 'Dogfooding Report: Post-Iteration 10'
+type: research
 ---
 
 # Dogfooding Report: Post-Iteration 10

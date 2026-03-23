@@ -56,19 +56,55 @@ Replaced the generic key=value text formatter with proper human-readable output 
 
 **No new commands** — purely output layer change. See [[iterations/iteration-07-text-output]].
 
-## Iteration 8 — Search
+## Iteration 8 — Task Commands (superseded)
 
-Property query syntax, boolean logic, operators. Ties iterations 1–7 together into one query interface.
+Original plan for task commands. Superseded by iteration 9 which combined tasks with summary and a unified scanner.
 
-**Commands:** `search` with `[prop:value]`, `path:`, `file:`, `tag:`, `content:`, `task-todo:`, `task-done:`
+## Iteration 9 — Task Commands + Summary + Unified Scanner
 
-## Iteration 9 — Move/Rename with Link Updates
+Combined task commands (`task read`, `task toggle`, `task set-status`) with a `summary` command for vault-wide overview. Introduced the multi-visitor scanner architecture (DEC-028, DEC-029).
 
-Move or rename a file and update all wikilinks across the knowledge base.
+**Commands:** `tasks`, `task read|toggle|set-status`, `summary`
 
-**Commands:** `move`, `rename`
+## Iteration 10 — Comment Block Handling
 
-## Later — Indexing
+Scanner now skips `%%comment%%` blocks, preventing false positives for wikilinks and tasks inside comments.
+
+## Iteration 11 — Discoverable Drill-Down Commands
+
+Added `--hints` / `--no-hints` flags and `.hyalo.toml` support. Output includes copy-pasteable follow-up commands (DEC-031).
+
+## Iteration 12 — CLI Redesign: find/set/remove
+
+Major breaking change. Replaced the many subcommands with a unified `find` query + `set`/`remove`/`append` mutations. `find` absorbs property search, tag search, task filtering, content search, and structural extraction into one command. (See research/unified-find-command.md)
+
+**Commands:** `find`, `set`, `remove`, `append`, `properties`, `tags`, `summary`, `task`
+
+## Iteration 13 — Read Command (planned, not yet implemented)
+
+Display file content from the CLI. Still planned but skipped in favour of iter-14+.
+
+## Iteration 14 — Text Output Overhaul
+
+Rewrote `--format text` rendering: quoted paths, group labels, newlines between entries, suppressed empty sections.
+
+## Iteration 15 — Performance Benchmark Suite
+
+Added Criterion.rs micro-benchmarks and Hyperfine CLI benchmarks. Established baseline performance numbers.
+
+## Iteration 16 — Robustness
+
+Hardened malformed-file handling and path edge cases. Better error messages for broken frontmatter, UTF-8 issues, path traversal.
+
+## Iteration 17 — Per-Project Config File (.hyalo.toml)
+
+Added `.hyalo.toml` config for `--dir`, `--format`, `--hints` defaults. CLI flags always override.
+
+## Iteration 18 — Parallel Processing (shelved)
+
+Experimented with rayon `par_iter()`. Benchmarks showed no meaningful improvement on SSD — I/O is not the bottleneck. Shelved until vault size justifies it. See research/performance-parallelization.md.
+
+## Future — Indexing
 
 SQLite or similar index for properties, tags, and links. Incremental updates based on file mtime. Triggered when file scanning becomes a bottleneck on large vaults.
 
@@ -76,13 +112,20 @@ SQLite or similar index for properties, tags, and links. Incremental updates bas
 
 **Deferred from iteration 2:** Obsidian shortest-path resolution (`[[foo]]` matching `sub/foo.md`). Currently link resolution requires explicit paths; shortest-path lookup can be added once an index exists.
 
+## Future — Read Command
+
+Display file content (or sections) from the CLI. Originally planned as iteration 13.
+
+## Future — Move/Rename with Link Updates
+
+Move or rename a file and update all wikilinks across the knowledge base. Originally planned as iteration 9.
+
 ## Dependencies
 
 ```
 Iteration 1 (frontmatter) ──→ Iteration 4 (find needs parser)
 Iteration 2 (link graph)  ──→ Iteration 6 (outline reuses scanner)
-Iteration 2 (link graph)  ──→ Iteration 8 (rename needs links)
-Iterations 1–7             ──→ Iteration 8 (search unifies all)
+Iterations 1–7             ──→ Iteration 12 (find unifies all queries)
 ```
 
 ## Dogfooding
