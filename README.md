@@ -31,7 +31,24 @@ cargo build --release
 
 ## Usage
 
-All commands accept `--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), and `--hints` (append executable drill-down command suggestions).
+All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), and `--hints` (append executable drill-down command suggestions).
+
+Most flags have short aliases for quick interactive use:
+
+| Short | Long | Available in |
+|-------|------|-------------|
+| `-d` | `--dir` | all commands |
+| `-e` | `--regexp` | find |
+| `-p` | `--property` | find, set, remove, append |
+| `-t` | `--tag` | find, set, remove |
+| `-s` | `--section` | find, read |
+| `-f` | `--file` | find, read, set, remove, append, task |
+| `-g` | `--glob` | find, set, remove, append, properties, tags, summary |
+| `-n` | `--limit` | find |
+| `-n` | `--recent` | summary |
+| `-l` | `--lines` | read |
+| `-l` | `--line` | task read, task toggle, task set-status |
+| `-s` | `--status` | task set-status |
 
 Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
 
