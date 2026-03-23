@@ -538,20 +538,21 @@ fn main() {
     // The global --dir flag is used as the dir value for .hyalo.toml.
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        match init_commands::run_init(init_dir, claude) {
+        let code = match init_commands::run_init(init_dir, claude) {
             Ok(CommandOutcome::Success(output)) => {
                 println!("{output}");
-                process::exit(0);
+                0
             }
             Ok(CommandOutcome::UserError(output)) => {
                 eprintln!("{output}");
-                process::exit(1);
+                1
             }
             Err(e) => {
                 eprintln!("Error: {e}");
-                process::exit(2);
+                2
             }
-        }
+        };
+        process::exit(code);
     }
 
     // Load per-project config from .hyalo.toml in CWD

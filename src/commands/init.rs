@@ -157,7 +157,7 @@ pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
     } else {
         let skill_dir = skill_path
             .parent()
-            .expect("skill path always has a parent directory");
+            .context("skill path has no parent directory")?;
         fs::create_dir_all(skill_dir)
             .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
         fs::write(&skill_path, SKILL_CONTENT)
@@ -184,7 +184,7 @@ pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
         // Create the file and any parent directories.
         let claude_dir = claude_md_path
             .parent()
-            .expect("CLAUDE.md path always has a parent directory");
+            .context("CLAUDE.md path has no parent directory")?;
         fs::create_dir_all(claude_dir)
             .with_context(|| format!("failed to create directory {}", claude_dir.display()))?;
         let content = format!("{CLAUDE_MD_HINT}\n");
