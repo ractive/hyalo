@@ -30,7 +30,8 @@ in a single call, something impossible with Grep/Glob alone:
 hyalo find -e "pattern" --property status!=completed --tag iteration --section "Tasks" --task todo
 ```
 
-Pipe through `--jq` to reshape output into anything — dashboards, burndowns, reports:
+Pipe through `--jq` to reshape output into anything — dashboards, burndowns, reports
+(requires JSON format — do not combine with `--format text`):
 
 ```bash
 hyalo find --property status=in-progress --fields tasks \
@@ -86,3 +87,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 Use `--format text` for compact, low-token output designed for LLM consumption — less noise
 than JSON, fewer tokens. Reach for it when orienting yourself or scanning results.
+
+**`--format text` and `--jq` are mutually exclusive.** `--jq` operates on JSON, so it requires
+the default JSON format. If you need to filter/reshape output, use `--jq` (without `--format text`).
+If you just need a quick readable overview, use `--format text` (without `--jq`).
