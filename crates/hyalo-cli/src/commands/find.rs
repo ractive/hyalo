@@ -240,7 +240,7 @@ pub fn find(
     // explicit notice on stderr so the caller knows the query succeeded but
     // matched nothing.  JSON mode keeps the empty array on stdout unchanged.
     if format == crate::output::Format::Text && json_array.is_empty() {
-        eprintln!("No files matched.");
+        eprintln!("warning: No files matched.");
     }
 
     let json_output = serde_json::Value::Array(json_array);

@@ -27,8 +27,8 @@ use hyalo_core::filter;
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
-        \u{00a0} format = \"text\"       # default --format\n\
-        \u{00a0} hints = true           # default --hints on\n\
+        \u{00a0} format = \"text\"       # example: override --format (CLI default is json)\n\
+        \u{00a0} hints = true           # example: override --hints on (CLI default is off)\n\
         CLI flags always take precedence.\n\n\
         See COMMAND REFERENCE below for full syntax of each command.",
     after_help = "EXAMPLES:\n  \
@@ -122,7 +122,7 @@ OUTPUT SHAPES (JSON, default):\n  \
   [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
     \"properties\": [...], \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]\n\n  \
   # set / remove / append (mutation result)\n  \
-  {\"property\": \"status\", \"value\": \"done\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \
+  {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \
   {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n\n  \
   # properties\n  \
   [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...]\n\n  \
