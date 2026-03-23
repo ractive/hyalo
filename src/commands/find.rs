@@ -166,20 +166,14 @@ pub fn find(
         // --- Apply section scope filter to body results ---
         if has_section_filter {
             if scope_ranges.is_empty() {
-                // No section matched — discard all body results
-                if let Some(ref mut tasks) = collected_tasks {
-                    tasks.clear();
-                }
-                if let Some(ref mut matches) = content_matches {
-                    matches.clear();
-                }
-            } else {
-                if let Some(ref mut tasks) = collected_tasks {
-                    tasks.retain(|t| in_scope(&scope_ranges, t.line));
-                }
-                if let Some(ref mut matches) = content_matches {
-                    matches.retain(|m| in_scope(&scope_ranges, m.line));
-                }
+                // No section matched in this file — skip it entirely
+                continue;
+            }
+            if let Some(ref mut tasks) = collected_tasks {
+                tasks.retain(|t| in_scope(&scope_ranges, t.line));
+            }
+            if let Some(ref mut matches) = content_matches {
+                matches.retain(|m| in_scope(&scope_ranges, m.line));
             }
         }
 
@@ -1239,12 +1233,10 @@ Just intro, no tasks section.
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let arr = parsed.as_array().unwrap();
-        // File is still returned (section filter only scopes body results, not file inclusion)
-        assert_eq!(arr.len(), 1);
-        let tasks = arr[0]["tasks"].as_array().unwrap();
+        // File has no matching section — it is excluded entirely
         assert!(
-            tasks.is_empty(),
-            "tasks outside matched section should be empty"
+            arr.is_empty(),
+            "file with no matching section should be excluded"
         );
     }
 
@@ -1320,7 +1312,7 @@ Just intro, no tasks section.
     }
 
     #[test]
-    fn find_section_filter_empty_no_section_returns_file_with_empty_tasks() {
+    fn find_section_filter_empty_no_section_excludes_file() {
         let tmp = setup_sectioned_vault();
         let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
         let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
@@ -1344,10 +1336,11 @@ Just intro, no tasks section.
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let arr = parsed.as_array().unwrap();
-        // empty.md has no Tasks section — tasks list should be empty
-        assert_eq!(arr.len(), 1);
-        let tasks = arr[0]["tasks"].as_array().unwrap();
-        assert!(tasks.is_empty());
+        // empty.md has no Tasks section — it is excluded entirely
+        assert!(
+            arr.is_empty(),
+            "file with no matching section should be excluded"
+        );
     }
 
     #[test]

@@ -179,8 +179,9 @@ enum Commands {
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, or bare name for existence)\n\
             - --tag T: tag filter (supports nested matching: 'project' matches 'project/backend')\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
-            - --section HEADING: section scope filter (restrict body results to matching sections; case-insensitive \
-whole-string match; use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR).\n\n\
+            - --section HEADING: section scope filter (exclude files without a matching section; within matching \
+files, restrict tasks and content matches to the section scope; case-insensitive whole-string match; use \
+leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). Nested subsections are included.\n\n\
             OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
             FIELDS: Use --fields to limit which fields appear (default: all).\n\
             SIDE EFFECTS: None (read-only).")]
