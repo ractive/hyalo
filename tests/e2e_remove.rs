@@ -211,6 +211,132 @@ tags:
 }
 
 // ---------------------------------------------------------------------------
+// --where-property / --where-tag filter tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_where_property_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+status: draft
+legacy: true
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "keep.md",
+        md!(r"
+---
+title: Keep
+status: published
+legacy: true
+---
+"),
+    );
+
+    let (status, json, stderr) = remove_json(
+        &tmp,
+        &[
+            "--property",
+            "legacy",
+            "--where-property",
+            "status=draft",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected 1 modified: {json}"
+    );
+    assert_eq!(
+        json["skipped"].as_array().unwrap().len(),
+        0,
+        "expected 0 skipped (keep.md was filtered out, not skipped): {json}"
+    );
+
+    let target_content = fs::read_to_string(tmp.path().join("target.md")).unwrap();
+    assert!(
+        !target_content.contains("legacy"),
+        "target.md should have legacy removed:\n{target_content}"
+    );
+
+    let keep_content = fs::read_to_string(tmp.path().join("keep.md")).unwrap();
+    assert!(
+        keep_content.contains("legacy: true"),
+        "keep.md should be untouched:\n{keep_content}"
+    );
+}
+
+#[test]
+fn remove_where_tag_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "tagged.md",
+        md!(r"
+---
+title: Tagged
+status: old
+tags:
+  - rust
+  - cli
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "untagged.md",
+        md!(r"
+---
+title: Untagged
+status: old
+---
+"),
+    );
+
+    let (status, json, stderr) = remove_json(
+        &tmp,
+        &[
+            "--property",
+            "status",
+            "--where-tag",
+            "rust",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected only tagged file to be modified: {json}"
+    );
+
+    let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
+    assert!(
+        !tagged_content.contains("status:"),
+        "tagged.md should have status removed:\n{tagged_content}"
+    );
+
+    let untagged_content = fs::read_to_string(tmp.path().join("untagged.md")).unwrap();
+    assert!(
+        untagged_content.contains("status: old"),
+        "untagged.md should be untouched:\n{untagged_content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Guard: --file or --glob required
 // ---------------------------------------------------------------------------
 

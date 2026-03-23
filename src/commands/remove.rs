@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::commands::tags::validate_tag;
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
+use crate::filter::{self, PropertyFilter};
 use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
 
@@ -23,6 +24,7 @@ pub struct RemovePropertyResult {
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub total: usize,
+    pub scanned: usize,
 }
 
 /// Result of a `remove --tag T` operation across files.
@@ -32,6 +34,7 @@ pub struct RemoveTagResult {
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub total: usize,
+    pub scanned: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,12 +161,15 @@ fn remove_tag_in_memory(props: &mut std::collections::BTreeMap<String, Value>, t
 /// - `tag_args`:      zero or more tag name strings to remove
 /// - Requires `--file` or `--glob`
 /// - At least one of `property_args` or `tag_args` must be non-empty
+#[allow(clippy::too_many_arguments)]
 pub fn remove(
     dir: &Path,
     property_args: &[String],
     tag_args: &[String],
     file: Option<&str>,
     glob: Option<&str>,
+    where_property_filters: &[PropertyFilter],
+    where_tag_filters: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() && tag_args.is_empty() {
@@ -216,6 +222,7 @@ pub fn remove(
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
+    let scanned = files.len();
 
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
@@ -234,6 +241,12 @@ pub fn remove(
             }
             Err(e) => return Err(e),
         };
+
+        // Apply --where-* filters: skip files that don't match
+        if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
+            continue;
+        }
+
         let mut file_changed = false;
 
         // Apply all --property mutations
@@ -278,6 +291,7 @@ pub fn remove(
             modified,
             skipped,
             total,
+            scanned,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -291,6 +305,7 @@ pub fn remove(
             modified,
             skipped,
             total,
+            scanned,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -376,6 +391,8 @@ status: draft
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -411,6 +428,8 @@ title: Note
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -443,6 +462,8 @@ status: draft
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -475,6 +496,8 @@ status: published
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -511,6 +534,8 @@ aliases:
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -548,6 +573,8 @@ tags:
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -583,6 +610,8 @@ tags:
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -602,6 +631,8 @@ tags:
             &[],
             None,
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -611,7 +642,17 @@ tags:
     #[test]
     fn remove_requires_at_least_one_arg() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = remove(tmp.path(), &[], &[], Some("note.md"), None, Format::Json).unwrap();
+        let outcome = remove(
+            tmp.path(),
+            &[],
+            &[],
+            Some("note.md"),
+            None,
+            &[],
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -636,6 +677,8 @@ tags:
             &["rust".to_owned()],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -663,6 +706,8 @@ tags:
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -693,6 +738,8 @@ priority: low
             &[],
             Some("note.md"),
             None,
+            &[],
+            &[],
             Format::Json,
         )
         .unwrap();
@@ -709,5 +756,85 @@ priority: low
         assert!(!content.contains("status:"));
         assert!(!content.contains("priority:"));
         assert!(content.contains("title:"));
+    }
+
+    #[test]
+    fn remove_where_property_filter_skips_nonmatching() {
+        // Only files matching --where-property are mutated.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("match.md"),
+            "---\nstatus: draft\npriority: low\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("no-match.md"),
+            "---\nstatus: published\npriority: low\n---\n",
+        )
+        .unwrap();
+
+        use crate::filter::parse_property_filter;
+        let filter = parse_property_filter("status=draft").unwrap();
+        let outcome = remove(
+            tmp.path(),
+            &["priority".to_owned()],
+            &[],
+            None,
+            Some("*.md"),
+            &[filter],
+            &[],
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        // 2 files scanned, 1 passed the where-filter
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
+        assert!(parsed["scanned"].as_u64().unwrap() > parsed["total"].as_u64().unwrap());
+
+        let match_content = fs::read_to_string(tmp.path().join("match.md")).unwrap();
+        assert!(!match_content.contains("priority:"));
+        let no_match_content = fs::read_to_string(tmp.path().join("no-match.md")).unwrap();
+        assert!(no_match_content.contains("priority:"));
+    }
+
+    #[test]
+    fn remove_where_tag_filter_skips_nonmatching() {
+        // Only files with the required tag are mutated.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("tagged.md"),
+            "---\ntags:\n  - deprecated\nstatus: old\n---\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("untagged.md"), "---\nstatus: old\n---\n").unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &["status".to_owned()],
+            &[],
+            None,
+            Some("*.md"),
+            &[],
+            &["deprecated".to_owned()],
+            Format::Json,
+        )
+        .unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        // 2 files scanned, 1 passed the where-filter
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
+        assert!(parsed["scanned"].as_u64().unwrap() > parsed["total"].as_u64().unwrap());
+
+        let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
+        assert!(!tagged_content.contains("status:"));
+        let untagged_content = fs::read_to_string(tmp.path().join("untagged.md")).unwrap();
+        assert!(untagged_content.contains("status:"));
     }
 }

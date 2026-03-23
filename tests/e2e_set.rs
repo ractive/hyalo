@@ -353,6 +353,354 @@ title: Note
 }
 
 // ---------------------------------------------------------------------------
+// --where-property / --where-tag filter tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_where_property_scalar_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "done.md",
+        md!(r"
+---
+title: Done
+status: done
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "active.md",
+        md!(r"
+---
+title: Active
+status: active
+---
+"),
+    );
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "status=completed",
+            "--where-property",
+            "status=done",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected 1 modified: {json}"
+    );
+    assert_eq!(
+        json["skipped"].as_array().unwrap().len(),
+        0,
+        "expected 0 skipped: {json}"
+    );
+
+    let done_content = fs::read_to_string(tmp.path().join("done.md")).unwrap();
+    assert!(
+        done_content.contains("status: completed"),
+        "done.md should be updated:\n{done_content}"
+    );
+
+    let active_content = fs::read_to_string(tmp.path().join("active.md")).unwrap();
+    assert!(
+        active_content.contains("status: active"),
+        "active.md should be untouched:\n{active_content}"
+    );
+    assert!(
+        !active_content.contains("completed"),
+        "active.md should not have been modified:\n{active_content}"
+    );
+}
+
+#[test]
+fn set_where_property_list_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+tags:
+  - cli
+  - rust
+---
+"),
+    );
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "reviewed=true",
+            "--where-property",
+            "tags=cli",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected list element match to produce 1 modified: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("reviewed: true"),
+        "file should have been mutated:\n{content}"
+    );
+}
+
+#[test]
+fn set_where_tag_nested_match() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "backend.md",
+        md!(r"
+---
+title: Backend
+tags:
+  - project/backend
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "research.md",
+        md!(r"
+---
+title: Research
+tags:
+  - research
+---
+"),
+    );
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "checked=true",
+            "--where-tag",
+            "project",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected only the nested-tag file to be modified: {json}"
+    );
+
+    let backend_content = fs::read_to_string(tmp.path().join("backend.md")).unwrap();
+    assert!(
+        backend_content.contains("checked: true"),
+        "backend.md should be modified:\n{backend_content}"
+    );
+
+    let research_content = fs::read_to_string(tmp.path().join("research.md")).unwrap();
+    assert!(
+        !research_content.contains("checked"),
+        "research.md should be untouched:\n{research_content}"
+    );
+}
+
+#[test]
+fn set_where_combined_and() {
+    let tmp = TempDir::new().unwrap();
+    // Matches both filters: status=active AND tagged with rust
+    write_md(
+        tmp.path(),
+        "both.md",
+        md!(r"
+---
+title: Both
+status: active
+tags:
+  - rust
+---
+"),
+    );
+    // Matches property but not tag
+    write_md(
+        tmp.path(),
+        "prop_only.md",
+        md!(r"
+---
+title: PropOnly
+status: active
+tags:
+  - python
+---
+"),
+    );
+    // Matches tag but not property
+    write_md(
+        tmp.path(),
+        "tag_only.md",
+        md!(r"
+---
+title: TagOnly
+status: draft
+tags:
+  - rust
+---
+"),
+    );
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "processed=true",
+            "--where-property",
+            "status=active",
+            "--where-tag",
+            "rust",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected only 1 file matching both filters: {json}"
+    );
+
+    let both_content = fs::read_to_string(tmp.path().join("both.md")).unwrap();
+    assert!(
+        both_content.contains("processed: true"),
+        "both.md should be modified:\n{both_content}"
+    );
+
+    let prop_only = fs::read_to_string(tmp.path().join("prop_only.md")).unwrap();
+    assert!(
+        !prop_only.contains("processed"),
+        "prop_only.md should be untouched:\n{prop_only}"
+    );
+
+    let tag_only = fs::read_to_string(tmp.path().join("tag_only.md")).unwrap();
+    assert!(
+        !tag_only.contains("processed"),
+        "tag_only.md should be untouched:\n{tag_only}"
+    );
+}
+
+#[test]
+fn set_where_no_matches() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+status: active
+---
+"),
+    );
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "status=done",
+            "--where-property",
+            "status=nonexistent",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        0,
+        "expected 0 modified when no files match filter: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("status: active"),
+        "note.md should be untouched:\n{content}"
+    );
+}
+
+#[test]
+fn set_where_property_operator() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "low.md",
+        md!(r"
+---
+title: Low
+priority: 2
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "high.md",
+        md!(r"
+---
+title: High
+priority: 5
+---
+"),
+    );
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "urgent=true",
+            "--where-property",
+            "priority>=3",
+            "--glob",
+            "**/*.md",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected only high-priority file to be modified: {json}"
+    );
+
+    let high_content = fs::read_to_string(tmp.path().join("high.md")).unwrap();
+    assert!(
+        high_content.contains("urgent: true"),
+        "high.md should be modified:\n{high_content}"
+    );
+
+    let low_content = fs::read_to_string(tmp.path().join("low.md")).unwrap();
+    assert!(
+        !low_content.contains("urgent"),
+        "low.md should be untouched:\n{low_content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Malformed YAML resilience
 // ---------------------------------------------------------------------------
 

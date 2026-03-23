@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::commands::tags::extract_tags;
 use crate::commands::{FilesOrOutcome, collect_files};
+use crate::filter::extract_tags;
 use crate::frontmatter::{infer_type, yaml_to_json};
 use crate::output::{CommandOutcome, Format};
 use crate::scanner::{FrontmatterCollector, scan_file_multi};
