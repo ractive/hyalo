@@ -88,8 +88,9 @@ fn apply_line_range<'a>(lines: &'a [String], range: &LineRange) -> &'a [String] 
 
 /// Extract all sections matching `query` (case-insensitive exact match on heading text).
 /// If query starts with `#`, parse the heading level and text from it.
-/// Returns a Vec of (heading_text, lines) pairs. Each section includes lines from
-/// the heading through to (but not including) the next heading of equal or higher level.
+/// Returns a `Vec<Vec<String>>`, where each inner `Vec<String>` contains the lines of a
+/// matched section, from the heading through to (but not including) the next heading of
+/// equal or higher level.
 fn extract_sections(body_lines: &[String], query: &str) -> Vec<Vec<String>> {
     // Parse query: strip leading `#` characters if present
     let (query_level, query_text) = if query.starts_with('#') {
@@ -318,7 +319,7 @@ pub fn run(
                 out.push_str("---\n");
                 if !props.is_empty() {
                     let yaml = serde_yaml_ng::to_string(props)
-                        .unwrap_or_else(|_| "# (failed to serialize)\n".to_owned());
+                        .context("failed to serialize frontmatter as YAML")?;
                     out.push_str(&yaml);
                 }
                 out.push_str("---\n");

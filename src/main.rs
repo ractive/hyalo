@@ -229,7 +229,7 @@ enum Commands {
         /// Extract only the section(s) under this heading (case-insensitive exact match)
         #[arg(long)]
         section: Option<String>,
-        /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to output)
+        /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
         #[arg(long)]
         lines: Option<String>,
         /// Include the YAML frontmatter in output
