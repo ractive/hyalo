@@ -4,9 +4,9 @@ status: completed
 tags:
 - cli
 - output
-- filtering
 - ux
 - structured-data
+- filters
 title: CLI Structured Output & Filtering Patterns
 type: research
 ---

@@ -1,13 +1,13 @@
 ---
-title: "Section-scoped filter for find command"
-type: iteration
-date: 2026-03-23
-tags:
-  - iteration
-  - search
-  - cli
-status: in-progress
 branch: iter-22/section-filter
+date: 2026-03-23
+status: completed
+tags:
+- iteration
+- search
+- cli
+title: Section-scoped filter for find command
+type: iteration
 ---
 
 # Iteration 22: Section Filter for Find
@@ -27,7 +27,7 @@ Add `--section HEADING` filter to the `find` command, scoping body-level results
 - [x] Add e2e tests for section filter (10 tests)
 - [x] Update help texts and README
 - [x] Run code quality gates (fmt, clippy, test)
-- [ ] Create PR
+- [x] Create PR
 
 ## Matching Semantics
 

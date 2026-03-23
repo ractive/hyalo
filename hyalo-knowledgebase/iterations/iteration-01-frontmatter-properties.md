@@ -98,7 +98,7 @@ See [[decision-log]] for cross-cutting design decisions (CLI style, `--dir`, `--
 - [x] `hyalo properties` (no --path) — aggregates across all .md files in --dir
 - [x] `--format json` / `--format text` output validation
 - [x] Error cases: nonexistent file, nonexistent dir, invalid YAML, missing .md extension
-- [ ] Smoke test: run against `hyalo-knowledgebase/` files
+- [x] Smoke test: run against `hyalo-knowledgebase/` files
 
 ### Quality Gates
 - [x] `cargo fmt`

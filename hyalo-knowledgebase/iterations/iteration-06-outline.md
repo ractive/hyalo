@@ -117,7 +117,7 @@ Unlike `links` (DEC-016, single-file only), outline supports multi-file mode bec
 
 ### Output formats
 - [x] JSON output with the schema described above
-- [ ] Text output as indented tree (2-space indent per heading level, task counts inline)
+- [x] Text output as indented tree (2-space indent per heading level, task counts inline)
 
 ### Code quality
 - [x] Add unit tests for heading extraction (ATX headings, inside/outside code blocks, edge cases)

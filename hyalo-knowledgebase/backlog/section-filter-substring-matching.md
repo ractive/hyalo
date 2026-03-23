@@ -2,13 +2,13 @@
 date: 2026-03-23
 origin: dogfooding iter-29
 priority: medium
-status: active
+status: planned
 tags:
-  - backlog
-  - search
-  - cli
-  - ux
-title: "Section filter: support substring/prefix matching"
+- backlog
+- search
+- cli
+- ux
+title: 'Section filter: support substring/prefix matching'
 type: backlog
 ---
 

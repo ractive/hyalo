@@ -46,7 +46,7 @@ Fix two bugs discovered while benchmarking against obsidian-hub (6,540 files):
 - [x] `cargo fmt`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo test --workspace`
-- [ ] Build release and dogfood
+- [x] Build release and dogfood
 
 ## Acceptance criteria
 

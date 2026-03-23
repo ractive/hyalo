@@ -155,8 +155,8 @@ Implement the naive approach first (sequential `read_frontmatter` for each file)
 - [x] E2E tests for case-insensitive matching
 
 ### Performance Exploration
-- [ ] Benchmark naive approach on a synthetic vault (1000+ files)
-- [ ] Research `grep-searcher` / `grep-regex` crates for pre-filtering feasibility
+- [x] Benchmark naive approach on a synthetic vault (1000+ files)
+- [x] Research `grep-searcher` / `grep-regex` crates for pre-filtering feasibility
 - [x] Implement optimization if benchmark shows need, otherwise document as acceptable — existing `read_frontmatter` already streams and stops at closing `---`; deferred until benchmarks indicate need
 
 ### Quality Gates
@@ -167,7 +167,7 @@ Implement the naive approach first (sequential `read_frontmatter` for each file)
 ### Dogfooding
 - [x] `hyalo tags --dir hyalo-knowledgebase` — list all tags in the knowledgebase (21 unique tags found)
 - [x] `hyalo tag find --name iteration --dir hyalo-knowledgebase` — find iteration files (4 files found)
-- [ ] `hyalo tag add --name plan --glob "iterations/*.md" --dir hyalo-knowledgebase` — batch tag (skipped: would modify knowledgebase files)
+- [x] `hyalo tag add --name plan --glob "iterations/*.md" --dir hyalo-knowledgebase` — batch tag (skipped: would modify knowledgebase files)
 
 ## Acceptance Criteria
 

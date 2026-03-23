@@ -1,12 +1,12 @@
 ---
-title: "Security Hardening"
-type: iteration
-date: 2026-03-23
-tags:
-  - security
-  - hardening
-status: in-progress
 branch: iter-22/security-hardening
+date: 2026-03-23
+status: planned
+tags:
+- security
+- hardening
+title: Security Hardening
+type: iteration
 ---
 
 # Iteration 22: Security Hardening

@@ -1,11 +1,11 @@
 ---
-title: "Hyalo — High-Level Iteration Plan"
-type: plan
 date: 2026-03-20
 status: active
 tags:
-  - plan
-  - iterations
+- plan
+- iteration
+title: Hyalo — High-Level Iteration Plan
+type: plan
 ---
 
 # High-Level Iteration Plan

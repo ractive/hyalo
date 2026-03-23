@@ -1,7 +1,7 @@
 ---
 branch: iter-25/release-profile-quick-wins
 date: 2026-03-23
-status: planned
+status: superseded
 tags:
 - iteration
 - release
