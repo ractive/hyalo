@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 
 use crate::scanner::{FileVisitor, ScanAction};
 use crate::types::ContentMatch;
@@ -43,7 +43,9 @@ impl ContentSearchVisitor {
     #[must_use = "returns a compiled regex visitor; call has no side effects"]
     pub fn regex(pattern: &str) -> Result<Self> {
         let effective = format!("(?i){pattern}");
-        let re = Regex::new(&effective)
+        let re = RegexBuilder::new(&effective)
+            .size_limit(1 << 20) // 1 MiB — generous for real patterns, prevents pathological ones
+            .build()
             .with_context(|| format!("invalid regular expression: {pattern}"))?;
         Ok(Self {
             mode: SearchMode::Regex(re),
@@ -332,5 +334,16 @@ mod tests {
     fn regex_no_match_returns_empty() {
         let matches = run_regex_visitor("Nothing here\n", r"\d{4}-\d{2}-\d{2}");
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn regex_rejects_oversized_pattern() {
+        // A huge alternation that exceeds the 1 MiB compiled-size limit
+        let huge = (0..50_000)
+            .map(|i| format!("word{i}"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let result = ContentSearchVisitor::regex(&huge);
+        assert!(result.is_err(), "oversized pattern should be rejected");
     }
 }

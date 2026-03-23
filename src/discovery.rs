@@ -58,6 +58,25 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
         return Err(FileResolveError::NotFound { path: normalized });
     }
 
+    // After confirming the file exists, canonicalize to resolve symlinks and
+    // verify the real path stays within the vault directory.
+    let canonical_dir = canonicalize_vault_dir(dir).map_err(|_| FileResolveError::NotFound {
+        path: normalized.clone(),
+    })?;
+    match ensure_within_vault(&canonical_dir, &full) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(FileResolveError::OutsideVault {
+                path: normalized.clone(),
+            });
+        }
+        Err(_) => {
+            // Canonicalization of the target failed (permission error, symlink loop, etc.).
+            // Do not claim "outside vault" — the path simply could not be resolved.
+            return Err(FileResolveError::NotFound { path: normalized });
+        }
+    }
+
     Ok((full, normalized))
 }
 
@@ -69,6 +88,31 @@ fn has_parent_traversal(path: &str) -> bool {
     Path::new(path)
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// Canonicalize the vault directory once.
+///
+/// Callers that invoke `ensure_within_vault` in a loop should call this once
+/// upfront and pass the result to every `ensure_within_vault` call, avoiding
+/// repeated canonicalization of the same directory.
+pub fn canonicalize_vault_dir(dir: &Path) -> Result<PathBuf> {
+    dunce::canonicalize(dir)
+        .with_context(|| format!("failed to canonicalize vault dir: {}", dir.display()))
+}
+
+/// Verify that `full` resolves to a path within `canonical_dir` after following symlinks.
+///
+/// Accepts an already-canonicalized vault directory to avoid re-canonicalizing
+/// on every call (important when called in a per-link loop).
+///
+/// Returns:
+/// - `Ok(true)`  — `full` is within the vault
+/// - `Ok(false)` — `full` resolves outside the vault boundary
+/// - `Err(_)`    — `full` could not be canonicalized (permission error, symlink loop, etc.)
+fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
+    let canonical_full = dunce::canonicalize(full)
+        .with_context(|| format!("failed to canonicalize path: {}", full.display()))?;
+    Ok(canonical_full.starts_with(canonical_dir))
 }
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
@@ -121,6 +165,7 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
 pub enum FileResolveError {
     NotFound { path: String },
     MissingExtension { path: String, hint: String },
+    OutsideVault { path: String },
 }
 
 impl std::fmt::Display for FileResolveError {
@@ -130,6 +175,9 @@ impl std::fmt::Display for FileResolveError {
             Self::MissingExtension { path, hint } => {
                 write!(f, "file not found: {path} (did you mean {hint}?)")
             }
+            Self::OutsideVault { path } => {
+                write!(f, "file resolves outside vault boundary: {path}")
+            }
         }
     }
 }
@@ -138,9 +186,12 @@ impl std::error::Error for FileResolveError {}
 
 /// Resolve a link target to a file path relative to the vault root.
 /// Tries the target as-is, then with `.md` appended.
-/// Returns the relative path if the file exists, or None.
+/// Returns the relative path if the file exists within the vault, or None.
+///
+/// `canonical_dir` must be a pre-canonicalized vault path (see `canonicalize_vault_dir`).
+/// Callers iterating over many links should canonicalize once and reuse the result.
 #[must_use]
-pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
+pub fn resolve_target(canonical_dir: &Path, target: &str) -> Option<String> {
     if target.is_empty() {
         return None;
     }
@@ -152,8 +203,13 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
         return None;
     }
 
-    if dir.join(&target).is_file() {
-        return Some(target.clone());
+    let full = canonical_dir.join(&target);
+    if full.is_file() {
+        // Ok(true) = within vault; Ok(false) or Err = reject
+        if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+            return Some(target.clone());
+        }
+        return None;
     }
 
     if !std::path::Path::new(&target)
@@ -161,8 +217,12 @@ pub fn resolve_target(dir: &Path, target: &str) -> Option<String> {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
     {
         let with_ext = format!("{target}.md");
-        if dir.join(&with_ext).is_file() {
-            return Some(with_ext);
+        let full = canonical_dir.join(&with_ext);
+        if full.is_file() {
+            if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+                return Some(with_ext);
+            }
+            return None;
         }
     }
 
@@ -269,7 +329,7 @@ mod tests {
                 assert_eq!(path, "note");
                 assert_eq!(hint, "note.md");
             }
-            other @ FileResolveError::NotFound { .. } => {
+            other => {
                 panic!("expected MissingExtension, got {other:?}")
             }
         }
@@ -321,8 +381,9 @@ mod tests {
     fn resolve_target_stem_appends_md() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(tmp.path(), "note"),
+            resolve_target(&canonical, "note"),
             Some("note.md".to_owned())
         );
     }
@@ -331,8 +392,9 @@ mod tests {
     fn resolve_target_explicit_md_extension() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(tmp.path(), "note.md"),
+            resolve_target(&canonical, "note.md"),
             Some("note.md".to_owned())
         );
     }
@@ -341,8 +403,9 @@ mod tests {
     fn resolve_target_subpath_stem() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["sub/other.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(tmp.path(), "sub/other"),
+            resolve_target(&canonical, "sub/other"),
             Some("sub/other.md".to_owned())
         );
     }
@@ -351,8 +414,9 @@ mod tests {
     fn resolve_target_subpath_with_extension() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["sub/other.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(tmp.path(), "sub/other.md"),
+            resolve_target(&canonical, "sub/other.md"),
             Some("sub/other.md".to_owned())
         );
     }
@@ -361,36 +425,41 @@ mod tests {
     fn resolve_target_bare_stem_does_not_match_subdirectory() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["sub/other.md"]);
-        assert_eq!(resolve_target(tmp.path(), "other"), None);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(resolve_target(&canonical, "other"), None);
     }
 
     #[test]
     fn resolve_target_nonexistent_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_target(tmp.path(), "nonexistent"), None);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(resolve_target(&canonical, "nonexistent"), None);
     }
 
     #[test]
     fn resolve_target_empty_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(resolve_target(tmp.path(), ""), None);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(resolve_target(&canonical, ""), None);
     }
 
     #[test]
     fn resolve_target_rejects_traversal() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["note.md"]);
-        assert_eq!(resolve_target(tmp.path(), "../note"), None);
-        assert_eq!(resolve_target(tmp.path(), "sub/../../note"), None);
-        assert_eq!(resolve_target(tmp.path(), "/etc/passwd"), None);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(resolve_target(&canonical, "../note"), None);
+        assert_eq!(resolve_target(&canonical, "sub/../../note"), None);
+        assert_eq!(resolve_target(&canonical, "/etc/passwd"), None);
     }
 
     #[test]
     fn resolve_target_non_md_file_exact_match() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["image.png"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(tmp.path(), "image.png"),
+            resolve_target(&canonical, "image.png"),
             Some("image.png".to_owned())
         );
     }
@@ -427,9 +496,10 @@ mod tests {
     fn resolve_target_accepts_dotdot_in_filename() {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["etc..md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
 
         assert_eq!(
-            resolve_target(tmp.path(), "etc..md"),
+            resolve_target(&canonical, "etc..md"),
             Some("etc..md".to_owned())
         );
     }
@@ -437,7 +507,57 @@ mod tests {
     #[test]
     fn resolve_target_rejects_parent_traversal_segment() {
         let tmp = tempfile::tempdir().unwrap();
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
 
-        assert_eq!(resolve_target(tmp.path(), "../secret.md"), None);
+        assert_eq!(resolve_target(&canonical, "../secret.md"), None);
+    }
+
+    // --- symlink escape tests ---
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_file_rejects_symlink_escape() {
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.md"), "# Secret").unwrap();
+
+        // Create a symlink inside vault that points outside
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("linked")).unwrap();
+
+        let err = resolve_file(vault.path(), "linked/secret.md").unwrap_err();
+        assert!(
+            matches!(err, FileResolveError::OutsideVault { .. }),
+            "expected OutsideVault, got {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_target_rejects_symlink_escape() {
+        let vault = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.md"), "# Secret").unwrap();
+
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("linked")).unwrap();
+
+        let canonical = canonicalize_vault_dir(vault.path()).unwrap();
+        assert_eq!(resolve_target(&canonical, "linked/secret"), None);
+        assert_eq!(resolve_target(&canonical, "linked/secret.md"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_file_allows_symlink_within_vault() {
+        let vault = tempfile::tempdir().unwrap();
+        let subdir = vault.path().join("notes");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("real.md"), "# Real").unwrap();
+
+        // Symlink within the vault is fine
+        std::os::unix::fs::symlink(&subdir, vault.path().join("alias")).unwrap();
+
+        let (path, rel) = resolve_file(vault.path(), "alias/real.md").unwrap();
+        assert!(path.is_file());
+        assert_eq!(rel, "alias/real.md");
     }
 }

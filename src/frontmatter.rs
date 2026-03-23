@@ -134,7 +134,8 @@ pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result
     out.extend_from_slice(&body_bytes);
 
     // --- Step 4: write atomically ---
-    std::fs::write(path, &out).with_context(|| format!("failed to write {}", path.display()))?;
+    crate::fs_util::atomic_write(path, &out)
+        .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(())
 }
