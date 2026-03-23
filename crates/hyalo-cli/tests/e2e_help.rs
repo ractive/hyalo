@@ -55,6 +55,7 @@ fn long_help_command_reference_lists_all_commands() {
     // Verify every command/subcommand appears in the COMMAND REFERENCE
     let expected = [
         "hyalo find",
+        "hyalo read",
         "hyalo set",
         "hyalo remove",
         "hyalo append",
@@ -64,6 +65,7 @@ fn long_help_command_reference_lists_all_commands() {
         "hyalo task read",
         "hyalo task toggle",
         "hyalo task set-status",
+        "hyalo init",
     ];
 
     for cmd in expected {

@@ -27,19 +27,10 @@ use hyalo_core::filter;
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
-        \u{00a0} format = \"text\"       # default --format\n\
-        \u{00a0} hints = true           # default --hints on\n\
+        \u{00a0} format = \"text\"       # example: override --format (CLI default is json)\n\
+        \u{00a0} hints = true           # example: override --hints on (CLI default is off)\n\
         CLI flags always take precedence.\n\n\
-        COMMANDS:\n\
-          find        Search and filter files by text, properties, tags, or tasks\n\
-          read        Read file body content, optionally filtered by section or line range\n\
-          set         Set (create or overwrite) properties and add tags\n\
-          remove      Remove properties or tags from file(s)\n\
-          append      Append values to list properties\n\
-          properties  Aggregate summary: unique property names with types and file counts\n\
-          tags        Aggregate summary: unique tags with file counts\n\
-          summary     High-level vault overview\n\
-          task        Read, toggle, or set status on a single task checkbox",
+        See COMMAND REFERENCE below for full syntax of each command.",
     after_help = "EXAMPLES:\n  \
         Search for files:             hyalo find --property status=draft\n  \
         Filter by tag:                hyalo find --tag project\n  \
@@ -48,8 +39,8 @@ use hyalo_core::filter;
         Filter by section:            hyalo find --section 'Tasks' --task todo\n  \
         Read file content:            hyalo read --file notes/todo.md\n  \
         Read a section:               hyalo read --file notes/todo.md --section Proposal\n  \
-        Set a property:               hyalo set --property status=done --file notes/todo.md\n  \
-        Bulk-set with filter:         hyalo set --property status=done --where-property status=draft --glob '**/*.md'\n  \
+        Set a property:               hyalo set --property status=completed --file notes/todo.md\n  \
+        Bulk-set with filter:         hyalo set --property status=completed --where-property status=draft --glob '**/*.md'\n  \
         Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'\n  \
         Remove a property:            hyalo remove --property status --file notes/todo.md\n  \
         Remove a tag from files:      hyalo remove --tag draft --glob '**/*.md'\n  \
@@ -82,6 +73,8 @@ COMMAND REFERENCE:\n  \
     hyalo task read       -f/--file F -l/--line N           Read task at a line\n  \
     hyalo task toggle     -f/--file F -l/--line N           Toggle completion\n  \
     hyalo task set-status -f/--file F -l/--line N -s/--status C\n\n  \
+  Init (configuration, one-time setup):\n  \
+    hyalo init [--claude] [-d/--dir DIR]\n\n  \
   Global flags (apply to all commands):\n  \
     -d/--dir <DIR>      Root directory (default: ., override via .hyalo.toml)\n  \
     --format json|text  Output format (default: json, override via .hyalo.toml)\n  \
@@ -119,13 +112,17 @@ COOKBOOK:\n  \
   # Count tasks across all files\n  \
   hyalo summary --jq '.tasks.total'\n\n  \
   # List all property names as a flat list\n  \
-  hyalo properties --jq '[.[].name] | join(\", \")'\n\n\
+  hyalo properties --jq '[.[].name] | join(\", \")'\n\n  \
+  # Get just file paths (no metadata)\n  \
+  hyalo find --property status=draft --jq '[.[].file]'\n\n  \
+  # Pipe file paths for scripting (Unix)\n  \
+  hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}\n\n\
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
   [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
     \"properties\": [...], \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]\n\n  \
   # set / remove / append (mutation result)\n  \
-  {\"property\": \"status\", \"value\": \"done\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \
+  {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \
   {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n\n  \
   # properties\n  \
   [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...]\n\n  \
@@ -186,7 +183,7 @@ enum Commands {
             - PATTERN (positional): case-insensitive body text search\n\
             - --regexp/-e REGEX: regex body text search (case-insensitive by default; mutually exclusive with PATTERN)\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, or bare name for existence)\n\
-            - --tag T: tag filter (supports nested matching: 'project' matches 'project/backend')\n\
+            - --tag T: tag filter (exact or prefix via '/': 'project' matches 'project/backend' but NOT 'projects' — no substring or fuzzy matching)\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
             - --section HEADING: section scope filter (exclude files without a matching section; within \
             matching files, restrict tasks and content matches to the section scope; case-insensitive \
@@ -205,7 +202,7 @@ enum Commands {
         /// Property filter: K=V (equals), K!=V (not equals), K>=V, K<=V, K>V, K<V, or K (exists). Repeatable (AND)
         #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
-        /// Tag filter: matches tag and all nested children. Repeatable (AND)
+        /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not 'projects'). Repeatable (AND)
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
         /// Task presence filter: 'todo', 'done', 'any', or a single status character
@@ -221,7 +218,7 @@ enum Commands {
         /// Glob pattern to select files
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
-        /// Comma-separated list of fields to include: properties, tags, sections, tasks, links (default: all). 'file' and 'modified' are always present
+        /// Comma-separated list of optional fields to include: properties, tags, sections, tasks, links (default: all). 'file' and 'modified' are always included
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default) or 'modified'
@@ -237,8 +234,8 @@ enum Commands {
             specific section by heading (case-insensitive whole-string match; use leading '#' to \
             pin heading level, e.g. '## Tasks'; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
-            OUTPUT: Plain text by default — this command defaults to --format text even though \
-            the global --format flag shows 'Default: json'. Pass --format json explicitly to get \
+            OUTPUT: Defaults to plain text (overrides the global json default). \
+            Pass --format json explicitly to get \
             {\"file\": \"...\", \"content\": \"...\"}.\n\
             SIDE EFFECTS: None (read-only).")]
     Read {
@@ -295,7 +292,7 @@ enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
-    /// Show a high-level vault summary: file counts, property/tag/status aggregation, tasks, recent files
+    /// Show a high-level vault summary: file counts, property/tag/status aggregation, tasks, recent files (read-only)
     #[command(long_about = "Show a high-level vault summary.\n\n\
             OUTPUT: A single 'VaultSummary' object with file counts (total + by directory), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
@@ -412,6 +409,7 @@ Repeatable (AND).\n\
     #[command(
         long_about = "Append values to list properties in file(s) frontmatter.\n\n\
             INPUT: One or more --property K=V arguments, with --file or --glob.\n\
+            Note: --tag is not available on append (tags are atomic, not lists). Use 'hyalo set --tag T' to add tags.\n\
             BEHAVIOR:\n\
             - Property absent or null: creates it as a single-element list [V].\n\
             - Property is a list: appends V if not already present (case-insensitive duplicate check).\n\
@@ -461,7 +459,7 @@ enum TaskAction {
         /// File containing the task (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
+        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter). Use 'hyalo find --task todo' to discover task line numbers
         #[arg(short, long)]
         line: usize,
     },
@@ -477,7 +475,7 @@ enum TaskAction {
         /// File containing the task (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
+        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter). Use 'hyalo find --task todo' to discover task line numbers
         #[arg(short, long)]
         line: usize,
     },
@@ -494,7 +492,7 @@ enum TaskAction {
         /// File containing the task (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter)
+        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter). Use 'hyalo find --task todo' to discover task line numbers
         #[arg(short, long)]
         line: usize,
         /// Single character to set as the task status (e.g. '?', '-', '!')

@@ -53,7 +53,7 @@ pub fn parse_kv(s: &str) -> Result<(&str, &str), String> {
             Ok((key, &s[pos + 1..]))
         }
         None => Err(format!(
-            "invalid property argument '{s}': expected K=V format (e.g. status=done)"
+            "invalid property argument '{s}': expected K=V format (e.g. status=completed)"
         )),
     }
 }
@@ -152,7 +152,7 @@ pub fn set(
             format,
             "set requires at least one --property K=V or --tag T",
             None,
-            Some("example: hyalo set --property status=done --file note.md"),
+            Some("example: hyalo set --property status=completed --file note.md"),
             None,
         );
         return Ok(CommandOutcome::UserError(out));
