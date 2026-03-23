@@ -206,21 +206,24 @@ const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""
 
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
-/// Key signature: `modified,property,skipped,total,value`
-/// Format: `property=value: N/T modified` followed by quoted file paths on separate lines.
-const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Key signature: `modified,property,scanned,skipped,total,value`
+/// Format: `property=value: N/T modified (S scanned)` when filters narrowed the set,
+/// or `property=value: N/T modified` when scanned == total.
+const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `property` only (no value field):
 /// covers `RemovePropertyResult` (without value).
-/// Key signature: `modified,property,skipped,total`
-/// Format: `property: N/T modified` followed by quoted file paths on separate lines.
-const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Key signature: `modified,property,scanned,skipped,total`
+/// Format: `property: N/T modified (S scanned)` when filters narrowed the set,
+/// or `property: N/T modified` when scanned == total.
+const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `tag` field:
 /// covers `SetTagResult` and `RemoveTagResult`.
-/// Key signature: `modified,skipped,tag,total`
-/// Format: `tag: N/T modified` followed by quoted file paths on separate lines.
-const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Key signature: `modified,scanned,skipped,tag,total`
+/// Format: `tag: N/T modified (S scanned)` when filters narrowed the set,
+/// or `tag: N/T modified` when scanned == total.
+const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
@@ -268,11 +271,11 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "files,properties,recent_files,status,tags,tasks" => Some(VAULT_SUMMARY_FILTER),
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value)
-        "modified,property,skipped,total,value" => Some(PROPERTY_VALUE_MUTATION_FILTER),
+        "modified,property,scanned,skipped,total,value" => Some(PROPERTY_VALUE_MUTATION_FILTER),
         // Mutation results with property only (RemovePropertyResult without value)
-        "modified,property,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
+        "modified,property,scanned,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
         // Mutation results with tag (SetTagResult, RemoveTagResult)
-        "modified,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
+        "modified,scanned,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
         _ => None,
     }
 }
@@ -805,9 +808,11 @@ mod tests {
     #[test]
     fn property_value_mutation_filter_with_modified() {
         // SetPropertyResult / AppendPropertyResult / RemovePropertyResult (with value)
+        // scanned == total: no "(N scanned)" suffix
         let val = json!({
             "modified": ["note-a.md", "note-b.md"],
             "property": "status",
+            "scanned": 2,
             "skipped": [],
             "total": 2,
             "value": "done"
@@ -815,6 +820,10 @@ mod tests {
         let out = jq(PROPERTY_VALUE_MUTATION_FILTER, &val).unwrap();
         assert!(out.contains("status=done"));
         assert!(out.contains("2/2 modified"));
+        assert!(
+            !out.contains("scanned"),
+            "no scanned suffix when scanned == total"
+        );
         assert!(out.contains("note-a.md"));
         assert!(out.contains("note-b.md"));
     }
@@ -824,6 +833,7 @@ mod tests {
         let val = json!({
             "modified": [],
             "property": "priority",
+            "scanned": 1,
             "skipped": ["note-a.md"],
             "total": 1,
             "value": "high"
@@ -836,10 +846,28 @@ mod tests {
     }
 
     #[test]
+    fn property_value_mutation_filter_with_where_filter() {
+        // scanned > total: "(N scanned)" suffix should appear
+        let val = json!({
+            "modified": ["note-a.md"],
+            "property": "status",
+            "scanned": 5,
+            "skipped": [],
+            "total": 1,
+            "value": "done"
+        });
+        let out = jq(PROPERTY_VALUE_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("status=done"));
+        assert!(out.contains("1/1 modified"));
+        assert!(out.contains("(5 scanned)"));
+    }
+
+    #[test]
     fn property_value_mutation_via_format_value_as_text() {
         let val = json!({
             "modified": ["notes/a.md"],
             "property": "status",
+            "scanned": 1,
             "skipped": [],
             "total": 1,
             "value": "done"
@@ -854,24 +882,46 @@ mod tests {
 
     #[test]
     fn property_mutation_filter_no_value() {
-        // RemovePropertyResult without value
+        // RemovePropertyResult without value; scanned == total
         let val = json!({
             "modified": ["note.md"],
             "property": "draft",
+            "scanned": 1,
             "skipped": [],
             "total": 1
         });
         let out = jq(PROPERTY_MUTATION_FILTER, &val).unwrap();
         assert!(out.contains("draft"));
         assert!(out.contains("1/1 modified"));
+        assert!(
+            !out.contains("scanned"),
+            "no scanned suffix when scanned == total"
+        );
         assert!(out.contains("note.md"));
     }
 
     #[test]
+    fn property_mutation_filter_no_value_with_where_filter() {
+        // RemovePropertyResult without value; scanned > total
+        let val = json!({
+            "modified": ["note.md"],
+            "property": "draft",
+            "scanned": 7,
+            "skipped": [],
+            "total": 1
+        });
+        let out = jq(PROPERTY_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("draft"));
+        assert!(out.contains("1/1 modified"));
+        assert!(out.contains("(7 scanned)"));
+    }
+
+    #[test]
     fn tag_mutation_filter_with_modified() {
-        // SetTagResult / RemoveTagResult
+        // SetTagResult / RemoveTagResult; scanned == total
         let val = json!({
             "modified": ["a.md", "b.md"],
+            "scanned": 3,
             "skipped": ["c.md"],
             "tag": "rust",
             "total": 3
@@ -879,15 +929,36 @@ mod tests {
         let out = jq(TAG_MUTATION_FILTER, &val).unwrap();
         assert!(out.contains("rust"));
         assert!(out.contains("2/3 modified"));
+        assert!(
+            !out.contains("scanned"),
+            "no scanned suffix when scanned == total"
+        );
         assert!(out.contains("a.md"));
         assert!(out.contains("b.md"));
         assert!(!out.contains("c.md"));
     }
 
     #[test]
+    fn tag_mutation_filter_with_where_filter() {
+        // scanned > total: "(N scanned)" suffix
+        let val = json!({
+            "modified": ["a.md"],
+            "scanned": 10,
+            "skipped": [],
+            "tag": "rust",
+            "total": 1
+        });
+        let out = jq(TAG_MUTATION_FILTER, &val).unwrap();
+        assert!(out.contains("rust"));
+        assert!(out.contains("1/1 modified"));
+        assert!(out.contains("(10 scanned)"));
+    }
+
+    #[test]
     fn tag_mutation_via_format_value_as_text() {
         let val = json!({
             "modified": [],
+            "scanned": 1,
             "skipped": ["note.md"],
             "tag": "cli",
             "total": 1

@@ -421,6 +421,32 @@ enum TaskAction {
     },
 }
 
+/// Parse `--where-property` filters and validate `--where-tag` names.
+/// Exits with code 1 on invalid input.
+fn parse_where_filters(
+    where_properties: &[String],
+    where_tags: &[String],
+) -> Vec<filter::PropertyFilter> {
+    let filters = match where_properties
+        .iter()
+        .map(|s| filter::parse_property_filter(s))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+    for tag in where_tags {
+        if let Err(msg) = hyalo::commands::tags::validate_tag(tag) {
+            eprintln!("Error: {msg}");
+            process::exit(1);
+        }
+    }
+    filters
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
@@ -630,23 +656,7 @@ fn main() {
             ref where_properties,
             ref where_tags,
         } => {
-            let where_prop_filters: Vec<filter::PropertyFilter> = match where_properties
-                .iter()
-                .map(|s| filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
-            };
-            for tag_str in where_tags {
-                if let Err(msg) = hyalo::commands::tags::validate_tag(tag_str) {
-                    eprintln!("Error: {msg}");
-                    process::exit(1);
-                }
-            }
+            let where_prop_filters = parse_where_filters(where_properties, where_tags);
             set_commands::set(
                 &dir,
                 properties,
@@ -666,23 +676,7 @@ fn main() {
             ref where_properties,
             ref where_tags,
         } => {
-            let where_prop_filters: Vec<filter::PropertyFilter> = match where_properties
-                .iter()
-                .map(|s| filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
-            };
-            for tag_str in where_tags {
-                if let Err(msg) = hyalo::commands::tags::validate_tag(tag_str) {
-                    eprintln!("Error: {msg}");
-                    process::exit(1);
-                }
-            }
+            let where_prop_filters = parse_where_filters(where_properties, where_tags);
             remove_commands::remove(
                 &dir,
                 properties,
@@ -701,23 +695,7 @@ fn main() {
             ref where_properties,
             ref where_tags,
         } => {
-            let where_prop_filters: Vec<filter::PropertyFilter> = match where_properties
-                .iter()
-                .map(|s| filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
-            };
-            for tag_str in where_tags {
-                if let Err(msg) = hyalo::commands::tags::validate_tag(tag_str) {
-                    eprintln!("Error: {msg}");
-                    process::exit(1);
-                }
-            }
+            let where_prop_filters = parse_where_filters(where_properties, where_tags);
             append_commands::append(
                 &dir,
                 properties,

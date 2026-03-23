@@ -22,6 +22,7 @@ pub struct AppendPropertyResult {
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub total: usize,
+    pub scanned: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,7 @@ pub fn append(
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
+    let scanned = files.len();
 
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
@@ -213,6 +215,7 @@ pub fn append(
             modified,
             skipped,
             total,
+            scanned,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -597,6 +600,9 @@ title: Note
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        // 2 files scanned, 1 passed the where-filter
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
+        assert!(parsed["scanned"].as_u64().unwrap() > parsed["total"].as_u64().unwrap());
 
         let match_content = fs::read_to_string(tmp.path().join("match.md")).unwrap();
         assert!(match_content.contains("draft-copy"));
@@ -626,6 +632,9 @@ title: Note
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+        // 2 files scanned, 1 passed the where-filter
+        assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
+        assert!(parsed["scanned"].as_u64().unwrap() > parsed["total"].as_u64().unwrap());
 
         let tagged_content = fs::read_to_string(tmp.path().join("tagged.md")).unwrap();
         assert!(tagged_content.contains("rust-note"));
