@@ -1,14 +1,14 @@
 ---
-title: "Section-scoped filter for find command"
-type: backlog
 date: 2026-03-23
 origin: dogfooding post-iter-19
 priority: medium
-status: planned
+status: completed
 tags:
   - backlog
   - search
   - cli
+title: Section-scoped filter for find command
+type: backlog
 ---
 
 # Section-scoped filter for find command

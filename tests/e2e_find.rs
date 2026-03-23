@@ -912,3 +912,257 @@ fn find_glob_no_match_exits_1() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// --section filter tests
+// ---------------------------------------------------------------------------
+
+fn setup_section_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // doc.md — multiple sections, nested subsections, tasks in different sections
+    write_md(
+        tmp.path(),
+        "doc.md",
+        md!(r"
+---
+title: Doc
+tags:
+  - test
+---
+# Introduction
+
+Intro text here.
+
+## Tasks
+
+- [ ] First task
+- [x] Second task
+
+### Subtasks
+
+- [ ] Nested task
+
+## Notes
+
+Some notes with a TODO marker.
+
+- [ ] Note task
+"),
+    );
+
+    // other.md — has a Tasks section too (tests multi-file matching)
+    // Also has a ## Introduction (level-2) to test level-pinning against doc.md's # Introduction (level-1)
+    write_md(
+        tmp.path(),
+        "other.md",
+        md!(r"
+---
+title: Other
+---
+# Overview
+
+Overview text.
+
+## Introduction
+
+A level-2 introduction section.
+
+## Tasks
+
+- [ ] Other task
+- [x] Done task
+
+## Design
+
+Design details with TODO items.
+"),
+    );
+
+    tmp
+}
+
+#[test]
+fn section_filter_scopes_tasks() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(
+        &tmp,
+        &["--section", "Tasks", "--task", "todo", "--fields", "tasks"],
+    );
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    // Both files have ## Tasks sections with open tasks
+    assert_eq!(arr.len(), 2);
+    for entry in arr {
+        let tasks = entry["tasks"].as_array().unwrap();
+        for task in tasks {
+            // All returned tasks must be in a section that starts with Tasks-related headings
+            let section = task["section"].as_str().unwrap();
+            assert!(
+                section.contains("Tasks") || section.contains("Subtasks"),
+                "unexpected section: {section}"
+            );
+        }
+    }
+}
+
+#[test]
+fn section_filter_includes_nested_children() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(
+        &tmp,
+        &[
+            "--section",
+            "Tasks",
+            "--task",
+            "any",
+            "--fields",
+            "tasks",
+            "--file",
+            "doc.md",
+        ],
+    );
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let tasks = arr[0]["tasks"].as_array().unwrap();
+    // Should include: First task, Second task (## Tasks), Nested task (### Subtasks)
+    // Should NOT include: Note task (## Notes)
+    assert_eq!(tasks.len(), 3);
+    let texts: Vec<&str> = tasks.iter().map(|t| t["text"].as_str().unwrap()).collect();
+    assert!(texts.contains(&"First task"));
+    assert!(texts.contains(&"Second task"));
+    assert!(texts.contains(&"Nested task"));
+}
+
+#[test]
+fn section_filter_nearest_heading_in_output() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(
+        &tmp,
+        &[
+            "--section",
+            "Tasks",
+            "--task",
+            "any",
+            "--fields",
+            "tasks",
+            "--file",
+            "doc.md",
+        ],
+    );
+    assert!(status.success());
+    let tasks = json.as_array().unwrap()[0]["tasks"].as_array().unwrap();
+    // The nested task should show "### Subtasks" as its section, not "## Tasks"
+    let nested = tasks
+        .iter()
+        .find(|t| t["text"].as_str().unwrap() == "Nested task")
+        .unwrap();
+    assert_eq!(nested["section"].as_str().unwrap(), "### Subtasks");
+}
+
+#[test]
+fn section_filter_case_insensitive() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(
+        &tmp,
+        &["--section", "tasks", "--task", "any", "--fields", "tasks"],
+    );
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    // Should still match ## Tasks sections
+    assert_eq!(arr.len(), 2);
+}
+
+#[test]
+fn section_filter_level_pinned() {
+    let tmp = setup_section_vault();
+    // doc.md has "# Introduction" (level 1); other.md has "## Introduction" (level 2).
+    // Using "# Introduction" should match only doc.md (level-pinned to 1) and exclude other.md.
+    let (status, json, _) = find_json(
+        &tmp,
+        &["--section", "# Introduction", "--fields", "sections"],
+    );
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    // Only doc.md should be returned — other.md's ## Introduction is level 2, not level 1
+    assert_eq!(
+        arr.len(),
+        1,
+        "only doc.md should match a level-1 Introduction filter"
+    );
+    assert_eq!(arr[0]["file"].as_str().unwrap(), "doc.md");
+}
+
+#[test]
+fn section_filter_or_semantics() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(
+        &tmp,
+        &[
+            "--section",
+            "Tasks",
+            "--section",
+            "Notes",
+            "--task",
+            "any",
+            "--fields",
+            "tasks",
+            "--file",
+            "doc.md",
+        ],
+    );
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let tasks = arr[0]["tasks"].as_array().unwrap();
+    // Should include tasks from both Tasks and Notes sections
+    let texts: Vec<&str> = tasks.iter().map(|t| t["text"].as_str().unwrap()).collect();
+    assert!(texts.contains(&"First task"));
+    assert!(texts.contains(&"Note task"));
+}
+
+#[test]
+fn section_filter_no_match_excludes_file() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(&tmp, &["--section", "Nonexistent", "--task", "any"]);
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    // No files should match since no section named "Nonexistent" exists
+    assert!(arr.is_empty());
+}
+
+#[test]
+fn section_filter_content_search_scoped() {
+    let tmp = setup_section_vault();
+    let (status, json, _) = find_json(&tmp, &["--section", "Notes", "TODO", "--file", "doc.md"]);
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let matches = arr[0]["matches"].as_array().unwrap();
+    // The TODO in Notes section should be found
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["section"].as_str().unwrap(), "## Notes");
+}
+
+#[test]
+fn section_filter_content_search_excludes_other_sections() {
+    let tmp = setup_section_vault();
+    // "TODO" appears in both Notes and Design, but --section "Notes" should only find it in Notes
+    let (status, json, _) = find_json(&tmp, &["--section", "Notes", "TODO", "--file", "other.md"]);
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    // other.md has no ## Notes section, so it shouldn't match
+    assert!(arr.is_empty());
+}
+
+#[test]
+fn section_filter_invalid_exits_1() {
+    let tmp = setup_section_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--section", "####### Too deep"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+}
