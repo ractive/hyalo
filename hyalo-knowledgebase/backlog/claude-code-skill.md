@@ -34,7 +34,7 @@ The CLAUDE.md file contains hyalo usage instructions interleaved with Rust conve
 
 - Core rule: always use hyalo CLI, never Edit/Read/Grep on knowledgebase files
 - Command cheat sheet: which command for which task
-- `--dir hyalo-knowledgebase/` default pattern
+- `.hyalo.toml` awareness: document that `--dir` is already configured — agents must NOT pass it explicitly (this is a recurring problem; see also [[context-command]])
 - Output format guidance (--format text vs JSON vs --jq)
 - `--hints` flag recommendation for discovery
 - Frontmatter conventions (required fields per file type)
