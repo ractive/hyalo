@@ -14,7 +14,7 @@ brew install ractive/tap/hyalo
 ### Cargo
 
 ```sh
-cargo install hyalo
+cargo install --git https://github.com/ractive/hyalo.git --locked
 ```
 
 ### Manual download
