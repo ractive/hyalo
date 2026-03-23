@@ -10,7 +10,7 @@ use crate::output::CommandOutcome;
 // Embedded skill content
 // ---------------------------------------------------------------------------
 
-const SKILL_CONTENT: &str = include_str!("../../.claude/skills/hyalo/SKILL.md");
+const SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo/SKILL.md");
 
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
 

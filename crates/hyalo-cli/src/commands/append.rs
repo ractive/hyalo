@@ -6,9 +6,9 @@ use std::path::Path;
 
 use crate::commands::set::parse_kv;
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
-use crate::filter::{self, PropertyFilter};
-use crate::frontmatter;
 use crate::output::{CommandOutcome, Format};
+use hyalo_core::filter::{self, PropertyFilter};
+use hyalo_core::frontmatter;
 
 // ---------------------------------------------------------------------------
 // Output type
@@ -583,7 +583,7 @@ title: Note
         )
         .unwrap();
 
-        use crate::filter::parse_property_filter;
+        use hyalo_core::filter::parse_property_filter;
         let filter = parse_property_filter("status=draft").unwrap();
         let outcome = append(
             tmp.path(),

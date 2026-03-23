@@ -3,9 +3,9 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
-use crate::frontmatter;
 use crate::output::{CommandOutcome, Format, format_output};
-use crate::types::PropertySummaryEntry;
+use hyalo_core::frontmatter;
+use hyalo_core::types::PropertySummaryEntry;
 
 /// Aggregate summary: unique property names with types and file counts.
 /// Scope is filtered by `--file` / `--glob` (or all files if both are None).

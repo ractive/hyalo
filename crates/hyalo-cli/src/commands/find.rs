@@ -6,16 +6,16 @@ use std::time::SystemTime;
 
 use crate::commands::outline::SectionScanner;
 use crate::commands::{FilesOrOutcome, collect_files};
-use crate::content_search::ContentSearchVisitor;
-use crate::discovery;
-use crate::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
-use crate::frontmatter;
-use crate::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
-use crate::links::Link;
 use crate::output::{CommandOutcome, Format};
-use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
-use crate::tasks::TaskExtractor;
-use crate::types::{
+use hyalo_core::content_search::ContentSearchVisitor;
+use hyalo_core::discovery;
+use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
+use hyalo_core::frontmatter;
+use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
+use hyalo_core::links::Link;
+use hyalo_core::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
+use hyalo_core::tasks::TaskExtractor;
+use hyalo_core::types::{
     ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
 };
 
@@ -395,7 +395,7 @@ impl LinkCollector {
 impl FileVisitor for LinkCollector {
     fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
         // `dispatch_body_line` already stripped inline code spans.
-        crate::links::extract_links_from_text(raw, &mut self.links);
+        hyalo_core::links::extract_links_from_text(raw, &mut self.links);
         ScanAction::Continue
     }
 }
@@ -573,7 +573,7 @@ Just some text here.
     #[test]
     fn find_property_filter_eq() {
         let tmp = setup_vault();
-        let filter = crate::filter::parse_property_filter("status=planned").unwrap();
+        let filter = hyalo_core::filter::parse_property_filter("status=planned").unwrap();
         let fields = Fields::default();
         let out = unwrap_success(
             find(
@@ -602,7 +602,7 @@ Just some text here.
     #[test]
     fn find_property_filter_exists() {
         let tmp = setup_vault();
-        let filter = crate::filter::parse_property_filter("title").unwrap();
+        let filter = hyalo_core::filter::parse_property_filter("title").unwrap();
         let fields = Fields::default();
         let out = unwrap_success(
             find(
@@ -1007,7 +1007,7 @@ Just some text here.
     #[test]
     fn find_no_match_returns_empty_array() {
         let tmp = setup_vault();
-        let filter = crate::filter::parse_property_filter("status=nonexistent").unwrap();
+        let filter = hyalo_core::filter::parse_property_filter("status=nonexistent").unwrap();
         let fields = Fields::default();
         let out = unwrap_success(
             find(

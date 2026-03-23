@@ -11,9 +11,9 @@ pub mod summary;
 pub mod tags;
 pub mod tasks;
 
-use crate::discovery::{self, FileResolveError};
 use crate::output::{CommandOutcome, Format};
 use anyhow::Result;
+use hyalo_core::discovery::{self, FileResolveError};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------

@@ -51,7 +51,7 @@ where
 
 /// Detect an opening fence (triple backtick or `~~~`) at the start of a line.
 /// Returns the fence character and count if found.
-pub(crate) fn detect_opening_fence(line: &str) -> Option<(char, usize)> {
+pub fn detect_opening_fence(line: &str) -> Option<(char, usize)> {
     let trimmed = line.trim_start();
     let fence_char = trimmed.as_bytes().first().copied()?;
     if fence_char != b'`' && fence_char != b'~' {
@@ -67,7 +67,7 @@ pub(crate) fn detect_opening_fence(line: &str) -> Option<(char, usize)> {
 }
 
 /// Check if a line is a closing fence matching the opening fence.
-pub(crate) fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -> bool {
+pub fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -> bool {
     let trimmed = line.trim_start();
     let count = trimmed.chars().take_while(|&c| c == fence_char).count();
     if count < min_count {

@@ -1,8 +1,8 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use hyalo::filter::parse_property_filter;
-use hyalo::links::{Link, extract_links_from_text};
-use hyalo::scanner::{strip_inline_code, strip_inline_comments};
-use hyalo::tasks::detect_task_checkbox;
+use hyalo_core::filter::parse_property_filter;
+use hyalo_core::links::{Link, extract_links_from_text};
+use hyalo_core::scanner::{strip_inline_code, strip_inline_comments};
+use hyalo_core::tasks::detect_task_checkbox;
 
 fn bench_strip_inline_code(c: &mut Criterion) {
     let no_backtick = "This is a regular line with no code spans at all";

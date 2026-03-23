@@ -1,11 +1,11 @@
 #![allow(clippy::missing_errors_doc)]
 
-use crate::discovery;
-use crate::frontmatter;
-use crate::heading::{SectionFilter, parse_atx_heading};
 use crate::output::{CommandOutcome, Format, format_error, format_success};
-use crate::scanner;
 use anyhow::{Context, Result};
+use hyalo_core::discovery;
+use hyalo_core::frontmatter;
+use hyalo_core::heading::{SectionFilter, parse_atx_heading};
+use hyalo_core::scanner;
 use std::io::BufRead;
 use std::path::Path;
 

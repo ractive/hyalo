@@ -3,14 +3,14 @@ use std::process;
 
 use clap::{Parser, Subcommand};
 
-use hyalo::commands::{
+use hyalo_cli::commands::{
     append as append_commands, find as find_commands, init as init_commands, properties,
     read as read_commands, remove as remove_commands, set as set_commands,
     summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
-use hyalo::filter;
-use hyalo::hints::{HintContext, HintSource, generate_hints};
-use hyalo::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_hints};
+use hyalo_cli::hints::{HintContext, HintSource, generate_hints};
+use hyalo_cli::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_hints};
+use hyalo_core::filter;
 
 #[derive(Parser)]
 #[command(
@@ -521,7 +521,7 @@ fn parse_where_filters(
         }
     };
     for tag in where_tags {
-        if let Err(msg) = hyalo::commands::tags::validate_tag(tag) {
+        if let Err(msg) = hyalo_cli::commands::tags::validate_tag(tag) {
             eprintln!("Error: {msg}");
             process::exit(1);
         }
@@ -556,7 +556,7 @@ fn main() {
     }
 
     // Load per-project config from .hyalo.toml in CWD
-    let config = hyalo::config::load_config();
+    let config = hyalo_cli::config::load_config();
 
     // Merge: CLI args override config, config overrides hardcoded defaults.
     // Track whether --dir was explicitly passed (not from config) so hints
@@ -711,9 +711,9 @@ fn main() {
                 None => None,
             };
             // Parse section filters
-            let section_filters: Vec<hyalo::heading::SectionFilter> = match sections
+            let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
                 .iter()
-                .map(|s| hyalo::heading::SectionFilter::parse(s))
+                .map(|s| hyalo_core::heading::SectionFilter::parse(s))
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(f) => f,
@@ -771,7 +771,7 @@ fn main() {
                 ref status,
             } => {
                 if status.chars().count() != 1 {
-                    let out = hyalo::output::format_error(
+                    let out = hyalo_cli::output::format_error(
                         effective_format,
                         "--status must be a single character",
                         None,
@@ -862,7 +862,7 @@ fn main() {
                 let value: serde_json::Value = match serde_json::from_str(&output) {
                     Ok(v) => v,
                     Err(e) => {
-                        let msg = hyalo::output::format_error(
+                        let msg = hyalo_cli::output::format_error(
                             format,
                             "internal error: failed to parse command JSON output",
                             None,
@@ -876,7 +876,7 @@ fn main() {
                 match apply_jq_filter_result(filter, &value) {
                     Ok(filtered) => println!("{filtered}"),
                     Err(e) => {
-                        let msg = hyalo::output::format_error(
+                        let msg = hyalo_cli::output::format_error(
                             format,
                             "jq filter failed",
                             None,
@@ -910,7 +910,7 @@ fn main() {
             process::exit(1);
         }
         Err(e) => {
-            let msg = hyalo::output::format_error(
+            let msg = hyalo_cli::output::format_error(
                 format,
                 &e.to_string(),
                 None,
