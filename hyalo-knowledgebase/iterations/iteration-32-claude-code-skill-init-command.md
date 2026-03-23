@@ -1,13 +1,13 @@
 ---
 branch: worktree-sunny-gliding-glade
 date: 2026-03-23
-status: in-progress
+status: completed
 tags:
-- iteration
-- cli
-- claude
-- skill
-title: 'Iteration 32: Claude Code Skill & Init Command'
+  - iteration
+  - cli
+  - claude
+  - skill
+title: "Iteration 32: Claude Code Skill & Init Command"
 type: iteration
 ---
 
@@ -31,4 +31,4 @@ Add a Claude Code skill (SKILL.md) for hyalo and implement a `hyalo init` comman
 - [x] Add init command to README
 
 ### Backlog
-- [ ] Create backlog item for plugin distribution
+- [x] Create backlog item for plugin distribution
