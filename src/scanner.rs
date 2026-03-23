@@ -318,6 +318,9 @@ pub fn scan_reader_multi<R: BufRead>(
 
     // Try to parse frontmatter
     let (fm_props, fm_lines) = if first_trimmed.trim() == "---" {
+        const MAX_FRONTMATTER_LINES: usize = 100;
+        const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
         // Collect YAML lines
         let mut yaml = String::new();
         let mut fm_line_count: usize = 1; // the opening `---`
@@ -333,6 +336,14 @@ pub fn scan_reader_multi<R: BufRead>(
             if trimmed.trim() == "---" {
                 found_close = true;
                 break;
+            }
+            // Content line count is fm_line_count - 1 (excludes the opening `---`)
+            if fm_line_count - 1 > MAX_FRONTMATTER_LINES
+                || yaml.len() + trimmed.len() > MAX_FRONTMATTER_BYTES
+            {
+                anyhow::bail!(
+                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                );
             }
             yaml.push_str(trimmed);
             yaml.push('\n');
@@ -945,6 +956,25 @@ Line 2
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("failed to parse YAML frontmatter"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn multi_visitor_frontmatter_exceeds_budget_returns_error() {
+        // Build a frontmatter block with 101 content lines and no closing `---`,
+        // which exceeds the 100-line budget enforced by scan_reader_multi.
+        let mut input = String::from("---\n");
+        for i in 0..101usize {
+            input.push_str(&format!("k{i}: v\n"));
+        }
+        // Deliberately omit the closing `---` so the budget is hit before EOF.
+        let mut fm = FrontmatterCollector::new(true);
+        let result = scan_reader_multi(input.as_bytes(), &mut [&mut fm]);
+        assert!(result.is_err(), "expected error for oversized frontmatter");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("frontmatter too large"),
             "unexpected error: {err_msg}"
         );
     }
