@@ -17,11 +17,12 @@ fn remove_json(
     cmd.arg("remove");
     cmd.args(extra_args);
     let output = cmd.output().unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"))
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+        })
     } else {
         serde_json::Value::Null
     };

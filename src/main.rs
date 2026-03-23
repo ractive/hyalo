@@ -535,7 +535,16 @@ fn main() {
     let format = if let Some(f) = cli.format {
         f
     } else {
-        Format::from_str_opt(&config.format).unwrap_or(Format::Json)
+        match Format::from_str_opt(&config.format) {
+            Some(fmt) => fmt,
+            None => {
+                eprintln!(
+                    "Invalid output format '{}' in .hyalo.toml; supported formats are: json, text",
+                    config.format
+                );
+                process::exit(2);
+            }
+        }
     };
     let hints_flag = if cli.hints {
         true
