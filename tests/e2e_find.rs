@@ -727,6 +727,115 @@ fn find_text_format_fields_properties_only() {
 }
 
 // ---------------------------------------------------------------------------
+// Regexp search (--regexp / -e)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_regexp_alternation_matches_multiple_files() {
+    let tmp = setup_vault();
+    // "programming|body" should match beta (has "programming") and gamma (has "body")
+    let (status, json, stderr) = find_json(&tmp, &["--regexp", "programming|body"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(files.contains(&"beta.md"));
+    assert!(files.contains(&"gamma.md"));
+}
+
+#[test]
+fn find_regexp_short_flag_e_works() {
+    let tmp = setup_vault();
+    // Use lowercase to verify -e applies case-insensitive matching by default
+    let (status, json, stderr) = find_json(&tmp, &["-e", "rust.*great"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
+    assert_eq!(arr[0]["file"], "beta.md");
+}
+
+#[test]
+fn find_regexp_case_insensitive_by_default() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--regexp", "rust PROGRAMMING"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
+    assert_eq!(arr[0]["file"], "beta.md");
+}
+
+#[test]
+fn find_regexp_includes_matches_field() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["-e", "programming"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert!(
+        arr[0]["matches"].is_array(),
+        "matches field should be present with --regexp"
+    );
+    let matches = arr[0]["matches"].as_array().unwrap();
+    assert!(!matches.is_empty(), "should have at least one match");
+}
+
+#[test]
+fn find_regexp_no_match_returns_empty_array() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--regexp", r"\d{4}-\d{2}-\d{2}"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert!(arr.is_empty(), "expected empty array: {arr:?}");
+}
+
+#[test]
+fn find_regexp_combined_with_tag() {
+    let tmp = setup_vault();
+    // regex match + tag filter
+    let (status, json, stderr) = find_json(&tmp, &["-e", "content", "--tag", "rust"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    // beta has "Content" in heading + rust tag; nested has "content" in body text + rust tag
+    assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
+}
+
+#[test]
+fn find_regexp_invalid_exits_1() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--regexp", "[invalid"]);
+    let output = cmd.output().unwrap();
+
+    assert!(!output.status.success(), "should fail on invalid regex");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid regular expression"),
+        "expected error message about invalid regex, got: {stderr}"
+    );
+}
+
+#[test]
+fn find_regexp_conflicts_with_positional_pattern() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "substring", "--regexp", "regex"]);
+    let output = cmd.output().unwrap();
+
+    assert!(
+        !output.status.success(),
+        "should fail when both positional and --regexp are given"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Path traversal: dotdot in filename
 // ---------------------------------------------------------------------------
 

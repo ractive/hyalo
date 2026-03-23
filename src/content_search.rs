@@ -1,11 +1,23 @@
+use anyhow::{Context, Result};
+use regex::Regex;
+
 use crate::scanner::{FileVisitor, ScanAction};
 use crate::types::ContentMatch;
 
-/// Visitor that performs case-insensitive substring search on body lines.
+/// How the visitor matches body lines.
+#[derive(Debug)]
+enum SearchMode {
+    /// Case-insensitive substring (lowercased pattern).
+    Substring(String),
+    /// Compiled regular expression.
+    Regex(Regex),
+}
+
+/// Visitor that searches body lines for content matches.
 /// Tracks current section heading for context in matches.
+#[derive(Debug)]
 pub struct ContentSearchVisitor {
-    /// Lowercase search pattern
-    pattern: String,
+    mode: SearchMode,
     /// Current section heading (e.g. "## Design")
     current_section: String,
     /// Collected matches
@@ -13,11 +25,41 @@ pub struct ContentSearchVisitor {
 }
 
 impl ContentSearchVisitor {
-    /// Create a new visitor that searches for `pattern` (case-insensitive).
+    /// Create a visitor that does **case-insensitive substring** search.
     #[must_use]
     pub fn new(pattern: &str) -> Self {
         Self {
-            pattern: pattern.to_lowercase(),
+            mode: SearchMode::Substring(pattern.to_lowercase()),
+            current_section: String::new(),
+            matches: Vec::new(),
+        }
+    }
+
+    /// Compile a **regular expression** for content search.
+    ///
+    /// The pattern is always prefixed with `(?i)` to make it case-insensitive
+    /// by default. Users can override this for all or part of their pattern
+    /// with `(?-i)` — the regex crate resolves nested flags correctly.
+    #[must_use = "returns a compiled regex visitor; call has no side effects"]
+    pub fn regex(pattern: &str) -> Result<Self> {
+        let effective = format!("(?i){pattern}");
+        let re = Regex::new(&effective)
+            .with_context(|| format!("invalid regular expression: {pattern}"))?;
+        Ok(Self {
+            mode: SearchMode::Regex(re),
+            current_section: String::new(),
+            matches: Vec::new(),
+        })
+    }
+
+    /// Create a visitor from an already-compiled `Regex`.
+    ///
+    /// Use this to avoid recompiling the same regex for each file.
+    /// The `Regex` is internally reference-counted, so cloning is cheap.
+    #[must_use]
+    pub fn from_compiled(re: Regex) -> Self {
+        Self {
+            mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
         }
@@ -34,6 +76,14 @@ impl ContentSearchVisitor {
     pub fn into_matches(self) -> Vec<ContentMatch> {
         self.matches
     }
+
+    /// Check whether a line matches the current mode.
+    fn is_match(&self, line: &str) -> bool {
+        match &self.mode {
+            SearchMode::Substring(pat) => line.to_lowercase().contains(pat),
+            SearchMode::Regex(re) => re.is_match(line),
+        }
+    }
 }
 
 impl FileVisitor for ContentSearchVisitor {
@@ -43,8 +93,8 @@ impl FileVisitor for ContentSearchVisitor {
             self.current_section = format!("{} {}", "#".repeat(level as usize), heading_text);
         }
 
-        // Check for pattern match (case-insensitive).
-        if raw.to_lowercase().contains(&self.pattern) {
+        // Check for match.
+        if self.is_match(raw) {
             self.matches.push(ContentMatch {
                 line: line_num,
                 section: self.current_section.clone(),
@@ -92,6 +142,17 @@ mod tests {
         }
         visitor.into_matches()
     }
+
+    fn run_regex_visitor(content: &str, pattern: &str) -> Vec<ContentMatch> {
+        let mut visitor = ContentSearchVisitor::regex(pattern).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            visitor.on_body_line(line, i + 1);
+        }
+        visitor.into_matches()
+    }
+
+    // --- substring mode (existing behaviour) ---
 
     #[test]
     fn finds_exact_match() {
@@ -158,12 +219,9 @@ mod tests {
 
     #[test]
     fn heading_line_itself_can_be_matched() {
-        // The heading both updates current_section and can itself match.
         let matches = run_visitor("## Design Goals\n", "design");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].text, "## Design Goals");
-        // Section is updated before the match check, so the heading
-        // reports itself as its own section.
         assert_eq!(matches[0].section, "## Design Goals");
     }
 
@@ -191,9 +249,88 @@ mod tests {
 
     #[test]
     fn invalid_atx_heading_not_tracked() {
-        // #NoSpace is not a valid ATX heading
         let matches = run_visitor("#NoSpace\nbody\n", "body");
-        // Section should remain empty because #NoSpace is not a heading
         assert_eq!(matches[0].section, "");
+    }
+
+    // --- regex mode ---
+
+    #[test]
+    fn regex_simple_match() {
+        let matches = run_regex_visitor("Hello world\nnothing here\n", "wor.d");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "Hello world");
+    }
+
+    #[test]
+    fn regex_case_insensitive_by_default() {
+        let matches = run_regex_visitor("Hello WORLD\nGoodbye world\n", "world");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn regex_alternation() {
+        let matches = run_regex_visitor("TODO fix this\nFIXME later\nall good\n", "TODO|FIXME");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn regex_anchored() {
+        let matches = run_regex_visitor("## Design\nnot a heading\n", r"^##\s");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "## Design");
+    }
+
+    #[test]
+    fn regex_explicit_case_sensitive() {
+        // User supplies (?-i) to override default case-insensitivity
+        let matches = run_regex_visitor("Hello WORLD\nGoodbye world\n", "(?-i)WORLD");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "Hello WORLD");
+    }
+
+    #[test]
+    fn regex_user_flag_overrides_default() {
+        // (?-i) in the user pattern overrides the auto-prepended (?i)
+        let matches = run_regex_visitor("Hello WORLD\nGoodbye world\n", "(?-i)world");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "Goodbye world");
+    }
+
+    #[test]
+    fn regex_section_tracking() {
+        let content = "## Tasks\n- TODO item\n### Done\n- completed\n";
+        let matches = run_regex_visitor(content, "TODO|completed");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].section, "## Tasks");
+        assert_eq!(matches[1].section, "### Done");
+    }
+
+    #[test]
+    fn regex_invalid_returns_error() {
+        let result = ContentSearchVisitor::regex("[invalid");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid regular expression"), "got: {err}");
+    }
+
+    #[test]
+    fn regex_non_capturing_group_still_case_insensitive() {
+        // (?:...) is a non-capturing group, not a flag group — must still be case-insensitive
+        let matches = run_regex_visitor("Hello WORLD\nGoodbye world\n", "(?:world)");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn regex_empty_pattern_matches_everything() {
+        // Empty regex compiles to (?i) which matches every line
+        let matches = run_regex_visitor("line one\nline two\n", "");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn regex_no_match_returns_empty() {
+        let matches = run_regex_visitor("Nothing here\n", r"\d{4}-\d{2}-\d{2}");
+        assert!(matches.is_empty());
     }
 }
