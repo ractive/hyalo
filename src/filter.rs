@@ -163,34 +163,30 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
 impl PropertyFilter {
     /// Return true if the given property map satisfies this filter.
     pub fn matches(&self, props: &BTreeMap<String, Value>) -> bool {
-        match self.op {
-            FilterOp::Exists => props.contains_key(&self.name),
-            _ => {
-                let Some(yaml_val) = props.get(&self.name) else {
-                    return false;
-                };
-                let filter_val = self.value.as_deref().unwrap_or("");
+        if self.op == FilterOp::Exists {
+            return props.contains_key(&self.name);
+        }
 
-                match self.op {
-                    FilterOp::Exists => unreachable!(),
-                    FilterOp::Eq => yaml_value_eq(yaml_val, filter_val),
-                    FilterOp::NotEq => !yaml_value_eq(yaml_val, filter_val),
-                    FilterOp::Gt => {
-                        yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Greater)
-                    }
-                    FilterOp::Gte => matches!(
-                        yaml_cmp(yaml_val, filter_val),
-                        Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
-                    ),
-                    FilterOp::Lt => {
-                        yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Less)
-                    }
-                    FilterOp::Lte => matches!(
-                        yaml_cmp(yaml_val, filter_val),
-                        Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
-                    ),
-                }
-            }
+        let Some(yaml_val) = props.get(&self.name) else {
+            return false;
+        };
+        let filter_val = self.value.as_deref().unwrap_or("");
+
+        match self.op {
+            FilterOp::Eq => yaml_value_eq(yaml_val, filter_val),
+            FilterOp::NotEq => !yaml_value_eq(yaml_val, filter_val),
+            FilterOp::Gt => yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Greater),
+            FilterOp::Gte => matches!(
+                yaml_cmp(yaml_val, filter_val),
+                Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
+            ),
+            FilterOp::Lt => yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Less),
+            FilterOp::Lte => matches!(
+                yaml_cmp(yaml_val, filter_val),
+                Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+            ),
+            // Exists is handled by the early return above
+            FilterOp::Exists => false,
         }
     }
 }

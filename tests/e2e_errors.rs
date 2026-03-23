@@ -74,6 +74,74 @@ fn error_invalid_yaml() {
     );
 }
 
+/// `hyalo find` uses the multi-visitor scan path (`scan_file_multi`) which propagates
+/// YAML parse errors via `?`. A malformed frontmatter must cause a non-zero exit and
+/// an error message that names the cause.
+#[test]
+fn error_find_malformed_yaml_hard_error() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bad.md",
+        md!(r"
+---
+: invalid yaml [[[{
+---
+# Body
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("failed to parse YAML frontmatter"),
+        "expected YAML parse error on stderr; got: {stderr}"
+    );
+}
+
+/// `hyalo summary` also uses the multi-visitor scan path and must propagate the error.
+#[test]
+fn error_summary_malformed_yaml_hard_error() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bad.md",
+        md!(r"
+---
+: invalid yaml [[[{
+---
+# Body
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["summary"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("failed to parse YAML frontmatter"),
+        "expected YAML parse error on stderr; got: {stderr}"
+    );
+}
+
 #[test]
 fn error_missing_md_extension() {
     let tmp = TempDir::new().unwrap();
