@@ -9,7 +9,7 @@ fn setup() -> TempDir {
     write_md(
         dir.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test Note
 status: draft
@@ -22,12 +22,12 @@ Some body text.
 
 - [ ] Open task
 - [x] Done task
-"#),
+"),
     );
     write_md(
         dir.path(),
         "other.md",
-        md!(r#"
+        md!(r"
 ---
 title: Other
 status: done
@@ -37,7 +37,7 @@ tags:
 # Other heading
 
 Other body.
-"#),
+"),
     );
     dir
 }
