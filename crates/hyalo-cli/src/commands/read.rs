@@ -93,21 +93,11 @@ fn apply_line_range<'a>(lines: &'a [String], range: &LineRange) -> &'a [String] 
 fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<String>> {
     let mut sections: Vec<Vec<String>> = Vec::new();
     let mut current_section: Option<(u8, Vec<String>)> = None;
-    let mut fence: Option<(char, usize)> = None;
+    let mut fence = scanner::FenceTracker::new();
 
     for line in body_lines {
         // Track code fences — headings inside code blocks are not real headings
-        if let Some((fence_char, fence_count)) = fence {
-            if scanner::is_closing_fence(line, fence_char, fence_count) {
-                fence = None;
-            }
-            if let Some((_, ref mut lines)) = current_section {
-                lines.push(line.clone());
-            }
-            continue;
-        }
-        if let Some(f) = scanner::detect_opening_fence(line) {
-            fence = Some(f);
+        if fence.process_line(line) {
             if let Some((_, ref mut lines)) = current_section {
                 lines.push(line.clone());
             }
@@ -146,17 +136,10 @@ fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<St
 
 /// Collect all heading texts from body lines (for error messages).
 fn collect_headings(body_lines: &[String]) -> Vec<String> {
-    let mut fence: Option<(char, usize)> = None;
+    let mut fence = scanner::FenceTracker::new();
     let mut headings = Vec::new();
     for line in body_lines {
-        if let Some((fence_char, fence_count)) = fence {
-            if scanner::is_closing_fence(line, fence_char, fence_count) {
-                fence = None;
-            }
-            continue;
-        }
-        if let Some(f) = scanner::detect_opening_fence(line) {
-            fence = Some(f);
+        if fence.process_line(line) {
             continue;
         }
         if let Some((level, text)) = parse_atx_heading(line) {

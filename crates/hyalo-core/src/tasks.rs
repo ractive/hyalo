@@ -272,14 +272,13 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
         }
     }
 
-    let mut fence: Option<(char, usize)> = None;
+    let mut fence = scanner::FenceTracker::new();
     let mut in_comment = false;
 
     // Process first line if not frontmatter
     if fm_lines == 0 {
         if line_num == line {
-            if let Some(f) = scanner::detect_opening_fence(&first_trimmed) {
-                fence = Some(f);
+            if fence.process_line(&first_trimmed) {
                 // A fence opener is never a task
             } else if scanner::is_comment_fence(&first_trimmed) {
                 in_comment = true;
@@ -294,8 +293,8 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
                     });
                 return Ok(info);
             }
-        } else if let Some(f) = scanner::detect_opening_fence(&first_trimmed) {
-            fence = Some(f);
+        } else if fence.process_line(&first_trimmed) {
+            // fence state updated
         } else if scanner::is_comment_fence(&first_trimmed) {
             in_comment = true;
         }
@@ -311,10 +310,8 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
         let line_str = buf.trim_end_matches(['\n', '\r']);
 
         // Handle fenced code block (highest priority)
-        if let Some((fence_char, fence_count)) = fence {
-            if scanner::is_closing_fence(line_str, fence_char, fence_count) {
-                fence = None;
-            }
+        if fence.in_fence() {
+            fence.process_line(line_str);
             if line_num == line {
                 return Ok(None); // inside code block
             }
@@ -338,11 +335,10 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
             continue;
         }
 
-        if let Some(f) = scanner::detect_opening_fence(line_str) {
+        if fence.process_line(line_str) {
             if line_num == line {
                 return Ok(None); // fence opener is not a task
             }
-            fence = Some(f);
             if line_num > line {
                 break;
             }
