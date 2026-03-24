@@ -39,3 +39,6 @@ This should work on all commands that accept `--file`: `find`, `set`, `remove`, 
 ## Notes
 
 clap supports `num_args(1..)` or `action(ArgAction::Append)` for repeatable flags. The `--file` / `--glob` mutual exclusivity rule should still apply (can't mix `--file` and `--glob`), but multiple `--file` values should be allowed.
+
+## My Comments
+What commands will break when you can pass multiple --file flags?

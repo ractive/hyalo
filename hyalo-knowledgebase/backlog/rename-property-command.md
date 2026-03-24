@@ -37,3 +37,11 @@ Atomically renames the property key across all matching files, preserving the va
 - [ ] Preserves value and type (text, list, number, etc.)
 - [ ] Works with `--where-property` / `--where-tag` for scoped renames
 - [ ] Reports how many files were modified
+
+## My Comments
+What about
+`hyalo properties rename--from foo --to bar`
+
+The same for tags
+`hyalo tags rename--from foo --to bar`
+[[bulk-tag-rename]]

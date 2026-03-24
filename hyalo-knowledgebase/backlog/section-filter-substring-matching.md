@@ -39,3 +39,7 @@ Option B is probably the best balance of power and simplicity. Option A risks fa
 - `hyalo read --section "DEC-031*" --file decision-log.md` returns the full DEC-031 section
 - `hyalo read --section "Tasks" --file iteration-29.md` still works (exact match unchanged)
 - Error hint still shows available sections when no match is found
+
+## My Comments
+Why not introduce the same operators as in the tag ans proeprty filters: <, >, <=, >=, ~, /regexp/
+See also [[property-value-search]]

@@ -35,3 +35,6 @@ Support a contains/regex operator:
 - [ ] Can search within text property values
 - [ ] Works with list properties (matches if any element matches)
 - [ ] Help text documents the syntax
+
+## My Comments
+Do we really need substring match *and* regex? Substring is super easy to implement with regex. /foo/ already should be a substring filter, isnt' it?

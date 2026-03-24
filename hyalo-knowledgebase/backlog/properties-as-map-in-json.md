@@ -51,3 +51,6 @@ The array format preserves type information. A map loses it. Possible compromise
 - [ ] jq queries like `.properties.status` work
 - [ ] Type information is still accessible when needed
 - [ ] Existing scripts/queries get a migration path
+
+## My Comments
+What about all the other commands? Isn't it way harder to use a map there?

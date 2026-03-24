@@ -39,3 +39,5 @@ Atomically removes the old tag and adds the new one across all files that have i
 - [ ] Atomic: if the new tag already exists on a file, only the old one is removed
 - [ ] Reports how many files were modified
 - [ ] Works with `--where-property` / `--where-tag` for scoped renames
+
+See [[rename-property-command]]

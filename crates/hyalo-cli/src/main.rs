@@ -16,11 +16,12 @@ use hyalo_core::filter;
 #[command(
     name = "hyalo",
     version,
-    about = "CLI tool for reading and modifying YAML frontmatter and [[wikilinks]] in Obsidian-compatible markdown files",
-    long_about = "Hyalo is a CLI tool for reading and modifying YAML frontmatter and [[wikilinks]] \
-        in Obsidian-compatible markdown (.md) files.\n\n\
+    about = "Query, filter, and mutate YAML frontmatter across markdown file collections",
+    long_about = "Hyalo — query, filter, and mutate YAML frontmatter across markdown file collections.\n\n\
+        Compatible with Obsidian vaults, Zettelkasten systems, and any directory of .md files \
+        with YAML frontmatter. Also resolves [[wikilinks]] and manages task checkboxes.\n\n\
         SCOPE: Hyalo operates on a directory of .md files. It can query and mutate frontmatter \
-        properties and tags, and inspect wikilink resolution.\n\n\
+        properties, tags, tasks, and links.\n\n\
         PATH RESOLUTION: All --file and --glob paths are relative to --dir (defaults to \".\"). \
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \

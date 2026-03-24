@@ -43,3 +43,6 @@ The error message does **not include the file path**, making it impossible to id
 - [ ] All warning messages include the file path
 - [ ] `hyalo summary --dir <3500-file-vault>` completes successfully even with broken files
 - [ ] Exit code is 0 when broken files are skipped (not 2)
+
+## My Comments
+Explore how the "index" files look like that are use in the github docs repo. I read somewhere that index file start with "---" but don't have a closing "---". Should we support them?

@@ -34,3 +34,6 @@ Alternatively, add a separate `--exclude` flag.
 - [ ] Works in combination with positive globs (include + exclude)
 - [ ] Help text documents the syntax
 - [ ] E2e tests cover negation globs
+
+## My Comments
+What's more common? ! or --exclude?

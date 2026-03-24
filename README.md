@@ -1,6 +1,6 @@
 # hyalo
 
-A self-contained command line tool for exploring and managing Markdown knowledge bases. Compatible with [Obsidian](https://obsidian.md/) vaults — no running Obsidian instance required.
+Query, filter, and mutate YAML frontmatter across markdown file collections. Compatible with [Obsidian](https://obsidian.md/) vaults, Zettelkasten systems, and any directory of `.md` files with YAML frontmatter — no running Obsidian instance required.
 
 ## Installation
 
