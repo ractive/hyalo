@@ -11,23 +11,14 @@ branch: iter-38/agent-integration
 
 ## Goal
 
-Make hyalo a first-class tool for AI agents: a single `hyalo context` call orients a new conversation, the Claude Code skill is polished, and the skill is distributable as a plugin.
+Make hyalo a first-class tool for AI agents: the Claude Code skill is polished and distributable as a plugin.
 
 ## Backlog items
 
-- [[backlog/context-command]] (medium)
 - [[backlog/done/claude-code-skill]] (medium)
 - [[backlog/claude-plugin-distribution]] (medium)
 
 ## Tasks
-
-### Context command
-- [ ] `hyalo context` command exists
-- [ ] Reads `.hyalo.toml` and reports effective defaults (dir, format, hints)
-- [ ] Summarizes vault stats (file count, tags, properties, status values)
-- [ ] Output is concise (under 20 lines) and designed for LLM context windows
-- [ ] `--format json` returns structured data for programmatic use
-- [ ] E2e tests cover context command
 
 ### Claude Code skill improvements
 - [ ] Skill at `.claude/skills/hyalo-knowledgebase/SKILL.md` is comprehensive
@@ -45,6 +36,5 @@ Make hyalo a first-class tool for AI agents: a single `hyalo context` call orien
 
 ## Acceptance Criteria
 
-- [ ] New conversation can orient itself with a single `hyalo context` call
 - [ ] Skill is installable via Claude Code plugin system
 - [ ] All quality gates pass (fmt, clippy, tests)

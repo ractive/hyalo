@@ -1,15 +1,15 @@
 ---
-title: "Context command — generate AI agent configuration from vault state"
-type: backlog
 date: 2026-03-23
+origin: dogfooding help-text audit
+priority: medium
+status: wont-do
 tags:
 - backlog
 - cli
 - llm
 - ux
-status: planned
-priority: medium
-origin: "dogfooding help-text audit"
+title: Context command — generate AI agent configuration from vault state
+type: backlog
 ---
 
 ## Problem

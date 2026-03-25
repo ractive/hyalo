@@ -3,5 +3,6 @@
 .obsidian
 .claude/memory
 .claude/agent-memory
+.claude/worktrees
 hyalo-knowledgebase/MyNotes.md
 bench-results/

@@ -1,14 +1,14 @@
 ---
-title: "SQLite-backed index for vault-wide operations"
-type: backlog
 date: 2026-03-21
-status: planned
-priority: high
 origin: iteration-plan, DEC-013
+priority: high
+status: wont-do
 tags:
-  - backlog
-  - indexing
-  - performance
+- backlog
+- indexing
+- performance
+title: SQLite-backed index for vault-wide operations
+type: backlog
 ---
 
 # SQLite-backed index for vault-wide operations
