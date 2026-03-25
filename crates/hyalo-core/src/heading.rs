@@ -136,8 +136,9 @@ impl SectionFilter {
 /// Non-allocating case-insensitive ASCII substring search.
 ///
 /// Both `haystack` and `needle` are compared byte-by-byte with ASCII
-/// lowercasing.  `needle` must already be lowercased at the call site.
+/// lowercasing.  `needle` must be ASCII and already lowercased at the call site.
 fn ascii_contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    debug_assert!(needle.is_ascii(), "needle must be ASCII");
     if needle.is_empty() {
         return true;
     }
@@ -200,8 +201,8 @@ fn parse_section_regex(input: &str) -> Result<Regex, String> {
     }
 
     // Default to case-insensitive (section matching is case-insensitive by convention).
-    // User can opt out with `(?-i)` in the pattern itself.
-    let case_insensitive = !pattern.contains("(?-i)");
+    // Explicit `i` flag overrides even `(?-i)` in the pattern body.
+    let case_insensitive = flags.contains('i') || !pattern.contains("(?-i)");
 
     regex::RegexBuilder::new(pattern)
         .case_insensitive(case_insensitive)

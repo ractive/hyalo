@@ -144,6 +144,10 @@ pub fn is_glob(path: &str) -> bool {
 /// The glob is matched against paths relative to `dir`.
 pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(PathBuf, String)>> {
     if let Some(neg_pattern) = pattern.strip_prefix('!') {
+        anyhow::ensure!(
+            !neg_pattern.is_empty(),
+            "negation glob pattern must not be empty (got '!')"
+        );
         // Negation glob: return all files that do NOT match the pattern.
         let glob = GlobBuilder::new(neg_pattern)
             .literal_separator(true)

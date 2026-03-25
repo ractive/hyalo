@@ -374,13 +374,7 @@ fn yaml_value_regex_match(yaml: &Value, pattern: &Regex) -> bool {
         Value::Number(n) => pattern.is_match(&n.to_string()),
         Value::Bool(b) => pattern.is_match(if *b { "true" } else { "false" }),
         Value::Sequence(seq) => seq.iter().any(|item| yaml_value_regex_match(item, pattern)),
-        _ => {
-            if let Some(s) = yaml.as_str() {
-                pattern.is_match(s)
-            } else {
-                false
-            }
-        }
+        _ => false,
     }
 }
 
