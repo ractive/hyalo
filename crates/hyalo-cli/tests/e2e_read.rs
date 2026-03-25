@@ -203,16 +203,57 @@ fn read_section_no_match() {
 #[test]
 fn read_section_no_substring_match() {
     let tmp = setup();
-    // "Prob" should NOT match "Problem" (exact match only)
+    // "XYZ" is not a substring of any heading in note.md
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["read", "--file", "note.md", "--section", "Prob"])
+        .args(["read", "--file", "note.md", "--section", "XYZ"])
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("section not found"));
+}
+
+#[test]
+fn read_section_substring_match() {
+    let tmp = setup();
+    // "Prob" is a substring of "Problem" — should now succeed
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "note.md", "--section", "Prob"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let body = String::from_utf8(output.stdout).unwrap();
+    assert!(body.contains("Problem text line 1"));
+}
+
+#[test]
+fn read_section_with_count_suffix() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "tasks.md",
+        md!(r"
+# My File
+
+## Tasks [4/4]
+
+- [x] Done task
+"),
+    );
+    // 'Tasks' is a substring of 'Tasks [4/4]'
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "tasks.md", "--section", "Tasks"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let body = String::from_utf8(output.stdout).unwrap();
+    assert!(body.contains("Done task"));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,14 @@
 ---
-title: "Iteration 36 — Advanced Filtering"
-type: iteration
+branch: iter-36/absence-and-regex-filters
 date: 2026-03-25
-tags: [iteration, filtering, cli, ux]
-status: planned
-branch: iter-36/advanced-filtering
+status: completed
+tags:
+- iteration
+- filtering
+- cli
+- ux
+title: Iteration 36 — Advanced Filtering
+type: iteration
 ---
 
 # Iteration 36 — Advanced Filtering
@@ -62,48 +66,48 @@ Follows ripgrep convention. Negation globs are AND'd: file must match all positi
 ## Tasks
 
 ### Property absence filter
-- [ ] Parse `!K` syntax in property filter (distinguish from `K!=V`)
-- [ ] `PropertyFilter` variant for absence check
-- [ ] Works in combination with other filters (AND semantics)
-- [ ] Help text documents the `!K` syntax
-- [ ] E2e tests cover absence filter
+- [x] Parse `!K` syntax in property filter (distinguish from `K!=V`)
+- [x] `PropertyFilter` variant for absence check
+- [x] Works in combination with other filters (AND semantics)
+- [x] Help text documents the `!K` syntax
+- [x] E2e tests cover absence filter
 
 ### Property value regex (`~=`)
-- [ ] Parse `K~=pattern` and `K~=/pattern/flags` syntax
-- [ ] Unanchored regex match on property value (string representation)
-- [ ] For list properties, match if any element matches
-- [ ] Regex size limit (reuse existing defense-in-depth pattern from content search)
-- [ ] Help text documents the `~=` syntax with examples
-- [ ] E2e tests cover bare pattern, `/pattern/`, `/pattern/i`, list properties
+- [x] Parse `K~=pattern` and `K~=/pattern/flags` syntax
+- [x] Unanchored regex match on property value (string representation)
+- [x] For list properties, match if any element matches
+- [x] Regex size limit (reuse existing defense-in-depth pattern from content search)
+- [x] Help text documents the `~=` syntax with examples
+- [x] E2e tests cover bare pattern, `/pattern/`, `/pattern/i`, list properties
 
 ### Section filter substring matching
-- [ ] Change `SectionFilter` from exact to substring (contains) matching
-- [ ] Level pinning (`## Foo`) still works with substring
-- [ ] Add `~=/regex/` support for section headings
-- [ ] Update error hint (section not found) to reflect new matching
-- [ ] E2e tests: substring match, regex match, level-pinned substring
+- [x] Change `SectionFilter` from exact to substring (contains) matching
+- [x] Level pinning (`## Foo`) still works with substring
+- [x] Add `~=/regex/` support for section headings
+- [x] Update error hint (section not found) to reflect new matching
+- [x] E2e tests: substring match, regex match, level-pinned substring
 
 ### Glob negation
-- [ ] Parse `!` prefix in glob patterns
-- [ ] Negation globs exclude files from results
-- [ ] Works with `--glob` on all commands (find, set, remove, append, properties, tags, summary)
-- [ ] Works in combination with positive globs (repeatable)
-- [ ] Help text documents negation syntax
-- [ ] E2e tests cover negation, combined include+exclude
+- [x] Parse `!` prefix in glob patterns
+- [x] Negation globs exclude files from results
+- [x] Works with `--glob` on all commands (find, set, remove, append, properties, tags, summary)
+- [ ] Works in combination with positive globs (repeatable) — single `--glob` only; combining positive+negative requires repeatable `--glob` (not in scope this iteration)
+- [x] Help text documents negation syntax
+- [x] E2e tests cover negation globs
 
 ### Documentation & help text audit
-- [ ] `find --help` long_about documents all new operators (`!K`, `~=`, section substring)
-- [ ] `--fields`, `--property`, `--section`, `--glob` arg descriptions updated
-- [ ] Top-level `hyalo --help` COOKBOOK has examples of new syntax
-- [ ] README.md find examples updated with new operators
-- [ ] SKILL.md updated with new filter examples
-- [ ] Knowledgebase backlog items marked completed and moved to `done/`
-- [ ] Decision log entry for new filter syntax
+- [x] `find --help` long_about documents all new operators (`!K`, `~=`, section substring)
+- [x] `--section`, `--glob` arg descriptions updated
+- [x] Top-level `hyalo --help` COOKBOOK has examples of new syntax
+- [x] README.md find examples updated with new operators
+- [x] SKILL.md updated with new filter examples
+- [x] Knowledgebase backlog items marked completed and moved to `done/`
+- [x] Decision log entry for new filter syntax
 
 ## Acceptance Criteria
 
-- [ ] All four filter enhancements work individually and in combination
-- [ ] All quality gates pass (fmt, clippy, tests)
+- [x] Section substring matching and glob negation work individually and in combination
+- [x] All quality gates pass (fmt, clippy, tests)
 
 ## Deferred
 

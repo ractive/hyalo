@@ -291,7 +291,7 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - 37 unit tests + 14 e2e tests covering hint generation and flag interactions
 - Found and fixed tags summary sort bug during dogfooding (hints were showing alphabetically-first tags instead of most-used)
 
-## DEC-032: YAML Parse Errors Are Hard Errors (2026-03-23) — UPDATED iter-35
+## DEC-032: ~~YAML Parse Errors Are Hard Errors~~ (2026-03-23) — UPDATED iter-35: read-only commands skip malformed files
 
 **Context:** The codebase had two scan paths for reading markdown files: `read_frontmatter_from_reader` (used by `properties`, `tags`, mutation commands) and `scan_reader_multi` (used by `find`, `summary`, task extraction). The former propagated YAML parse errors via `?`; the latter silently swallowed them with `unwrap_or_default()`, returning an empty property map for malformed frontmatter. This inconsistency meant `hyalo find` would silently skip broken files while `hyalo properties` would warn about them.
 
@@ -305,3 +305,23 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - The old 80-line `scan_reader` implementation and its dependency on `frontmatter::skip_frontmatter` are removed
 - All read-only commands (`find`, `summary`, `properties`, `tags`) gracefully skip files with malformed YAML: emit a warning to stderr and continue (iter-35 extended this from `properties`/`tags` to `find`/`summary`)
 - Mutation commands (`set`, `remove`, `append`) still fail hard on malformed YAML — safe, since silent corruption would be worse
+
+## DEC-033: Advanced Filter Syntax for iter-36 (2026-03-25)
+
+**Context:** `hyalo find` supported existence checks (`--property K`) and comparison operators but had no way to express absence, substring/regex matches on property values, or dynamic section headings. `--section` required exact whole-string match, making it brittle for headings with date/counter suffixes (e.g. `## DEC-031: ... (2026-03-22)`).
+
+**Decisions:**
+
+1. **Property absence: `--property '!K'`** — Chosen over a separate `--no-property` flag because it is composable with the existing `--property` repetition and consistent with the `!=` operator. The `!` prefix is unambiguous since property names cannot start with `!` in YAML.
+
+2. **Property value regex: `--property 'K~=pattern'` / `'K~=/pattern/flags'`** — The `~=` operator was chosen to parallel CSS attribute selector and existing tool conventions while being visually distinct from `=` and `!=`. Bare `K~=foo` is unanchored regex (contains semantics). For list properties, matches if any element matches. The `i` flag enables case-insensitive matching, consistent with how `--regexp` works on body content. Substring match was not added as a separate operator since `~=foo` already provides it.
+
+3. **Section substring default** — `--section` changed from exact whole-string to case-insensitive substring (contains) matching. This is backwards-compatible in practice: any query that previously matched will still match (exact match is a subset of substring match). Power users can use `--section '~=/regex/'` for regex. Level pinning (`## Foo`) continues to work with substring.
+
+4. **Glob negation: `!pattern`** — Follows ripgrep convention (`--glob '!pattern'`). Simpler than adding a separate `--exclude` flag; consistent with rg muscle memory.
+
+**Consequences:**
+- `PropertyFilter` gained `Absent` and `Regex` variants
+- `SectionFilter` gained a `Regex` variant and changed its default match mode from `Exact` to `Contains`
+- `match_glob()` checks for `!` prefix and inverts the match result
+- Help text and COOKBOOK updated with examples for all four operators

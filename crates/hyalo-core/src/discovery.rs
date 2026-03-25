@@ -124,15 +124,47 @@ fn normalize_path(path: &str) -> String {
         .to_owned()
 }
 
-/// Check if a path argument contains glob characters.
+/// Check if a path argument is a glob or negation pattern.
+///
+/// Returns `true` for paths containing `*`, `?`, `[`, or a leading `!`
+/// (negation glob).
 #[must_use]
 pub fn is_glob(path: &str) -> bool {
-    path.contains('*') || path.contains('?') || path.contains('[')
+    path.starts_with('!') || path.contains('*') || path.contains('?') || path.contains('[')
 }
 
 /// Match discovered files against a glob pattern.
+///
+/// If `pattern` starts with `!`, it is treated as a negation: all discovered
+/// files are returned **except** those matching the remainder of the pattern.
+///
+/// Positive patterns (no `!` prefix) work as before — only files matching the
+/// pattern are returned.
+///
 /// The glob is matched against paths relative to `dir`.
 pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(PathBuf, String)>> {
+    if let Some(neg_pattern) = pattern.strip_prefix('!') {
+        anyhow::ensure!(
+            !neg_pattern.is_empty(),
+            "negation glob pattern must not be empty (got '!')"
+        );
+        // Negation glob: return all files that do NOT match the pattern.
+        let glob = GlobBuilder::new(neg_pattern)
+            .literal_separator(true)
+            .build()
+            .context("invalid glob negation pattern")?
+            .compile_matcher();
+
+        let mut matched = Vec::new();
+        for file in files {
+            let rel = relative_path(dir, file);
+            if !glob.is_match(&rel) {
+                matched.push((file.clone(), rel));
+            }
+        }
+        return Ok(matched);
+    }
+
     let glob = GlobBuilder::new(pattern)
         .literal_separator(true)
         .build()
@@ -365,6 +397,63 @@ mod tests {
         assert!(is_glob("notes/**/*.md"));
         assert!(is_glob("note[123].md"));
         assert!(!is_glob("notes/file.md"));
+    }
+
+    #[test]
+    fn is_glob_detects_negation_prefix() {
+        assert!(is_glob("!notes/draft.md"));
+        assert!(is_glob("!**/index.md"));
+    }
+
+    #[test]
+    fn glob_negation_excludes_matching_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &["a.md", "b.md", "notes/draft.md", "notes/final.md"],
+        );
+        let files = discover_files(tmp.path()).unwrap();
+
+        // Exclude a specific file
+        let matched = match_glob(tmp.path(), &files, "!notes/draft.md").unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert!(
+            !rels.contains(&"notes/draft.md"),
+            "draft.md should be excluded"
+        );
+        assert!(rels.contains(&"notes/final.md"));
+        assert!(rels.contains(&"a.md"));
+        assert_eq!(matched.len(), 3);
+    }
+
+    #[test]
+    fn glob_negation_with_wildcard() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &["a.md", "draft-b.md", "draft-c.md", "final.md"],
+        );
+        let files = discover_files(tmp.path()).unwrap();
+
+        let matched = match_glob(tmp.path(), &files, "!draft-*").unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert!(!rels.iter().any(|r| r.starts_with("draft-")));
+        assert!(rels.contains(&"a.md"));
+        assert!(rels.contains(&"final.md"));
+        assert_eq!(matched.len(), 2);
+    }
+
+    #[test]
+    fn glob_negation_double_star_excludes_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["index.md", "notes/index.md", "notes/real.md"]);
+        let files = discover_files(tmp.path()).unwrap();
+
+        let matched = match_glob(tmp.path(), &files, "!**/index.md").unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert!(!rels.iter().any(|r| r.ends_with("index.md")));
+        assert!(rels.contains(&"notes/real.md"));
+        assert_eq!(matched.len(), 1);
     }
 
     fn make_files(dir: &Path, paths: &[&str]) {

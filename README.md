@@ -107,11 +107,14 @@ hyalo find --regexp "retry.*backoff"
 hyalo find -e "TODO|FIXME|HACK"
 hyalo find -e "fn\s+\w+_test" --tag rust
 
-# Filter by property (operator: =, !=, >, >=, <, <=, or existence)
+# Filter by property (operator: =, !=, >, >=, <, <=, existence, absence, or regex)
 hyalo find --property status=draft
 hyalo find --property status!=done
 hyalo find --property priority>=3
 hyalo find --property status          # existence check (has this property)
+hyalo find --property '!status'       # absence check (missing this property)
+hyalo find --property 'title~=draft'  # regex match on property value (unanchored)
+hyalo find --property 'title~=/^Draft/i'  # regex with flags (i = case-insensitive)
 hyalo find --property status=draft --property topic=cli   # AND
 
 # Filter by tag (prefix-matches hierarchy: --tag inbox matches inbox/processing)
@@ -122,15 +125,17 @@ hyalo find --task todo    # open tasks
 hyalo find --task done    # completed tasks
 hyalo find --task any     # any tasks
 
-# Filter by section heading (case-insensitive whole-string match)
-hyalo find --section "Tasks" --task todo          # open tasks in ## Tasks sections
+# Filter by section heading (case-insensitive substring match by default)
+hyalo find --section "Tasks" --task todo          # matches "Tasks", "Tasks [4/4]", etc.
 hyalo find --section "## Design" "TODO"           # content search scoped to level-2 Design sections
 hyalo find --section "# Introduction" --fields sections  # level-pinned: only # Introduction, not ## Introduction
 hyalo find --section "Tasks" --section "Notes"    # OR: match either section
+hyalo find --section "~=/DEC-03[12]/"             # regex section match
 
 # Scope to file(s)
 hyalo find --file path/to/note.md
 hyalo find --glob "notes/*.md"
+hyalo find --glob '!**/draft-*'      # exclude files matching a pattern (glob negation)
 
 # Control returned fields (default: all)
 hyalo find --fields properties,tags

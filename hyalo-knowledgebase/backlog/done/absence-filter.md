@@ -1,15 +1,15 @@
 ---
-title: "Property absence filter (--no-property / --property !K)"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: medium
 origin: dogfooding knowledgebase housekeeping + docs/content vault
+priority: medium
+status: completed
 tags:
-  - backlog
-  - cli
-  - filtering
-  - ux
+- backlog
+- cli
+- filtering
+- ux
+title: Property absence filter (--no-property / --property !K)
+type: backlog
 ---
 
 # Property absence filter (--no-property / --property !K)
