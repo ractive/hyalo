@@ -91,10 +91,18 @@ Follows ripgrep convention. Negation globs are AND'd: file must match all positi
 - [ ] Help text documents negation syntax
 - [ ] E2e tests cover negation, combined include+exclude
 
+### Documentation & help text audit
+- [ ] `find --help` long_about documents all new operators (`!K`, `~=`, section substring)
+- [ ] `--fields`, `--property`, `--section`, `--glob` arg descriptions updated
+- [ ] Top-level `hyalo --help` COOKBOOK has examples of new syntax
+- [ ] README.md find examples updated with new operators
+- [ ] SKILL.md updated with new filter examples
+- [ ] Knowledgebase backlog items marked completed and moved to `done/`
+- [ ] Decision log entry for new filter syntax
+
 ## Acceptance Criteria
 
 - [ ] All four filter enhancements work individually and in combination
-- [ ] Help text and README updated for all new syntax
 - [ ] All quality gates pass (fmt, clippy, tests)
 
 ## Deferred
