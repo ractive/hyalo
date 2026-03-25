@@ -204,7 +204,7 @@ hyalo tags rename --from old-tag --to new-tag --glob "notes/*.md"
 
 ### summary
 
-High-level vault overview: file counts, property and tag aggregates, status groups, tasks, orphan files (no inbound links), and recently modified files.
+High-level vault overview: file counts, property and tag aggregates, status groups, tasks, orphan files (fully isolated — no links in or out), and recently modified files.
 
 ```sh
 hyalo summary
@@ -213,7 +213,7 @@ hyalo summary --recent 5          # control how many recent files to show (defau
 hyalo summary --depth 1           # collapse subdirectories beyond depth 1
 hyalo summary --format text
 hyalo summary --jq '.tasks.total'
-hyalo summary --jq '.orphans.files'  # list files with no inbound links
+hyalo summary --jq '.orphans.files'  # list fully isolated files (no links in or out)
 hyalo summary --format text --hints
 ```
 

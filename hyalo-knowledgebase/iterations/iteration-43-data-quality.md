@@ -26,7 +26,7 @@ Improve data quality tooling and write fidelity: orphan detection in summary, in
 ### Orphan detection in summary
 - [x] Add `all_targets()` method to `LinkGraph`
 - [x] Add `OrphanSummary` type and extend `VaultSummary`
-- [x] Compute orphans (files with no inbound links) in summary command
+- [x] Compute orphans (fully isolated files — no links in or out) in summary command
 - [x] Update text formatter to display orphans
 - [x] E2e tests for orphan detection
 - [x] Update README documentation
@@ -49,7 +49,7 @@ Improve data quality tooling and write fidelity: orphan detection in summary, in
 
 ## Acceptance Criteria
 
-- [x] Orphan files (no inbound links) reported in summary
+- [x] Fully isolated orphan files (no links in or out) reported in summary
 - [ ] Inconsistency detection flags rare property values
 - [ ] Frontmatter key order preserved on mutation
 - [ ] All quality gates pass

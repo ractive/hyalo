@@ -555,7 +555,8 @@ fn summary_json_has_orphans_field() {
 fn summary_orphans_detects_unlinked_files() {
     let tmp = TempDir::new().unwrap();
 
-    // a.md links to b, so b is NOT an orphan. a and c are orphans (nothing links to them).
+    // a.md links to b, so a has outbound (not orphan) and b has inbound (not orphan).
+    // Only c.md is fully isolated (no links in or out).
     write_md(
         tmp.path(),
         "a.md",

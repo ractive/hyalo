@@ -201,7 +201,7 @@ const TASK_INFO_FILTER: &str =
 const TASK_READ_RESULT_FILTER: &str =
     r#""\"\(.file)\":\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
 
-/// `VaultSummary`: `{files, properties, recent_files, status, tags, tasks}`
+/// `VaultSummary`: `{files, orphans, properties, recent_files, status, tags, tasks}`
 const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then "\n\(.files.by_directory | map("  \"\(.directory)\": \(.count)") | join("\n"))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nOrphans: \(.orphans.total)\(if (.orphans.files | length) > 0 then "\n\(.orphans.files | map("  \"\(.)\"") | join("\n"))" else "" end)\nRecent:\(if (.recent_files | length) > 0 then "\n\(.recent_files | map("  \"\(.path)\"") | join("\n"))" else " (none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`

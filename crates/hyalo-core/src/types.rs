@@ -137,7 +137,8 @@ pub struct VaultSummary {
     pub recent_files: Vec<RecentFile>,
 }
 
-/// Files with no inbound links (nothing links to them).
+/// Fully isolated files: no inbound links (nothing links to them) and no
+/// outbound links (they don't link to anything).
 #[derive(Debug, Clone, Serialize)]
 pub struct OrphanSummary {
     pub total: usize,

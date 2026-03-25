@@ -43,17 +43,30 @@ impl LinkGraph {
     /// `LinkGraphBuild::warnings` so callers can decide how to surface them.
     pub fn build(dir: &Path) -> Result<LinkGraphBuild> {
         let files = discovery::discover_files(dir)?;
+        let pairs: Vec<(PathBuf, PathBuf)> = files
+            .into_iter()
+            .map(|f| {
+                let rel = f.strip_prefix(dir).unwrap_or(&f).to_path_buf();
+                (f, rel)
+            })
+            .collect();
+        Self::build_from_files(&pairs)
+    }
+
+    /// Build a link graph from a pre-collected list of `(absolute_path, relative_path)` pairs.
+    ///
+    /// Use this when the caller already has the file list (e.g. from `collect_files`)
+    /// to avoid a redundant directory traversal.
+    pub fn build_from_files(files: &[(PathBuf, PathBuf)]) -> Result<LinkGraphBuild> {
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::new();
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
 
-        for file in &files {
-            let rel = file.strip_prefix(dir).unwrap_or(file).to_path_buf();
-
+        for (full_path, rel) in files {
             let mut visitor = LinkGraphVisitor::new(rel.clone());
-            match scanner::scan_file_multi(file, &mut [&mut visitor]) {
+            match scanner::scan_file_multi(full_path, &mut [&mut visitor]) {
                 Ok(()) => {}
                 Err(e) if frontmatter::is_parse_error(&e) => {
-                    warnings.push((rel, e.to_string()));
+                    warnings.push((rel.clone(), e.to_string()));
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -93,17 +106,21 @@ impl LinkGraph {
 
     /// Return the set of all normalized link targets that have at least one
     /// inbound link.
-    pub fn all_targets(&self) -> HashSet<&str> {
-        self.index.keys().map(String::as_str).collect()
+    pub fn all_targets(&self) -> HashSet<String> {
+        self.index.keys().cloned().collect()
     }
 
     /// Return the set of all files that contain at least one outbound link.
-    /// Paths are vault-relative (e.g. `"notes/a.md"`).
+    /// Paths are vault-relative with forward slashes (e.g. `"notes/a.md"`).
     pub fn all_sources(&self) -> HashSet<String> {
         self.index
             .values()
             .flatten()
-            .map(|entry| entry.source.to_string_lossy().into_owned())
+            .map(|entry| {
+                // Normalize to forward slashes for consistent cross-platform comparison
+                // with vault-relative paths from discovery.
+                entry.source.to_string_lossy().replace('\\', "/")
+            })
             .collect()
     }
 
