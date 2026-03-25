@@ -762,6 +762,80 @@ fn summary_orphans_empty_vault() {
 }
 
 // ---------------------------------------------------------------------------
+// Orphan + glob interaction
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summary_orphans_glob_uses_vault_wide_links() {
+    let tmp = TempDir::new().unwrap();
+
+    // root.md (outside glob) links to notes/a.md (inside glob).
+    // notes/b.md has no links at all.
+    write_md(
+        tmp.path(),
+        "root.md",
+        md!(r"
+---
+title: Root
+---
+See [[notes/a]]
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes/a.md",
+        md!(r"
+---
+title: A
+---
+Content
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes/b.md",
+        md!(r"
+---
+title: B
+---
+No links
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--glob",
+            "notes/*.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Summary only counts glob-matched files
+    assert_eq!(json["files"]["total"].as_u64().unwrap(), 2);
+
+    let orphans = json["orphans"]["files"].as_array().unwrap();
+    let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
+
+    // notes/a.md is linked from root.md (outside glob) — NOT an orphan
+    assert!(
+        !orphan_paths.contains(&"notes/a.md"),
+        "notes/a.md should NOT be orphan (linked from outside glob)"
+    );
+    // notes/b.md has no links in or out — orphan
+    assert!(
+        orphan_paths.contains(&"notes/b.md"),
+        "notes/b.md should be orphan"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Glob negation
 // ---------------------------------------------------------------------------
 

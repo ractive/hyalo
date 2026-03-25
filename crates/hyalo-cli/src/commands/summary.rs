@@ -192,11 +192,12 @@ pub fn summary(
         .collect();
 
     // Build orphan list: files with no inbound AND no outbound links (fully isolated).
-    // Reuses the already-collected file list to avoid a second directory traversal.
-    // Only considers successfully parsed files (excludes files skipped due to parse errors).
+    // The link graph is built vault-wide (not glob-filtered) so that links from files
+    // outside the glob still count — a file linked from anywhere is not an orphan.
+    // Orphan candidates are restricted to good_files (glob-scoped, parse-error-free).
     let orphans = {
-        let build = LinkGraph::build_from_files(&good_files)
-            .context("failed to build link graph for orphan detection")?;
+        let build =
+            LinkGraph::build(dir).context("failed to build link graph for orphan detection")?;
         let targets = build.graph.all_targets();
         let sources = build.graph.all_sources();
         let mut orphan_files: Vec<String> = good_files
