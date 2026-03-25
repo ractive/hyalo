@@ -42,7 +42,7 @@ Most flags have short aliases for quick interactive use:
 | `-p` | `--property` | find, set, remove, append |
 | `-t` | `--tag` | find, set, remove |
 | `-s` | `--section` | find, read |
-| `-f` | `--file` | find, read, set, remove, append, task, backlinks |
+| `-f` | `--file` | find, read, set, remove, append, task, backlinks, mv |
 | `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary |
 | `-n` | `--limit` | find |
 | `-n` | `--recent` | summary |

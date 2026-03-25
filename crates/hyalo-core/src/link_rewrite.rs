@@ -193,14 +193,14 @@ fn plan_inbound_rewrites(
     for line in content.split('\n') {
         line_num += 1;
 
-        // ---- Frontmatter handling ----
+        // ---- Frontmatter handling (trim() matches scanner behaviour) ----
         if !frontmatter_done {
-            if line_num == 1 && line.trim_end() == "---" {
+            if line_num == 1 && line.trim() == "---" {
                 in_frontmatter = true;
                 continue;
             }
             if in_frontmatter {
-                if line.trim_end() == "---" {
+                if line.trim() == "---" {
                     in_frontmatter = false;
                     frontmatter_done = true;
                 }
@@ -236,13 +236,8 @@ fn plan_inbound_rewrites(
                     t == old_stem || t == old_rel
                 }
                 LinkKind::Markdown => {
-                    // Normalize relative target against the source file.
-                    let norm = if span.link.target.contains('/') || span.link.target.contains('\\')
-                    {
-                        normalize_target(Path::new(source_rel), &span.link.target)
-                    } else {
-                        span.link.target.clone()
-                    };
+                    // Normalize relative target against the source file's directory.
+                    let norm = normalize_target(Path::new(source_rel), &span.link.target);
                     norm == old_rel || norm == old_stem
                 }
             };
@@ -300,14 +295,14 @@ fn plan_outbound_rewrites(content: &str, old_rel: &str, new_rel: &str) -> Vec<Re
     for line in content.split('\n') {
         line_num += 1;
 
-        // ---- Frontmatter handling ----
+        // ---- Frontmatter handling (trim() matches scanner behaviour) ----
         if !frontmatter_done {
-            if line_num == 1 && line.trim_end() == "---" {
+            if line_num == 1 && line.trim() == "---" {
                 in_frontmatter = true;
                 continue;
             }
             if in_frontmatter {
-                if line.trim_end() == "---" {
+                if line.trim() == "---" {
                     in_frontmatter = false;
                     frontmatter_done = true;
                 }
@@ -341,18 +336,8 @@ fn plan_outbound_rewrites(content: &str, old_rel: &str, new_rel: &str) -> Vec<Re
                 continue;
             }
 
-            // Resolve target relative to the OLD location.
-            let resolved = if span.link.target.contains('/') || span.link.target.contains('\\') {
-                normalize_target(Path::new(old_rel), &span.link.target)
-            } else {
-                // Bare filename (no path separator): resolves from old dir.
-                let old_dir = parent_dir(old_rel);
-                if old_dir.is_empty() {
-                    span.link.target.clone()
-                } else {
-                    normalize_target(Path::new(old_rel), &span.link.target)
-                }
-            };
+            // Resolve target relative to the OLD location's directory.
+            let resolved = normalize_target(Path::new(old_rel), &span.link.target);
 
             // Compute new relative path from the NEW location.
             let new_target = relative_path_between(new_rel, &resolved);
@@ -430,14 +415,11 @@ fn apply_replacements(content: &str, replacements: &[Replacement]) -> String {
 
         out.push_str(&line);
 
-        // Re-add '\n' between lines. Skip after the last segment so we don't
-        // add an extra newline unless the original content ended with one.
-        if !is_last || ends_with_newline && raw_line.is_empty() {
-            // The split('\n') on "a\nb\n" gives ["a", "b", ""].
-            // We only push '\n' between real segments (not after the final empty one).
-            if !is_last {
-                out.push('\n');
-            }
+        // Re-add '\n' between lines but not after the final segment.
+        // split('\n') on "a\nb\n" gives ["a", "b", ""] — the trailing
+        // empty segment is handled by the safety net below.
+        if !is_last {
+            out.push('\n');
         }
     }
 
@@ -663,6 +645,21 @@ mod tests {
         assert_eq!(plans[0].replacements[0].old_text, "[note](../b.md)");
         // From sub/a.md to archive/b.md: ../archive/b.md
         assert_eq!(plans[0].replacements[0].new_text, "[note](../archive/b.md)");
+    }
+
+    #[test]
+    fn plan_mv_bare_markdown_link_from_subdir_not_false_positive() {
+        // sub/a.md has [note](b.md) which resolves to sub/b.md, NOT root b.md.
+        // Moving root b.md must NOT rewrite this link.
+        let vault = create_vault(&[
+            ("sub/a.md", "See [note](b.md) here\n"),
+            ("sub/b.md", "Content sub\n"),
+            ("b.md", "Content root\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md").unwrap();
+        // sub/a.md links to sub/b.md, not root b.md — should NOT be rewritten.
+        let sub_plan = plans.iter().find(|p| p.rel_path == "sub/a.md");
+        assert!(sub_plan.is_none(), "false positive: {plans:?}");
     }
 
     #[test]

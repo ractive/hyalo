@@ -1,5 +1,4 @@
 ---
-blocked-by: indexing
 date: 2026-03-21
 origin: dogfooding iteration-06
 priority: medium

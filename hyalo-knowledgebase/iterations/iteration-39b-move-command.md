@@ -1,10 +1,14 @@
 ---
-title: "Iteration 39b — Move Command"
-type: iteration
-date: 2026-03-25
-tags: [iteration, links, wikilinks, cli]
-status: planned
 branch: iter-39b/move-command
+date: 2026-03-25
+status: in-progress
+tags:
+- iteration
+- links
+- wikilinks
+- cli
+title: Iteration 39b — Move Command
+type: iteration
 ---
 
 # Iteration 39b — Move Command
