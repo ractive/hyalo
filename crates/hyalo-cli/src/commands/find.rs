@@ -1661,8 +1661,8 @@ Just intro, no tasks section.
         let arr = parsed.as_array().unwrap();
         for entry in arr {
             assert!(
-                entry["backlinks"].is_null(),
-                "backlinks should not be included by default"
+                !entry.as_object().unwrap().contains_key("backlinks"),
+                "backlinks key should be absent by default, not just null"
             );
         }
     }

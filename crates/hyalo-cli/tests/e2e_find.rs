@@ -584,8 +584,8 @@ fn find_fields_backlinks_not_included_by_default() {
 
     for entry in json.as_array().unwrap() {
         assert!(
-            entry["backlinks"].is_null(),
-            "backlinks should not be included by default"
+            !entry.as_object().unwrap().contains_key("backlinks"),
+            "backlinks key should be absent by default, not just null"
         );
     }
 }
