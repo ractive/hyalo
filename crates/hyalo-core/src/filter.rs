@@ -356,6 +356,7 @@ pub fn parse_task_filter(input: &str) -> Result<FindTaskFilter> {
 #[derive(Debug, Clone)]
 pub struct Fields {
     pub properties: bool,
+    pub properties_typed: bool,
     pub tags: bool,
     pub sections: bool,
     pub tasks: bool,
@@ -366,6 +367,7 @@ impl Default for Fields {
     fn default() -> Self {
         Self {
             properties: true,
+            properties_typed: false,
             tags: true,
             sections: true,
             tasks: true,
@@ -386,6 +388,7 @@ impl Fields {
 
         let mut fields = Fields {
             properties: false,
+            properties_typed: false,
             tags: false,
             sections: false,
             tasks: false,
@@ -400,12 +403,13 @@ impl Fields {
                 }
                 match part {
                     "properties" => fields.properties = true,
+                    "properties-typed" => fields.properties_typed = true,
                     "tags" => fields.tags = true,
                     "sections" => fields.sections = true,
                     "tasks" => fields.tasks = true,
                     "links" => fields.links = true,
                     unknown => bail!(
-                        "unknown field {:?}: valid fields are properties, tags, sections, tasks, links",
+                        "unknown field {:?}: valid fields are properties, properties-typed, tags, sections, tasks, links",
                         unknown
                     ),
                 }
@@ -689,6 +693,26 @@ mod tests {
         assert!(!f.sections);
         assert!(f.tasks);
         assert!(f.links);
+    }
+
+    #[test]
+    fn fields_properties_typed() {
+        let input = vec!["properties-typed".to_owned()];
+        let f = Fields::parse(&input).unwrap();
+        assert!(!f.properties);
+        assert!(f.properties_typed);
+        assert!(!f.tags);
+        assert!(!f.sections);
+        assert!(!f.tasks);
+        assert!(!f.links);
+    }
+
+    #[test]
+    fn fields_properties_and_properties_typed_together() {
+        let input = vec!["properties,properties-typed".to_owned()];
+        let f = Fields::parse(&input).unwrap();
+        assert!(f.properties);
+        assert!(f.properties_typed);
     }
 
     #[test]

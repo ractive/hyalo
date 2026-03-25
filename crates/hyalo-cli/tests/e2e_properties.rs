@@ -192,24 +192,19 @@ fn find_properties_single_file() {
     assert_eq!(entry["file"], "file.md");
 
     let props = entry["properties"]
-        .as_array()
-        .expect("field 'properties' should be an array");
-    let find_prop = |name: &str| {
-        props
-            .iter()
-            .find(|p| p["name"] == name)
-            .unwrap_or_else(|| panic!("property '{name}' should be present"))
-    };
-    assert_eq!(find_prop("title")["type"], "text");
-    assert_eq!(find_prop("title")["value"], "My Note");
-    assert_eq!(find_prop("priority")["type"], "number");
-    assert_eq!(find_prop("priority")["value"], 3);
-    assert_eq!(find_prop("draft")["type"], "checkbox");
-    assert_eq!(find_prop("draft")["value"], true);
-    assert_eq!(find_prop("created")["type"], "date");
+        .as_object()
+        .expect("field 'properties' should be an object");
+    // Values are present with correct scalar types
+    assert_eq!(props["title"], "My Note");
+    assert_eq!(props["priority"], 3);
+    assert_eq!(props["draft"], true);
+    assert!(
+        props.contains_key("created"),
+        "created property should be present"
+    );
     // "tags" should not appear as a property (it has its own dedicated field)
     assert!(
-        props.iter().all(|p| p["name"] != "tags"),
+        !props.contains_key("tags"),
         "tags should not be in properties: {props:?}"
     );
 }
@@ -277,7 +272,7 @@ fn find_properties_file_without_frontmatter() {
     let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json.len(), 1);
     assert_eq!(json[0]["file"], "plain.md");
-    let props = json[0]["properties"].as_array().unwrap();
+    let props = json[0]["properties"].as_object().unwrap();
     assert!(props.is_empty());
 }
 

@@ -309,6 +309,9 @@ enum Commands {
         /// Number of recent files to show (default: 10)
         #[arg(short = 'n', long, default_value = "10")]
         recent: usize,
+        /// Limit directory listing depth (0 = root only; stats are always full)
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
     #[command(
@@ -789,9 +792,11 @@ fn main() {
                 )
             }
         },
-        Commands::Summary { ref glob, recent } => {
-            summary_commands::summary(&dir, glob.as_deref(), recent, effective_format)
-        }
+        Commands::Summary {
+            ref glob,
+            recent,
+            depth,
+        } => summary_commands::summary(&dir, glob.as_deref(), recent, depth, effective_format),
         Commands::Set {
             ref properties,
             ref tag,

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::commands::outline::SectionScanner;
+use crate::commands::section_scanner::SectionScanner;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::content_search::ContentSearchVisitor;
@@ -119,7 +119,7 @@ pub fn find(
         };
 
         // Build visitor slice dynamically — only include Some visitors.
-        {
+        let scan_result = {
             let mut visitor_refs: Vec<&mut dyn FileVisitor> = Vec::new();
             visitor_refs.push(&mut fm);
             if let Some(ref mut ss) = section_scanner {
@@ -134,7 +134,15 @@ pub fn find(
             if let Some(ref mut cv) = content_visitor {
                 visitor_refs.push(cv);
             }
-            scanner::scan_file_multi(full_path, &mut visitor_refs)?;
+            scanner::scan_file_multi(full_path, &mut visitor_refs)
+        };
+        match scan_result {
+            Ok(()) => {}
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                eprintln!("warning: skipping {rel_path}: {e}");
+                continue;
+            }
+            Err(e) => return Err(e),
         }
 
         let props = fm.into_props();
@@ -316,6 +324,16 @@ fn build_file_object(
     canonical_dir: &Path,
 ) -> FileObject {
     let properties = if fields.properties {
+        let mut map = serde_json::Map::new();
+        for (name, value) in props.iter().filter(|(n, _)| n.as_str() != "tags") {
+            map.insert(name.clone(), frontmatter::yaml_to_json(value));
+        }
+        Some(map)
+    } else {
+        None
+    };
+
+    let properties_typed = if fields.properties_typed {
         Some(
             props
                 .iter()
@@ -374,6 +392,7 @@ fn build_file_object(
         file: rel_path.to_owned(),
         modified: modified.to_owned(),
         properties,
+        properties_typed,
         tags: tags_field,
         sections,
         tasks,
@@ -870,7 +889,7 @@ Just some text here.
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let arr = parsed.as_array().unwrap();
         for entry in arr {
-            assert!(entry["properties"].is_array());
+            assert!(entry["properties"].is_object());
             assert!(entry["tags"].is_null());
             assert!(entry["sections"].is_null());
             assert!(entry["tasks"].is_null());
@@ -1071,6 +1090,7 @@ Just some text here.
     fn needs_body_false_when_only_fm_fields() {
         let fields = Fields {
             properties: true,
+            properties_typed: false,
             tags: true,
             sections: false,
             tasks: false,
@@ -1083,6 +1103,7 @@ Just some text here.
     fn needs_body_true_when_pattern() {
         let fields = Fields {
             properties: true,
+            properties_typed: false,
             tags: true,
             sections: false,
             tasks: false,
@@ -1095,6 +1116,7 @@ Just some text here.
     fn needs_body_true_when_sections() {
         let fields = Fields {
             properties: false,
+            properties_typed: false,
             tags: false,
             sections: true,
             tasks: false,
@@ -1367,6 +1389,7 @@ Just intro, no tasks section.
     fn needs_body_true_when_section_filter() {
         let fields = Fields {
             properties: false,
+            properties_typed: false,
             tags: false,
             sections: false,
             tasks: false,
@@ -1374,5 +1397,173 @@ Just intro, no tasks section.
         };
         assert!(needs_body(&fields, false, false, true));
         assert!(!needs_body(&fields, false, false, false));
+    }
+
+    #[test]
+    fn find_skips_broken_frontmatter_file() {
+        let tmp = setup_vault();
+        // Add a file with unclosed frontmatter
+        fs::write(
+            tmp.path().join("broken.md"),
+            "---\ntitle: Broken\nNo closing delimiter.\n",
+        )
+        .unwrap();
+        let fields = Fields::default();
+        let result = find(
+            tmp.path(),
+            None,
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            None,
+            None,
+            &fields,
+            None,
+            None,
+            Format::Json,
+        )
+        .unwrap();
+        let out = unwrap_success(result);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        // Should return the 3 good files, skipping the broken one
+        assert_eq!(arr.len(), 3);
+        assert!(
+            !arr.iter()
+                .any(|e| e["file"].as_str().unwrap().contains("broken"))
+        );
+    }
+
+    // --- find: properties-typed field ---
+
+    #[test]
+    fn find_fields_properties_typed_is_array() {
+        let tmp = setup_vault();
+        let fields = Fields::parse(&["properties-typed".to_owned()]).unwrap();
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                Some("alpha.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        let entry = &arr[0];
+
+        // properties_typed must be an array of {name, type, value} objects
+        let typed = entry["properties_typed"]
+            .as_array()
+            .expect("properties_typed should be an array");
+        assert!(!typed.is_empty());
+
+        for item in typed {
+            assert!(
+                item["name"].is_string(),
+                "each item must have a string 'name'"
+            );
+            assert!(
+                item["type"].is_string(),
+                "each item must have a string 'type'"
+            );
+            assert!(!item["value"].is_null(), "each item must have a 'value'");
+        }
+
+        // tags must be excluded from properties_typed
+        assert!(
+            typed.iter().all(|p| p["name"] != "tags"),
+            "tags should not appear in properties_typed"
+        );
+
+        // properties (map) should not be present when not requested
+        assert!(
+            entry["properties"].is_null(),
+            "properties map should be absent"
+        );
+    }
+
+    #[test]
+    fn find_fields_properties_and_properties_typed_together() {
+        let tmp = setup_vault();
+        let fields = Fields::parse(&["properties,properties-typed".to_owned()]).unwrap();
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                Some("alpha.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        let entry = &arr[0];
+
+        // Both fields present simultaneously
+        assert!(
+            entry["properties"].is_object(),
+            "properties map should be present"
+        );
+        assert!(
+            entry["properties_typed"].is_array(),
+            "properties_typed should be present"
+        );
+    }
+
+    #[test]
+    fn find_fields_properties_typed_type_values() {
+        let tmp = setup_vault();
+        let fields = Fields::parse(&["properties-typed".to_owned()]).unwrap();
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                Some("alpha.md"),
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        let typed = arr[0]["properties_typed"].as_array().unwrap();
+
+        // alpha.md has status: planned (text) and title: Alpha Note (text)
+        let status = typed
+            .iter()
+            .find(|p| p["name"] == "status")
+            .expect("status property missing");
+        assert_eq!(status["type"], "text");
+        assert_eq!(status["value"], "planned");
     }
 }

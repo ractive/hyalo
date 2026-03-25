@@ -1,16 +1,16 @@
 ---
-title: "Properties as map (not array) in JSON output"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: medium
 origin: dogfooding docs/content vault jq queries
+priority: medium
+status: completed
 tags:
-  - backlog
-  - cli
-  - output
-  - llm
-  - ux
+- backlog
+- cli
+- output
+- llm
+- ux
+title: Properties as map (not array) in JSON output
+type: backlog
 ---
 
 # Properties as map (not array) in JSON output
