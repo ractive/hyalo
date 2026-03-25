@@ -56,14 +56,20 @@ impl LinkGraph {
                 (f, rel)
             })
             .collect();
-        Self::build_from_files(&pairs)
+        Self::build_from_files(&pairs, site_prefix)
     }
 
     /// Build a link graph from a pre-collected list of `(absolute_path, relative_path)` pairs.
     ///
+    /// `site_prefix` is an optional path prefix stripped from absolute links
+    /// (those starting with `/`) before resolution.  See [`LinkGraph::build`] for details.
+    ///
     /// Use this when the caller already has the file list (e.g. from `collect_files`)
     /// to avoid a redundant directory traversal.
-    pub fn build_from_files(files: &[(PathBuf, PathBuf)]) -> Result<LinkGraphBuild> {
+    pub fn build_from_files(
+        files: &[(PathBuf, PathBuf)],
+        site_prefix: Option<&str>,
+    ) -> Result<LinkGraphBuild> {
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::new();
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
 

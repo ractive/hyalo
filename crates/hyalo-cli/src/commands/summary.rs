@@ -197,7 +197,7 @@ pub fn summary(
     // Orphan candidates are restricted to good_files (glob-scoped, parse-error-free).
     let orphans = {
         let build =
-            LinkGraph::build(dir).context("failed to build link graph for orphan detection")?;
+            LinkGraph::build(dir, None).context("failed to build link graph for orphan detection")?;
         let targets = build.graph.all_targets();
         let sources = build.graph.all_sources();
         let mut orphan_files: Vec<String> = good_files

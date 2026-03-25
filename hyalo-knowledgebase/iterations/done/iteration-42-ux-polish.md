@@ -1,7 +1,7 @@
 ---
 branch: iter-42/ux-polish
 date: 2026-03-25
-status: in-progress
+status: completed
 tags:
 - iteration
 - ux
@@ -20,7 +20,7 @@ Address UX friction found during dogfooding: config-aware help text, properties-
 ## Backlog items
 
 - [[backlog/config-aware-help-text]] (medium)
-- [[backlog/backlinks-absolute-path-resolution]] (medium)
+- [[backlog/done/backlinks-absolute-path-resolution]] (medium)
 - [[backlog/properties-typed-naming-inconsistency]] (low)
 - [[backlog/hints-flag-no-op-for-most-commands]] (low)
 

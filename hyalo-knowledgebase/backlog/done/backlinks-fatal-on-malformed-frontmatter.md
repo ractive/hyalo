@@ -1,11 +1,14 @@
 ---
-title: "Backlinks scanner treats malformed frontmatter as fatal error"
-type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1 against docs/content (3,517 files)
 priority: critical
-status: planned
-tags: [backlog, backlinks, robustness]
+status: completed
+tags:
+- backlog
+- backlinks
+- robustness
+title: Backlinks scanner treats malformed frontmatter as fatal error
+type: backlog
 ---
 
 # Backlinks scanner treats malformed frontmatter as fatal error

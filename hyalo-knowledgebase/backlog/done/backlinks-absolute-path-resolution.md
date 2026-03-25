@@ -1,11 +1,15 @@
 ---
-title: "Backlinks don't resolve site-absolute links (/docs/...)"
-type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1 against vscode-docs/docs (2,772 links, all absolute)
 priority: medium
-status: planned
-tags: [backlog, backlinks, links, ux]
+status: completed
+tags:
+- backlog
+- backlinks
+- links
+- ux
+title: Backlinks don't resolve site-absolute links (/docs/...)
+type: backlog
 ---
 
 # Backlinks don't resolve site-absolute links
