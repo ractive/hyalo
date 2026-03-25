@@ -92,10 +92,19 @@ impl LinkGraph {
     }
 
     /// Return the set of all normalized link targets that have at least one
-    /// inbound link.  Used by `summary` to compute orphan files (files that
-    /// nothing links to).
+    /// inbound link.
     pub fn all_targets(&self) -> HashSet<&str> {
         self.index.keys().map(String::as_str).collect()
+    }
+
+    /// Return the set of all files that contain at least one outbound link.
+    /// Paths are vault-relative (e.g. `"notes/a.md"`).
+    pub fn all_sources(&self) -> HashSet<String> {
+        self.index
+            .values()
+            .flatten()
+            .map(|entry| entry.source.to_string_lossy().into_owned())
+            .collect()
     }
 
     /// Look up all files that link to the given target.

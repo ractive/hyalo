@@ -188,17 +188,19 @@ pub fn summary(
         })
         .collect();
 
-    // Build orphan list: files with no inbound links
+    // Build orphan list: files with no inbound AND no outbound links (fully isolated)
     let orphans = {
         let build = LinkGraph::build(dir)?;
         let targets = build.graph.all_targets();
+        let sources = build.graph.all_sources();
         let mut orphan_files: Vec<String> = files
             .iter()
             .map(|(_, rel)| rel.as_str())
             .filter(|rel| {
-                // Check both with and without .md extension against the target set
                 let without_md = rel.strip_suffix(".md").unwrap_or(rel);
-                !targets.contains(rel) && !targets.contains(without_md)
+                let has_inbound = targets.contains(rel) || targets.contains(without_md);
+                let has_outbound = sources.contains(*rel);
+                !has_inbound && !has_outbound
             })
             .map(String::from)
             .collect();

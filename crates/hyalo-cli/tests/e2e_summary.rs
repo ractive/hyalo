@@ -603,12 +603,19 @@ No links to me
     let orphans = json["orphans"]["files"].as_array().unwrap();
     let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
 
-    // a.md and c.md are orphans (nothing links to them)
-    assert!(orphan_paths.contains(&"a.md"), "a.md should be orphan");
+    // c.md is the only orphan: no inbound AND no outbound links
     assert!(orphan_paths.contains(&"c.md"), "c.md should be orphan");
-    // b.md is linked from a.md, so NOT an orphan
-    assert!(!orphan_paths.contains(&"b.md"), "b.md should NOT be orphan");
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 2);
+    // a.md has outbound links (to b), so NOT an orphan
+    assert!(
+        !orphan_paths.contains(&"a.md"),
+        "a.md should NOT be orphan (has outbound)"
+    );
+    // b.md has inbound links (from a), so NOT an orphan
+    assert!(
+        !orphan_paths.contains(&"b.md"),
+        "b.md should NOT be orphan (has inbound)"
+    );
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 1);
 }
 
 #[test]
