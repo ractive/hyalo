@@ -118,13 +118,14 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
 }
 
 impl FileVisitor for ContentSearchVisitor {
-    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
-        // Check for ATX heading and update section context.
+    fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
+        // Use raw text for heading detection so that code spans in headings
+        // (e.g. `## The \`versions\` field`) are preserved in section context.
         if let Some((level, heading_text)) = parse_atx_heading(raw) {
             self.current_section = format!("{} {}", "#".repeat(level as usize), heading_text);
         }
 
-        // Check for match.
+        // Match against raw text so that users can search for backtick content.
         if self.is_match(raw) {
             self.matches.push(ContentMatch {
                 line: line_num,
@@ -133,6 +134,18 @@ impl FileVisitor for ContentSearchVisitor {
             });
         }
 
+        ScanAction::Continue
+    }
+
+    fn on_code_block_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+        // Do NOT parse headings here — `#` inside code blocks is code, not structure.
+        if self.is_match(raw) {
+            self.matches.push(ContentMatch {
+                line: line_num,
+                section: self.current_section.clone(),
+                text: raw.to_owned(),
+            });
+        }
         ScanAction::Continue
     }
 }
@@ -149,7 +162,8 @@ mod tests {
         let mut visitor = ContentSearchVisitor::new(pattern);
         let lines: Vec<&str> = content.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            visitor.on_body_line(line, i + 1);
+            // Test helpers pass raw == cleaned (no stripping needed in unit tests).
+            visitor.on_body_line(line, line, i + 1);
         }
         visitor.into_matches()
     }
@@ -158,7 +172,8 @@ mod tests {
         let mut visitor = ContentSearchVisitor::regex(pattern).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            visitor.on_body_line(line, i + 1);
+            // Test helpers pass raw == cleaned (no stripping needed in unit tests).
+            visitor.on_body_line(line, line, i + 1);
         }
         visitor.into_matches()
     }
@@ -200,7 +215,7 @@ mod tests {
     #[test]
     fn has_matches_true_after_match() {
         let mut visitor = ContentSearchVisitor::new("hello");
-        visitor.on_body_line("say hello", 1);
+        visitor.on_body_line("say hello", "say hello", 1);
         assert!(visitor.has_matches());
     }
 
@@ -246,8 +261,8 @@ mod tests {
     #[test]
     fn into_matches_consumes_visitor() {
         let mut visitor = ContentSearchVisitor::new("hello");
-        visitor.on_body_line("say hello", 1);
-        visitor.on_body_line("hello again", 2);
+        visitor.on_body_line("say hello", "say hello", 1);
+        visitor.on_body_line("hello again", "hello again", 2);
         let matches = visitor.into_matches();
         assert_eq!(matches.len(), 2);
     }
@@ -262,6 +277,28 @@ mod tests {
     fn invalid_atx_heading_not_tracked() {
         let matches = run_visitor("#NoSpace\nbody\n", "body");
         assert_eq!(matches[0].section, "");
+    }
+
+    #[test]
+    fn heading_with_inline_code_span_preserved_in_section() {
+        // The heading `## The \`versions\` field` must appear verbatim in the
+        // section context — not with the code span replaced by spaces.
+        //
+        // This test drives raw text directly to on_body_line to isolate the
+        // ContentSearchVisitor from dispatch_body_line's stripping logic.
+        let content = "## The `versions` field\nsome text\n";
+        let matches = run_visitor(content, "text");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].section, "## The `versions` field");
+    }
+
+    #[test]
+    fn heading_with_inline_code_span_is_matchable() {
+        // Users should be able to search for content inside a code span in a heading.
+        let content = "## The `versions` field\n";
+        let matches = run_visitor(content, "versions");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "## The `versions` field");
     }
 
     // --- regex mode ---
@@ -354,6 +391,58 @@ mod tests {
             .join("|");
         let result = ContentSearchVisitor::regex(&huge);
         assert!(result.is_err(), "oversized pattern should be rejected");
+    }
+
+    // --- full pipeline (code block coverage) ---
+
+    fn run_full_scan(content: &str, pattern: &str) -> Vec<ContentMatch> {
+        use crate::scanner::scan_reader_multi;
+        let mut visitor = ContentSearchVisitor::new(pattern);
+        scan_reader_multi(content.as_bytes(), &mut [&mut visitor]).unwrap();
+        visitor.into_matches()
+    }
+
+    #[test]
+    fn finds_match_inside_code_block() {
+        let content = "---\n---\n## Code\n```rust\nlet typescript = 42;\n```\n";
+        let matches = run_full_scan(content, "typescript");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, 5);
+        assert_eq!(matches[0].section, "## Code");
+    }
+
+    #[test]
+    fn finds_match_inside_code_block_regex() {
+        use crate::scanner::scan_reader_multi;
+        let content = "---\n---\n```\nfoo_bar_baz\n```\n";
+        let mut visitor = ContentSearchVisitor::regex("foo.*baz").unwrap();
+        scan_reader_multi(content.as_bytes(), &mut [&mut visitor]).unwrap();
+        let matches = visitor.into_matches();
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn code_block_match_outside_and_inside() {
+        let content = "---\n---\nhello world\n```\nhello code\n```\n";
+        let matches = run_full_scan(content, "hello");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn heading_inside_code_block_not_tracked_as_section() {
+        // A `#` line inside a code block must not change current_section
+        let content = "---\n---\n## Real Section\n```\n# not a heading\nfoo\n```\nbar\n";
+        let matches = run_full_scan(content, "bar");
+        assert_eq!(matches.len(), 1);
+        // section should still be the last real heading, not the code block `#`
+        assert_eq!(matches[0].section, "## Real Section");
+    }
+
+    #[test]
+    fn no_match_inside_code_block_when_pattern_absent() {
+        let content = "---\n---\n```\nsome code here\n```\n";
+        let matches = run_full_scan(content, "zzz");
+        assert!(matches.is_empty());
     }
 
     // --- contains_ignore_ascii_case ---

@@ -23,8 +23,8 @@ pub fn properties_summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    // Aggregate: name -> (type, count)
-    let mut agg: std::collections::BTreeMap<String, (String, usize)> =
+    // Aggregate: (name, type) -> count — same key as summary command so both agree.
+    let mut agg: std::collections::BTreeMap<(String, String), usize> =
         std::collections::BTreeMap::new();
 
     for (fp, rel) in &files {
@@ -37,20 +37,20 @@ pub fn properties_summary(
             Err(e) => return Err(e),
         };
         for (key, value) in props.iter().filter(|(k, _)| k.as_str() != "tags") {
-            agg.entry(key.clone())
-                .and_modify(|entry| entry.1 += 1)
-                .or_insert_with(|| (frontmatter::infer_type(value).to_owned(), 1));
+            let prop_type = frontmatter::infer_type(value).to_owned();
+            *agg.entry((key.clone(), prop_type)).or_insert(0) += 1;
         }
     }
 
-    let result: Vec<PropertySummaryEntry> = agg
+    let mut result: Vec<PropertySummaryEntry> = agg
         .into_iter()
-        .map(|(name, (prop_type, count))| PropertySummaryEntry {
+        .map(|((name, prop_type), count)| PropertySummaryEntry {
             name,
             prop_type,
             count,
         })
         .collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
 
     Ok(CommandOutcome::Success(format_output(format, &result)))
 }
@@ -280,6 +280,30 @@ Keywords: other
         let tmp = tempfile::tempdir().unwrap();
         let outcome = properties_rename(tmp.path(), "foo", "foo", None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn properties_summary_distinguishes_types() {
+        // Same property name with different types should produce separate entries
+        // (consistent with summary command's (name, type) keying)
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("text.md"), "---\npriority: high\n---\n").unwrap();
+        fs::write(tmp.path().join("number.md"), "---\npriority: 3\n---\n").unwrap();
+
+        let (out, ok) =
+            unwrap_output(properties_summary(tmp.path(), None, None, Format::Json).unwrap());
+        assert!(ok);
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        let priority_entries: Vec<&serde_json::Value> =
+            parsed.iter().filter(|p| p["name"] == "priority").collect();
+        // Two entries: one text, one number — not collapsed into a single entry
+        assert_eq!(
+            priority_entries.len(),
+            2,
+            "expected 2 entries for 'priority', got: {priority_entries:?}"
+        );
+        assert_eq!(priority_entries[0]["count"], 1);
+        assert_eq!(priority_entries[1]["count"], 1);
     }
 
     #[test]

@@ -1930,3 +1930,154 @@ fn find_multi_file_returns_array() {
     assert!(json.is_array());
     assert_eq!(json.as_array().unwrap().len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Content search inside code blocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_pattern_matches_inside_code_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "code.md",
+        md!(r"
+---
+title: Code Example
+---
+# Code
+
+```rust
+let typescript = 42;
+```
+"),
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["typescript"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "should find match inside code block: {arr:?}");
+    assert_eq!(arr[0]["file"], "code.md");
+}
+
+#[test]
+fn find_regex_matches_inside_code_block() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "code.md",
+        md!(r"
+---
+title: Code Example
+---
+# Code
+
+```python
+def hello_world():
+    pass
+```
+"),
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["-e", "hello.*world"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "should find regex match inside code block");
+}
+
+#[test]
+fn find_pattern_only_inside_code_block_still_found() {
+    // Term appears ONLY inside a code block, not in body text
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "only_code.md",
+        md!(r"
+---
+title: Only Code
+---
+Nothing special here.
+
+```
+unique_code_term_xyz
+```
+"),
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["unique_code_term_xyz"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "term only inside code block should be found");
+}
+
+// ---------------------------------------------------------------------------
+// Heading code spans preserved
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_heading_with_code_span_preserved_in_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "heading.md",
+        md!(r"
+---
+title: Heading Test
+---
+## The `versions` field
+
+Some content about versions.
+"),
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["content about"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let matches = arr[0]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    // Section should preserve the backtick content
+    let section = matches[0]["section"].as_str().unwrap();
+    assert!(
+        section.contains("versions"),
+        "heading code span should be preserved, got: {section}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Regex case sensitivity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_regex_case_sensitive_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "case.md",
+        md!(r"
+---
+title: Case Test
+---
+TypeScript is great
+typescript is lowercase
+TYPESCRIPT is uppercase
+"),
+    );
+
+    // Default: case-insensitive, all 3 lines match
+    let (status, json, stderr) = find_json(&tmp, &["-e", "typescript"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let matches = json.as_array().unwrap()[0]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 3, "default should be case-insensitive");
+
+    // (?-i) override: only exact case matches
+    let (status, json, stderr) = find_json(&tmp, &["-e", "(?-i)TypeScript"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let matches = json.as_array().unwrap()[0]["matches"].as_array().unwrap();
+    assert_eq!(
+        matches.len(),
+        1,
+        "(?-i) should make search case-sensitive: {matches:?}"
+    );
+    assert_eq!(matches[0]["text"], "TypeScript is great");
+}
