@@ -113,7 +113,8 @@ fn error_find_malformed_yaml_graceful_skip() {
 }
 
 /// `hyalo summary` also uses the multi-visitor scan path. Malformed frontmatter
-/// must be gracefully skipped: exit 0, warning on stderr.
+/// must be gracefully skipped: exit 0, warning on stderr, and directory counts
+/// must not include the skipped file.
 #[test]
 fn error_summary_malformed_yaml_graceful_skip() {
     let tmp = TempDir::new().unwrap();
@@ -123,6 +124,16 @@ fn error_summary_malformed_yaml_graceful_skip() {
         md!(r"
 ---
 : invalid yaml [[[{
+---
+# Body
+"),
+    );
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: OK
 ---
 # Body
 "),
@@ -147,6 +158,21 @@ fn error_summary_malformed_yaml_graceful_skip() {
     assert!(
         stderr.contains("bad.md"),
         "warning should name the bad file; got: {stderr}"
+    );
+
+    // Directory counts must exclude the skipped file
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    let total = json["files"]["total"].as_u64().unwrap();
+    assert_eq!(total, 1, "only the good file should be counted");
+    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let root_count: u64 = by_dir
+        .iter()
+        .map(|d| d["count"].as_u64().unwrap_or(0))
+        .sum();
+    assert_eq!(
+        root_count, total,
+        "by_directory counts must sum to total files"
     );
 }
 

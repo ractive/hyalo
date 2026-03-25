@@ -57,8 +57,6 @@ pub fn summary(
                 _ => ".".to_owned(),
             }
         };
-        *dir_counts.entry(dir_key).or_insert(0) += 1;
-
         // Single-pass scan: collect frontmatter + count tasks
         let mut fm = FrontmatterCollector::new(true);
         let mut counter = TaskCounter::new();
@@ -71,6 +69,7 @@ pub fn summary(
             }
             Err(e) => return Err(e),
         }
+        *dir_counts.entry(dir_key).or_insert(0) += 1;
         let props = fm.into_props();
         let TaskCount { total, done } = counter.into_count();
         total_tasks += total;
