@@ -34,10 +34,13 @@ pub fn backlinks(dir: &Path, file_arg: &str, format: Format) -> Result<CommandOu
     };
 
     // Build the in-memory link graph
-    let graph = LinkGraph::build(dir)?;
+    let build = LinkGraph::build(dir)?;
+    for (path, msg) in &build.warnings {
+        eprintln!("warning: skipping {}: {msg}", path.display());
+    }
 
     // Look up backlinks — try with and without .md since wikilinks may use either
-    let entries = graph.backlinks(&rel);
+    let entries = build.graph.backlinks(&rel);
 
     let items: Vec<BacklinkItem> = entries
         .iter()

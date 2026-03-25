@@ -66,7 +66,11 @@ pub struct RewritePlan {
 /// `dir`.
 pub fn plan_mv(dir: &Path, old_rel: &str, new_rel: &str) -> Result<Vec<RewritePlan>> {
     // Step 1: build link graph to discover inbound links.
-    let graph = LinkGraph::build(dir).context("building link graph")?;
+    let build = LinkGraph::build(dir).context("building link graph")?;
+    for (path, msg) in &build.warnings {
+        eprintln!("warning: skipping {}: {msg}", path.display());
+    }
+    let graph = build.graph;
 
     let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
     let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);

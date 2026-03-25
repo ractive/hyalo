@@ -19,6 +19,14 @@ pub struct BacklinkEntry {
     pub link: Link,
 }
 
+/// Result of building a link graph, including any files that were skipped.
+pub struct LinkGraphBuild {
+    /// The built link graph.
+    pub graph: LinkGraph,
+    /// Files that were skipped due to parse errors, with the error message.
+    pub warnings: Vec<(PathBuf, String)>,
+}
+
 /// In-memory reverse index mapping link targets to their sources.
 ///
 /// Keys are normalized target strings (as they appear in `[[target]]` or
@@ -30,9 +38,13 @@ pub struct LinkGraph {
 
 impl LinkGraph {
     /// Build a link graph by scanning all `.md` files under `dir`.
-    pub fn build(dir: &Path) -> Result<Self> {
+    ///
+    /// Files with malformed frontmatter are skipped and reported in
+    /// `LinkGraphBuild::warnings` so callers can decide how to surface them.
+    pub fn build(dir: &Path) -> Result<LinkGraphBuild> {
         let files = discovery::discover_files(dir)?;
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::new();
+        let mut warnings: Vec<(PathBuf, String)> = Vec::new();
 
         for file in &files {
             let rel = file.strip_prefix(dir).unwrap_or(file).to_path_buf();
@@ -41,7 +53,7 @@ impl LinkGraph {
             match scanner::scan_file_multi(file, &mut [&mut visitor]) {
                 Ok(()) => {}
                 Err(e) if frontmatter::is_parse_error(&e) => {
-                    eprintln!("warning: skipping {}: {e}", rel.display());
+                    warnings.push((rel, e.to_string()));
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -73,7 +85,10 @@ impl LinkGraph {
             }
         }
 
-        Ok(Self { index })
+        Ok(LinkGraphBuild {
+            graph: Self { index },
+            warnings,
+        })
     }
 
     /// Look up all files that link to the given target.
@@ -244,7 +259,8 @@ mod tests {
             ("b.md", "---\ntitle: B\n---\nSee [[a]] and [[c]]\n"),
             ("c.md", "---\ntitle: C\n---\nNo links here\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl_b = graph.backlinks("b");
         assert_eq!(bl_b.len(), 1);
@@ -270,7 +286,8 @@ mod tests {
             // `../a.md` from `sub/` resolves to `a.md` at the vault root.
             ("sub/b.md", "Back to [a](../a.md)\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         // Down-path links are stored normalized (no change needed).
         let bl = graph.backlinks("sub/b.md");
@@ -291,7 +308,8 @@ mod tests {
             ("assets/img.md", "# Image\n"),
             ("notes/page.md", "See [img](../assets/img.md)\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("assets/img.md");
         assert_eq!(bl.len(), 1);
@@ -310,7 +328,8 @@ mod tests {
             ("target.md", "# Target\n"),
             ("sub/a.md", "[link](../target.md)\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("target.md");
         assert_eq!(bl.len(), 1);
@@ -336,7 +355,8 @@ mod tests {
     #[test]
     fn build_graph_with_alias() {
         let vault = create_vault(&[("a.md", "See [[b|my note B]]\n")]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("b");
         assert_eq!(bl.len(), 1);
@@ -349,7 +369,8 @@ mod tests {
             ("a.md", "Link to [[notes]]\n"),
             ("b.md", "Link to [text](notes.md)\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         // Query with .md finds both the .md link and the bare wikilink
         let bl = graph.backlinks("notes.md");
@@ -363,7 +384,8 @@ mod tests {
     #[test]
     fn links_inside_code_blocks_ignored() {
         let vault = create_vault(&[("a.md", "---\ntitle: A\n---\n```\n[[b]]\n```\nReal [[c]]\n")]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         assert!(graph.backlinks("b").is_empty());
         assert_eq!(graph.backlinks("c").len(), 1);
@@ -372,17 +394,19 @@ mod tests {
     #[test]
     fn links_inside_inline_code_ignored() {
         let vault = create_vault(&[("a.md", "Use `[[b]]` syntax and [[c]]\n")]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         assert!(graph.backlinks("b").is_empty());
         assert_eq!(graph.backlinks("c").len(), 1);
     }
 
     #[test]
-    fn malformed_frontmatter_skipped() {
-        // With needs_frontmatter=false, malformed YAML is never parsed — no error
+    fn malformed_yaml_ignored_when_frontmatter_not_needed() {
+        // With needs_frontmatter=false, malformed YAML is never parsed — file is still indexed
         let vault = create_vault(&[("a.md", "---\n: bad yaml [[\n---\n[[b]]\n")]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
         assert_eq!(graph.backlinks("b").len(), 1);
     }
 
@@ -398,10 +422,14 @@ mod tests {
             ),
             ("also_good.md", "---\ntitle: Also Good\n---\n[[target]]\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+
+        // Warning should mention the bad file
+        assert_eq!(build.warnings.len(), 1);
+        assert!(build.warnings[0].0.to_str().unwrap().contains("bad.md"));
 
         // Both good files should contribute their links
-        let bl = graph.backlinks("target");
+        let bl = build.graph.backlinks("target");
         assert_eq!(bl.len(), 2, "both good files should link to target");
     }
 
@@ -417,7 +445,8 @@ mod tests {
         huge_fm.push_str("[[target]]\n");
 
         let vault = create_vault(&[("good.md", "[[target]]\n"), ("huge.md", &huge_fm)]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("target");
         assert_eq!(bl.len(), 1, "good file should still be indexed");
@@ -426,7 +455,8 @@ mod tests {
     #[test]
     fn empty_vault() {
         let vault = create_vault(&[]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
         assert!(graph.backlinks("anything").is_empty());
     }
 
@@ -479,7 +509,8 @@ mod tests {
                 "---\ntitle: Iter 1\n---\nSee [[backlog/item]]\n",
             ),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("backlog/item");
         assert_eq!(bl.len(), 1, "backlinks('backlog/item') should find 1 link");
@@ -500,7 +531,8 @@ mod tests {
             ("backlog/item.md", "Content\n"),
             ("a.md", "See [[backlog/item.md]]\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("backlog/item.md");
         assert_eq!(bl.len(), 1);
@@ -517,7 +549,8 @@ mod tests {
             ("other/target.md", "Content\n"),
             ("sub/source.md", "See [[other/target]]\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         // Must find the backlink via vault-relative path
         let bl = graph.backlinks("other/target");
@@ -540,7 +573,8 @@ mod tests {
             ("target.md", "Content\n"),
             ("sub/source.md", "See [link](../target.md)\n"),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl = graph.backlinks("target.md");
         assert_eq!(
@@ -562,7 +596,8 @@ mod tests {
                 "Wiki: [[docs/a]] and md: [link](../notes/b.md)\n",
             ),
         ]);
-        let graph = LinkGraph::build(vault.path()).unwrap();
+        let build = LinkGraph::build(vault.path()).unwrap();
+        let graph = build.graph;
 
         let bl_a = graph.backlinks("docs/a");
         assert_eq!(bl_a.len(), 1, "wikilink to docs/a should be found");

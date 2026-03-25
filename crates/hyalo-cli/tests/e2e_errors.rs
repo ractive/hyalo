@@ -179,7 +179,7 @@ title: OK
 /// `hyalo backlinks` must gracefully skip files with broken frontmatter
 /// instead of fatally erroring. Exit 0, warning on stderr, good files indexed.
 #[test]
-fn error_backlinks_malformed_yaml_graceful_skip() {
+fn error_backlinks_unclosed_frontmatter_graceful_skip() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -238,7 +238,7 @@ title: Target
 /// `hyalo find --fields backlinks` must also gracefully skip broken files
 /// during link graph construction.
 #[test]
-fn error_find_backlinks_field_malformed_yaml_graceful_skip() {
+fn error_find_backlinks_field_unclosed_frontmatter_graceful_skip() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),

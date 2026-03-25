@@ -94,8 +94,14 @@ pub fn find(
 
     // Build the link graph lazily — only when backlinks field is requested.
     // This requires scanning all files in the vault so it's opt-in.
+    // Warnings for skipped files are emitted here; the per-file scan loop
+    // below will also skip these files independently, so no duplicates.
     let link_graph = if fields.backlinks {
-        Some(LinkGraph::build(dir)?)
+        let build = LinkGraph::build(dir)?;
+        for (path, msg) in &build.warnings {
+            eprintln!("warning: skipping {}: {msg}", path.display());
+        }
+        Some(build.graph)
     } else {
         None
     };
