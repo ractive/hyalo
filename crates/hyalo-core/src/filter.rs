@@ -497,6 +497,8 @@ pub struct Fields {
     pub sections: bool,
     pub tasks: bool,
     pub links: bool,
+    /// Backlinks are opt-in only: building the link graph requires scanning all files.
+    pub backlinks: bool,
 }
 
 impl Default for Fields {
@@ -508,6 +510,7 @@ impl Default for Fields {
             sections: true,
             tasks: true,
             links: true,
+            backlinks: false,
         }
     }
 }
@@ -516,7 +519,8 @@ impl Fields {
     /// Parse a fields selection from a list of `--fields` argument values.
     ///
     /// Each element may be a comma-separated list of field names. An empty
-    /// slice returns the default (all fields enabled).
+    /// slice returns the default (all standard fields enabled; `properties-typed` and `backlinks`
+    /// are opt-in).
     pub fn parse(input: &[String]) -> Result<Fields> {
         if input.is_empty() {
             return Ok(Fields::default());
@@ -529,6 +533,7 @@ impl Fields {
             sections: false,
             tasks: false,
             links: false,
+            backlinks: false,
         };
 
         for item in input {
@@ -544,8 +549,9 @@ impl Fields {
                     "sections" => fields.sections = true,
                     "tasks" => fields.tasks = true,
                     "links" => fields.links = true,
+                    "backlinks" => fields.backlinks = true,
                     unknown => bail!(
-                        "unknown field {:?}: valid fields are properties, properties-typed, tags, sections, tasks, links",
+                        "unknown field {:?}: valid fields are properties, properties-typed, tags, sections, tasks, links, backlinks",
                         unknown
                     ),
                 }

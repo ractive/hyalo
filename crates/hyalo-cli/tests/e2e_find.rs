@@ -528,6 +528,7 @@ fn find_fields_properties_and_tags_only() {
         assert!(entry["sections"].is_null(), "sections should be absent");
         assert!(entry["tasks"].is_null(), "tasks should be absent");
         assert!(entry["links"].is_null(), "links should be absent");
+        assert!(entry["backlinks"].is_null(), "backlinks should be absent");
     }
 }
 
@@ -555,6 +556,38 @@ fn find_fields_tasks_only() {
         alpha["tasks"].is_array(),
         "alpha should have tasks array when tasks field requested"
     );
+}
+
+#[test]
+fn find_fields_backlinks_shows_incoming_links() {
+    let tmp = setup_vault();
+    // alpha.md links to [[beta]], so beta should have a backlink from alpha
+    let (status, json, stderr) = find_json(&tmp, &["--fields", "backlinks", "--file", "beta.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let beta = &arr[0];
+    let backlinks = beta["backlinks"]
+        .as_array()
+        .expect("backlinks should be an array");
+    assert_eq!(backlinks.len(), 1, "beta should have 1 backlink from alpha");
+    assert_eq!(backlinks[0]["source"], "alpha.md");
+    assert!(backlinks[0]["line"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn find_fields_backlinks_not_included_by_default() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &[]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    for entry in json.as_array().unwrap() {
+        assert!(
+            !entry.as_object().unwrap().contains_key("backlinks"),
+            "backlinks key should be absent by default, not just null"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

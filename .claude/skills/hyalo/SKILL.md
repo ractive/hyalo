@@ -45,6 +45,19 @@ hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
 
 `--glob` supports negation with `!` prefix to exclude files: `--glob '!**/draft-*'`.
 
+The `--fields` flag controls which data is returned. Available fields: `properties`,
+`properties-typed`, `tags`, `sections`, `tasks`, `links`, `backlinks`. All fields except
+`properties-typed` and `backlinks` are included by default. Both are opt-in: `properties-typed`
+returns a `[{name, type, value}]` array instead of a `{key: value}` map; `backlinks` requires
+scanning all files to build the link graph. Each backlink entry contains `source` (file path),
+`line` (line number), and an optional `label`.
+
+```bash
+hyalo find --fields backlinks --file my-note.md       # see who links to this note
+hyalo find --fields backlinks --jq 'map(select(.backlinks | length == 0))' # find orphan notes
+hyalo find --fields properties,backlinks              # combine with other fields
+```
+
 Pipe through `--jq` to reshape output into anything — dashboards, burndowns, reports
 (requires JSON format — do not combine with `--format text`):
 

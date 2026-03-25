@@ -62,6 +62,16 @@ pub struct LinkInfo {
     pub label: Option<String>,
 }
 
+/// A single backlink: another file that links to this one.
+/// Used by `find` (backlinks field).
+#[derive(Debug, Clone, Serialize)]
+pub struct BacklinkInfo {
+    pub source: String,
+    pub line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Outline types
 // ---------------------------------------------------------------------------
@@ -195,6 +205,8 @@ pub struct FileObject {
     pub tasks: Option<Vec<FindTaskInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<LinkInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backlinks: Option<Vec<BacklinkInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<ContentMatch>>,
 }
