@@ -39,6 +39,7 @@ use hyalo_core::types::{
 #[allow(clippy::too_many_arguments)]
 pub fn find(
     dir: &Path,
+    site_prefix: Option<&str>,
     pattern: Option<&str>,
     regexp: Option<&str>,
     property_filters: &[PropertyFilter],
@@ -97,7 +98,7 @@ pub fn find(
     // Warnings for skipped files are emitted here; the per-file scan loop
     // below will also skip these files independently, so no duplicates.
     let link_graph = if fields.backlinks {
-        let build = LinkGraph::build(dir)?;
+        let build = LinkGraph::build(dir, site_prefix)?;
         for (path, msg) in &build.warnings {
             eprintln!("warning: skipping {}: {msg}", path.display());
         }
@@ -555,6 +556,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -580,6 +582,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -610,6 +613,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -648,6 +652,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[filter],
                 &[],
                 None,
@@ -675,6 +680,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[filter],
@@ -707,6 +713,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &["cli".to_owned()],
                 None,
@@ -733,6 +740,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -762,6 +770,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 Some("Rust programming"),
                 None,
                 &[],
@@ -790,6 +799,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 Some("Rust"),
                 None,
                 &[],
@@ -823,6 +833,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -854,6 +865,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 Some(&FindTaskFilter::Todo),
@@ -881,6 +893,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -911,6 +924,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -944,6 +958,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -983,6 +998,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -1017,6 +1033,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -1044,6 +1061,7 @@ Just some text here.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1082,6 +1100,7 @@ Just some text here.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[filter],
                 &[],
                 None,
@@ -1107,6 +1126,7 @@ Just some text here.
         let fields = Fields::default();
         let result = find(
             tmp.path(),
+            None,
             None,
             None,
             &[],
@@ -1272,6 +1292,7 @@ Just intro, no tasks section.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -1301,6 +1322,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1334,6 +1356,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 Some("background"),
                 None,
                 &[],
@@ -1366,6 +1389,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1404,6 +1428,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1457,6 +1482,7 @@ Just intro, no tasks section.
             tmp.path(),
             None,
             None,
+            None,
             &[],
             &[],
             None,
@@ -1489,6 +1515,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1548,6 +1575,7 @@ Just intro, no tasks section.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -1583,6 +1611,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1623,6 +1652,7 @@ Just intro, no tasks section.
                 tmp.path(),
                 None,
                 None,
+                None,
                 &[],
                 &[],
                 None,
@@ -1652,6 +1682,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],
@@ -1685,6 +1716,7 @@ Just intro, no tasks section.
         let out = unwrap_success(
             find(
                 tmp.path(),
+                None,
                 None,
                 None,
                 &[],

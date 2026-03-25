@@ -18,17 +18,12 @@ Hyalo only resolves relative paths and `[[wikilinks]]`, not absolute paths. This
 
 ## Proposal
 
-Add a `link-base` config option (in `.hyalo.toml` and as `--link-base` flag) that strips a prefix before resolving. Example:
+When resolving a link that starts with `/`, automatically strip the `/<dir>/` prefix (derived from the existing `dir` config) before resolving. No new config option or CLI flag needed — `link-base` is always the same as `dir`.
 
-```toml
-link-base = "/docs/"
-```
-
-This would make `/docs/configure/settings.md` resolve to `configure/settings.md` relative to the vault root.
+For example, with `dir = "docs"` in `.hyalo.toml`, `/docs/configure/settings.md` → strip `/<dir>/` → `configure/settings.md` → resolves correctly against the vault root. When `dir` is `.` (repo root), just strip the leading `/`.
 
 ## Acceptance criteria
 
-- [ ] `--link-base /prefix/` strips the prefix from absolute links before resolution
+- [ ] Absolute links starting with `/<dir>/` are resolved by stripping the prefix
 - [ ] Backlinks work on repos using site-absolute link conventions
-- [ ] Config option in `.hyalo.toml` avoids repeating the flag
-- [ ] E2e test with absolute-path links and link-base config
+- [ ] E2e test with absolute-path links

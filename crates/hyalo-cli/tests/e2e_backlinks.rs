@@ -309,6 +309,32 @@ fn backlinks_wikilink_with_path_separator() {
 }
 
 #[test]
+fn backlinks_resolves_absolute_links_with_dir_config() {
+    // When .hyalo.toml sets `dir = "docs"`, a site-absolute link like
+    // `/docs/target.md` in source.md must resolve to `target.md` within
+    // the vault and show up as a backlink.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "docs/source.md", "[link](/docs/target.md)\n");
+    write_md(tmp.path(), "docs/target.md", "# Target\n");
+    std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \"docs\"\n").unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["backlinks", "--file", "target.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
+    assert_eq!(json["backlinks"][0]["source"], "source.md");
+}
+
+#[test]
 fn backlinks_wikilink_with_path_from_subdirectory() {
     // A file in sub/ linking [[other/target]] must store the link as
     // "other/target", not "sub/other/target" (the incorrect normalized form).

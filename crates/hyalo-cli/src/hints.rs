@@ -12,6 +12,7 @@ pub enum HintSource {
     Summary,
     PropertiesSummary,
     TagsSummary,
+    Find,
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -39,6 +40,7 @@ pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<String
         HintSource::Summary => hints_for_summary(ctx, data),
         HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data),
         HintSource::TagsSummary => hints_for_tags_summary(ctx, data),
+        HintSource::Find => hints_for_find(ctx, data),
     };
     hints.into_iter().take(MAX_HINTS).collect()
 }
@@ -198,6 +200,39 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
         .take(3)
         .map(|(name, _)| build_command_with_glob(ctx, &["find", "--property", name]))
         .collect()
+}
+
+fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
+    let results = match data.as_array() {
+        Some(arr) => arr,
+        None => return vec![],
+    };
+
+    if results.is_empty() {
+        return vec![];
+    }
+
+    let mut hints = Vec::new();
+
+    // Suggest reading the first result.
+    if let Some(first_file) = results[0].get("file").and_then(|f| f.as_str()) {
+        hints.push(build_command_no_glob(ctx, &["read", "--file", first_file]));
+        hints.push(build_command_no_glob(
+            ctx,
+            &["backlinks", "--file", first_file],
+        ));
+    }
+
+    // When there are many results, suggest narrowing filters.
+    if results.len() > 5 {
+        hints.push(build_command_with_glob(
+            ctx,
+            &["find", "--property", "status=draft"],
+        ));
+        hints.push(build_command_with_glob(ctx, &["find", "--tag", "draft"]));
+    }
+
+    hints
 }
 
 fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {

@@ -24,7 +24,12 @@ struct BacklinkItem {
 }
 
 /// Run `hyalo backlinks --file <path>`.
-pub fn backlinks(dir: &Path, file_arg: &str, format: Format) -> Result<CommandOutcome> {
+pub fn backlinks(
+    dir: &Path,
+    site_prefix: Option<&str>,
+    file_arg: &str,
+    format: Format,
+) -> Result<CommandOutcome> {
     // Resolve the file argument to a relative path
     let (_full_path, rel) = match discovery::resolve_file(dir, file_arg) {
         Ok(r) => r,
@@ -34,7 +39,7 @@ pub fn backlinks(dir: &Path, file_arg: &str, format: Format) -> Result<CommandOu
     };
 
     // Build the in-memory link graph
-    let build = LinkGraph::build(dir)?;
+    let build = LinkGraph::build(dir, site_prefix)?;
     for (path, msg) in &build.warnings {
         eprintln!("warning: skipping {}: {msg}", path.display());
     }

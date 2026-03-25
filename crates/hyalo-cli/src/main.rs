@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use hyalo_cli::commands::{
     append as append_commands, backlinks as backlinks_commands, find as find_commands,
@@ -260,7 +260,7 @@ enum Commands {
         /// Glob pattern to select files; prefix '!' to negate (e.g. '!**/draft-*' excludes matching files)
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
-        /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links, backlinks (default: all except properties-typed and backlinks). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files
+        /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links, backlinks (default: all except properties-typed and backlinks). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files. Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default) or 'modified'
@@ -669,7 +669,28 @@ fn parse_where_filters(
 
 #[allow(clippy::too_many_lines)]
 fn main() {
-    let cli = Cli::parse();
+    // Load per-project config from .hyalo.toml in CWD before parsing args.
+    // This lets us hide flags that already have config-provided defaults,
+    // keeping `--help` output focused on what the user actually needs to set.
+    let config = hyalo_cli::config::load_config();
+
+    // Build the clap Command and hide global flags that are already covered by
+    // the project config.  `mut_arg` is scoped to the root command, but because
+    // both `--dir` and `--format` are declared `global = true`, hiding them on
+    // the root is sufficient for --help at every level.
+    let mut cmd = Cli::command();
+    if config.dir.as_os_str() != "." {
+        cmd = cmd.mut_arg("dir", |a| a.hide(true));
+    }
+    if config.format != "json" {
+        cmd = cmd.mut_arg("format", |a| a.hide(true));
+    }
+
+    let matches = cmd.get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(c) => c,
+        Err(e) => e.exit(),
+    };
 
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
@@ -693,9 +714,6 @@ fn main() {
         process::exit(code);
     }
 
-    // Load per-project config from .hyalo.toml in CWD
-    let config = hyalo_cli::config::load_config();
-
     // Merge: CLI args override config, config overrides hardcoded defaults.
     // Track whether --dir was explicitly passed (not from config) so hints
     // can omit it when the user relies on .hyalo.toml.
@@ -703,6 +721,19 @@ fn main() {
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
     let dir = cli.dir.unwrap_or(config.dir);
+    // Derive site_prefix for absolute link resolution: when dir != ".",
+    // absolute links like `/docs/page.md` are resolved by stripping `/<dir>/`.
+    let site_prefix_owned = {
+        let s = dir.to_string_lossy().replace('\\', "/");
+        let s = s.trim().trim_end_matches('/');
+        let s = s.strip_prefix("./").unwrap_or(s);
+        if s == "." || s.is_empty() {
+            None
+        } else {
+            Some(s.to_owned())
+        }
+    };
+    let site_prefix = site_prefix_owned.as_deref();
     // CLI --format is already validated by Clap; fall back to config (String) with runtime parse.
     let format = if let Some(f) = cli.format {
         f
@@ -794,11 +825,28 @@ fn main() {
                 format: format_hint,
                 hints: hints_from_cli,
             }),
+            Commands::Find { glob, .. } => Some(HintContext {
+                source: HintSource::Find,
+                dir: dir_hint,
+                glob: glob.clone(),
+                format: format_hint,
+                hints: hints_from_cli,
+            }),
             _ => None,
         }
     } else {
         None
     };
+
+    // Warn when --hints is passed to mutation commands, which do not generate hints.
+    if hints_from_cli
+        && matches!(
+            &cli.command,
+            Commands::Set { .. } | Commands::Remove { .. } | Commands::Append { .. }
+        )
+    {
+        eprintln!("warning: --hints has no effect on mutation commands");
+    }
 
     let result = match cli.command {
         Commands::Find {
@@ -867,6 +915,7 @@ fn main() {
 
             find_commands::find(
                 &dir,
+                site_prefix,
                 pattern.as_deref(),
                 regexp.as_deref(),
                 &prop_filters,
@@ -1010,13 +1059,13 @@ fn main() {
             )
         }
         Commands::Backlinks { ref file } => {
-            backlinks_commands::backlinks(&dir, file, effective_format)
+            backlinks_commands::backlinks(&dir, site_prefix, file, effective_format)
         }
         Commands::Mv {
             ref file,
             ref to,
             dry_run,
-        } => mv_commands::mv(&dir, file, to, dry_run, effective_format),
+        } => mv_commands::mv(&dir, file, to, dry_run, effective_format, site_prefix),
         // `Init` is handled as an early return before this match is reached.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
     };
