@@ -37,12 +37,11 @@ impl LinkGraph {
         for file in &files {
             let rel = file.strip_prefix(dir).unwrap_or(file).to_path_buf();
 
-            let mut visitor = LinkGraphVisitor::new(rel);
+            let mut visitor = LinkGraphVisitor::new(rel.clone());
             match scanner::scan_file_multi(file, &mut [&mut visitor]) {
                 Ok(()) => {}
                 Err(e) if frontmatter::is_parse_error(&e) => {
-                    let rel_display = file.strip_prefix(dir).unwrap_or(file).display();
-                    eprintln!("warning: skipping {rel_display}: {e}");
+                    eprintln!("warning: skipping {}: {e}", rel.display());
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -408,9 +407,10 @@ mod tests {
 
     #[test]
     fn frontmatter_too_large_skipped() {
-        // A file with >100 frontmatter lines (no closing ---) should be skipped.
+        // A file with >100 frontmatter content lines (no closing ---) should be skipped.
+        // MAX_FRONTMATTER_LINES is 100; 101 content lines triggers the error.
         let mut huge_fm = String::from("---\n");
-        for i in 0..102 {
+        for i in 0..101 {
             huge_fm.push_str(&format!("key{i}: value\n"));
         }
         // No closing ---, so scanner bails with "frontmatter too large"
