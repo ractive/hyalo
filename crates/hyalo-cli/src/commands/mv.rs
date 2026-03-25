@@ -116,12 +116,14 @@ fn validate_target(
         return Ok(Err(CommandOutcome::UserError(out)));
     }
 
-    // Reject path traversal
-    if normalized.starts_with('/')
-        || normalized.contains("../")
-        || normalized.starts_with("..")
-        || std::path::Path::new(&normalized).is_absolute()
-    {
+    // Reject path traversal (component-based, consistent with discovery::resolve_file)
+    let has_traversal = std::path::Path::new(&normalized).components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )
+    }) || std::path::Path::new(&normalized).is_absolute();
+    if has_traversal {
         let out = crate::output::format_error(
             format,
             "target path must be relative and within the vault",
