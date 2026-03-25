@@ -1,14 +1,14 @@
 ---
-title: "Move/rename command with wikilink updates"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: medium
 origin: dogfooding post-iter-19, iteration-plan
+priority: medium
+status: completed
 tags:
-  - backlog
-  - cli
-  - links
+- backlog
+- cli
+- links
+title: Move/rename command with wikilink updates
+type: backlog
 ---
 
 # Move/rename command with wikilink updates

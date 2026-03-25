@@ -54,7 +54,7 @@ Also introduced `src/types.rs` with `#[derive(Serialize)]` structs for all JSON 
 
 Replaced the generic key=value text formatter with proper human-readable output for all commands. Each output type gets a jq filter string executed via the `jaq` crate (pure Rust). Filter lookup is based on sorted top-level JSON keys. Unknown shapes fall back to old generic format. (DEC-027)
 
-**No new commands** — purely output layer change. See [[iterations/iteration-07-text-output]].
+**No new commands** — purely output layer change. See [[iterations/done/iteration-07-text-output]].
 
 ## Iteration 8 — Task Commands (superseded)
 

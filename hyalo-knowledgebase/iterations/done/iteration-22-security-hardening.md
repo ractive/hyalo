@@ -1,7 +1,7 @@
 ---
 branch: iter-22/security-hardening
 date: 2026-03-23
-status: planned
+status: completed
 tags:
 - security
 - hardening

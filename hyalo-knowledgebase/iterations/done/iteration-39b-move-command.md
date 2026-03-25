@@ -15,7 +15,7 @@ type: iteration
 
 ## Goal
 
-Add a `hyalo mv` command that renames/moves a markdown file and updates all inbound wikilinks across the vault, using the in-memory link graph built in [[iterations/iteration-39a-link-graph]].
+Add a `hyalo mv` command that renames/moves a markdown file and updates all inbound wikilinks across the vault, using the in-memory link graph built in [[iterations/done/iteration-39a-link-graph]].
 
 ## Tasks
 

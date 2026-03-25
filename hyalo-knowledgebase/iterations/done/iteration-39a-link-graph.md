@@ -23,8 +23,8 @@ Build an in-memory link graph to enable vault-wide link operations, starting wit
 
 ## Backlog items
 
-- [[backlog/backlinks]] (medium)
-- [[backlog/move-rename-command]] (medium)
+- [[backlog/done/backlinks]] (medium)
+- [[backlog/done/move-rename-command]] (medium)
 - [[backlog/shortest-path-link-resolution]] (medium)
 
 ## Tasks
@@ -56,4 +56,4 @@ Build an in-memory link graph to enable vault-wide link operations, starting wit
 
 ## Notes
 
-Split from original iteration 39. Move/rename command deferred to [[iterations/iteration-39b-move-command]]. Config-aware help text and shortest-path resolution moved to backlog.
+Split from original iteration 39. Move/rename command deferred to [[iterations/done/iteration-39b-move-command]]. Config-aware help text and shortest-path resolution moved to backlog.
