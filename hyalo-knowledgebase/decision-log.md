@@ -325,3 +325,24 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - `SectionFilter` gained a `Regex` variant and changed its default match mode from `Exact` to `Contains`
 - `match_glob()` checks for `!` prefix and inverts the match result
 - Help text and COOKBOOK updated with examples for all four operators
+
+## DEC-034: Subcommand Groups for `properties` and `tags` (2026-03-25)
+
+**Context:** `hyalo properties` and `hyalo tags` were leaf commands that only showed aggregate summaries. Iteration 37 adds bulk rename operations (`properties rename`, `tags rename`). Rather than adding top-level `rename-property` / `rename-tag` commands, the existing commands were restructured as subcommand groups.
+
+**Decisions:**
+
+1. **Explicit `summary` subcommand** — `hyalo properties summary` / `hyalo tags summary` replace the implicit summary behavior. Bare `hyalo properties` / `hyalo tags` now show help text listing available subcommands.
+
+2. **No backward compatibility shim** — Breaking change accepted since hyalo has no external users yet. The `summary` subcommand makes the CLI more discoverable (you can see all available operations under `hyalo properties help`).
+
+3. **Rename uses `--from`/`--to` flags** — `hyalo properties rename --from old --to new` rather than positional arguments. Flags are more explicit and harder to get wrong.
+
+4. **Property rename skips conflicts** — If the target key already exists on a file, the file is skipped and reported in a `conflicts` array. This prevents silent data loss.
+
+5. **Tag rename is atomic per-file** — If the new tag already exists on a file, only the old tag is removed (no duplicate). This ensures idempotent behavior.
+
+**Consequences:**
+- All existing `hyalo properties` / `hyalo tags` calls (e2e tests, SKILL.md, CLAUDE.md examples, hint generation) updated to `properties summary` / `tags summary`
+- `PropertiesAction` and `TagsAction` subcommand enums added to the CLI
+- Rename results include `modified`, `skipped`, and (for properties) `conflicts` arrays

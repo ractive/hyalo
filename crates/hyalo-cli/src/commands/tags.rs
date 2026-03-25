@@ -8,6 +8,8 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
 use hyalo_core::types::{TagSummary, TagSummaryEntry};
+use serde::Serialize;
+use serde_yaml_ng::Value;
 
 // ---------------------------------------------------------------------------
 // Tag format validation
@@ -54,7 +56,8 @@ pub fn tags_summary(
     glob: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let files = collect_files(dir, file, glob, format)?;
+    let file_vec: Vec<String> = file.map(|f| vec![f.to_owned()]).unwrap_or_default();
+    let files = collect_files(dir, &file_vec, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -88,6 +91,129 @@ pub fn tags_summary(
 
     let total = tags.len();
     let result = TagSummary { tags, total };
+
+    Ok(CommandOutcome::Success(crate::output::format_output(
+        format, &result,
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// `hyalo tags rename` — rename a tag across matched files
+// ---------------------------------------------------------------------------
+
+/// Result of a `tags rename` operation.
+#[derive(Debug, Serialize)]
+pub struct RenameTagResult {
+    pub from: String,
+    pub to: String,
+    pub modified: Vec<String>,
+    pub skipped: Vec<String>,
+    pub total: usize,
+    pub scanned: usize,
+}
+
+/// Rename a tag across all matched files.
+///
+/// - Atomic per-file: if new tag already exists, only old one is removed
+/// - Skips files where the source tag is absent
+pub fn tags_rename(
+    dir: &Path,
+    from: &str,
+    to: &str,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    // Validate both tag names
+    if let Err(msg) = validate_tag(from) {
+        let out = crate::output::format_error(format, &msg, None, Some("invalid --from tag"), None);
+        return Ok(CommandOutcome::UserError(out));
+    }
+    if let Err(msg) = validate_tag(to) {
+        let out = crate::output::format_error(format, &msg, None, Some("invalid --to tag"), None);
+        return Ok(CommandOutcome::UserError(out));
+    }
+    if from.eq_ignore_ascii_case(to) {
+        let out = crate::output::format_error(
+            format,
+            "source and target tag names are identical (case-insensitive)",
+            None,
+            None,
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
+    let file_vec: Vec<String> = Vec::new();
+    let files = collect_files(dir, &file_vec, glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+    let scanned = files.len();
+
+    let mut modified = Vec::new();
+    let mut skipped = Vec::new();
+
+    for (full_path, rel_path) in &files {
+        let mut props = match frontmatter::read_frontmatter(full_path) {
+            Ok(p) => p,
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                eprintln!("warning: skipping {rel_path}: {e}");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+
+        let tags = extract_tags(&props);
+        let has_old = tags.iter().any(|t| t.eq_ignore_ascii_case(from));
+        if !has_old {
+            skipped.push(rel_path.clone());
+            continue;
+        }
+
+        let has_new = tags.iter().any(|t| t.eq_ignore_ascii_case(to));
+
+        // Remove old tag and add new tag, handling both sequence and scalar forms
+        let mut remove_tags_key = false;
+        match props.get_mut("tags") {
+            Some(Value::Sequence(seq)) => {
+                seq.retain(|v| match v {
+                    Value::String(s) => !s.eq_ignore_ascii_case(from),
+                    _ => true,
+                });
+                if !has_new {
+                    seq.push(Value::String(to.to_owned()));
+                }
+                if seq.is_empty() {
+                    remove_tags_key = true;
+                }
+            }
+            Some(Value::String(s)) if s.eq_ignore_ascii_case(from) => {
+                if has_new {
+                    remove_tags_key = true;
+                } else {
+                    *s = to.to_owned();
+                }
+            }
+            _ => {}
+        }
+        if remove_tags_key {
+            props.remove("tags");
+        }
+
+        frontmatter::write_frontmatter(full_path, &props)?;
+        modified.push(rel_path.clone());
+    }
+
+    let total = modified.len() + skipped.len();
+    let result = RenameTagResult {
+        from: from.to_owned(),
+        to: to.to_owned(),
+        modified,
+        skipped,
+        total,
+        scanned,
+    };
 
     Ok(CommandOutcome::Success(crate::output::format_output(
         format, &result,
@@ -296,6 +422,103 @@ tags:
         // tags_summary (read-only) still accepts no --file/--glob
         let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success(_)));
+    }
+
+    #[test]
+    fn tags_rename_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+tags:
+  - filtering
+  - cli
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = tags_rename(tmp.path(), "filtering", "filters", None, Format::Json).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["from"], "filtering");
+        assert_eq!(parsed["to"], "filters");
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("filters"));
+        assert!(!content.contains("filtering"));
+    }
+
+    #[test]
+    fn tags_rename_already_has_new_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+tags:
+  - filtering
+  - filters
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = tags_rename(tmp.path(), "filtering", "filters", None, Format::Json).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("filters"));
+        assert!(!content.contains("filtering"));
+        // Should not have duplicate "filters"
+        let count = content.matches("filters").count();
+        assert_eq!(count, 1, "should not duplicate the new tag");
+    }
+
+    #[test]
+    fn tags_rename_skips_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+tags:
+  - cli
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = tags_rename(tmp.path(), "filtering", "filters", None, Format::Json).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn tags_rename_same_name_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = tags_rename(tmp.path(), "foo", "foo", None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn tags_rename_invalid_tag_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome =
+            tags_rename(tmp.path(), "valid-tag", "invalid tag!", None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
     #[test]

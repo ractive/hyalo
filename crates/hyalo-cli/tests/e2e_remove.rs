@@ -408,6 +408,34 @@ fn remove_preserves_file_body() {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-file --file targeting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_multi_file_modifies_all() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\nstatus: draft\n---\n");
+    write_md(tmp.path(), "b.md", "---\ntitle: B\nstatus: draft\n---\n");
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "remove",
+        "--property",
+        "status",
+        "--file",
+        "a.md",
+        "--file",
+        "b.md",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
 // --format text produces structured mutation output
 // ---------------------------------------------------------------------------
 

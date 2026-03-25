@@ -32,19 +32,44 @@ pub enum FilesOrOutcome {
 /// Returns a user-error outcome for invalid inputs (file not found, no glob matches).
 pub fn collect_files(
     dir: &Path,
-    file: Option<&str>,
+    files: &[String],
     glob: Option<&str>,
     format: Format,
 ) -> Result<FilesOrOutcome> {
-    match (file, glob) {
-        (Some(f), None) => {
-            let resolved = match discovery::resolve_file(dir, f) {
-                Ok(r) => r,
-                Err(e) => return Ok(FilesOrOutcome::Outcome(resolve_error_to_outcome(e, format))),
-            };
-            Ok(FilesOrOutcome::Files(vec![resolved]))
+    match (files.is_empty(), glob) {
+        (false, None) => {
+            // Resolve each file, best-effort: collect successes and errors
+            let mut resolved = Vec::new();
+            let mut errors = Vec::new();
+            for f in files {
+                match discovery::resolve_file(dir, f) {
+                    Ok(r) => resolved.push(r),
+                    Err(e) => errors.push((f.clone(), e)),
+                }
+            }
+            if resolved.is_empty() {
+                // All files failed — return error for the first one (no warning needed)
+                let (_, first_err) = errors.into_iter().next().expect("at least one error");
+                return Ok(FilesOrOutcome::Outcome(resolve_error_to_outcome(
+                    first_err, format,
+                )));
+            }
+            // Some succeeded — warn about the ones that didn't
+            for (path, err) in &errors {
+                let msg = match err {
+                    FileResolveError::NotFound { .. } => format!("file not found: {path}"),
+                    FileResolveError::MissingExtension { hint, .. } => {
+                        format!("file not found: {path} (did you mean {hint}?)")
+                    }
+                    FileResolveError::OutsideVault { .. } => {
+                        format!("file resolves outside vault: {path}")
+                    }
+                };
+                eprintln!("warning: {msg}");
+            }
+            Ok(FilesOrOutcome::Files(resolved))
         }
-        (None, Some(pattern)) => {
+        (true, Some(pattern)) => {
             let all = discovery::discover_files(dir)?;
             let matched = discovery::match_glob(dir, &all, pattern)?;
             if matched.is_empty() {
@@ -64,7 +89,7 @@ pub fn collect_files(
             }
             Ok(FilesOrOutcome::Files(matched))
         }
-        (None, None) => {
+        (true, None) => {
             // Operate on all .md files
             let all = discovery::discover_files(dir)?;
             let with_rel: Vec<(PathBuf, String)> = all
@@ -76,7 +101,7 @@ pub fn collect_files(
                 .collect();
             Ok(FilesOrOutcome::Files(with_rel))
         }
-        (Some(_), Some(_)) => {
+        (false, Some(_)) => {
             // Clap enforces mutual exclusivity; this branch is unreachable in practice
             let out = crate::output::format_error(
                 format,
@@ -96,12 +121,12 @@ pub fn collect_files(
 /// when the caller may proceed.  The `command_name` is used in the error message.
 #[must_use]
 pub fn require_file_or_glob(
-    file: Option<&str>,
+    files: &[String],
     glob: Option<&str>,
     command_name: &str,
     format: Format,
 ) -> Option<CommandOutcome> {
-    if file.is_none() && glob.is_none() {
+    if files.is_empty() && glob.is_none() {
         let out = crate::output::format_error(
             format,
             &format!("{command_name} requires --file or --glob"),
@@ -117,14 +142,14 @@ pub fn require_file_or_glob(
     }
 }
 
-/// If `--file` was used (single-file mode), unwrap a one-element results Vec into a bare
+/// If exactly one file was specified and there is exactly one result, unwrap to a bare
 /// JSON object. Otherwise return the full array.
 #[must_use]
 pub fn unwrap_single_file_result(
-    file: Option<&str>,
+    files: &[String],
     mut results: Vec<serde_json::Value>,
 ) -> serde_json::Value {
-    if file.is_some() && results.len() == 1 {
+    if files.len() == 1 && results.len() == 1 {
         results.pop().unwrap_or_default()
     } else {
         serde_json::json!(results)

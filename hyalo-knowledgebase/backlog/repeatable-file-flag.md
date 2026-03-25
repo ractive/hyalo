@@ -1,14 +1,14 @@
 ---
-title: "Repeatable --file flag for targeting multiple specific files"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: high
 origin: dogfooding post-iter-19
+priority: high
+status: completed
 tags:
-  - backlog
-  - cli
-  - ux
+- backlog
+- cli
+- ux
+title: Repeatable --file flag for targeting multiple specific files
+type: backlog
 ---
 
 # Repeatable --file flag for targeting multiple specific files

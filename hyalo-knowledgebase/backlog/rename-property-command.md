@@ -1,15 +1,15 @@
 ---
-title: "Rename property command (bulk property key rename)"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: low
 origin: dogfooding vscode-docs vault (keywords vs Keywords casing)
+priority: low
+status: completed
 tags:
-  - backlog
-  - cli
-  - frontmatter
-  - ux
+- backlog
+- cli
+- frontmatter
+- ux
+title: Rename property command (bulk property key rename)
+type: backlog
 ---
 
 # Rename property command (bulk property key rename)

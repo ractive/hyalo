@@ -784,6 +784,129 @@ title: Note
 }
 
 // ---------------------------------------------------------------------------
+// List property creation via bracket syntax
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_list_property_creates_yaml_sequence() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+"),
+    );
+    let (status, json, _) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "keywords=[rust, cli, tools]",
+            "--file",
+            "note.md",
+        ],
+    );
+    assert!(status.success());
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    // Should be a YAML list, not a string
+    assert!(
+        content.contains("- rust"),
+        "expected YAML list item, got:\n{content}"
+    );
+    assert!(content.contains("- cli"));
+    assert!(content.contains("- tools"));
+}
+
+#[test]
+fn set_empty_list_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+    let (status, _, _) = set_json(&tmp, &["--property", "keywords=[]", "--file", "note.md"]);
+    assert!(status.success());
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(content.contains("keywords: []"));
+}
+
+// ---------------------------------------------------------------------------
+// Multi-file --file targeting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_multi_file_modifies_all() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+"),
+    );
+    let (status, json, _) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "status=done",
+            "--file",
+            "a.md",
+            "--file",
+            "b.md",
+        ],
+    );
+    assert!(status.success());
+    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+
+    let a = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    let b = fs::read_to_string(tmp.path().join("b.md")).unwrap();
+    assert!(a.contains("status: done"));
+    assert!(b.contains("status: done"));
+}
+
+#[test]
+fn set_multi_file_partial_failure() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "exists.md",
+        md!(r"
+---
+title: Exists
+---
+"),
+    );
+    // "missing.md" does not exist
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &[
+            "--property",
+            "status=done",
+            "--file",
+            "exists.md",
+            "--file",
+            "missing.md",
+        ],
+    );
+    assert!(status.success(), "should succeed with partial failure");
+    assert!(stderr.contains("warning"), "should warn about missing file");
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // Malformed YAML resilience
 // ---------------------------------------------------------------------------
 

@@ -456,8 +456,20 @@ fn infer_value(raw: &str) -> Value {
         "false" => return Value::Bool(false),
         _ => {}
     }
-    // Try date/datetime
-    // (these stay as strings, type inference will pick them up)
+    // Try list: [a, b, c] syntax
+    if raw.starts_with('[') && raw.ends_with(']') {
+        let inner = &raw[1..raw.len() - 1];
+        // Empty brackets = empty list
+        if inner.trim().is_empty() {
+            return Value::Sequence(Vec::new());
+        }
+        // Split by comma, trim each item, keep as strings
+        let items: Vec<Value> = inner
+            .split(',')
+            .map(|s| Value::String(s.trim().to_owned()))
+            .collect();
+        return Value::Sequence(items);
+    }
     Value::String(raw.to_owned())
 }
 
@@ -853,5 +865,58 @@ Body.
     fn is_parse_error_false_for_io_error() {
         let err = read_frontmatter(Path::new("/nonexistent/path/file.md")).unwrap_err();
         assert!(!is_parse_error(&err), "expected I/O error: {err}");
+    }
+
+    #[test]
+    fn infer_value_list_basic() {
+        match parse_value("[a, b, c]", None).unwrap() {
+            Value::Sequence(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::String("a".to_owned()));
+                assert_eq!(items[1], Value::String("b".to_owned()));
+                assert_eq!(items[2], Value::String("c".to_owned()));
+            }
+            other => panic!("expected sequence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_value_list_empty() {
+        match parse_value("[]", None).unwrap() {
+            Value::Sequence(items) => assert!(items.is_empty()),
+            other => panic!("expected empty sequence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_value_list_single_item() {
+        match parse_value("[single]", None).unwrap() {
+            Value::Sequence(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0], Value::String("single".to_owned()));
+            }
+            other => panic!("expected sequence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_value_not_a_list() {
+        // Value that contains brackets but doesn't start with [ should remain string
+        match parse_value("not [a list]", None).unwrap() {
+            Value::String(s) => assert_eq!(s, "not [a list]"),
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_value_list_whitespace_trimmed() {
+        match parse_value("[  a , b ,  c  ]", None).unwrap() {
+            Value::Sequence(items) => {
+                assert_eq!(items[0], Value::String("a".to_owned()));
+                assert_eq!(items[1], Value::String("b".to_owned()));
+                assert_eq!(items[2], Value::String("c".to_owned()));
+            }
+            other => panic!("expected sequence, got {other:?}"),
+        }
     }
 }

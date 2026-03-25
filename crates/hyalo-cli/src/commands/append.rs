@@ -115,7 +115,7 @@ fn append_value_in_memory(
 pub fn append(
     dir: &Path,
     property_args: &[String],
-    file: Option<&str>,
+    files: &[String],
     glob: Option<&str>,
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
@@ -132,7 +132,7 @@ pub fn append(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    if let Some(outcome) = require_file_or_glob(file, glob, "append", format) {
+    if let Some(outcome) = require_file_or_glob(files, glob, "append", format) {
         return Ok(outcome);
     }
 
@@ -156,7 +156,7 @@ pub fn append(
         v
     };
 
-    let files = collect_files(dir, file, glob, format)?;
+    let files = collect_files(dir, files, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -265,7 +265,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["aliases=my-note".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -303,7 +303,7 @@ aliases:
         append(
             tmp.path(),
             &["aliases=new-name".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -333,7 +333,7 @@ aliases:
         let outcome = append(
             tmp.path(),
             &["aliases=my-note".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -366,7 +366,7 @@ author: Alice
         append(
             tmp.path(),
             &["author=Bob".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -397,7 +397,7 @@ author: Alice
         let outcome = append(
             tmp.path(),
             &["author=Alice".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -429,7 +429,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["aliases=a".to_owned(), "tags=rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -452,7 +452,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["aliases=x".to_owned()],
-            None,
+            &[],
             None,
             &[],
             &[],
@@ -468,7 +468,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -485,7 +485,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["no-equals-sign".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -502,7 +502,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["=value".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -525,7 +525,7 @@ title: Note
         append(
             tmp.path(),
             &["aliases=my-note".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -554,7 +554,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["aliases=a".to_owned(), "aliases=b".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -588,7 +588,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["aliases=draft-copy".to_owned()],
-            None,
+            &[],
             Some("*.md"),
             &[filter],
             &[],
@@ -620,7 +620,7 @@ title: Note
         let outcome = append(
             tmp.path(),
             &["aliases=rust-note".to_owned()],
-            None,
+            &[],
             Some("*.md"),
             &[],
             &["rust".to_owned()],

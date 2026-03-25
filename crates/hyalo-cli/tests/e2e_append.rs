@@ -437,6 +437,34 @@ fn append_on_file_with_no_frontmatter_creates_frontmatter() {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-file --file targeting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_multi_file_modifies_all() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n");
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "append",
+        "--property",
+        "aliases=alias1",
+        "--file",
+        "a.md",
+        "--file",
+        "b.md",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
 // --format text produces structured mutation output
 // ---------------------------------------------------------------------------
 
