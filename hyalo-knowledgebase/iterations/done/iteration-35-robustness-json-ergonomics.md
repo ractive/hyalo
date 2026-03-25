@@ -20,9 +20,9 @@ Make hyalo reliable on real-world vaults (including broken files) and fix the JS
 
 ## Backlog items
 
-- [[backlog/graceful-parse-error-recovery]] (critical)
-- [[backlog/properties-as-map-in-json]] (medium)
-- [[backlog/summary-depth-flag]] (low)
+- [[backlog/done/graceful-parse-error-recovery]] (critical)
+- [[backlog/done/properties-as-map-in-json]] (medium)
+- [[backlog/done/summary-depth-flag]] (low)
 - iter-12 cleanup items (from code review)
 
 ## Tasks

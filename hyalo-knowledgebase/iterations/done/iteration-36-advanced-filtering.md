@@ -19,10 +19,10 @@ Expand `hyalo find` filtering to cover the common queries that currently require
 
 ## Backlog items
 
-- [[backlog/absence-filter]] (medium)
-- [[backlog/glob-negation]] (medium)
-- [[backlog/section-filter-substring-matching]] (medium)
-- [[backlog/property-value-search]] (low — folded into `~=` operator)
+- [[backlog/done/absence-filter]] (medium)
+- [[backlog/done/glob-negation]] (medium)
+- [[backlog/done/section-filter-substring-matching]] (medium)
+- [[backlog/done/property-value-search]] (low — folded into `~=` operator)
 
 ## Design decisions
 

@@ -13,7 +13,7 @@ status: completed
 
 # Deep Dive: Unified `find` command as the query layer
 
-> **Note:** This is the exploration/discussion history. The decided design is captured in [[iterations/iteration-12-cli-redesign]]. This document is kept for rationale and decision context.
+> **Note:** This is the exploration/discussion history. The decided design is captured in [[iterations/done/iteration-12-cli-redesign]]. This document is kept for rationale and decision context.
 
 ## The Problem Restated
 

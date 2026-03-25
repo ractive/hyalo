@@ -32,9 +32,9 @@ Revisit when users report latency on vaults >20,000 files, or when per-file proc
 
 ## Iteration 18 outcome
 
-Implemented and benchmarked — only 1-2x speedup on 6,540 files (I/O-dominated workload on SSD). Shelved due to poor complexity-to-gain ratio. Branch `iter-18/parallel-processing` has the full working implementation. See [[iterations/iteration-18-parallel-processing]] for details.
+Implemented and benchmarked — only 1-2x speedup on 6,540 files (I/O-dominated workload on SSD). Shelved due to poor complexity-to-gain ratio. Branch `iter-18/parallel-processing` has the full working implementation. See [[iterations/done/iteration-18-parallel-processing]] for details.
 
 ## References
 
 - [[research/performance-parallelization]]: full research with benchmark results
-- [[iterations/iteration-18-parallel-processing]]: iteration details and decision rationale
+- [[iterations/done/iteration-18-parallel-processing]]: iteration details and decision rationale

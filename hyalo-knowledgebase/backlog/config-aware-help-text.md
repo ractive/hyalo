@@ -29,4 +29,4 @@ Load `.hyalo.toml` before building the `clap::Command` and dynamically hide args
 
 ## References
 
-Originally part of [[iterations/iteration-39a-link-graph]], split out during scope reduction.
+Originally part of [[iterations/done/iteration-39a-link-graph]], split out during scope reduction.

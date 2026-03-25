@@ -147,22 +147,15 @@ impl FileVisitor for SectionScanner {
 
 /// Format a `Link` into a human-readable string for storage in the outline.
 fn format_link_string(link: &links::Link) -> String {
-    // Heuristic: targets containing '://' are URLs from markdown links.
-    // Targets ending in common extensions with '/' are file paths from markdown links.
-    // Everything else is treated as a wikilink.
-    let is_markdown_link =
-        link.target.contains("://") || (link.target.contains('/') && link.target.contains('.'));
-
-    if is_markdown_link {
-        match &link.label {
-            Some(label) if !label.is_empty() => format!("[{}]({})", label, link.target),
-            _ => format!("[]({})", link.target),
-        }
-    } else {
-        match &link.label {
+    match link.kind {
+        links::LinkKind::Wikilink => match &link.label {
             Some(label) if !label.is_empty() => format!("[[{}|{}]]", link.target, label),
             _ => format!("[[{}]]", link.target),
-        }
+        },
+        links::LinkKind::Markdown => match &link.label {
+            Some(label) if !label.is_empty() => format!("[{}]({})", label, link.target),
+            _ => format!("[]({})", link.target),
+        },
     }
 }
 
@@ -215,6 +208,7 @@ mod tests {
         let link = links::Link {
             target: "my-note".to_owned(),
             label: None,
+            kind: links::LinkKind::Wikilink,
         };
         assert_eq!(format_link_string(&link), "[[my-note]]");
     }
@@ -224,6 +218,7 @@ mod tests {
         let link = links::Link {
             target: "my-note".to_owned(),
             label: Some("My Note".to_owned()),
+            kind: links::LinkKind::Wikilink,
         };
         assert_eq!(format_link_string(&link), "[[my-note|My Note]]");
     }
@@ -233,6 +228,7 @@ mod tests {
         let link = links::Link {
             target: "https://example.com".to_owned(),
             label: Some("Example".to_owned()),
+            kind: links::LinkKind::Markdown,
         };
         assert_eq!(format_link_string(&link), "[Example](https://example.com)");
     }
@@ -242,6 +238,7 @@ mod tests {
         let link = links::Link {
             target: "docs/some-note.md".to_owned(),
             label: Some("Some Note".to_owned()),
+            kind: links::LinkKind::Markdown,
         };
         assert_eq!(format_link_string(&link), "[Some Note](docs/some-note.md)");
     }

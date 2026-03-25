@@ -1,7 +1,7 @@
 ---
 branch: iter-37/bulk-mutations
 date: 2026-03-25
-status: in-progress
+status: completed
 tags:
 - iteration
 - mutations
@@ -19,10 +19,10 @@ Reduce the number of CLI calls needed for multi-file mutations. Currently Claude
 
 ## Backlog items
 
-- [[backlog/repeatable-file-flag]] (high)
-- [[backlog/set-list-property]] (medium)
-- [[backlog/bulk-tag-rename]] (low)
-- [[backlog/rename-property-command]] (low)
+- [[backlog/done/repeatable-file-flag]] (high)
+- [[backlog/done/set-list-property]] (medium)
+- [[backlog/done/bulk-tag-rename]] (low)
+- [[backlog/done/rename-property-command]] (low)
 
 ## Design decisions
 

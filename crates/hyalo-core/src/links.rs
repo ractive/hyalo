@@ -11,6 +11,8 @@ pub struct Link {
     pub target: String,
     /// Display text from `[[target|label]]` or `[label](target)`
     pub label: Option<String>,
+    /// The kind of link syntax used in the source text.
+    pub kind: LinkKind,
 }
 
 /// The kind of link syntax used in the source text.
@@ -284,6 +286,7 @@ pub fn parse_wikilink(inner: &str) -> Option<Link> {
     Some(Link {
         target: target.to_string(),
         label,
+        kind: LinkKind::Wikilink,
     })
 }
 
@@ -348,6 +351,7 @@ pub fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<Link> {
         } else {
             Some(label_text.to_string())
         },
+        kind: LinkKind::Markdown,
     })
 }
 

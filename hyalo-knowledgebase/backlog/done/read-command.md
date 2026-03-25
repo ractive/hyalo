@@ -35,7 +35,7 @@ hyalo read --file research/dogfooding-post-iter-10.md --lines
 
 ## Notes
 
-- Originally planned as [[iterations/iteration-13-read-command]] (now deferred)
+- Originally planned as [[iterations/done/iteration-13-read-command]] (now deferred)
 - JSON output could wrap content in `{"file": "...", "content": "...", "section": "..."}`
 - `--section` should match by heading text (case-insensitive substring match)
 - Consider supporting `--format text` (raw content) vs `--format json` (wrapped)

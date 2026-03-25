@@ -1,7 +1,7 @@
 ---
 branch: iter-31/homebrew-distribution
 date: 2026-03-23
-status: in-progress
+status: completed
 tags:
 - iteration
 - distribution

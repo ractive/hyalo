@@ -16,7 +16,7 @@ Make hyalo a first-class tool for AI agents: a single `hyalo context` call orien
 ## Backlog items
 
 - [[backlog/context-command]] (medium)
-- [[claude-code-skill]] (medium)
+- [[backlog/done/claude-code-skill]] (medium)
 - [[backlog/claude-plugin-distribution]] (medium)
 
 ## Tasks

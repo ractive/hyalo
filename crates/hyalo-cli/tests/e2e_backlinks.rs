@@ -278,3 +278,56 @@ fn backlinks_with_jq_filter() {
     let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     assert_eq!(text, "2");
 }
+
+#[test]
+fn backlinks_wikilink_with_path_separator() {
+    // [[backlog/item]] written in any file must be found when querying
+    // backlinks for "backlog/item.md" — vault-relative wikilinks must NOT
+    // be normalized as if they were relative markdown paths.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "backlog/item.md", "# Item\nContent\n");
+    write_md(
+        tmp.path(),
+        "iterations/iter-1.md",
+        "See [[backlog/item]] for context.\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "backlog/item.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
+    assert_eq!(json["backlinks"][0]["source"], "iterations/iter-1.md");
+}
+
+#[test]
+fn backlinks_wikilink_with_path_from_subdirectory() {
+    // A file in sub/ linking [[other/target]] must store the link as
+    // "other/target", not "sub/other/target" (the incorrect normalized form).
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "other/target.md", "# Target\n");
+    write_md(tmp.path(), "sub/source.md", "See [[other/target]] here.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "other/target.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
+    assert_eq!(json["backlinks"][0]["source"], "sub/source.md");
+}
