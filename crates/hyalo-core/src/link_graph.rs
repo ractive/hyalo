@@ -129,7 +129,7 @@ impl FileVisitor for LinkGraphVisitor {
 ///
 /// Only called for targets that contain `/` or `\`.  Wikilink-style bare note
 /// names are left unchanged by the caller.
-fn normalize_target(source: &Path, target: &str) -> String {
+pub(crate) fn normalize_target(source: &Path, target: &str) -> String {
     let base = source.parent().unwrap_or(Path::new(""));
     let joined = base.join(target);
     normalize_path_components(&joined)
@@ -138,7 +138,7 @@ fn normalize_target(source: &Path, target: &str) -> String {
 /// Remove `.` and resolve `..` components in `path`, returning a forward-slash
 /// separated string.  Does not touch the filesystem (`canonicalize` is avoided
 /// so that this works for files that may not exist yet, e.g. in tests).
-fn normalize_path_components(path: &Path) -> String {
+pub(crate) fn normalize_path_components(path: &Path) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for component in path.components() {
         match component {
@@ -164,6 +164,47 @@ fn normalize_path_components(path: &Path) -> String {
         }
     }
     parts.join("/")
+}
+
+/// Compute the relative path from the directory of `from_file` to `to_file`.
+/// Both paths must be vault-relative with forward slashes.
+///
+/// Example: `relative_path_between("sub/a.md", "other/b.md")` → `"../other/b.md"`
+/// Example: `relative_path_between("a.md", "sub/b.md")` → `"sub/b.md"`
+/// Example: `relative_path_between("sub/a.md", "sub/b.md")` → `"b.md"`
+#[allow(dead_code)] // used by the upcoming mv command (link_rewrite)
+pub(crate) fn relative_path_between(from_file: &str, to_file: &str) -> String {
+    // from_dir components: everything except the last segment (the filename)
+    let from_parts: Vec<&str> = from_file.split('/').collect();
+    let from_dir: Vec<&str> = if from_parts.len() > 1 {
+        from_parts[..from_parts.len() - 1].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    // If the source file is at vault root there are no directory components to
+    // traverse — the relative path is just to_file itself.
+    if from_dir.is_empty() {
+        return to_file.to_string();
+    }
+
+    let to_parts: Vec<&str> = to_file.split('/').collect();
+
+    // Find common prefix length between from_dir and the full to_file path.
+    let common = from_dir
+        .iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    // One `..` per remaining component in from_dir past the common prefix.
+    let up_count = from_dir.len() - common;
+    let remaining = &to_parts[common..];
+
+    let mut result: Vec<&str> = Vec::with_capacity(up_count + remaining.len());
+    result.extend(std::iter::repeat_n("..", up_count));
+    result.extend_from_slice(remaining);
+    result.join("/")
 }
 
 #[cfg(test)]
@@ -337,5 +378,43 @@ mod tests {
         let vault = create_vault(&[]);
         let graph = LinkGraph::build(vault.path()).unwrap();
         assert!(graph.backlinks("anything").is_empty());
+    }
+
+    #[test]
+    fn relative_path_same_directory() {
+        assert_eq!(relative_path_between("sub/a.md", "sub/b.md"), "b.md");
+    }
+
+    #[test]
+    fn relative_path_from_root_to_subdir() {
+        assert_eq!(relative_path_between("a.md", "sub/b.md"), "sub/b.md");
+    }
+
+    #[test]
+    fn relative_path_from_subdir_to_root() {
+        assert_eq!(relative_path_between("sub/a.md", "b.md"), "../b.md");
+    }
+
+    #[test]
+    fn relative_path_cross_directory() {
+        assert_eq!(
+            relative_path_between("sub/a.md", "other/b.md"),
+            "../other/b.md"
+        );
+    }
+
+    #[test]
+    fn relative_path_deep_to_shallow() {
+        assert_eq!(relative_path_between("a/b/c.md", "d.md"), "../../d.md");
+    }
+
+    #[test]
+    fn relative_path_shallow_to_deep() {
+        assert_eq!(relative_path_between("a.md", "x/y/z.md"), "x/y/z.md");
+    }
+
+    #[test]
+    fn relative_path_nested_common_prefix() {
+        assert_eq!(relative_path_between("a/b/c.md", "a/d/e.md"), "../d/e.md");
     }
 }

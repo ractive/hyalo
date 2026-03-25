@@ -13,6 +13,35 @@ pub struct Link {
     pub label: Option<String>,
 }
 
+/// The kind of link syntax used in the source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    Wikilink,
+    Markdown,
+}
+
+/// A parsed link together with its byte-offset span within the source text.
+///
+/// All offsets are byte positions into the original `&str` passed to
+/// [`extract_link_spans`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSpan {
+    /// The resolved link (target without fragment, plus optional label).
+    pub link: Link,
+    /// Syntax kind (wikilink or markdown).
+    pub kind: LinkKind,
+    /// Byte offset of the first byte of the target text (i.e. the text that
+    /// `link.target` was derived from, before the `#fragment` was stripped).
+    pub target_start: usize,
+    /// Byte offset one past the last byte of the target text (stops at `#`,
+    /// `|`, `]]`, or `)` depending on what follows the target).
+    pub target_end: usize,
+    /// Byte offset of the opening `!`, `[`, depending on link kind/embed.
+    pub full_start: usize,
+    /// Byte offset one past the closing `]]` or `)`.
+    pub full_end: usize,
+}
+
 /// Extract all internal links from a markdown file.
 pub fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
     let mut links = Vec::new();
@@ -69,6 +98,143 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
 
         i += 1;
     }
+}
+
+/// Extract all internal links with byte-offset spans from a text segment.
+///
+/// Works exactly like [`extract_links_from_text`] but returns [`LinkSpan`]
+/// values that carry byte positions for both the full link syntax and the
+/// target substring.  `text` must already be cleaned of inline code spans.
+pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut out = Vec::new();
+
+    while i < len {
+        // ![[embed]] — full_start is at the `!`
+        if bytes[i] == b'!'
+            && i + 3 < len
+            && bytes[i + 1] == b'['
+            && bytes[i + 2] == b'['
+            && let Some((mut span, end)) = try_parse_wikilink_span_at(text, i + 1)
+        {
+            // Extend full_start back to the `!`
+            span.full_start = i;
+            out.push(span);
+            i = end;
+            continue;
+        }
+
+        // [[wikilink]]
+        if bytes[i] == b'['
+            && i + 1 < len
+            && bytes[i + 1] == b'['
+            && let Some((span, end)) = try_parse_wikilink_span_at(text, i)
+        {
+            out.push(span);
+            i = end;
+            continue;
+        }
+
+        // [text](target) — skip if preceded by `!` (image)
+        if bytes[i] == b'['
+            && (i == 0 || bytes[i - 1] != b'!')
+            && let Some((span, end)) = try_parse_markdown_link_span_at(text, i)
+        {
+            out.push(span);
+            i = end;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    out
+}
+
+/// Try to parse a wikilink span starting at `start` (the first `[` of `[[`).
+/// Returns the [`LinkSpan`] and the byte position after the closing `]]`.
+fn try_parse_wikilink_span_at(text: &str, start: usize) -> Option<(LinkSpan, usize)> {
+    let content_start = start + 2; // skip [[
+    let rest = &text[content_start..];
+
+    let close = rest.find("]]")?;
+    let inner = &rest[..close];
+
+    if inner.is_empty() || inner.contains('\n') {
+        return None;
+    }
+
+    // Determine where the target text ends within `inner`.
+    // target ends at `|` (alias) or `#` (fragment), whichever comes first.
+    let target_end_in_inner = [inner.find('|'), inner.find('#')]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(inner.len());
+
+    let target_part = &inner[..target_end_in_inner];
+
+    // Reuse existing logic to validate and strip the fragment from target_part.
+    // We call parse_wikilink on `inner` to get the full Link (handles alias etc.).
+    let link = parse_wikilink(inner)?;
+
+    let full_end = content_start + close + 2;
+
+    Some((
+        LinkSpan {
+            link,
+            kind: LinkKind::Wikilink,
+            target_start: content_start,
+            target_end: content_start + target_part.len(),
+            full_start: start,
+            full_end,
+        },
+        full_end,
+    ))
+}
+
+/// Try to parse a markdown link span `[text](target)` at byte position `start`
+/// (the `[`).  Returns the [`LinkSpan`] and the byte position after `)`.
+fn try_parse_markdown_link_span_at(text: &str, start: usize) -> Option<(LinkSpan, usize)> {
+    let rest = &text[start..];
+
+    let close_bracket = rest.find(']')?;
+    let label_text = &rest[1..close_bracket];
+
+    let after_bracket = start + close_bracket + 1;
+    if text.as_bytes().get(after_bracket).copied() != Some(b'(') {
+        return None;
+    }
+
+    let paren_start = after_bracket + 1; // first byte of raw target
+    let rest_after_paren = &text[paren_start..];
+    let close_paren = rest_after_paren.find(')')?;
+    let target_raw = &rest_after_paren[..close_paren];
+
+    if is_external(target_raw) || target_raw.is_empty() {
+        return None;
+    }
+
+    let link = parse_markdown_link(label_text, target_raw)?;
+
+    // target_end stops at `#` if a fragment is present, otherwise at `)`.
+    let target_end_in_raw = target_raw.find('#').unwrap_or(target_raw.len());
+
+    let full_end = paren_start + close_paren + 1;
+
+    Some((
+        LinkSpan {
+            link,
+            kind: LinkKind::Markdown,
+            target_start: paren_start,
+            target_end: paren_start + target_end_in_raw,
+            full_start: start,
+            full_end,
+        },
+        full_end,
+    ))
 }
 
 /// Try to parse a wikilink starting at position `start` (the first `[`).
@@ -400,5 +566,125 @@ mod tests {
         extract_links_from_text(text, &mut links);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "real link");
+    }
+
+    // --- LinkSpan / extract_link_spans tests ---
+
+    #[test]
+    fn span_simple_wikilink() {
+        let text = "See [[Note]] here";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "Note");
+        assert_eq!(spans[0].kind, LinkKind::Wikilink);
+        assert_eq!(&text[spans[0].target_start..spans[0].target_end], "Note");
+        assert_eq!(&text[spans[0].full_start..spans[0].full_end], "[[Note]]");
+    }
+
+    #[test]
+    fn span_wikilink_with_alias() {
+        let text = "[[target|display text]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "target");
+        assert_eq!(&text[spans[0].target_start..spans[0].target_end], "target");
+        assert_eq!(
+            &text[spans[0].full_start..spans[0].full_end],
+            "[[target|display text]]"
+        );
+    }
+
+    #[test]
+    fn span_wikilink_with_fragment() {
+        let text = "[[note#heading]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "note");
+        assert_eq!(&text[spans[0].target_start..spans[0].target_end], "note");
+    }
+
+    #[test]
+    fn span_wikilink_with_fragment_and_alias() {
+        let text = "[[note#section|display]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "note");
+        assert_eq!(&text[spans[0].target_start..spans[0].target_end], "note");
+    }
+
+    #[test]
+    fn span_embed_wikilink() {
+        let text = "![[embedded]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].kind, LinkKind::Wikilink);
+        assert_eq!(
+            &text[spans[0].full_start..spans[0].full_end],
+            "![[embedded]]"
+        );
+        assert_eq!(
+            &text[spans[0].target_start..spans[0].target_end],
+            "embedded"
+        );
+    }
+
+    #[test]
+    fn span_markdown_link() {
+        let text = "See [click](notes/foo.md) here";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].kind, LinkKind::Markdown);
+        assert_eq!(spans[0].link.target, "notes/foo.md");
+        assert_eq!(
+            &text[spans[0].target_start..spans[0].target_end],
+            "notes/foo.md"
+        );
+        assert_eq!(
+            &text[spans[0].full_start..spans[0].full_end],
+            "[click](notes/foo.md)"
+        );
+    }
+
+    #[test]
+    fn span_markdown_link_with_fragment() {
+        let text = "[text](note.md#section)";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "note.md");
+        assert_eq!(&text[spans[0].target_start..spans[0].target_end], "note.md");
+    }
+
+    #[test]
+    fn span_multiple_links() {
+        let text = "[[A]] then [b](b.md) then [[C]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].kind, LinkKind::Wikilink);
+        assert_eq!(spans[1].kind, LinkKind::Markdown);
+        assert_eq!(spans[2].kind, LinkKind::Wikilink);
+    }
+
+    #[test]
+    fn span_external_link_skipped() {
+        let text = "[Google](https://google.com) and [[internal]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "internal");
+    }
+
+    #[test]
+    fn span_image_skipped() {
+        let text = "![alt](image.png) and [[real]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "real");
+    }
+
+    #[test]
+    fn span_fragment_only_skipped() {
+        let text = "[[#heading]] and [[real]]";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "real");
     }
 }

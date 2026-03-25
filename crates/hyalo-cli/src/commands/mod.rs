@@ -3,6 +3,7 @@ pub mod append;
 pub mod backlinks;
 pub mod find;
 pub mod init;
+pub mod mv;
 pub mod properties;
 pub mod read;
 pub mod remove;

@@ -5,8 +5,9 @@ use clap::{Parser, Subcommand};
 
 use hyalo_cli::commands::{
     append as append_commands, backlinks as backlinks_commands, find as find_commands,
-    init as init_commands, properties, read as read_commands, remove as remove_commands,
-    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    init as init_commands, mv as mv_commands, properties, read as read_commands,
+    remove as remove_commands, set as set_commands, summary as summary_commands,
+    tags as tag_commands, tasks as task_commands,
 };
 use hyalo_cli::hints::{HintContext, HintSource, generate_hints};
 use hyalo_cli::output::{
@@ -55,7 +56,9 @@ use hyalo_core::filter;
         Vault overview:               hyalo summary --format text\n  \
         Overview with drill-down:     hyalo summary --format text --hints\n  \
         Toggle a task:                hyalo task toggle --file todo.md --line 5\n  \
-        Find backlinks:               hyalo backlinks --file decision-log.md",
+        Find backlinks:               hyalo backlinks --file decision-log.md\n  \
+        Move a file (update links):   hyalo mv --file old.md --to new.md\n  \
+        Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run",
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
@@ -83,6 +86,8 @@ COMMAND REFERENCE:\n  \
     hyalo task set-status -f/--file F -l/--line N -s/--status C\n\n  \
   Backlinks (reverse link lookup, read-only):\n  \
     hyalo backlinks -f/--file F\n\n  \
+  Mv (move/rename file, updates links, mutates files):\n  \
+    hyalo mv -f/--file F --to NEW [--dry-run]\n\n  \
   Init (configuration, one-time setup):\n  \
     hyalo init [--claude] [-d/--dir DIR]\n\n  \
   Global flags (apply to all commands):\n  \
@@ -140,7 +145,11 @@ COOKBOOK:\n  \
   # Pipe file paths for scripting (Unix)\n  \
   hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}\n\n  \
   # Find all files that link to a given note\n  \
-  hyalo backlinks --file decision-log.md\n\n\
+  hyalo backlinks --file decision-log.md\n\n  \
+  # Move a file and update all links\n  \
+  hyalo mv --file backlog/old.md --to backlog/done/old.md\n\n  \
+  # Preview a move without writing\n  \
+  hyalo mv --file note.md --to archive/note.md --dry-run\n\n\
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
   [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
@@ -161,6 +170,10 @@ OUTPUT SHAPES (JSON, default):\n  \
   \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}\n\n  \
   # backlinks\n  \
   {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}], \"total\": 1}\n\n  \
+  # mv\n  \
+  {\"from\": \"old.md\", \"to\": \"new.md\", \"dry_run\": false,\n   \
+  \"updated_files\": [{\"file\": \"a.md\", \"replacements\": [{\"line\": 5, \"old_text\": \"[[old]]\", \"new_text\": \"[[new]]\"}]}],\n   \
+  \"total_files_updated\": 1, \"total_links_updated\": 1}\n\n  \
   # --hints wraps JSON output in an envelope with drill-down commands\n  \
   {\"data\": { ... original output ... }, \"hints\": [\"hyalo properties\", ...]}\n\n  \
   # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
@@ -348,6 +361,28 @@ enum Commands {
         /// Target file to find backlinks for (relative to --dir)
         #[arg(short, long)]
         file: String,
+    },
+    /// Move/rename a file and update all inbound and outbound links
+    #[command(
+        long_about = "Move or rename a markdown file and update all links across the vault.\n\n\
+            Builds an in-memory link graph, then:\n\
+            1. Moves the file on disk.\n\
+            2. Rewrites all [[wikilinks]] and [markdown](links) in other files that pointed to the old path.\n\
+            3. Rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.\n\n\
+            Use --dry-run to preview changes without writing.\n\n\
+            OUTPUT: JSON object with from, to, updated_files (with per-file replacements), and totals.\n\
+            SIDE EFFECTS: Moves the file and modifies files containing links (unless --dry-run)."
+    )]
+    Mv {
+        /// Source file to move (relative to --dir)
+        #[arg(short, long)]
+        file: String,
+        /// Destination path (relative to --dir, must end with .md)
+        #[arg(long)]
+        to: String,
+        /// Preview changes without modifying any files
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
     #[command(
@@ -977,6 +1012,11 @@ fn main() {
         Commands::Backlinks { ref file } => {
             backlinks_commands::backlinks(&dir, file, effective_format)
         }
+        Commands::Mv {
+            ref file,
+            ref to,
+            dry_run,
+        } => mv_commands::mv(&dir, file, to, dry_run, effective_format),
         // `Init` is handled as an early return before this match is reached.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
     };
