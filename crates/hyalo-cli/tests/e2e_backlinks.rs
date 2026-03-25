@@ -215,6 +215,52 @@ Link is here: [[target]]
 }
 
 #[test]
+fn backlinks_cross_directory_relative_link() {
+    // source at `sub/source.md` links via `[text](../target.md)`.
+    // The CLI must resolve the `../` and find the link when queried as
+    // `backlinks --file target.md`.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "# Target\n");
+    std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
+    write_md(
+        tmp.path(),
+        "sub/source.md",
+        "See [the target](../target.md) for more.\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "target.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["backlinks"][0]["source"], "sub/source.md");
+}
+
+#[test]
+fn backlinks_wikilink_without_extension_finds_md_file() {
+    // source links `[[notes]]` (no extension); query uses `notes.md`.
+    // The cross-form matching in `backlinks()` must bridge the gap.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "notes.md", "# Notes\n");
+    write_md(tmp.path(), "source.md", "See [[notes]] for details.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "notes.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["backlinks"][0]["source"], "source.md");
+}
+
+#[test]
 fn backlinks_with_jq_filter() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "target.md", "# Target\n");

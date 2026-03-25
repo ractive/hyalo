@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::discovery;
 use crate::links::{Link, extract_links_from_text};
@@ -40,7 +40,15 @@ impl LinkGraph {
             scanner::scan_file_multi(file, &mut [&mut visitor])
                 .with_context(|| format!("scanning {}", file.display()))?;
 
-            for (line, link) in visitor.links {
+            for (line, mut link) in visitor.links {
+                // Normalize relative markdown link targets (those containing path
+                // separators) so that `sub/a.md` linking to `../target.md` is
+                // stored as `target.md` — matching how callers query by vault-
+                // relative path.  Bare wikilink targets (no `/` or `\`) are left
+                // unchanged because they are note names, not file system paths.
+                if link.target.contains('/') || link.target.contains('\\') {
+                    link.target = normalize_target(&visitor.source, &link.target);
+                }
                 index
                     .entry(link.target.clone())
                     .or_default()
@@ -69,8 +77,8 @@ impl LinkGraph {
         }
 
         // Also check with/without .md extension
-        let alt = if target.ends_with(".md") {
-            target.strip_suffix(".md").unwrap().to_string()
+        let alt = if let Some(stem) = target.strip_suffix(".md") {
+            stem.to_string()
         } else {
             format!("{target}.md")
         };
@@ -114,6 +122,48 @@ impl FileVisitor for LinkGraphVisitor {
     fn needs_frontmatter(&self) -> bool {
         false
     }
+}
+
+/// Resolve a relative markdown link target against the source file's directory,
+/// producing a clean vault-relative path.
+///
+/// Only called for targets that contain `/` or `\`.  Wikilink-style bare note
+/// names are left unchanged by the caller.
+fn normalize_target(source: &Path, target: &str) -> String {
+    let base = source.parent().unwrap_or(Path::new(""));
+    let joined = base.join(target);
+    normalize_path_components(&joined)
+}
+
+/// Remove `.` and resolve `..` components in `path`, returning a forward-slash
+/// separated string.  Does not touch the filesystem (`canonicalize` is avoided
+/// so that this works for files that may not exist yet, e.g. in tests).
+fn normalize_path_components(path: &Path) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {} // skip `.`
+            Component::ParentDir => {
+                // Pop the previous normal component.  If the stack is empty or
+                // its top is already `..`, we would escape the vault root —
+                // push `..` literally so the path is preserved as-is.
+                if parts.last().is_some_and(|p| *p != "..") {
+                    parts.pop();
+                } else {
+                    parts.push("..");
+                }
+            }
+            Component::Normal(s) => {
+                if let Some(s) = s.to_str() {
+                    parts.push(s);
+                }
+            }
+            // Prefix / RootDir only appear on absolute paths; skip them so we
+            // always produce a relative vault path.
+            Component::Prefix(_) | Component::RootDir => {}
+        }
+    }
+    parts.join("/")
 }
 
 #[cfg(test)]
@@ -163,18 +213,70 @@ mod tests {
     fn build_graph_markdown_links() {
         let vault = create_vault(&[
             ("a.md", "See [note](sub/b.md) for details\n"),
+            // `../a.md` from `sub/` resolves to `a.md` at the vault root.
             ("sub/b.md", "Back to [a](../a.md)\n"),
         ]);
         let graph = LinkGraph::build(vault.path()).unwrap();
 
-        // Markdown links store target as-is
+        // Down-path links are stored normalized (no change needed).
         let bl = graph.backlinks("sub/b.md");
         assert_eq!(bl.len(), 1);
         assert_eq!(bl[0].source, PathBuf::from("a.md"));
 
-        let bl = graph.backlinks("../a.md");
+        // Cross-directory `../` link must resolve to the vault-relative target.
+        let bl = graph.backlinks("a.md");
         assert_eq!(bl.len(), 1);
         assert_eq!(bl[0].source, PathBuf::from("sub/b.md"));
+    }
+
+    #[test]
+    fn cross_directory_relative_link_normalized() {
+        // source at `notes/page.md` links to `../assets/img.md`
+        // → should resolve to `assets/img.md`
+        let vault = create_vault(&[
+            ("assets/img.md", "# Image\n"),
+            ("notes/page.md", "See [img](../assets/img.md)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl = graph.backlinks("assets/img.md");
+        assert_eq!(bl.len(), 1);
+        assert_eq!(bl[0].source, PathBuf::from("notes/page.md"));
+
+        // The raw `../assets/img.md` form must NOT appear in the index.
+        let raw_bl = graph.backlinks("../assets/img.md");
+        assert!(raw_bl.is_empty());
+    }
+
+    #[test]
+    fn parent_dir_link_from_subdirectory() {
+        // source at `sub/a.md` links to `../target.md`
+        // → should resolve to `target.md`
+        let vault = create_vault(&[
+            ("target.md", "# Target\n"),
+            ("sub/a.md", "[link](../target.md)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl = graph.backlinks("target.md");
+        assert_eq!(bl.len(), 1);
+        assert_eq!(bl[0].source, PathBuf::from("sub/a.md"));
+    }
+
+    #[test]
+    fn normalize_path_components_dot_dot() {
+        assert_eq!(
+            normalize_path_components(Path::new("sub/../target.md")),
+            "target.md"
+        );
+        assert_eq!(
+            normalize_path_components(Path::new("a/b/../../c.md")),
+            "c.md"
+        );
+        assert_eq!(
+            normalize_path_components(Path::new("notes/../assets/img.md")),
+            "assets/img.md"
+        );
     }
 
     #[test]

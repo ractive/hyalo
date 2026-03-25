@@ -388,11 +388,16 @@ pub fn scan_reader_multi<R: BufRead>(
                 found_close = true;
                 break;
             }
+            // Content line count is fm_line_count - 1 (excludes the opening `---`).
+            // Apply the line-count limit unconditionally so that files with huge
+            // frontmatter are rejected even when no visitor needs the YAML content.
+            if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
+                anyhow::bail!(
+                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                );
+            }
             if let Some(ref mut y) = yaml {
-                // Content line count is fm_line_count - 1 (excludes the opening `---`)
-                if fm_line_count - 1 > MAX_FRONTMATTER_LINES
-                    || y.len() + trimmed.len() > MAX_FRONTMATTER_BYTES
-                {
+                if y.len() + trimmed.len() > MAX_FRONTMATTER_BYTES {
                     anyhow::bail!(
                         "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
                     );
@@ -1032,6 +1037,42 @@ Line 2
         let mut fm = FrontmatterCollector::new(true);
         let result = scan_reader_multi(input.as_bytes(), &mut [&mut fm]);
         assert!(result.is_err(), "expected error for oversized frontmatter");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("frontmatter too large"),
+            "unexpected error: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn frontmatter_line_limit_enforced_when_no_visitor_needs_frontmatter() {
+        // Regression test for DoS gap: the line-count limit must fire even when
+        // every visitor has needs_frontmatter() = false (yaml accumulation is
+        // skipped in that path, which previously caused the guard to be bypassed).
+        struct BodyOnly {
+            lines: Vec<String>,
+        }
+        impl FileVisitor for BodyOnly {
+            fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+                self.lines.push(raw.to_owned());
+                ScanAction::Continue
+            }
+            fn needs_frontmatter(&self) -> bool {
+                false
+            }
+        }
+
+        // 101 content lines, no closing `---` — must exceed the 100-line budget.
+        let mut input = String::from("---\n");
+        for i in 0..101usize {
+            input.push_str(&format!("k{i}: v\n"));
+        }
+        let mut v = BodyOnly { lines: Vec::new() };
+        let result = scan_reader_multi(input.as_bytes(), &mut [&mut v]);
+        assert!(
+            result.is_err(),
+            "expected error for oversized frontmatter even with needs_frontmatter=false"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("frontmatter too large"),
