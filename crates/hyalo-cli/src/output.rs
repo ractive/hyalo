@@ -153,7 +153,7 @@ pub fn format_error(
 // jq filter constants — one per output type
 // ---------------------------------------------------------------------------
 
-/// `PropertyInfo`: `{name, type, value}`
+/// `PropertyInfo` (used by `--fields properties-typed`): `{name, type, value}`
 /// When value is an array (list type), join elements with ", " for readability.
 const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)""#;
 
@@ -445,10 +445,17 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // Header: file path and modified timestamp — always present.
     let mut parts = vec![r#""\"\(.file)\"  (\(.modified))""#.to_owned()];
 
-    // Properties: header then each as "    name (type): value"
+    // Properties: header then each as "    key: value"
     if map.contains_key("properties") {
         parts.push(
-            r#"if (.properties | length) > 0 then "  properties:\n\(.properties | map("    \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
+            r#"if (.properties | length) > 0 then "  properties:\n\(.properties | to_entries | map("    \(.key): \(if (.value | type) == "array" then "[" + (.value | map(tostring) | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
+        );
+    }
+
+    // Properties (typed): header then each as "    name (type): value"
+    if map.contains_key("properties_typed") {
+        parts.push(
+            r#"if (.properties_typed | length) > 0 then "  properties_typed:\n\(.properties_typed | map("    \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | map(tostring) | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
         );
     }
 
@@ -1007,19 +1014,19 @@ mod tests {
     #[test]
     fn build_file_object_filter_with_properties() {
         let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
-            r#"{"file": "foo.md", "modified": "2024-01-01", "properties": [{"name": "status", "type": "text", "value": "done"}]}"#,
+            r#"{"file": "foo.md", "modified": "2024-01-01", "properties": {"status": "done"}}"#,
         )
         .unwrap();
         let filter = build_file_object_filter(&map);
         let val = json!({
             "file": "foo.md",
             "modified": "2024-01-01",
-            "properties": [{"name": "status", "type": "text", "value": "done"}]
+            "properties": {"status": "done"}
         });
         let out = jq(&filter, &val).unwrap();
         assert!(out.contains("foo.md"));
         assert!(out.contains("properties:"));
-        assert!(out.contains("status (text): done"));
+        assert!(out.contains("status: done"));
     }
 
     #[test]
@@ -1129,7 +1136,7 @@ mod tests {
             "file": "notes/project.md",
             "modified": "2024-03-01",
             "tags": ["rust", "work"],
-            "properties": [{"name": "status", "type": "text", "value": "active"}],
+            "properties": {"status": "active"},
             "tasks": [
                 {"done": false, "line": 10, "section": "Todo", "status": " ", "text": "Fix bug"},
                 {"done": true, "line": 20, "section": "Done", "status": "x", "text": "Write docs"}
@@ -1138,7 +1145,7 @@ mod tests {
         let out = fmt(&val);
         assert!(out.contains("notes/project.md"));
         assert!(out.contains("properties:"));
-        assert!(out.contains("status (text): active"));
+        assert!(out.contains("status: active"));
         assert!(out.contains("tags: [rust, work]"));
         assert!(out.contains("tasks:"));
         assert!(out.contains("[ ] Fix bug"));

@@ -11,7 +11,7 @@ use serde::Serialize;
 // ---------------------------------------------------------------------------
 
 /// A single frontmatter property with its inferred type and value.
-/// Used by `find` (properties field) and `properties` (aggregate summary).
+/// Used by `properties` (aggregate summary).
 #[derive(Debug, Clone, Serialize)]
 pub struct PropertyInfo {
     pub name: String,
@@ -184,7 +184,9 @@ pub struct FileObject {
     pub file: String,
     pub modified: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub properties: Option<Vec<PropertyInfo>>,
+    pub properties: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties_typed: Option<Vec<PropertyInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

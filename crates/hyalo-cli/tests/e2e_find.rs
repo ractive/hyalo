@@ -476,6 +476,39 @@ fn find_pattern_and_tag_combined() {
     assert_eq!(arr[0]["file"], "alpha.md");
 }
 
+#[test]
+fn find_all_four_filters_combined() {
+    let tmp = setup_vault();
+    // All four filter types AND'd together:
+    //   --property status=planned  → alpha, sub/nested
+    //   --tag rust                 → alpha, beta, sub/nested
+    //   --task todo                → alpha only (only file with open tasks)
+    //   -e "Write"                 → alpha only (body contains "Write tests" / "Write code")
+    // Only alpha satisfies all four simultaneously.
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &[
+            "--property",
+            "status=planned",
+            "--tag",
+            "rust",
+            "--task",
+            "todo",
+            "-e",
+            "Write",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(
+        arr.len(),
+        1,
+        "expected exactly 1 file matching all four filters: {arr:?}"
+    );
+    assert_eq!(arr[0]["file"], "alpha.md");
+}
+
 // ---------------------------------------------------------------------------
 // Fields
 // ---------------------------------------------------------------------------
@@ -488,7 +521,7 @@ fn find_fields_properties_and_tags_only() {
 
     for entry in json.as_array().unwrap() {
         assert!(
-            entry["properties"].is_array(),
+            entry["properties"].is_object(),
             "properties should be present"
         );
         assert!(entry["tags"].is_array(), "tags should be present");
@@ -654,19 +687,20 @@ fn find_text_format_file_object_structure() {
         stdout.contains("sections:"),
         "sections group label: {stdout}"
     );
-    // Properties with type annotations
+    // Properties as key: value (no type annotation in map format)
     assert!(
-        stdout.contains("title (text): Alpha"),
+        stdout.contains("title: Alpha"),
         "property rendering: {stdout}"
     );
     assert!(
-        stdout.contains("status (text): planned"),
+        stdout.contains("status: planned"),
         "status property: {stdout}"
     );
     // Tags are shown as a dedicated field, not duplicated under properties
+    // (tags key exists in the map but should be excluded from properties section)
     assert!(
-        !stdout.contains("tags (list):"),
-        "tags should not appear as a property: {stdout}"
+        !stdout.contains("    tags:"),
+        "tags should not appear under properties: {stdout}"
     );
     assert!(stdout.contains("tags: [rust, cli]"), "tags line: {stdout}");
     // Section headings
@@ -743,7 +777,7 @@ fn find_text_format_fields_properties_only() {
         "properties group label: {stdout}"
     );
     assert!(
-        stdout.contains("title (text): Alpha"),
+        stdout.contains("title: Alpha"),
         "property present: {stdout}"
     );
     // Should NOT have sections (not requested)
@@ -1279,4 +1313,143 @@ fn empty_json_result_returns_empty_array_no_stderr() {
         !stderr.contains("No files matched"),
         "JSON mode should not print 'No files matched' notice"
     );
+}
+
+// ---------------------------------------------------------------------------
+// --fields properties-typed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_fields_properties_typed_json() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &["--file", "alpha.md", "--fields", "properties-typed"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let entry = &arr[0];
+
+    // properties_typed must be an array
+    let typed = entry["properties_typed"]
+        .as_array()
+        .expect("properties_typed should be an array");
+    assert!(!typed.is_empty());
+
+    // Each element has name, type, value keys
+    for item in typed {
+        assert!(item["name"].is_string());
+        assert!(item["type"].is_string());
+        assert!(!item["value"].is_null());
+    }
+
+    // tags should not appear in properties_typed
+    assert!(
+        typed.iter().all(|p| p["name"] != "tags"),
+        "tags must not appear in properties_typed"
+    );
+
+    // properties (map) should not be present when not requested
+    assert!(
+        entry["properties"].is_null(),
+        "properties map should be absent when only properties-typed was requested"
+    );
+}
+
+#[test]
+fn find_fields_properties_typed_type_and_value() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &["--file", "alpha.md", "--fields", "properties-typed"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    let typed = arr[0]["properties_typed"].as_array().unwrap();
+
+    // alpha.md has: title: Alpha, status: planned, priority: 3
+    let status_prop = typed
+        .iter()
+        .find(|p| p["name"] == "status")
+        .expect("status property missing");
+    assert_eq!(status_prop["type"], "text");
+    assert_eq!(status_prop["value"], "planned");
+
+    let priority_prop = typed
+        .iter()
+        .find(|p| p["name"] == "priority")
+        .expect("priority property missing");
+    assert_eq!(priority_prop["type"], "number");
+    assert_eq!(priority_prop["value"], 3);
+}
+
+#[test]
+fn find_fields_properties_and_properties_typed_together_e2e() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &[
+            "--file",
+            "alpha.md",
+            "--fields",
+            "properties,properties-typed",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    let entry = &arr[0];
+
+    // Both fields present
+    assert!(
+        entry["properties"].is_object(),
+        "properties map should be present"
+    );
+    assert!(
+        entry["properties_typed"].is_array(),
+        "properties_typed should be present"
+    );
+}
+
+#[test]
+fn find_fields_properties_typed_text_format() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "find",
+        "--file",
+        "alpha.md",
+        "--fields",
+        "properties-typed",
+        "--format",
+        "text",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("properties_typed:"),
+        "text output should contain properties_typed header, got: {stdout}"
+    );
+    // Expect entries formatted as "name (type): value"
+    assert!(
+        stdout.contains("(text):") || stdout.contains("(number):"),
+        "text output should contain typed property entries, got: {stdout}"
+    );
+}
+
+#[test]
+fn find_fields_properties_typed_unknown_field_error() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--fields", "properties-badtypo"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
 }

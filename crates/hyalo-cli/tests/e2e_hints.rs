@@ -330,3 +330,110 @@ fn find_hints_with_task_filter() {
     // Should succeed — hints may or may not have drill-down suggestions for find
     assert!(output.status.success());
 }
+
+// ---------------------------------------------------------------------------
+// Mutation commands with --hints
+// Mutation commands (set, remove, append) accept --hints but do not generate
+// hint suggestions — they produce the same JSON output as without --hints.
+// These tests verify the flag is accepted and output remains valid/correct.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_hints_accepted_produces_valid_json() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--hints"])
+        .args([
+            "set",
+            "--property",
+            "status=updated",
+            "--file",
+            "notes/alpha.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
+    // Output should be the mutation result, not wrapped in a hints envelope
+    assert!(
+        parsed.get("modified").is_some(),
+        "should have modified field: {parsed}"
+    );
+    // Mutation commands do not generate hints, so no envelope
+    assert!(
+        parsed.get("hints").is_none(),
+        "mutation commands should not wrap output in hints envelope: {parsed}"
+    );
+}
+
+#[test]
+fn remove_hints_accepted_produces_valid_json() {
+    let tmp = setup_vault();
+    // notes/alpha.md has status: in-progress — remove it
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--hints"])
+        .args(["remove", "--property", "status", "--file", "notes/alpha.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
+    assert!(
+        parsed.get("modified").is_some(),
+        "should have modified field: {parsed}"
+    );
+    assert!(
+        parsed.get("hints").is_none(),
+        "mutation commands should not wrap output in hints envelope: {parsed}"
+    );
+}
+
+#[test]
+fn append_hints_accepted_produces_valid_json() {
+    let tmp = setup_vault();
+    // Append a new alias to notes/alpha.md
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--hints"])
+        .args([
+            "append",
+            "--property",
+            "aliases=alpha-note",
+            "--file",
+            "notes/alpha.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
+    assert!(
+        parsed.get("modified").is_some(),
+        "should have modified field: {parsed}"
+    );
+    assert!(
+        parsed.get("hints").is_none(),
+        "mutation commands should not wrap output in hints envelope: {parsed}"
+    );
+}

@@ -2,10 +2,10 @@
 pub mod append;
 pub mod find;
 pub mod init;
-pub mod outline;
 pub mod properties;
 pub mod read;
 pub mod remove;
+pub mod section_scanner;
 pub mod set;
 pub mod summary;
 pub mod tags;

@@ -3,6 +3,45 @@ mod common;
 use common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
+fn setup_vault_nested() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    write_md(
+        tmp.path(),
+        "root.md",
+        md!(r"
+---
+title: Root
+status: published
+---
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "notes/n.md",
+        md!(r"
+---
+title: N
+status: draft
+---
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "notes/sub/s.md",
+        md!(r"
+---
+title: S
+status: draft
+---
+"),
+    );
+
+    tmp
+}
+
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
@@ -382,6 +421,90 @@ fn summary_empty_vault() {
     assert_eq!(json["tasks"]["done"].as_u64().unwrap(), 0);
     assert!(json["status"].as_array().unwrap().is_empty());
     assert!(json["recent_files"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn summary_depth_zero_collapses_all_dirs() {
+    let tmp = setup_vault_nested();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--depth",
+            "0",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    assert_eq!(by_dir.len(), 1);
+    assert_eq!(by_dir[0]["directory"], ".");
+    assert_eq!(by_dir[0]["count"], 3);
+    // Stats are unaffected — all 3 files are still counted
+    assert_eq!(json["files"]["total"].as_u64().unwrap(), 3);
+}
+
+#[test]
+fn summary_depth_one_collapses_sub_into_parent() {
+    let tmp = setup_vault_nested();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--depth",
+            "1",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    // "." and "notes" (notes/sub collapsed into notes)
+    assert_eq!(by_dir.len(), 2);
+
+    let dot = by_dir.iter().find(|d| d["directory"] == ".").unwrap();
+    assert_eq!(dot["count"].as_u64().unwrap(), 1);
+
+    let notes = by_dir.iter().find(|d| d["directory"] == "notes").unwrap();
+    assert_eq!(notes["count"].as_u64().unwrap(), 2);
+
+    // notes/sub must NOT appear
+    assert!(by_dir.iter().all(|d| d["directory"] != "notes/sub"));
+}
+
+#[test]
+fn summary_depth_no_flag_shows_all_directories() {
+    let tmp = setup_vault_nested();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let dirs: Vec<&str> = by_dir
+        .iter()
+        .map(|d| d["directory"].as_str().unwrap())
+        .collect();
+    assert!(dirs.contains(&"."));
+    assert!(dirs.contains(&"notes"));
+    assert!(dirs.contains(&"notes/sub"));
 }
 
 #[test]

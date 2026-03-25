@@ -121,7 +121,8 @@ COOKBOOK:\n  \
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
   [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
-    \"properties\": [...], \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]\n\n  \
+    \"properties\": {\"status\": \"draft\", \"title\": \"My Note\"},\n   \
+    \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]\n\n  \
   # set / remove / append (mutation result)\n  \
   {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \
   {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n\n  \
@@ -191,7 +192,8 @@ enum Commands {
             whole-string match; use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). \
             Nested subsections are included.\n\n\
             OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
-            FIELDS: Use --fields to limit which fields appear (default: all).\n\
+            FIELDS: Use --fields to limit which fields appear (default: all). \
+            Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)
@@ -219,7 +221,7 @@ enum Commands {
         /// Glob pattern to select files
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
-        /// Comma-separated list of optional fields to include: properties, tags, sections, tasks, links (default: all). 'file' and 'modified' are always included
+        /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links (default: all). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default) or 'modified'
@@ -309,6 +311,9 @@ enum Commands {
         /// Number of recent files to show (default: 10)
         #[arg(short = 'n', long, default_value = "10")]
         recent: usize,
+        /// Limit directory listing depth (0 = root only; stats are always full)
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
     #[command(
@@ -789,9 +794,11 @@ fn main() {
                 )
             }
         },
-        Commands::Summary { ref glob, recent } => {
-            summary_commands::summary(&dir, glob.as_deref(), recent, effective_format)
-        }
+        Commands::Summary {
+            ref glob,
+            recent,
+            depth,
+        } => summary_commands::summary(&dir, glob.as_deref(), recent, depth, effective_format),
         Commands::Set {
             ref properties,
             ref tag,

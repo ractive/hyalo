@@ -74,11 +74,10 @@ fn error_invalid_yaml() {
     );
 }
 
-/// `hyalo find` uses the multi-visitor scan path (`scan_file_multi`) which propagates
-/// YAML parse errors via `?`. A malformed frontmatter must cause a non-zero exit and
-/// an error message that names the cause.
+/// `hyalo find` uses the multi-visitor scan path (`scan_file_multi`). Malformed
+/// frontmatter must be gracefully skipped: exit 0, warning on stderr.
 #[test]
-fn error_find_malformed_yaml_hard_error() {
+fn error_find_malformed_yaml_graceful_skip() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -98,20 +97,26 @@ fn error_find_malformed_yaml_hard_error() {
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "expected non-zero exit; stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
+        output.status.success(),
+        "expected graceful skip; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("failed to parse YAML frontmatter"),
-        "expected YAML parse error on stderr; got: {stderr}"
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "warning should name the bad file; got: {stderr}"
     );
 }
 
-/// `hyalo summary` also uses the multi-visitor scan path and must propagate the error.
+/// `hyalo summary` also uses the multi-visitor scan path. Malformed frontmatter
+/// must be gracefully skipped: exit 0, warning on stderr, and directory counts
+/// must not include the skipped file.
 #[test]
-fn error_summary_malformed_yaml_hard_error() {
+fn error_summary_malformed_yaml_graceful_skip() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -119,6 +124,16 @@ fn error_summary_malformed_yaml_hard_error() {
         md!(r"
 ---
 : invalid yaml [[[{
+---
+# Body
+"),
+    );
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: OK
 ---
 # Body
 "),
@@ -131,14 +146,33 @@ fn error_summary_malformed_yaml_hard_error() {
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "expected non-zero exit; stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
+        output.status.success(),
+        "expected graceful skip; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("failed to parse YAML frontmatter"),
-        "expected YAML parse error on stderr; got: {stderr}"
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "warning should name the bad file; got: {stderr}"
+    );
+
+    // Directory counts must exclude the skipped file
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    let total = json["files"]["total"].as_u64().unwrap();
+    assert_eq!(total, 1, "only the good file should be counted");
+    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let root_count: u64 = by_dir
+        .iter()
+        .map(|d| d["count"].as_u64().unwrap_or(0))
+        .sum();
+    assert_eq!(
+        root_count, total,
+        "by_directory counts must sum to total files"
     );
 }
 
