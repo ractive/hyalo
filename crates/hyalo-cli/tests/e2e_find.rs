@@ -1642,8 +1642,17 @@ Another decision.
 fn section_filter_substring_matches_heading_with_count_suffix() {
     // "Tasks" should match "Tasks [4/4]" via substring
     let tmp = setup_substring_section_vault();
-    let (status, json, stderr) =
-        find_json(&tmp, &["--file", "tasks.md", "--section", "Tasks", "--fields", "sections"]);
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &[
+            "--file",
+            "tasks.md",
+            "--section",
+            "Tasks",
+            "--fields",
+            "sections",
+        ],
+    );
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1, "expected tasks.md to match");
@@ -1662,8 +1671,17 @@ fn section_filter_substring_matches_heading_with_count_suffix() {
 fn section_filter_substring_matches_ticket_heading() {
     // "DEC-031" should match "DEC-031: Discoverable Drill-Down Hints Architecture (2026-03-22)"
     let tmp = setup_substring_section_vault();
-    let (status, json, stderr) =
-        find_json(&tmp, &["--file", "decision.md", "--section", "DEC-031", "--task", "any"]);
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &[
+            "--file",
+            "decision.md",
+            "--section",
+            "DEC-031",
+            "--task",
+            "any",
+        ],
+    );
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1, "expected decision.md to match");
@@ -1685,19 +1703,41 @@ fn section_filter_substring_exact_heading_still_matches() {
 fn section_filter_level_pinned_substring() {
     // "## Task" (level-pinned + substring) should match "## Tasks [4/4]" at level 2
     let tmp = setup_substring_section_vault();
-    let (status, json, stderr) =
-        find_json(&tmp, &["--file", "tasks.md", "--section", "## Task", "--fields", "sections"]);
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &[
+            "--file",
+            "tasks.md",
+            "--section",
+            "## Task",
+            "--fields",
+            "sections",
+        ],
+    );
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
-    assert_eq!(arr.len(), 1, "level-pinned substring should match: stderr={stderr}");
+    assert_eq!(
+        arr.len(),
+        1,
+        "level-pinned substring should match: stderr={stderr}"
+    );
 }
 
 #[test]
 fn section_filter_regex_matches() {
     // ~=/DEC-03[12]/ should match both DEC-031 and DEC-032
     let tmp = setup_substring_section_vault();
-    let (status, json, stderr) =
-        find_json(&tmp, &["--file", "decision.md", "--section", "~=/DEC-03[12]/", "--task", "any"]);
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &[
+            "--file",
+            "decision.md",
+            "--section",
+            "~=/DEC-03[12]/",
+            "--task",
+            "any",
+        ],
+    );
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1, "expected decision.md to match");
@@ -1710,12 +1750,24 @@ fn section_filter_regex_matches() {
 fn section_filter_regex_anchored() {
     // ~=/^Tasks$/ should match heading "Tasks" exactly but NOT "Tasks [4/4]"
     let tmp = setup_substring_section_vault();
-    let (status, json, _) =
-        find_json(&tmp, &["--file", "tasks.md", "--section", "~=/^Tasks$/", "--task", "any"]);
+    let (status, json, _) = find_json(
+        &tmp,
+        &[
+            "--file",
+            "tasks.md",
+            "--section",
+            "~=/^Tasks$/",
+            "--task",
+            "any",
+        ],
+    );
     assert!(status.success());
     let arr = json.as_array().unwrap();
     // tasks.md only has "Tasks [4/4]" — anchored regex should NOT match
-    assert!(arr.is_empty(), "anchored regex should not match 'Tasks [4/4]'");
+    assert!(
+        arr.is_empty(),
+        "anchored regex should not match 'Tasks [4/4]'"
+    );
 }
 
 #[test]
@@ -1741,9 +1793,21 @@ fn section_filter_regex_invalid_exits_1() {
 fn setup_negation_vault() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     write_md(tmp.path(), "index.md", "---\ntitle: Index\n---\n# Index\n");
-    write_md(tmp.path(), "notes/draft.md", "---\ntitle: Draft\n---\n# Draft\n");
-    write_md(tmp.path(), "notes/final.md", "---\ntitle: Final\n---\n# Final\n");
-    write_md(tmp.path(), "notes/index.md", "---\ntitle: Notes Index\n---\n# Notes Index\n");
+    write_md(
+        tmp.path(),
+        "notes/draft.md",
+        "---\ntitle: Draft\n---\n# Draft\n",
+    );
+    write_md(
+        tmp.path(),
+        "notes/final.md",
+        "---\ntitle: Final\n---\n# Final\n",
+    );
+    write_md(
+        tmp.path(),
+        "notes/index.md",
+        "---\ntitle: Notes Index\n---\n# Notes Index\n",
+    );
     tmp
 }
 
@@ -1754,7 +1818,10 @@ fn find_glob_negation_excludes_specific_file() {
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
-    assert!(!files.contains(&"notes/draft.md"), "draft.md should be excluded");
+    assert!(
+        !files.contains(&"notes/draft.md"),
+        "draft.md should be excluded"
+    );
     assert!(files.contains(&"notes/final.md"));
     assert!(files.contains(&"index.md"));
     assert_eq!(arr.len(), 3);
@@ -1772,7 +1839,10 @@ fn find_glob_negation_wildcard_pattern() {
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
-    assert!(!files.iter().any(|f| f.starts_with("draft-")), "draft files should be excluded");
+    assert!(
+        !files.iter().any(|f| f.starts_with("draft-")),
+        "draft files should be excluded"
+    );
     assert!(files.contains(&"a.md"));
     assert!(files.contains(&"final.md"));
     assert_eq!(arr.len(), 2);

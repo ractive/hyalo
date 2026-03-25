@@ -559,3 +559,41 @@ fn remove_tag_without_file_or_glob_is_user_error() {
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains("rust"));
 }
+
+// ---------------------------------------------------------------------------
+// Glob negation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_glob_negation_excludes_files() {
+    use common::write_tagged;
+
+    let tmp = tempfile::tempdir().unwrap();
+    write_tagged(tmp.path(), "keep.md", &["rust", "cli"]);
+    write_tagged(tmp.path(), "exclude.md", &["exclusive-tag"]);
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "tags",
+            "--glob",
+            "!exclude.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let tags: Vec<&str> = json["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert!(tags.contains(&"rust"), "rust tag should be present");
+    assert!(tags.contains(&"cli"), "cli tag should be present");
+    assert!(
+        !tags.contains(&"exclusive-tag"),
+        "exclusive-tag should be excluded via negation glob"
+    );
+}

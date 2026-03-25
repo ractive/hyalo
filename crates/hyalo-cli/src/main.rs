@@ -211,14 +211,14 @@ enum Commands {
         /// Task presence filter: 'todo', 'done', 'any', or a single status character
         #[arg(long, value_name = "STATUS")]
         task: Option<String>,
-        /// Section heading filter: restrict body results to matching sections (case-insensitive whole-string match;
-        /// use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR)
+        /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+        /// prefix '##' to pin heading level; prefix '~=' for regex (e.g. '~=/DEC-03[12]/'). Repeatable (OR)
         #[arg(short, long = "section", value_name = "HEADING")]
         sections: Vec<String>,
         /// Scan only this file (still returns an array)
         #[arg(short, long, conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern to select files
+        /// Glob pattern to select files; prefix '!' to negate (e.g. '!**/draft-*' excludes matching files)
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
         /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links (default: all). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array
@@ -245,8 +245,8 @@ enum Commands {
         /// Target file (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// Extract the section(s) matching this heading (case-insensitive whole-string match;
-        /// use leading '#' to pin heading level, e.g. '## Tasks'). Nested subsections are included
+        /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+        /// prefix '##' to pin heading level; prefix '~=' for regex. Nested subsections included
         #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
         /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
@@ -265,7 +265,7 @@ enum Commands {
             USE WHEN: You need to discover what properties exist or audit frontmatter across a vault."
     )]
     Properties {
-        /// Glob pattern to select files (e.g. '**/*.md', 'notes/*.md')
+        /// Glob pattern to select files (e.g. 'notes/*.md'); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]
         glob: Option<String>,
     },
@@ -276,7 +276,7 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
     Tags {
-        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md')
+        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md'); prefix '!' to negate
         #[arg(short, long)]
         glob: Option<String>,
     },
@@ -305,7 +305,7 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
     Summary {
-        /// Glob pattern to filter which files to include
+        /// Glob pattern to filter which files to include; prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]
         glob: Option<String>,
         /// Number of recent files to show (default: 10)

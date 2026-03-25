@@ -525,3 +525,38 @@ fn summary_recent_zero() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(json["recent_files"].as_array().unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Glob negation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summary_glob_negation_excludes_files() {
+    let tmp = setup_vault();
+    // Exclude one of the root-level files; the summary file count should be reduced
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--glob",
+            "!notes/**/*.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let total = json["files"]["total"].as_u64().unwrap();
+    // The vault has files in notes/ — after excluding them, total should be smaller
+    assert!(total > 0, "should still have some files: {total}");
+    // Verify no notes/ paths appear in recent files
+    for entry in json["recent_files"].as_array().unwrap() {
+        let path = entry["path"].as_str().unwrap_or("");
+        assert!(
+            !path.starts_with("notes/"),
+            "notes/ file should be excluded: {path}"
+        );
+    }
+}

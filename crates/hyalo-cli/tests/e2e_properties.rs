@@ -330,3 +330,47 @@ status: draft
         "warning should name the bad file; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Glob negation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn properties_glob_negation_excludes_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "keep.md",
+        "---\ntitle: Keep\nstatus: active\n---\n",
+    );
+    write_md(
+        tmp.path(),
+        "exclude.md",
+        "---\ntitle: Exclude\nexclusive_prop: only_here\n---\n",
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "properties",
+            "--glob",
+            "!exclude.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let names: Vec<&str> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"title"));
+    assert!(names.contains(&"status"));
+    assert!(
+        !names.contains(&"exclusive_prop"),
+        "exclusive_prop should be excluded via negation glob"
+    );
+}
