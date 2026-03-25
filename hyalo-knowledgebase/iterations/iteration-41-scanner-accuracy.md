@@ -1,10 +1,14 @@
 ---
-title: "Iteration 41 — Scanner Accuracy & Consistency"
-type: iteration
-date: 2026-03-25
-status: planned
 branch: iter-41/scanner-accuracy
-tags: [iteration, scanner, bug-fix, consistency]
+date: 2026-03-25
+status: completed
+tags:
+- iteration
+- scanner
+- bug-fix
+- consistency
+title: Iteration 41 — Scanner Accuracy & Consistency
+type: iteration
 ---
 
 # Iteration 41 — Scanner Accuracy & Consistency
