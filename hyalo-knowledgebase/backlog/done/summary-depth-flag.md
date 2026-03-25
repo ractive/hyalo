@@ -1,15 +1,15 @@
 ---
-title: "Summary --depth flag for large vaults"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: low
 origin: dogfooding docs/content vault (200+ subdirectories in summary output)
+priority: low
+status: completed
 tags:
-  - backlog
-  - cli
-  - ux
-  - llm
+- backlog
+- cli
+- ux
+- llm
+title: Summary --depth flag for large vaults
+type: backlog
 ---
 
 # Summary --depth flag for large vaults

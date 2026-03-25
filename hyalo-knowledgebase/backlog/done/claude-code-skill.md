@@ -1,15 +1,15 @@
 ---
-title: "Claude Code skill for hyalo knowledgebase interactions"
-type: backlog
 date: 2026-03-23
+origin: dogfooding help-text audit
+priority: medium
+status: completed
 tags:
 - backlog
 - cli
 - llm
 - ux
-status: planned
-priority: medium
-origin: "dogfooding help-text audit"
+title: Claude Code skill for hyalo knowledgebase interactions
+type: backlog
 ---
 
 ## Problem

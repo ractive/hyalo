@@ -291,7 +291,7 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - 37 unit tests + 14 e2e tests covering hint generation and flag interactions
 - Found and fixed tags summary sort bug during dogfooding (hints were showing alphabetically-first tags instead of most-used)
 
-## DEC-032: YAML Parse Errors Are Hard Errors (2026-03-23)
+## DEC-032: YAML Parse Errors Are Hard Errors (2026-03-23) — UPDATED iter-35
 
 **Context:** The codebase had two scan paths for reading markdown files: `read_frontmatter_from_reader` (used by `properties`, `tags`, mutation commands) and `scan_reader_multi` (used by `find`, `summary`, task extraction). The former propagated YAML parse errors via `?`; the latter silently swallowed them with `unwrap_or_default()`, returning an empty property map for malformed frontmatter. This inconsistency meant `hyalo find` would silently skip broken files while `hyalo properties` would warn about them.
 
@@ -303,5 +303,5 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - `scan_reader_multi` now returns `Err` on malformed YAML (was `Ok` with empty props)
 - `scan_reader` / `scan_file` (closure-based API) now delegates to `scan_reader_multi` via a `ClosureVisitor` wrapper, unifying the two code paths
 - The old 80-line `scan_reader` implementation and its dependency on `frontmatter::skip_frontmatter` are removed
-- `find` and `summary` commands now exit with an error on malformed YAML (previously silent)
-- `properties` and `tags` commands continue to warn-and-skip via their existing `is_parse_error()` handling
+- All read-only commands (`find`, `summary`, `properties`, `tags`) gracefully skip files with malformed YAML: emit a warning to stderr and continue (iter-35 extended this from `properties`/`tags` to `find`/`summary`)
+- Mutation commands (`set`, `remove`, `append`) still fail hard on malformed YAML — safe, since silent corruption would be worse

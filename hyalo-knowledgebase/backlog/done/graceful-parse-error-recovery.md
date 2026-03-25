@@ -1,14 +1,14 @@
 ---
-title: "Graceful parse error recovery: skip broken files instead of hard exit"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: critical
 origin: dogfooding docs/content vault (3,521 files)
+priority: critical
+status: completed
 tags:
-  - backlog
-  - robustness
-  - cli
+- backlog
+- robustness
+- cli
+title: 'Graceful parse error recovery: skip broken files instead of hard exit'
+type: backlog
 ---
 
 # Graceful parse error recovery: skip broken files instead of hard exit
