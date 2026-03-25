@@ -445,7 +445,7 @@ Every markdown file is a structured object with these fields:
 {
   "file": "iterations/iteration-10.md",
   "modified": "2026-03-21T14:23:45Z",
-  "properties": [{"name": "status", "type": "text", "value": "completed"}, ...],
+  "properties": {"status": "completed", "title": "Iteration 10"},
   "tags": ["iteration", "cli"],
   "sections": [{"level": 1, "heading": "Title", "line": 5, "links": [...],
                  "tasks": {"total": 3, "done": 3}, "code_blocks": ["rust"]}],

@@ -135,6 +135,7 @@ hyalo find --glob "notes/*.md"
 # Control returned fields (default: all)
 hyalo find --fields properties,tags
 hyalo find --fields sections,tasks,links
+hyalo find --fields properties-typed     # [{name, type, value}] array instead of {key: value} map
 
 # Sort and limit
 hyalo find --sort modified --limit 10
@@ -191,6 +192,7 @@ High-level vault overview: file counts, property and tag aggregates, status grou
 hyalo summary
 hyalo summary --glob "notes/*.md"
 hyalo summary --recent 5          # control how many recent files to show (default: 10)
+hyalo summary --depth 1           # collapse subdirectories beyond depth 1
 hyalo summary --format text
 hyalo summary --jq '.tasks.total'
 hyalo summary --format text --hints

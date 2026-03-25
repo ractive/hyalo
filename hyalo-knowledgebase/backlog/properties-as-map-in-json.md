@@ -15,42 +15,25 @@ type: backlog
 
 # Properties as map (not array) in JSON output
 
-## Problem
+## Problem (resolved)
 
-Properties are emitted as an array of `{name, type, value}` objects:
+Properties were emitted as an array of `{name, type, value}` objects, making `--jq` queries verbose (`select(.name == "status") | .value`).
 
-```json
-"properties": [
-  {"name": "status", "type": "text", "value": "completed"},
-  {"name": "title", "type": "text", "value": "My Title"}
-]
-```
+## Solution (iter-35)
 
-This makes `--jq` queries verbose:
-```
-.properties[] | select(.name == "status") | .value
-```
+Properties in `find` output are now a `{"key": value}` map:
 
-A map shape would be much simpler:
 ```json
 "properties": {"status": "completed", "title": "My Title"}
 ```
 
-Enabling: `.properties.status` — dramatically simpler jq one-liners.
+Direct access: `.properties.status` — dramatically simpler jq one-liners.
 
-## Trade-off
-
-The array format preserves type information. A map loses it. Possible compromise:
-- Default to map for `--jq` ergonomics
-- Add `--properties-format array` flag for the rare case where type info is needed
-- Or nest type info: `{"status": {"type": "text", "value": "completed"}}`
+Type information is available via `--fields properties-typed`, which returns the old `[{name, type, value}]` array format.
 
 ## Acceptance criteria
 
-- [ ] Properties output as a map by default (or via flag)
-- [ ] jq queries like `.properties.status` work
-- [ ] Type information is still accessible when needed
-- [ ] Existing scripts/queries get a migration path
-
-## My Comments
-What about all the other commands? Isn't it way harder to use a map there?
+- [x] Properties output as a map by default
+- [x] jq queries like `.properties.status` work
+- [x] Type information is still accessible via `--fields properties-typed`
+- [x] Existing scripts/queries get a migration path

@@ -153,7 +153,7 @@ pub fn format_error(
 // jq filter constants — one per output type
 // ---------------------------------------------------------------------------
 
-/// `PropertyInfo`: `{name, type, value}`
+/// `PropertyInfo` (used by `--fields properties-typed`): `{name, type, value}`
 /// When value is an array (list type), join elements with ", " for readability.
 const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)""#;
 
