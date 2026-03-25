@@ -519,7 +519,8 @@ impl Fields {
     /// Parse a fields selection from a list of `--fields` argument values.
     ///
     /// Each element may be a comma-separated list of field names. An empty
-    /// slice returns the default (all fields enabled).
+    /// slice returns the default (all standard fields enabled; `properties-typed` and `backlinks`
+    /// are opt-in).
     pub fn parse(input: &[String]) -> Result<Fields> {
         if input.is_empty() {
             return Ok(Fields::default());

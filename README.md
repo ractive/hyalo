@@ -138,7 +138,7 @@ hyalo find --file a.md --file b.md
 hyalo find --glob "notes/*.md"
 hyalo find --glob '!**/draft-*'      # exclude files matching a pattern (glob negation)
 
-# Control returned fields (default: all except backlinks)
+# Control returned fields (default: all except properties-typed and backlinks)
 hyalo find --fields properties,tags
 hyalo find --fields sections,tasks,links
 hyalo find --fields properties-typed     # [{name, type, value}] array instead of {key: value} map

@@ -406,10 +406,13 @@ fn build_file_object(
         Some(
             entries
                 .into_iter()
-                .map(|e| BacklinkInfo {
-                    source: e.source.to_string_lossy().into_owned(),
-                    line: e.line,
-                    label: e.link.label.clone(),
+                .map(|e| {
+                    let source = e.source.to_string_lossy().replace('\\', "/");
+                    BacklinkInfo {
+                        source,
+                        line: e.line,
+                        label: e.link.label.clone(),
+                    }
                 })
                 .collect(),
         )

@@ -47,7 +47,8 @@ hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
 
 The `--fields` flag controls which data is returned. Available fields: `properties`,
 `properties-typed`, `tags`, `sections`, `tasks`, `links`, `backlinks`. All fields except
-`backlinks` are included by default. The `backlinks` field is opt-in because it requires
+`properties-typed` and `backlinks` are included by default. Both are opt-in: `properties-typed`
+returns a `[{name, type, value}]` array instead of a `{key: value}` map; `backlinks` requires
 scanning all files to build the link graph. Each backlink entry contains `source` (file path),
 `line` (line number), and an optional `label`.
 
