@@ -1,9 +1,10 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::discovery;
+use crate::frontmatter;
 use crate::links::{Link, LinkKind, extract_links_from_text};
 use crate::scanner::{self, FileVisitor, ScanAction, strip_inline_code};
 
@@ -37,8 +38,15 @@ impl LinkGraph {
             let rel = file.strip_prefix(dir).unwrap_or(file).to_path_buf();
 
             let mut visitor = LinkGraphVisitor::new(rel);
-            scanner::scan_file_multi(file, &mut [&mut visitor])
-                .with_context(|| format!("scanning {}", file.display()))?;
+            match scanner::scan_file_multi(file, &mut [&mut visitor]) {
+                Ok(()) => {}
+                Err(e) if frontmatter::is_parse_error(&e) => {
+                    let rel_display = file.strip_prefix(dir).unwrap_or(file).display();
+                    eprintln!("warning: skipping {rel_display}: {e}");
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
 
             for (line, mut link) in visitor.links {
                 // Normalize markdown link targets that contain path separators
@@ -373,10 +381,46 @@ mod tests {
 
     #[test]
     fn malformed_frontmatter_skipped() {
-        // With needs_frontmatter=false, malformed YAML shouldn't cause errors
+        // With needs_frontmatter=false, malformed YAML is never parsed — no error
         let vault = create_vault(&[("a.md", "---\n: bad yaml [[\n---\n[[b]]\n")]);
         let graph = LinkGraph::build(vault.path()).unwrap();
         assert_eq!(graph.backlinks("b").len(), 1);
+    }
+
+    #[test]
+    fn unclosed_frontmatter_skipped() {
+        // Unclosed frontmatter triggers an error even with needs_frontmatter=false.
+        // The link graph builder should warn-and-skip, not fatally error.
+        let vault = create_vault(&[
+            ("good.md", "---\ntitle: Good\n---\n[[target]]\n"),
+            (
+                "bad.md",
+                "---\nunclosed frontmatter without closing delimiter\n",
+            ),
+            ("also_good.md", "---\ntitle: Also Good\n---\n[[target]]\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        // Both good files should contribute their links
+        let bl = graph.backlinks("target");
+        assert_eq!(bl.len(), 2, "both good files should link to target");
+    }
+
+    #[test]
+    fn frontmatter_too_large_skipped() {
+        // A file with >100 frontmatter lines (no closing ---) should be skipped.
+        let mut huge_fm = String::from("---\n");
+        for i in 0..102 {
+            huge_fm.push_str(&format!("key{i}: value\n"));
+        }
+        // No closing ---, so scanner bails with "frontmatter too large"
+        huge_fm.push_str("[[target]]\n");
+
+        let vault = create_vault(&[("good.md", "[[target]]\n"), ("huge.md", &huge_fm)]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl = graph.backlinks("target");
+        assert_eq!(bl.len(), 1, "good file should still be indexed");
     }
 
     #[test]
