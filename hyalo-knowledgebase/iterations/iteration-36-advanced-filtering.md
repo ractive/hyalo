@@ -1,7 +1,7 @@
 ---
 branch: iter-36/absence-and-regex-filters
 date: 2026-03-25
-status: in-progress
+status: completed
 tags:
 - iteration
 - filtering
@@ -66,19 +66,19 @@ Follows ripgrep convention. Negation globs are AND'd: file must match all positi
 ## Tasks
 
 ### Property absence filter
-- [ ] Parse `!K` syntax in property filter (distinguish from `K!=V`)
-- [ ] `PropertyFilter` variant for absence check
-- [ ] Works in combination with other filters (AND semantics)
-- [ ] Help text documents the `!K` syntax
-- [ ] E2e tests cover absence filter
+- [x] Parse `!K` syntax in property filter (distinguish from `K!=V`)
+- [x] `PropertyFilter` variant for absence check
+- [x] Works in combination with other filters (AND semantics)
+- [x] Help text documents the `!K` syntax
+- [x] E2e tests cover absence filter
 
 ### Property value regex (`~=`)
-- [ ] Parse `K~=pattern` and `K~=/pattern/flags` syntax
-- [ ] Unanchored regex match on property value (string representation)
-- [ ] For list properties, match if any element matches
-- [ ] Regex size limit (reuse existing defense-in-depth pattern from content search)
-- [ ] Help text documents the `~=` syntax with examples
-- [ ] E2e tests cover bare pattern, `/pattern/`, `/pattern/i`, list properties
+- [x] Parse `K~=pattern` and `K~=/pattern/flags` syntax
+- [x] Unanchored regex match on property value (string representation)
+- [x] For list properties, match if any element matches
+- [x] Regex size limit (reuse existing defense-in-depth pattern from content search)
+- [x] Help text documents the `~=` syntax with examples
+- [x] E2e tests cover bare pattern, `/pattern/`, `/pattern/i`, list properties
 
 ### Section filter substring matching
 - [x] Change `SectionFilter` from exact to substring (contains) matching
@@ -96,13 +96,13 @@ Follows ripgrep convention. Negation globs are AND'd: file must match all positi
 - [x] E2e tests cover negation, combined include+exclude
 
 ### Documentation & help text audit
-- [ ] `find --help` long_about documents all new operators (`!K`, `~=`, section substring)
+- [x] `find --help` long_about documents all new operators (`!K`, `~=`, section substring)
 - [x] `--section`, `--glob` arg descriptions updated
-- [ ] Top-level `hyalo --help` COOKBOOK has examples of new syntax
-- [ ] README.md find examples updated with new operators
-- [ ] SKILL.md updated with new filter examples
-- [ ] Knowledgebase backlog items marked completed and moved to `done/`
-- [ ] Decision log entry for new filter syntax
+- [x] Top-level `hyalo --help` COOKBOOK has examples of new syntax
+- [x] README.md find examples updated with new operators
+- [x] SKILL.md updated with new filter examples
+- [x] Knowledgebase backlog items marked completed and moved to `done/`
+- [x] Decision log entry for new filter syntax
 
 ## Acceptance Criteria
 

@@ -104,6 +104,16 @@ pub enum PropertyFilter {
 /// - `name~=/pattern/`   → RegexMatch (delimited, unanchored)
 /// - `name~=/pattern/i`  → RegexMatch (delimited, case-insensitive flag)
 pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
+    // Normalize `\!K` → `!K` so that zsh-escaped absence filters work.
+    // zsh escapes `!` to `\!` even in single quotes in some contexts.
+    let normalized;
+    let input = if let Some(rest) = input.strip_prefix("\\!") {
+        normalized = format!("!{rest}");
+        normalized.as_str()
+    } else {
+        input
+    };
+
     // --- Absence filter: `!key` ---
     // Must start with `!` and contain no operator characters after the `!`.
     // Be careful not to confuse with `key!=value` which has `!` in the middle.
@@ -682,6 +692,16 @@ mod tests {
     #[test]
     fn parse_absence_empty_key_errors() {
         assert!(parse_property_filter("!").is_err());
+    }
+
+    #[test]
+    fn parse_absence_backslash_escaped() {
+        // zsh escapes `!` to `\!` — `\!status` should be treated as `!status`
+        let f = parse_property_filter("\\!status").unwrap();
+        match f {
+            PropertyFilter::Absent { key } => assert_eq!(key, "status"),
+            other => panic!("expected Absent, got {other:?}"),
+        }
     }
 
     #[test]

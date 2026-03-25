@@ -1,15 +1,15 @@
 ---
-title: "Glob negation / exclude pattern support"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: medium
 origin: dogfooding docs/content vault
+priority: medium
+status: completed
 tags:
-  - backlog
-  - cli
-  - filtering
-  - ux
+- backlog
+- cli
+- filtering
+- ux
+title: Glob negation / exclude pattern support
+type: backlog
 ---
 
 # Glob negation / exclude pattern support

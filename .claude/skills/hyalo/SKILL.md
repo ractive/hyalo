@@ -30,6 +30,21 @@ in a single call, something impossible with Grep/Glob alone:
 hyalo find -e "pattern" --property status!=completed --tag iteration --section "Tasks" --task todo
 ```
 
+Property filters support: `K=V` (eq), `K!=V` (neq), `K>=V`/`K<=V`/`K>V`/`K<V` (comparison),
+`K` (existence), `!K` (absence — files missing the property), `K~=pattern` or `K~=/pattern/flags`
+(regex match on value; for list properties, matches if any element matches):
+
+```bash
+hyalo find --property '!status'           # files missing the status property
+hyalo find --property 'title~=draft'      # title contains "draft"
+hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
+```
+
+`--section` uses case-insensitive **substring** matching by default — `"Tasks"` matches
+`"Tasks [4/4]"`, `"My Tasks"`, etc. Use `"~=/regex/"` for regex. Prefix `##` to pin heading level.
+
+`--glob` supports negation with `!` prefix to exclude files: `--glob '!**/draft-*'`.
+
 Pipe through `--jq` to reshape output into anything — dashboards, burndowns, reports
 (requires JSON format — do not combine with `--format text`):
 

@@ -1,15 +1,15 @@
 ---
-title: "Property value substring/regex search"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: low
 origin: dogfooding vscode-docs vault
+priority: low
+status: completed
 tags:
-  - backlog
-  - cli
-  - filtering
-  - ux
+- backlog
+- cli
+- filtering
+- ux
+title: Property value substring/regex search
+type: backlog
 ---
 
 # Property value substring/regex search

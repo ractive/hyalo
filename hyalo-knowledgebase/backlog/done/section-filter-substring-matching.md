@@ -2,7 +2,7 @@
 date: 2026-03-23
 origin: dogfooding iter-29
 priority: medium
-status: planned
+status: completed
 tags:
 - backlog
 - search

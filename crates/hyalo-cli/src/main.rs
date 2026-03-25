@@ -90,16 +90,24 @@ COOKBOOK:\n  \
   hyalo summary --format text --hints\n\n  \
   # Find all files with status=draft\n  \
   hyalo find --property status=draft\n\n  \
+  # Find files missing the 'status' property (absence filter)\n  \
+  hyalo find --property '!status'\n\n  \
+  # Find files where title contains 'draft' (property value regex)\n  \
+  hyalo find --property 'title~=draft'\n\n  \
+  # Case-insensitive regex on a property value\n  \
+  hyalo find --property 'title~=/^Draft/i'\n\n  \
   # Find files tagged 'project' (matches project/backend, project/frontend, etc.)\n  \
   hyalo find --tag project\n\n  \
   # Find files with open tasks\n  \
   hyalo find --task todo\n\n  \
-  # Find files with a specific section heading\n  \
+  # Find files with a specific section heading (substring match: 'Tasks' matches 'Tasks [4/4]')\n  \
   hyalo find --section 'Tasks'\n\n  \
   # Find open tasks within a specific section\n  \
   hyalo find --section '## Sprint' --task todo\n\n  \
   # Find broken [[wikilinks]] (fields=links, then filter in jq)\n  \
   hyalo find --fields links --jq '[.[] | select(.links | map(select(.path == null)) | length > 0)]'\n\n  \
+  # Exclude draft files with glob negation\n  \
+  hyalo find --glob '!**/draft-*'\n\n  \
   # Tag all research notes in a folder\n  \
   hyalo set --tag reviewed --glob 'research/**/*.md'\n\n  \
   # Bulk-update a property across matching files\n  \
@@ -189,7 +197,8 @@ enum Commands {
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
             - --section HEADING: section scope filter (exclude files without a matching section; within \
             matching files, restrict tasks and content matches to the section scope; case-insensitive \
-            whole-string match; use leading '#' to pin heading level, e.g. '## Tasks'). Repeatable (OR). \
+            substring (contains) match by default, e.g. 'Tasks' matches 'Tasks [4/4]'; use leading '#' \
+            to pin heading level, e.g. '## Tasks'; use '~=/regex/' for regex matching). Repeatable (OR). \
             Nested subsections are included.\n\n\
             OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
             FIELDS: Use --fields to limit which fields appear (default: all). \
