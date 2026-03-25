@@ -42,7 +42,7 @@ pub fn backlinks(dir: &Path, file_arg: &str, format: Format) -> Result<CommandOu
     let items: Vec<BacklinkItem> = entries
         .iter()
         .map(|e| BacklinkItem {
-            source: e.source.to_string_lossy().into_owned(),
+            source: e.source.to_string_lossy().replace('\\', "/"),
             line: e.line,
             target: e.link.target.clone(),
             label: e.link.label.clone(),

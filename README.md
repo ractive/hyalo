@@ -42,7 +42,7 @@ Most flags have short aliases for quick interactive use:
 | `-p` | `--property` | find, set, remove, append |
 | `-t` | `--tag` | find, set, remove |
 | `-s` | `--section` | find, read |
-| `-f` | `--file` | find, read, set, remove, append, task, backlinks |
+| `-f` | `--file` | find, read, set, remove, append, task, backlinks, mv |
 | `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary |
 | `-n` | `--limit` | find |
 | `-n` | `--recent` | summary |
@@ -318,6 +318,45 @@ hyalo backlinks --file path/to/note.md
 ```
 
 The `label` field (and the parenthesised text in text mode) appears only for aliased wikilinks (`[[target|label]]`) and titled markdown links (`[label](target.md)`).
+
+### mv
+
+Move or rename a markdown file and update all links across the vault. Builds an in-memory link graph, moves the file on disk, then rewrites all inbound `[[wikilinks]]` and `[markdown](links)` in other files that pointed to the old path. Also rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.
+
+```sh
+hyalo mv --file old/path.md --to new/path.md
+hyalo mv --file note.md --to archive/note.md --dry-run   # preview without writing
+```
+
+**JSON output** (default):
+
+```json
+{
+  "from": "old/path.md",
+  "to": "new/path.md",
+  "dry_run": false,
+  "updated_files": [
+    {
+      "file": "index.md",
+      "replacements": [
+        { "line": 5, "old_text": "[[old/path]]", "new_text": "[[new/path]]" }
+      ]
+    }
+  ],
+  "total_files_updated": 1,
+  "total_links_updated": 1
+}
+```
+
+**Text output** (`--format text`):
+
+```
+Moved old/path.md → new/path.md
+Updated 1 link in 1 file:
+  index.md:5  [[old/path]] → [[new/path]]
+```
+
+Use `--dry-run` to preview which files and links would change without modifying anything.
 
 ### Hints
 
