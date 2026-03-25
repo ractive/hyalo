@@ -129,11 +129,20 @@ pub struct TaskReadResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultSummary {
     pub files: FileCounts,
+    pub orphans: OrphanSummary,
     pub properties: Vec<PropertySummaryEntry>,
     pub tags: TagSummary,
     pub status: Vec<StatusGroup>,
     pub tasks: TaskCount,
     pub recent_files: Vec<RecentFile>,
+}
+
+/// Fully isolated files: no inbound links (nothing links to them) and no
+/// outbound links (they don't link to anything).
+#[derive(Debug, Clone, Serialize)]
+pub struct OrphanSummary {
+    pub total: usize,
+    pub files: Vec<String>,
 }
 
 /// File counts by directory.

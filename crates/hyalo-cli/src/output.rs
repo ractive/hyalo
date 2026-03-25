@@ -201,8 +201,8 @@ const TASK_INFO_FILTER: &str =
 const TASK_READ_RESULT_FILTER: &str =
     r#""\"\(.file)\":\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
 
-/// `VaultSummary`: `{files, properties, recent_files, status, tags, tasks}`
-const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then "\n\(.files.by_directory | map("  \"\(.directory)\": \(.count)") | join("\n"))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nRecent:\(if (.recent_files | length) > 0 then "\n\(.recent_files | map("  \"\(.path)\"") | join("\n"))" else " (none)" end)""#;
+/// `VaultSummary`: `{files, orphans, properties, recent_files, status, tags, tasks}`
+const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then "\n\(.files.by_directory | map("  \"\(.directory)\": \(.count)") | join("\n"))" else "" end)\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nOrphans: \(.orphans.total)\(if (.orphans.files | length) > 0 then "\n\(.orphans.files | map("  \"\(.)\"") | join("\n"))" else "" end)\nRecent:\(if (.recent_files | length) > 0 then "\n\(.recent_files | map("  \"\(.path)\"") | join("\n"))" else " (none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -277,7 +277,7 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // TaskReadResult
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         // VaultSummary
-        "files,properties,recent_files,status,tags,tasks" => Some(VAULT_SUMMARY_FILTER),
+        "files,orphans,properties,recent_files,status,tags,tasks" => Some(VAULT_SUMMARY_FILTER),
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value)
         "modified,property,scanned,skipped,total,value" => Some(PROPERTY_VALUE_MUTATION_FILTER),

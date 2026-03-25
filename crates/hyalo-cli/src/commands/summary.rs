@@ -1,18 +1,19 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::{infer_type, yaml_to_json};
+use hyalo_core::link_graph::LinkGraph;
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
-    DirectoryCount, FileCounts, PropertySummaryEntry, RecentFile, StatusGroup, TagSummary,
-    TagSummaryEntry, TaskCount, VaultSummary,
+    DirectoryCount, FileCounts, OrphanSummary, PropertySummaryEntry, RecentFile, StatusGroup,
+    TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
 };
 
 /// Show a high-level vault summary.
@@ -44,6 +45,8 @@ pub fn summary(
     let mut done_tasks: usize = 0;
     // (mtime_secs_as_i64_negated, rel_path) for sorting most-recent first
     let mut recent_entries: Vec<(i64, String)> = Vec::new();
+    // Track successfully processed files for orphan detection (excludes parse-error files)
+    let mut good_files: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     for (full_path, rel_path) in &files {
         total_files += 1;
@@ -69,6 +72,7 @@ pub fn summary(
             }
             Err(e) => return Err(e),
         }
+        good_files.push((full_path.clone(), PathBuf::from(rel_path)));
         *dir_counts.entry(dir_key).or_insert(0) += 1;
         let props = fm.into_props();
         let TaskCount { total, done } = counter.into_count();
@@ -187,8 +191,38 @@ pub fn summary(
         })
         .collect();
 
+    // Build orphan list: files with no inbound AND no outbound links (fully isolated).
+    // The link graph is built vault-wide (not glob-filtered) so that links from files
+    // outside the glob still count — a file linked from anywhere is not an orphan.
+    // Orphan candidates are restricted to good_files (glob-scoped, parse-error-free).
+    let orphans = {
+        let build =
+            LinkGraph::build(dir).context("failed to build link graph for orphan detection")?;
+        let targets = build.graph.all_targets();
+        let sources = build.graph.all_sources();
+        let mut orphan_files: Vec<String> = good_files
+            .iter()
+            .map(|(_, rel)| rel.to_string_lossy())
+            .filter(|rel| {
+                let rel_str: &str = rel.as_ref();
+                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
+                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+                let has_outbound = sources.contains(rel_str);
+                !has_inbound && !has_outbound
+            })
+            .map(|rel| rel.into_owned())
+            .collect();
+        orphan_files.sort();
+        let total = orphan_files.len();
+        OrphanSummary {
+            total,
+            files: orphan_files,
+        }
+    };
+
     let vault_summary = VaultSummary {
         files: file_counts,
+        orphans,
         properties,
         tags,
         status,

@@ -1,14 +1,14 @@
 ---
-title: "Date-aware property comparison"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: low
 origin: dogfooding vscode-docs vault
+priority: low
+status: wont-do
 tags:
-  - backlog
-  - cli
-  - filtering
+- backlog
+- cli
+- filtering
+title: Date-aware property comparison
+type: backlog
 ---
 
 # Date-aware property comparison
