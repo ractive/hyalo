@@ -537,8 +537,9 @@ Some text.
     #[test]
     fn links_inside_inline_code_in_heading_not_extracted() {
         // A heading like `## See \`[[not-a-link]]\`` must not emit the wikilink as
-        // a real outbound link. The code span sits on the heading line itself
-        // and `cleaned` (not `raw`) is used for link extraction.
+        // a real outbound link. The code span sits on the heading line itself,
+        // and on_body_line returns early on headings before link extraction, so
+        // only the real body link `[[real-link]]` should be recorded.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("note.md");
         fs::write(

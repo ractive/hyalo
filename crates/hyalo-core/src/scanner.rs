@@ -307,9 +307,9 @@ pub trait FileVisitor {
         ScanAction::Continue
     }
 
-    /// Whether this visitor needs body events (`on_body_line`, `on_code_fence_*`).
-    /// If `false`, the visitor only receives `on_frontmatter` and is then stopped.
-    /// Default: `true`.
+    /// Whether this visitor needs body events (`on_body_line`, `on_code_block_line`,
+    /// `on_code_fence_*`). If `false`, the visitor only receives `on_frontmatter`
+    /// and is then stopped. Default: `true`.
     fn needs_body(&self) -> bool {
         true
     }
