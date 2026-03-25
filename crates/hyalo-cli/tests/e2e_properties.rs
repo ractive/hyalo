@@ -5,7 +5,7 @@ use std::fs;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
-// `hyalo properties` — aggregate summary (the only mode now)
+// `hyalo properties summary` — aggregate property summary
 // ---------------------------------------------------------------------------
 
 #[test]

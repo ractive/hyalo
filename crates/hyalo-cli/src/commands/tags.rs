@@ -173,20 +173,32 @@ pub fn tags_rename(
 
         let has_new = tags.iter().any(|t| t.eq_ignore_ascii_case(to));
 
-        // Remove old tag from the sequence
-        if let Some(Value::Sequence(seq)) = props.get_mut("tags") {
-            seq.retain(|v| match v {
-                Value::String(s) => !s.eq_ignore_ascii_case(from),
-                _ => true,
-            });
-            // Add new tag only if not already present
-            if !has_new {
-                seq.push(Value::String(to.to_owned()));
+        // Remove old tag and add new tag, handling both sequence and scalar forms
+        let mut remove_tags_key = false;
+        match props.get_mut("tags") {
+            Some(Value::Sequence(seq)) => {
+                seq.retain(|v| match v {
+                    Value::String(s) => !s.eq_ignore_ascii_case(from),
+                    _ => true,
+                });
+                if !has_new {
+                    seq.push(Value::String(to.to_owned()));
+                }
+                if seq.is_empty() {
+                    remove_tags_key = true;
+                }
             }
-            // If sequence is empty after removal, remove the key
-            if seq.is_empty() {
-                props.remove("tags");
+            Some(Value::String(s)) if s.eq_ignore_ascii_case(from) => {
+                if has_new {
+                    remove_tags_key = true;
+                } else {
+                    *s = to.to_owned();
+                }
             }
+            _ => {}
+        }
+        if remove_tags_key {
+            props.remove("tags");
         }
 
         frontmatter::write_frontmatter(full_path, &props)?;

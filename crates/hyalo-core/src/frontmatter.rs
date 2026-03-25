@@ -470,8 +470,6 @@ fn infer_value(raw: &str) -> Value {
             .collect();
         return Value::Sequence(items);
     }
-    // Try date/datetime
-    // (these stay as strings, type inference will pick them up)
     Value::String(raw.to_owned())
 }
 
