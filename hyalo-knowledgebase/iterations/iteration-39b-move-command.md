@@ -1,7 +1,7 @@
 ---
 branch: iter-39b/move-command
 date: 2026-03-25
-status: in-progress
+status: completed
 tags:
 - iteration
 - links
