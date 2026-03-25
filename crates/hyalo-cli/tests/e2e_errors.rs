@@ -176,6 +176,104 @@ title: OK
     );
 }
 
+/// `hyalo backlinks` must gracefully skip files with broken frontmatter
+/// instead of fatally erroring. Exit 0, warning on stderr, good files indexed.
+#[test]
+fn error_backlinks_unclosed_frontmatter_graceful_skip() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\nunclosed frontmatter without closing delimiter\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+See [[target]]
+"),
+    );
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+# Target
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "target.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected graceful skip; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "warning should name the bad file; got: {stderr}"
+    );
+
+    // The good link should still be found
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid JSON output");
+    let backlinks = json["backlinks"].as_array().unwrap();
+    assert_eq!(backlinks.len(), 1, "source.md should link to target.md");
+}
+
+/// `hyalo find --fields backlinks` must also gracefully skip broken files
+/// during link graph construction.
+#[test]
+fn error_find_backlinks_field_unclosed_frontmatter_graceful_skip() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\nunclosed frontmatter without closing delimiter\n",
+    );
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: Good
+---
+# Good
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--fields", "backlinks"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected graceful skip; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("warning: skipping"),
+        "expected warning on stderr; got: {stderr}"
+    );
+}
+
 #[test]
 fn error_missing_md_extension() {
     let tmp = TempDir::new().unwrap();
