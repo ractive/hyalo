@@ -261,15 +261,11 @@ pub fn run(
             let hint = if available.is_empty() {
                 "this file has no headings".to_owned()
             } else {
-                format!(
-                    "no heading contains {:?} (substring match); available sections: {}",
-                    query,
-                    available.join(", ")
-                )
+                format!("available sections: {}", available.join(", "))
             };
             return Ok(CommandOutcome::UserError(format_error(
                 format,
-                "section not found",
+                &format!("section not found: {query}"),
                 Some(&rel_path),
                 Some(&hint),
                 None,

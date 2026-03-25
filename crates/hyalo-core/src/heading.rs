@@ -112,7 +112,7 @@ impl SectionFilter {
 
     /// Check if a heading matches this filter.
     ///
-    /// - Substring mode: case-insensitive contains check on heading text.
+    /// - Substring mode: case-insensitive ASCII contains check on heading text.
     /// - Regex mode: compiled regex is tested against the heading text.
     /// - If `level` is set, heading level must match exactly.
     #[must_use]
@@ -123,22 +123,49 @@ impl SectionFilter {
         }
         match &self.mode {
             SectionMatchMode::Substring(needle) => {
-                // Fast path: ASCII-only heading
-                if heading_text.is_ascii() {
-                    heading_text.to_ascii_lowercase().contains(needle.as_str())
-                } else {
-                    heading_text.to_lowercase().contains(needle.as_str())
-                }
+                // Non-allocating case-insensitive ASCII substring search.
+                // Markdown headings are ASCII in practice; needle is already
+                // lowercased at parse time.
+                ascii_contains_ignore_case(heading_text, needle)
             }
             SectionMatchMode::Regex(re) => re.is_match(heading_text),
         }
     }
 }
 
+/// Non-allocating case-insensitive ASCII substring search.
+///
+/// Both `haystack` and `needle` are compared byte-by-byte with ASCII
+/// lowercasing.  `needle` must already be lowercased at the call site.
+fn ascii_contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let n = needle.len();
+    let h = haystack.len();
+    if n > h {
+        return false;
+    }
+    let needle_bytes = needle.as_bytes();
+    let hay_bytes = haystack.as_bytes();
+    'outer: for start in 0..=(h - n) {
+        for i in 0..n {
+            if hay_bytes[start + i].to_ascii_lowercase() != needle_bytes[i] {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+    false
+}
+
 /// Parse the part after `~=` as a regex, supporting `/pattern/flags` notation.
 ///
+/// Compiled with a 1 MiB size limit to prevent pathological regex compilation.
+/// Default is case-insensitive (section headings are case-insensitive by convention).
+///
 /// Supported flags:
-/// - `i` — case-insensitive (adds `(?i)` prefix if not already implied)
+/// - `i` — case-insensitive (default, explicit for clarity)
 ///
 /// Examples:
 /// - `~=foo` → `(?i)foo` (always case-insensitive by default)
@@ -146,20 +173,16 @@ impl SectionFilter {
 /// - `~=/foo/i` → `(?i)foo`
 /// - `~=/^Tasks$/` → `(?i)^Tasks$`
 fn parse_section_regex(input: &str) -> Result<Regex, String> {
-    let (pattern, flags) = if let Some(inner) = input.strip_prefix('/') {
-        // `/pattern/flags` or `/pattern/`
-        match inner.rfind('/') {
-            Some(close) if close > 0 || inner.ends_with('/') => {
-                let pat = &inner[..close];
-                let flags_str = &inner[close + 1..];
-                (pat, flags_str)
-            }
-            _ => {
-                // No closing slash — treat the whole thing as bare pattern
-                (input, "")
-            }
-        }
+    const SIZE_LIMIT: usize = 1 << 20; // 1 MiB
+
+    let (pattern, flags) = if let Some(rest) = input.strip_prefix('/') {
+        // Delimited form: `/pattern/flags`
+        let close = rest
+            .rfind('/')
+            .ok_or_else(|| format!("section regex starting with '/' must have a closing '/' (e.g. /pattern/ or /pattern/i), got: /{rest}"))?;
+        (&rest[..close], &rest[close + 1..])
     } else {
+        // Bare form
         (input, "")
     };
 
@@ -167,16 +190,24 @@ fn parse_section_regex(input: &str) -> Result<Regex, String> {
         return Err("section regex pattern must not be empty".to_owned());
     }
 
-    // Build the effective pattern. Default to case-insensitive unless
-    // the user explicitly opted out with `(?-i)` in the pattern.
-    let case_flag = if flags.contains('i') || !pattern.contains("(?-i)") {
-        "(?i)"
-    } else {
-        ""
-    };
-    let effective = format!("{case_flag}{pattern}");
+    // Validate flags — only 'i' is supported
+    for ch in flags.chars() {
+        if ch != 'i' {
+            return Err(format!(
+                "unsupported section regex flag {ch:?}: only 'i' is supported"
+            ));
+        }
+    }
 
-    Regex::new(&effective).map_err(|e| format!("invalid section regex {input:?}: {e}"))
+    // Default to case-insensitive (section matching is case-insensitive by convention).
+    // User can opt out with `(?-i)` in the pattern itself.
+    let case_insensitive = !pattern.contains("(?-i)");
+
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .size_limit(SIZE_LIMIT)
+        .build()
+        .map_err(|e| format!("invalid section regex {input:?}: {e}"))
 }
 
 // ---------------------------------------------------------------------------

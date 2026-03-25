@@ -93,7 +93,7 @@ Follows ripgrep convention. Negation globs are AND'd: file must match all positi
 - [x] Works with `--glob` on all commands (find, set, remove, append, properties, tags, summary)
 - [ ] Works in combination with positive globs (repeatable) — single `--glob` only; combining positive+negative requires repeatable `--glob` (not in scope this iteration)
 - [x] Help text documents negation syntax
-- [x] E2e tests cover negation, combined include+exclude
+- [x] E2e tests cover negation globs
 
 ### Documentation & help text audit
 - [x] `find --help` long_about documents all new operators (`!K`, `~=`, section substring)

@@ -291,7 +291,7 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - 37 unit tests + 14 e2e tests covering hint generation and flag interactions
 - Found and fixed tags summary sort bug during dogfooding (hints were showing alphabetically-first tags instead of most-used)
 
-## DEC-032: YAML Parse Errors Are Hard Errors (2026-03-23) — UPDATED iter-35
+## DEC-032: ~~YAML Parse Errors Are Hard Errors~~ (2026-03-23) — UPDATED iter-35: read-only commands skip malformed files
 
 **Context:** The codebase had two scan paths for reading markdown files: `read_frontmatter_from_reader` (used by `properties`, `tags`, mutation commands) and `scan_reader_multi` (used by `find`, `summary`, task extraction). The former propagated YAML parse errors via `?`; the latter silently swallowed them with `unwrap_or_default()`, returning an empty property map for malformed frontmatter. This inconsistency meant `hyalo find` would silently skip broken files while `hyalo properties` would warn about them.
 
