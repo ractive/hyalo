@@ -493,3 +493,173 @@ fn append_hints_accepted_produces_valid_json() {
         "mutation commands should not wrap output in hints envelope: {parsed}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// find --hints: suggestions based on results
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_with_hints_shows_suggestions() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // The vault has files, so hints should be produced.
+    assert!(
+        stdout.contains("  -> hyalo"),
+        "should have hint lines with arrow prefix: {stdout}"
+    );
+    // Should suggest reading the first result.
+    assert!(
+        stdout.contains("read --file"),
+        "should suggest read --file for first result: {stdout}"
+    );
+    // Should suggest backlinks for the first result.
+    assert!(
+        stdout.contains("backlinks --file"),
+        "should suggest backlinks --file for first result: {stdout}"
+    );
+}
+
+#[test]
+fn find_with_hints_json_envelope() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert!(parsed.get("data").is_some(), "should have 'data' key");
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(!hints.is_empty(), "should have at least one hint");
+    for hint in hints {
+        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+    }
+}
+
+#[test]
+fn find_with_hints_empty_results_no_hints() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        // Tag that does not exist in the vault.
+        .args([
+            "find",
+            "--tag",
+            "nonexistent-tag-xyz",
+            "--hints",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // Empty results -> no hints generated; output is a plain empty array or
+    // a hints envelope with an empty hints array.
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    if let Some(hints) = parsed.get("hints") {
+        assert!(
+            hints.as_array().map(|a| a.is_empty()).unwrap_or(false),
+            "expected empty hints for empty results: {parsed}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mutation commands with --hints: warning on stderr
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mutation_with_hints_warns() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "set",
+            "--hints",
+            "--property",
+            "status=updated",
+            "--file",
+            "notes/alpha.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "set --hints should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("warning: --hints has no effect on mutation commands"),
+        "should warn when --hints is passed to set: {stderr}"
+    );
+}
+
+#[test]
+fn remove_with_hints_warns() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "remove",
+            "--hints",
+            "--property",
+            "status",
+            "--file",
+            "notes/beta.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "remove --hints should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("warning: --hints has no effect on mutation commands"),
+        "should warn when --hints is passed to remove: {stderr}"
+    );
+}
+
+#[test]
+fn append_with_hints_warns() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "append",
+            "--hints",
+            "--property",
+            "aliases=hint-test",
+            "--file",
+            "notes/alpha.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "append --hints should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("warning: --hints has no effect on mutation commands"),
+        "should warn when --hints is passed to append: {stderr}"
+    );
+}
