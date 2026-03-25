@@ -333,6 +333,61 @@ fn find_hints_with_task_filter() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: --format text --hints on commands without hint generators
+// must still honour the text format instead of emitting raw JSON.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_format_text_with_hints_outputs_text_not_json() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--format", "text", "--hints"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "find --format text --hints failed");
+    // Text format does not start with '[' or '{'; JSON would.
+    let trimmed = stdout.trim_start();
+    assert!(
+        !trimmed.starts_with('[') && !trimmed.starts_with('{'),
+        "expected text output but got JSON: {}",
+        &stdout[..stdout.len().min(200)]
+    );
+}
+
+#[test]
+fn set_format_text_with_hints_outputs_text_not_json() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "set",
+            "--property",
+            "status=updated",
+            "--file",
+            "notes/alpha.md",
+            "--format",
+            "text",
+            "--hints",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "set --format text --hints failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let trimmed = stdout.trim_start();
+    assert!(
+        !trimmed.starts_with('[') && !trimmed.starts_with('{'),
+        "expected text output but got JSON: {}",
+        &stdout[..stdout.len().min(200)]
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Mutation commands with --hints
 // Mutation commands (set, remove, append) accept --hints but do not generate
 // hint suggestions — they produce the same JSON output as without --hints.

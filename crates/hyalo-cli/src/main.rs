@@ -9,7 +9,9 @@ use hyalo_cli::commands::{
     summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use hyalo_cli::hints::{HintContext, HintSource, generate_hints};
-use hyalo_cli::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_hints};
+use hyalo_cli::output::{
+    CommandOutcome, Format, apply_jq_filter_result, format_success, format_with_hints,
+};
 use hyalo_core::filter;
 
 #[derive(Parser)]
@@ -1001,6 +1003,15 @@ fn main() {
                 let hints = generate_hints(ctx, &value);
                 let formatted = format_with_hints(format, &value, &hints);
                 println!("{formatted}");
+            } else if hints_active {
+                // --hints forced JSON internally but this command has no hint
+                // generator.  Convert back to the user-requested format.
+                match serde_json::from_str::<serde_json::Value>(&output) {
+                    Ok(value) => {
+                        println!("{}", format_success(format, &value));
+                    }
+                    Err(_) => println!("{output}"),
+                }
             } else {
                 println!("{output}");
             }
