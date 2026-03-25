@@ -91,9 +91,24 @@ Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (
 
 This one-line instruction saves tokens in every future conversation.
 
+## Moving or renaming files
+
+When moving or renaming any file in the knowledgebase, always use `hyalo mv` — never use
+system `mv`, `git mv`, or any other tool. `hyalo mv` automatically rewrites all `[[wikilinks]]`
+and `[markdown](links)` across the vault that pointed to the old path. Without it, moves
+silently break links throughout the knowledgebase.
+
+```bash
+# Move a file to a subfolder (updates all links vault-wide)
+hyalo mv --file backlog/my-item.md --to backlog/done/my-item.md
+
+# Preview what would change without writing
+hyalo mv --file old-path.md --to new-path.md --dry-run
+```
+
 ## When to use hyalo vs. built-in tools
 
-- **hyalo:** queries, frontmatter reads/mutations, tag management, task toggling, bulk updates
+- **hyalo:** queries, frontmatter reads/mutations, tag management, task toggling, bulk updates, **moving/renaming files**
 - **Edit tool:** body prose changes (rewriting paragraphs) that hyalo can't handle
 - **Write tool:** creating brand new markdown files
 
@@ -103,7 +118,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 - **find** — search/filter by text, regex, property, tag, task status
 - **read** — extract body content, a section, or line range
-- **summary** — directory overview: file counts, tags, tasks, recent files
+- **summary** — directory overview: file counts, tags, tasks, recent files (use `--depth N` to limit directory listing)
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts
@@ -112,6 +127,8 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **remove** — delete properties or tags
 - **append** — add to list properties
 - **task** — read, toggle, or set status on checkboxes
+- **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
+- **backlinks** — reverse link lookup: lists all files that link to a given file
 
 ## The --format text flag
 
@@ -121,3 +138,20 @@ than JSON, fewer tokens. Reach for it when orienting yourself or scanning result
 **`--format text` and `--jq` are mutually exclusive.** `--jq` operates on JSON, so it requires
 the default JSON format. If you need to filter/reshape output, use `--jq` (without `--format text`).
 If you just need a quick readable overview, use `--format text` (without `--jq`).
+
+## The backlinks command
+
+Use `hyalo backlinks --file <path>` to find all files that link to a given file (reverse link
+lookup). This builds an in-memory link graph by scanning all `.md` files in the directory,
+detecting both `[[wikilinks]]` and `[markdown](links)`.
+
+```bash
+# Which files reference iteration-37?
+hyalo backlinks --file iterations/iteration-37-bulk-mutations.md
+
+# JSON output for programmatic use
+hyalo backlinks --file iterations/iteration-37-bulk-mutations.md --format json
+```
+
+Supports `--format text` (default, compact) and `--format json`. Useful for impact analysis
+(what depends on this file?), finding orphan pages, and navigating link structure.
