@@ -357,6 +357,7 @@ fn summary_text_format() {
     assert!(text.contains("Tags:"));
     assert!(text.contains("Status:"));
     assert!(text.contains("Tasks: 2/4"));
+    assert!(text.contains("Orphans:"));
     assert!(text.contains("Recent:"));
 }
 
@@ -524,6 +525,232 @@ fn summary_recent_zero() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(json["recent_files"].as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Glob negation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summary_json_has_orphans_field() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(json["orphans"]["total"].is_number());
+    assert!(json["orphans"]["files"].is_array());
+}
+
+#[test]
+fn summary_orphans_detects_unlinked_files() {
+    let tmp = TempDir::new().unwrap();
+
+    // a.md links to b, so b is NOT an orphan. a and c are orphans (nothing links to them).
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+See [[b]]
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+Content
+"),
+    );
+    write_md(
+        tmp.path(),
+        "c.md",
+        md!(r"
+---
+title: C
+---
+No links to me
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let orphans = json["orphans"]["files"].as_array().unwrap();
+    let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
+
+    // a.md and c.md are orphans (nothing links to them)
+    assert!(orphan_paths.contains(&"a.md"), "a.md should be orphan");
+    assert!(orphan_paths.contains(&"c.md"), "c.md should be orphan");
+    // b.md is linked from a.md, so NOT an orphan
+    assert!(!orphan_paths.contains(&"b.md"), "b.md should NOT be orphan");
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 2);
+}
+
+#[test]
+fn summary_orphans_no_orphans_when_all_linked() {
+    let tmp = TempDir::new().unwrap();
+
+    // Circular links: a→b, b→a — neither is an orphan
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+See [[b]]
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+See [[a]]
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 0);
+    assert!(json["orphans"]["files"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn summary_orphans_all_orphans_when_no_links() {
+    let tmp = TempDir::new().unwrap();
+
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+No links
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+No links
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    // Both files are orphans
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 2);
+    assert_eq!(json["orphans"]["files"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn summary_orphans_text_format() {
+    let tmp = TempDir::new().unwrap();
+
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+No links
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("Orphans: 1"),
+        "expected 'Orphans: 1' in: {text}"
+    );
+    assert!(
+        text.contains("\"a.md\""),
+        "expected orphan file listed in: {text}"
+    );
+}
+
+#[test]
+fn summary_orphans_empty_vault() {
+    let tmp = TempDir::new().unwrap();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 0);
+    assert!(json["orphans"]["files"].as_array().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

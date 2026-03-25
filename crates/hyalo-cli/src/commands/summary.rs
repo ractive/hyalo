@@ -8,11 +8,12 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::{infer_type, yaml_to_json};
+use hyalo_core::link_graph::LinkGraph;
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
-    DirectoryCount, FileCounts, PropertySummaryEntry, RecentFile, StatusGroup, TagSummary,
-    TagSummaryEntry, TaskCount, VaultSummary,
+    DirectoryCount, FileCounts, OrphanSummary, PropertySummaryEntry, RecentFile, StatusGroup,
+    TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
 };
 
 /// Show a high-level vault summary.
@@ -187,8 +188,31 @@ pub fn summary(
         })
         .collect();
 
+    // Build orphan list: files with no inbound links
+    let orphans = {
+        let build = LinkGraph::build(dir)?;
+        let targets = build.graph.all_targets();
+        let mut orphan_files: Vec<String> = files
+            .iter()
+            .map(|(_, rel)| rel.as_str())
+            .filter(|rel| {
+                // Check both with and without .md extension against the target set
+                let without_md = rel.strip_suffix(".md").unwrap_or(rel);
+                !targets.contains(rel) && !targets.contains(without_md)
+            })
+            .map(String::from)
+            .collect();
+        orphan_files.sort();
+        let total = orphan_files.len();
+        OrphanSummary {
+            total,
+            files: orphan_files,
+        }
+    };
+
     let vault_summary = VaultSummary {
         files: file_counts,
+        orphans,
         properties,
         tags,
         status,

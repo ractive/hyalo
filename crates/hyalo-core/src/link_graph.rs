@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use crate::discovery;
@@ -89,6 +89,13 @@ impl LinkGraph {
             graph: Self { index },
             warnings,
         })
+    }
+
+    /// Return the set of all normalized link targets that have at least one
+    /// inbound link.  Used by `summary` to compute orphan files (files that
+    /// nothing links to).
+    pub fn all_targets(&self) -> HashSet<&str> {
+        self.index.keys().map(String::as_str).collect()
     }
 
     /// Look up all files that link to the given target.
