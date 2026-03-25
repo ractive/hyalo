@@ -41,9 +41,10 @@ impl LinkGraph {
                 .with_context(|| format!("scanning {}", file.display()))?;
 
             for (line, mut link) in visitor.links {
-                // Normalize relative markdown link targets so that `sub/a.md`
-                // linking to `../target.md` is stored as `target.md`, matching
-                // how callers query by vault-relative path.
+                // Normalize markdown link targets that contain path separators
+                // so that, for example, `sub/a.md` linking to `../target.md`
+                // is stored as `target.md`, matching how callers query by
+                // vault-relative path.
                 //
                 // Wikilinks are vault-relative by definition — `[[backlog/item]]`
                 // written in any file always refers to `backlog/item.md` at the
