@@ -184,7 +184,7 @@ enum Commands {
             FILTERS: All filters are AND'd together.\n\
             - PATTERN (positional): case-insensitive body text search\n\
             - --regexp/-e REGEX: regex body text search (case-insensitive by default; mutually exclusive with PATTERN)\n\
-            - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, or bare name for existence)\n\
+            - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
             - --tag T: tag filter (exact or prefix via '/': 'project' matches 'project/backend' but NOT 'projects' — no substring or fuzzy matching)\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
             - --section HEADING: section scope filter (exclude files without a matching section; within \
@@ -202,7 +202,7 @@ enum Commands {
         /// Regex body text search (case-insensitive by default; use (?-i) to override). Mutually exclusive with PATTERN
         #[arg(long, short = 'e', value_name = "REGEX")]
         regexp: Option<String>,
-        /// Property filter: K=V (equals), K!=V (not equals), K>=V, K<=V, K>V, K<V, or K (exists). Repeatable (AND)
+        /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent), K~=pat or K~=/pat/i (regex). Repeatable (AND)
         #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
         /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not 'projects'). Repeatable (AND)

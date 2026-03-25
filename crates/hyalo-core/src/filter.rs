@@ -1,4 +1,5 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use regex::Regex;
 use serde_yaml_ng::Value;
 use std::collections::BTreeMap;
 
@@ -67,25 +68,78 @@ pub enum FilterOp {
     Lte,
 }
 
-/// A parsed `--property K=V` filter.
+/// A parsed `--property` filter.
+///
+/// Variants:
+/// - `Scalar`      — comparison filter: `K=V`, `K!=V`, `K>V`, `K>=V`, `K<V`, `K<=V`, or bare `K` (existence)
+/// - `Absent`      — matches files that do NOT have property K: `!K`
+/// - `RegexMatch`  — matches if property value matches pattern: `K~=pattern` or `K~=/pattern/flags`
 #[derive(Debug, Clone)]
-pub struct PropertyFilter {
-    pub name: String,
-    pub op: FilterOp,
-    pub value: Option<String>,
+pub enum PropertyFilter {
+    /// A scalar comparison filter (includes the Exists op).
+    Scalar {
+        name: String,
+        op: FilterOp,
+        /// Pre-lowercased for Eq/NotEq; original casing for ordering ops.
+        value: Option<String>,
+    },
+    /// Matches files where property `key` is absent (not present in frontmatter).
+    Absent { key: String },
+    /// Matches files where property `key`'s value matches `pattern`.
+    RegexMatch { key: String, pattern: Regex },
 }
 
 /// Parse a property filter expression.
 ///
 /// Supported formats:
-/// - `name`         → Exists
-/// - `name=value`   → Eq
-/// - `name!=value`  → NotEq
-/// - `name>=value`  → Gte
-/// - `name<=value`  → Lte
-/// - `name>value`   → Gt
-/// - `name<value`   → Lt
+/// - `name`              → Exists (property is present)
+/// - `!name`             → Absent (property is NOT present)
+/// - `name=value`        → Eq
+/// - `name!=value`       → NotEq
+/// - `name>=value`       → Gte
+/// - `name<=value`       → Lte
+/// - `name>value`        → Gt
+/// - `name<value`        → Lt
+/// - `name~=pattern`     → RegexMatch (bare pattern, unanchored)
+/// - `name~=/pattern/`   → RegexMatch (delimited, unanchored)
+/// - `name~=/pattern/i`  → RegexMatch (delimited, case-insensitive flag)
 pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
+    // --- Absence filter: `!key` ---
+    // Must start with `!` and contain no operator characters after the `!`.
+    // Be careful not to confuse with `key!=value` which has `!` in the middle.
+    if let Some(key) = input.strip_prefix('!') {
+        // `!K` is valid only if there is no `=` in what follows (which would
+        // mean someone typed `!key=value`, an ambiguous/unsupported form).
+        if !key.contains('=') && !key.contains('>') && !key.contains('<') && !key.contains('~') {
+            if key.is_empty() {
+                bail!("property filter name must not be empty");
+            }
+            return Ok(PropertyFilter::Absent {
+                key: key.to_owned(),
+            });
+        }
+    }
+
+    // --- Regex filter: `key~=pattern` or `key~=/pattern/flags` ---
+    if let Some(tilde_eq_pos) = input.find("~=") {
+        let key = &input[..tilde_eq_pos];
+        let pattern_part = &input[tilde_eq_pos + 2..];
+
+        if key.is_empty() {
+            bail!("property filter name must not be empty");
+        }
+
+        let re = parse_regex_pattern(pattern_part)
+            .with_context(|| format!("invalid regex in property filter: {input:?}"))?;
+
+        return Ok(PropertyFilter::RegexMatch {
+            key: key.to_owned(),
+            pattern: re,
+        });
+    }
+
+    // --- Scalar filters (equality, ordering, existence) ---
+
     // Try splitting on the first `=`.
     if let Some(eq_pos) = input.find('=') {
         let raw_name = &input[..eq_pos];
@@ -113,7 +167,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
             _ => value,
         };
 
-        return Ok(PropertyFilter {
+        return Ok(PropertyFilter::Scalar {
             name: name.to_owned(),
             op,
             value: Some(stored_value),
@@ -128,7 +182,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         if name.is_empty() {
             bail!("property filter name must not be empty");
         }
-        return Ok(PropertyFilter {
+        return Ok(PropertyFilter::Scalar {
             name: name.to_owned(),
             op: FilterOp::Gt,
             value: Some(value.to_owned()),
@@ -141,7 +195,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         if name.is_empty() {
             bail!("property filter name must not be empty");
         }
-        return Ok(PropertyFilter {
+        return Ok(PropertyFilter::Scalar {
             name: name.to_owned(),
             op: FilterOp::Lt,
             value: Some(value.to_owned()),
@@ -153,40 +207,97 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         bail!("property filter must not be empty");
     }
 
-    Ok(PropertyFilter {
+    Ok(PropertyFilter::Scalar {
         name: input.to_owned(),
         op: FilterOp::Exists,
         value: None,
     })
 }
 
+/// Parse a regex pattern from the part after `~=`.
+///
+/// Accepts:
+/// - `/pattern/flags` — delimited form; closing `/` is required; flags: `i` (case-insensitive)
+/// - `pattern`        — bare form; treated as unanchored, case-sensitive
+///
+/// In both forms the pattern is compiled with a 1 MiB size limit to prevent
+/// pathological regex compilation.
+fn parse_regex_pattern(s: &str) -> Result<Regex> {
+    const SIZE_LIMIT: usize = 1 << 20; // 1 MiB
+
+    if let Some(rest) = s.strip_prefix('/') {
+        // Delimited form: `/pattern/flags`
+        // Find the closing `/` (last occurrence, to allow `/` inside the pattern).
+        let close = rest.rfind('/').with_context(|| {
+            format!("regex pattern starting with '/' must end with '/' (e.g. /pattern/ or /pattern/i), got: /{rest}")
+        })?;
+        let pattern = &rest[..close];
+        let flags = &rest[close + 1..];
+
+        let mut builder = regex::RegexBuilder::new(pattern);
+        builder.size_limit(SIZE_LIMIT);
+        for ch in flags.chars() {
+            match ch {
+                'i' => {
+                    builder.case_insensitive(true);
+                }
+                other => bail!("unsupported regex flag {:?}: only 'i' is supported", other),
+            }
+        }
+        builder
+            .build()
+            .with_context(|| format!("invalid regex pattern: /{pattern}/"))
+    } else {
+        // Bare form: unanchored, case-sensitive.
+        regex::RegexBuilder::new(s)
+            .size_limit(SIZE_LIMIT)
+            .build()
+            .with_context(|| format!("invalid regex pattern: {s:?}"))
+    }
+}
+
 impl PropertyFilter {
     /// Return true if the given property map satisfies this filter.
     pub fn matches(&self, props: &BTreeMap<String, Value>) -> bool {
-        if self.op == FilterOp::Exists {
-            return props.contains_key(&self.name);
-        }
+        match self {
+            PropertyFilter::Absent { key } => !props.contains_key(key),
+            PropertyFilter::RegexMatch { key, pattern } => {
+                let Some(yaml_val) = props.get(key) else {
+                    return false;
+                };
+                yaml_value_regex_match(yaml_val, pattern)
+            }
+            PropertyFilter::Scalar { name, op, value } => {
+                if *op == FilterOp::Exists {
+                    return props.contains_key(name);
+                }
 
-        let Some(yaml_val) = props.get(&self.name) else {
-            return false;
-        };
-        let filter_val = self.value.as_deref().unwrap_or("");
+                let Some(yaml_val) = props.get(name) else {
+                    return false;
+                };
+                let filter_val = value.as_deref().unwrap_or("");
 
-        match self.op {
-            FilterOp::Eq => yaml_value_eq(yaml_val, filter_val),
-            FilterOp::NotEq => !yaml_value_eq(yaml_val, filter_val),
-            FilterOp::Gt => yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Greater),
-            FilterOp::Gte => matches!(
-                yaml_cmp(yaml_val, filter_val),
-                Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
-            ),
-            FilterOp::Lt => yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Less),
-            FilterOp::Lte => matches!(
-                yaml_cmp(yaml_val, filter_val),
-                Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
-            ),
-            // SAFETY: Exists is handled by the early return above
-            FilterOp::Exists => unreachable!("Exists handled by early return"),
+                match op {
+                    FilterOp::Eq => yaml_value_eq(yaml_val, filter_val),
+                    FilterOp::NotEq => !yaml_value_eq(yaml_val, filter_val),
+                    FilterOp::Gt => {
+                        yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Greater)
+                    }
+                    FilterOp::Gte => matches!(
+                        yaml_cmp(yaml_val, filter_val),
+                        Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
+                    ),
+                    FilterOp::Lt => {
+                        yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Less)
+                    }
+                    FilterOp::Lte => matches!(
+                        yaml_cmp(yaml_val, filter_val),
+                        Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+                    ),
+                    // SAFETY: Exists is handled by the early return above
+                    FilterOp::Exists => unreachable!("Exists handled by early return"),
+                }
+            }
         }
     }
 }
@@ -240,6 +351,27 @@ fn matches_tag_filters(tags: &[String], tag_filters: &[String]) -> bool {
     tag_filters
         .iter()
         .all(|q| tags.iter().any(|t| tag_matches(t, q)))
+}
+
+// ---------------------------------------------------------------------------
+
+/// Returns `true` if any string representation of `yaml` matches `pattern`.
+///
+/// For sequences, at least one element must match.
+fn yaml_value_regex_match(yaml: &Value, pattern: &Regex) -> bool {
+    match yaml {
+        Value::String(s) => pattern.is_match(s),
+        Value::Number(n) => pattern.is_match(&n.to_string()),
+        Value::Bool(b) => pattern.is_match(if *b { "true" } else { "false" }),
+        Value::Sequence(seq) => seq.iter().any(|item| yaml_value_regex_match(item, pattern)),
+        _ => {
+            if let Some(s) = yaml.as_str() {
+                pattern.is_match(s)
+            } else {
+                false
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -453,69 +585,70 @@ mod tests {
     // Property filter parsing
     // -----------------------------------------------------------------------
 
+    // Helper: assert the filter is a Scalar variant with the given fields.
+    fn assert_scalar(
+        f: &PropertyFilter,
+        exp_name: &str,
+        exp_op: FilterOp,
+        exp_value: Option<&str>,
+    ) {
+        match f {
+            PropertyFilter::Scalar { name, op, value } => {
+                assert_eq!(name, exp_name);
+                assert_eq!(op, &exp_op);
+                assert_eq!(value.as_deref(), exp_value);
+            }
+            other => panic!("expected Scalar, got {other:?}"),
+        }
+    }
+
     #[test]
     fn parse_eq() {
         let f = parse_property_filter("status=planned").unwrap();
-        assert_eq!(f.name, "status");
-        assert_eq!(f.op, FilterOp::Eq);
-        assert_eq!(f.value.as_deref(), Some("planned"));
+        assert_scalar(&f, "status", FilterOp::Eq, Some("planned"));
     }
 
     #[test]
     fn parse_not_eq() {
         let f = parse_property_filter("status!=superseded").unwrap();
-        assert_eq!(f.name, "status");
-        assert_eq!(f.op, FilterOp::NotEq);
-        assert_eq!(f.value.as_deref(), Some("superseded"));
+        assert_scalar(&f, "status", FilterOp::NotEq, Some("superseded"));
     }
 
     #[test]
     fn parse_gte() {
         let f = parse_property_filter("priority>=3").unwrap();
-        assert_eq!(f.name, "priority");
-        assert_eq!(f.op, FilterOp::Gte);
-        assert_eq!(f.value.as_deref(), Some("3"));
+        assert_scalar(&f, "priority", FilterOp::Gte, Some("3"));
     }
 
     #[test]
     fn parse_lte() {
         let f = parse_property_filter("priority<=5").unwrap();
-        assert_eq!(f.name, "priority");
-        assert_eq!(f.op, FilterOp::Lte);
-        assert_eq!(f.value.as_deref(), Some("5"));
+        assert_scalar(&f, "priority", FilterOp::Lte, Some("5"));
     }
 
     #[test]
     fn parse_gt() {
         let f = parse_property_filter("priority>3").unwrap();
-        assert_eq!(f.name, "priority");
-        assert_eq!(f.op, FilterOp::Gt);
-        assert_eq!(f.value.as_deref(), Some("3"));
+        assert_scalar(&f, "priority", FilterOp::Gt, Some("3"));
     }
 
     #[test]
     fn parse_lt() {
         let f = parse_property_filter("priority<5").unwrap();
-        assert_eq!(f.name, "priority");
-        assert_eq!(f.op, FilterOp::Lt);
-        assert_eq!(f.value.as_deref(), Some("5"));
+        assert_scalar(&f, "priority", FilterOp::Lt, Some("5"));
     }
 
     #[test]
     fn parse_exists() {
         let f = parse_property_filter("status").unwrap();
-        assert_eq!(f.name, "status");
-        assert_eq!(f.op, FilterOp::Exists);
-        assert!(f.value.is_none());
+        assert_scalar(&f, "status", FilterOp::Exists, None);
     }
 
     #[test]
     fn parse_value_contains_equals() {
         // Value itself contains `=`; only the first `=` is the delimiter.
         let f = parse_property_filter("key=a=b").unwrap();
-        assert_eq!(f.name, "key");
-        assert_eq!(f.op, FilterOp::Eq);
-        assert_eq!(f.value.as_deref(), Some("a=b"));
+        assert_scalar(&f, "key", FilterOp::Eq, Some("a=b"));
     }
 
     #[test]
@@ -531,6 +664,187 @@ mod tests {
     #[test]
     fn parse_empty_input_errors() {
         assert!(parse_property_filter("").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Absence filter parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_absence_simple() {
+        let f = parse_property_filter("!status").unwrap();
+        match f {
+            PropertyFilter::Absent { key } => assert_eq!(key, "status"),
+            other => panic!("expected Absent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_absence_empty_key_errors() {
+        assert!(parse_property_filter("!").is_err());
+    }
+
+    #[test]
+    fn parse_absence_not_confused_with_not_eq() {
+        // `status!=completed` is NotEq, not absence
+        let f = parse_property_filter("status!=completed").unwrap();
+        assert_scalar(&f, "status", FilterOp::NotEq, Some("completed"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Regex filter parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_regex_bare() {
+        let f = parse_property_filter("status~=compl").unwrap();
+        match &f {
+            PropertyFilter::RegexMatch { key, pattern } => {
+                assert_eq!(key, "status");
+                assert!(pattern.is_match("completed"));
+                assert!(!pattern.is_match("planned"));
+            }
+            other => panic!("expected RegexMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_delimited() {
+        let f = parse_property_filter(r"status~=/^draft$/").unwrap();
+        match &f {
+            PropertyFilter::RegexMatch { key, pattern } => {
+                assert_eq!(key, "status");
+                assert!(pattern.is_match("draft"));
+                assert!(!pattern.is_match("drafts"));
+                assert!(!pattern.is_match("some draft here"));
+            }
+            other => panic!("expected RegexMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_delimited_case_insensitive_flag() {
+        let f = parse_property_filter("title~=/foo/i").unwrap();
+        match &f {
+            PropertyFilter::RegexMatch { key, pattern } => {
+                assert_eq!(key, "title");
+                assert!(pattern.is_match("FOO bar"));
+                assert!(pattern.is_match("foo bar"));
+                assert!(!pattern.is_match("bar baz"));
+            }
+            other => panic!("expected RegexMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_empty_key_errors() {
+        assert!(parse_property_filter("~=foo").is_err());
+    }
+
+    #[test]
+    fn parse_regex_invalid_pattern_errors() {
+        assert!(parse_property_filter("status~=[invalid").is_err());
+    }
+
+    #[test]
+    fn parse_regex_missing_closing_slash_errors() {
+        assert!(parse_property_filter("status~=/unclosed").is_err());
+    }
+
+    #[test]
+    fn parse_regex_unsupported_flag_errors() {
+        assert!(parse_property_filter("status~=/foo/x").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Absence filter matching
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_absent_key_not_present() {
+        let p = props(&[("status", Value::String("planned".into()))]);
+        let f = parse_property_filter("!priority").unwrap();
+        assert!(f.matches(&p), "priority absent — should match");
+    }
+
+    #[test]
+    fn match_absent_key_present_no_match() {
+        let p = props(&[("status", Value::String("planned".into()))]);
+        let f = parse_property_filter("!status").unwrap();
+        assert!(!f.matches(&p), "status present — should NOT match");
+    }
+
+    #[test]
+    fn match_absent_empty_frontmatter() {
+        let p = props(&[]);
+        let f = parse_property_filter("!priority").unwrap();
+        assert!(f.matches(&p));
+    }
+
+    // -----------------------------------------------------------------------
+    // Regex filter matching
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_regex_bare_substring() {
+        let p = props(&[("status", Value::String("completed".into()))]);
+        let f = parse_property_filter("status~=compl").unwrap();
+        assert!(f.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_no_match() {
+        let p = props(&[("status", Value::String("planned".into()))]);
+        let f = parse_property_filter("status~=compl").unwrap();
+        assert!(!f.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_missing_key_no_match() {
+        let p = props(&[]);
+        let f = parse_property_filter("status~=compl").unwrap();
+        assert!(!f.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_list_any_element() {
+        let p = props(&[(
+            "tags",
+            Value::Sequence(vec![
+                Value::String("rust".into()),
+                Value::String("cli-tool".into()),
+            ]),
+        )]);
+        let f = parse_property_filter("tags~=cli").unwrap();
+        assert!(f.matches(&p));
+        let f2 = parse_property_filter("tags~=python").unwrap();
+        assert!(!f2.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_case_insensitive_flag() {
+        let p = props(&[("title", Value::String("My Foo Project".into()))]);
+        let f = parse_property_filter("title~=/foo/i").unwrap();
+        assert!(f.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_case_sensitive_by_default() {
+        let p = props(&[("title", Value::String("My Foo Project".into()))]);
+        let f = parse_property_filter("title~=foo").unwrap();
+        // bare pattern is case-sensitive; "Foo" != "foo"
+        assert!(!f.matches(&p));
+        let f2 = parse_property_filter("title~=Foo").unwrap();
+        assert!(f2.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_anchored_exact() {
+        let p = props(&[("status", Value::String("draft".into()))]);
+        let f_exact = parse_property_filter(r"status~=/^draft$/").unwrap();
+        assert!(f_exact.matches(&p));
+        let f_no = parse_property_filter(r"status~=/^drafts$/").unwrap();
+        assert!(!f_no.matches(&p));
     }
 
     // -----------------------------------------------------------------------

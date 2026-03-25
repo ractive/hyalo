@@ -1453,3 +1453,355 @@ fn find_fields_properties_typed_unknown_field_error() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// Absence filter: !K
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_property_absence_no_priority() {
+    let tmp = setup_vault();
+    // alpha has priority=3; beta, gamma, nested do not → 3 matches
+    let (status, json, stderr) = find_json(&tmp, &["--property", "!priority"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 3, "expected 3 files without priority: {arr:?}");
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(
+        !files.contains(&"alpha.md"),
+        "alpha has priority — should be excluded"
+    );
+    assert!(files.contains(&"beta.md"));
+    assert!(files.contains(&"gamma.md"));
+    assert!(files.contains(&"sub/nested.md"));
+}
+
+#[test]
+fn find_property_absence_no_status_only_gamma() {
+    let tmp = setup_vault();
+    // Only gamma.md has no frontmatter (and therefore no status)
+    let (status, json, stderr) = find_json(&tmp, &["--property", "!status"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 file without status: {arr:?}");
+    assert_eq!(arr[0]["file"], "gamma.md");
+}
+
+#[test]
+fn find_property_absence_combined_with_other_filters() {
+    let tmp = setup_vault();
+    // Files without priority AND with status=planned → nested only (alpha has priority)
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &["--property", "!priority", "--property", "status=planned"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 match: {arr:?}");
+    assert_eq!(arr[0]["file"], "sub/nested.md");
+}
+
+// ---------------------------------------------------------------------------
+// Regex filter: K~=pattern and K~=/pattern/flags
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_property_regex_bare_substring() {
+    let tmp = setup_vault();
+    // status~=compl matches "completed" (beta only)
+    let (status, json, stderr) = find_json(&tmp, &["--property", "status~=compl"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
+    assert_eq!(arr[0]["file"], "beta.md");
+}
+
+#[test]
+fn find_property_regex_delimited_anchored_exact() {
+    let tmp = setup_vault();
+    // status~=/^planned$/ — only exact "planned" values
+    let (status, json, stderr) = find_json(&tmp, &["--property", r"status~=/^planned$/"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "expected alpha + nested: {arr:?}");
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(files.contains(&"alpha.md"));
+    assert!(files.contains(&"sub/nested.md"));
+}
+
+#[test]
+fn find_property_regex_case_insensitive_flag() {
+    let tmp = setup_vault();
+    // title~=/ALPHA/i — case-insensitive match against "Alpha"
+    let (status, json, stderr) = find_json(&tmp, &["--property", "title~=/ALPHA/i"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected alpha.md: {arr:?}");
+    assert_eq!(arr[0]["file"], "alpha.md");
+}
+
+#[test]
+fn find_property_regex_list_property_any_element() {
+    let tmp = setup_vault();
+    // tags~=cli — matches "cli" element in alpha's tags list (alpha only)
+    let (status, json, stderr) = find_json(&tmp, &["--property", "tags~=cli"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected alpha.md only: {arr:?}");
+    assert_eq!(arr[0]["file"], "alpha.md");
+}
+
+#[test]
+fn find_property_regex_list_property_nested_tag() {
+    let tmp = setup_vault();
+    // tags~=backend — matches "project/backend" element in nested's tags list
+    let (status, json, stderr) = find_json(&tmp, &["--property", "tags~=backend"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected sub/nested.md: {arr:?}");
+    assert_eq!(arr[0]["file"], "sub/nested.md");
+}
+
+#[test]
+fn find_property_regex_invalid_pattern_returns_user_error() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--property", "status~=[invalid"]);
+    let output = cmd.output().unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1), "invalid regex should exit 1");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid") || stderr.contains("regex") || stderr.contains("property"),
+        "expected error message about invalid regex, got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Section substring matching
+// ---------------------------------------------------------------------------
+
+fn setup_substring_section_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+
+    write_md(
+        tmp.path(),
+        "tasks.md",
+        md!(r"
+---
+title: Task File
+---
+# Overview
+
+Some text.
+
+## Tasks [4/4]
+
+- [x] Done item one
+- [x] Done item two
+- [x] Done item three
+- [x] Done item four
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "decision.md",
+        md!(r"
+---
+title: Decisions
+---
+# DEC-031: Discoverable Drill-Down Hints Architecture (2026-03-22)
+
+Decision text.
+
+- [ ] Implement hints
+
+# DEC-032: Another Decision (2026-03-23)
+
+Another decision.
+
+- [ ] Implement feature
+"),
+    );
+
+    tmp
+}
+
+#[test]
+fn section_filter_substring_matches_heading_with_count_suffix() {
+    // "Tasks" should match "Tasks [4/4]" via substring
+    let tmp = setup_substring_section_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "tasks.md", "--section", "Tasks", "--fields", "sections"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected tasks.md to match");
+    let sections = arr[0]["sections"].as_array().unwrap();
+    let headings: Vec<&str> = sections
+        .iter()
+        .map(|s| s["heading"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        headings.iter().any(|h| h.contains("Tasks")),
+        "expected a section containing 'Tasks', got: {headings:?}"
+    );
+}
+
+#[test]
+fn section_filter_substring_matches_ticket_heading() {
+    // "DEC-031" should match "DEC-031: Discoverable Drill-Down Hints Architecture (2026-03-22)"
+    let tmp = setup_substring_section_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "decision.md", "--section", "DEC-031", "--task", "any"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected decision.md to match");
+    let tasks = arr[0]["tasks"].as_array().unwrap();
+    assert!(!tasks.is_empty(), "expected tasks in DEC-031 section");
+}
+
+#[test]
+fn section_filter_substring_exact_heading_still_matches() {
+    // Backwards compatible: exact heading text still works
+    let tmp = setup_section_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--section", "Tasks", "--task", "any"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert!(!arr.is_empty(), "expected files with ## Tasks section");
+}
+
+#[test]
+fn section_filter_level_pinned_substring() {
+    // "## Task" (level-pinned + substring) should match "## Tasks [4/4]" at level 2
+    let tmp = setup_substring_section_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "tasks.md", "--section", "## Task", "--fields", "sections"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "level-pinned substring should match: stderr={stderr}");
+}
+
+#[test]
+fn section_filter_regex_matches() {
+    // ~=/DEC-03[12]/ should match both DEC-031 and DEC-032
+    let tmp = setup_substring_section_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "decision.md", "--section", "~=/DEC-03[12]/", "--task", "any"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected decision.md to match");
+    let tasks = arr[0]["tasks"].as_array().unwrap();
+    // Both DEC-031 and DEC-032 have tasks, so we should get 2 tasks
+    assert_eq!(tasks.len(), 2, "expected tasks from both matching sections");
+}
+
+#[test]
+fn section_filter_regex_anchored() {
+    // ~=/^Tasks$/ should match heading "Tasks" exactly but NOT "Tasks [4/4]"
+    let tmp = setup_substring_section_vault();
+    let (status, json, _) =
+        find_json(&tmp, &["--file", "tasks.md", "--section", "~=/^Tasks$/", "--task", "any"]);
+    assert!(status.success());
+    let arr = json.as_array().unwrap();
+    // tasks.md only has "Tasks [4/4]" — anchored regex should NOT match
+    assert!(arr.is_empty(), "anchored regex should not match 'Tasks [4/4]'");
+}
+
+#[test]
+fn section_filter_regex_invalid_exits_1() {
+    let tmp = setup_section_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--section", "~=/[invalid/"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("regex") || stderr.contains("invalid"),
+        "expected regex error, got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Glob negation
+// ---------------------------------------------------------------------------
+
+fn setup_negation_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(tmp.path(), "index.md", "---\ntitle: Index\n---\n# Index\n");
+    write_md(tmp.path(), "notes/draft.md", "---\ntitle: Draft\n---\n# Draft\n");
+    write_md(tmp.path(), "notes/final.md", "---\ntitle: Final\n---\n# Final\n");
+    write_md(tmp.path(), "notes/index.md", "---\ntitle: Notes Index\n---\n# Notes Index\n");
+    tmp
+}
+
+#[test]
+fn find_glob_negation_excludes_specific_file() {
+    let tmp = setup_negation_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "!notes/draft.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(!files.contains(&"notes/draft.md"), "draft.md should be excluded");
+    assert!(files.contains(&"notes/final.md"));
+    assert!(files.contains(&"index.md"));
+    assert_eq!(arr.len(), 3);
+}
+
+#[test]
+fn find_glob_negation_wildcard_pattern() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+    write_md(tmp.path(), "draft-b.md", "---\ntitle: Draft B\n---\n");
+    write_md(tmp.path(), "draft-c.md", "---\ntitle: Draft C\n---\n");
+    write_md(tmp.path(), "final.md", "---\ntitle: Final\n---\n");
+
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "!draft-*"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(!files.iter().any(|f| f.starts_with("draft-")), "draft files should be excluded");
+    assert!(files.contains(&"a.md"));
+    assert!(files.contains(&"final.md"));
+    assert_eq!(arr.len(), 2);
+}
+
+#[test]
+fn find_glob_negation_double_star() {
+    // !**/index.md should exclude all index.md files recursively
+    let tmp = setup_negation_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "!**/index.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(
+        !files.iter().any(|f| f.ends_with("index.md")),
+        "all index.md files should be excluded, got: {files:?}"
+    );
+    assert!(files.contains(&"notes/draft.md"));
+    assert!(files.contains(&"notes/final.md"));
+    assert_eq!(arr.len(), 2);
+}
+
+#[test]
+fn find_glob_positive_still_works() {
+    let tmp = setup_negation_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "notes/*.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 3, "expected 3 files in notes/");
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert!(files.iter().all(|f| f.starts_with("notes/")));
+}

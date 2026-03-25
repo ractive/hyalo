@@ -48,11 +48,16 @@ pub fn collect_files(
             let all = discovery::discover_files(dir)?;
             let matched = discovery::match_glob(dir, &all, pattern)?;
             if matched.is_empty() {
+                let hint = if pattern.starts_with('!') {
+                    Some("negation glob excluded all files")
+                } else {
+                    None
+                };
                 let out = crate::output::format_error(
                     format,
                     "no files match pattern",
                     Some(pattern),
-                    None,
+                    hint,
                     None,
                 );
                 return Ok(FilesOrOutcome::Outcome(CommandOutcome::UserError(out)));

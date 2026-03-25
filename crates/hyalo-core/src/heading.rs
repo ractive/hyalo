@@ -5,6 +5,7 @@
 //! `--section` CLI flag used by `find` and `read`.
 
 use crate::types::OutlineSection;
+use regex::Regex;
 
 // ---------------------------------------------------------------------------
 // ATX heading parser
@@ -44,30 +45,54 @@ pub fn parse_atx_heading(line: &str) -> Option<(u8, &str)> {
 // SectionFilter
 // ---------------------------------------------------------------------------
 
+/// The text-matching mode for a `SectionFilter`.
+#[derive(Debug, Clone)]
+enum SectionMatchMode {
+    /// Case-insensitive substring match (lowercased needle stored).
+    Substring(String),
+    /// Compiled regular expression match.
+    Regex(Regex),
+}
+
 /// A parsed `--section` filter value.
 ///
-/// Supports two forms:
-/// - `"Foo"` — match heading text case-insensitively at any level
-/// - `"## Foo"` — match heading text case-insensitively at exactly level 2
+/// Supports three forms:
+/// - `"Tasks"` — case-insensitive substring match at any level
+/// - `"## Tasks"` — level-pinned, substring match on text after stripping `##` prefix
+/// - `"~=/pattern/flags"` — regex match (bare `~=pattern` or `~=/pattern/` or `~=/pattern/i`)
 #[derive(Debug, Clone)]
 pub struct SectionFilter {
     /// If `Some`, match only headings at this exact level.
     level: Option<u8>,
-    /// Heading text to match (lowercased for case-insensitive comparison).
-    text: String,
+    /// How to match the heading text.
+    mode: SectionMatchMode,
 }
 
 impl SectionFilter {
     /// Parse a `--section` value into a `SectionFilter`.
     ///
-    /// Returns an error if the value contains a `#` prefix that doesn't parse
-    /// as a valid ATX heading (e.g. `"####### Too deep"`).
+    /// Parsing rules:
+    /// - If the value starts with `~=`, parse the rest as a regex (bare or `/pattern/flags`).
+    /// - If the value starts with `#`, parse as a level-pinned substring filter.
+    /// - Otherwise, use case-insensitive substring matching.
+    ///
+    /// Returns an error if the `#` prefix doesn't form a valid ATX heading or the
+    /// regex pattern fails to compile.
     pub fn parse(input: &str) -> Result<Self, String> {
+        if let Some(regex_part) = input.strip_prefix("~=") {
+            // Regex mode: ~=/pattern/flags or ~=pattern
+            let compiled = parse_section_regex(regex_part)?;
+            return Ok(Self {
+                level: None,
+                mode: SectionMatchMode::Regex(compiled),
+            });
+        }
+
         if input.starts_with('#') {
             match parse_atx_heading(input) {
                 Some((level, text)) => Ok(Self {
                     level: Some(level),
-                    text: text.to_ascii_lowercase(),
+                    mode: SectionMatchMode::Substring(text.to_ascii_lowercase()),
                 }),
                 None => Err(format!(
                     "invalid section filter: {input:?} (starts with '#' but is not a valid heading)"
@@ -80,21 +105,78 @@ impl SectionFilter {
             }
             Ok(Self {
                 level: None,
-                text: trimmed.to_ascii_lowercase(),
+                mode: SectionMatchMode::Substring(trimmed.to_ascii_lowercase()),
             })
         }
     }
 
     /// Check if a heading matches this filter.
     ///
-    /// - Case-insensitive whole-string match on heading text.
+    /// - Substring mode: case-insensitive contains check on heading text.
+    /// - Regex mode: compiled regex is tested against the heading text.
     /// - If `level` is set, heading level must match exactly.
     #[must_use]
     pub fn matches(&self, heading_level: u8, heading_text: &str) -> bool {
         let level_ok = self.level.is_none_or(|l| l == heading_level);
-        let text_ok = heading_text.eq_ignore_ascii_case(&self.text);
-        level_ok && text_ok
+        if !level_ok {
+            return false;
+        }
+        match &self.mode {
+            SectionMatchMode::Substring(needle) => {
+                // Fast path: ASCII-only heading
+                if heading_text.is_ascii() {
+                    heading_text.to_ascii_lowercase().contains(needle.as_str())
+                } else {
+                    heading_text.to_lowercase().contains(needle.as_str())
+                }
+            }
+            SectionMatchMode::Regex(re) => re.is_match(heading_text),
+        }
     }
+}
+
+/// Parse the part after `~=` as a regex, supporting `/pattern/flags` notation.
+///
+/// Supported flags:
+/// - `i` — case-insensitive (adds `(?i)` prefix if not already implied)
+///
+/// Examples:
+/// - `~=foo` → `(?i)foo` (always case-insensitive by default)
+/// - `~=/foo/` → `(?i)foo`
+/// - `~=/foo/i` → `(?i)foo`
+/// - `~=/^Tasks$/` → `(?i)^Tasks$`
+fn parse_section_regex(input: &str) -> Result<Regex, String> {
+    let (pattern, flags) = if let Some(inner) = input.strip_prefix('/') {
+        // `/pattern/flags` or `/pattern/`
+        match inner.rfind('/') {
+            Some(close) if close > 0 || inner.ends_with('/') => {
+                let pat = &inner[..close];
+                let flags_str = &inner[close + 1..];
+                (pat, flags_str)
+            }
+            _ => {
+                // No closing slash — treat the whole thing as bare pattern
+                (input, "")
+            }
+        }
+    } else {
+        (input, "")
+    };
+
+    if pattern.is_empty() {
+        return Err("section regex pattern must not be empty".to_owned());
+    }
+
+    // Build the effective pattern. Default to case-insensitive unless
+    // the user explicitly opted out with `(?-i)` in the pattern.
+    let case_flag = if flags.contains('i') || !pattern.contains("(?-i)") {
+        "(?i)"
+    } else {
+        ""
+    };
+    let effective = format!("{case_flag}{pattern}");
+
+    Regex::new(&effective).map_err(|e| format!("invalid section regex {input:?}: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -245,21 +327,25 @@ mod tests {
     fn parse_plain_text() {
         let f = SectionFilter::parse("Tasks").unwrap();
         assert!(f.level.is_none());
-        assert_eq!(f.text, "tasks");
+        // Verify it matches via the public API (substring mode)
+        assert!(f.matches(1, "Tasks"));
+        assert!(f.matches(2, "My Tasks"));
     }
 
     #[test]
     fn parse_with_hashes() {
         let f = SectionFilter::parse("## Design").unwrap();
         assert_eq!(f.level, Some(2));
-        assert_eq!(f.text, "design");
+        assert!(f.matches(2, "Design"));
+        assert!(!f.matches(1, "Design"));
     }
 
     #[test]
     fn parse_level_1() {
         let f = SectionFilter::parse("# Top").unwrap();
         assert_eq!(f.level, Some(1));
-        assert_eq!(f.text, "top");
+        assert!(f.matches(1, "Top Level"));
+        assert!(!f.matches(2, "Top Level"));
     }
 
     #[test]
@@ -278,6 +364,48 @@ mod tests {
         assert!(SectionFilter::parse("#NoSpace").is_err());
     }
 
+    #[test]
+    fn parse_regex_bare() {
+        let f = SectionFilter::parse("~=Tasks").unwrap();
+        assert!(f.matches(1, "Tasks"));
+        assert!(f.matches(2, "My Tasks"));
+        assert!(!f.matches(1, "Notes"));
+    }
+
+    #[test]
+    fn parse_regex_slash_delimited() {
+        let f = SectionFilter::parse("~=/Tasks/").unwrap();
+        assert!(f.matches(1, "Tasks"));
+        assert!(f.matches(2, "My Tasks [4/4]"));
+    }
+
+    #[test]
+    fn parse_regex_with_anchors() {
+        let f = SectionFilter::parse("~=/^Tasks$/").unwrap();
+        assert!(f.matches(1, "Tasks"));
+        assert!(!f.matches(2, "My Tasks"));
+    }
+
+    #[test]
+    fn parse_regex_with_i_flag() {
+        let f = SectionFilter::parse("~=/tasks/i").unwrap();
+        assert!(f.matches(1, "TASKS"));
+    }
+
+    #[test]
+    fn parse_regex_character_class() {
+        let f = SectionFilter::parse("~=/DEC-03[12]/").unwrap();
+        assert!(f.matches(1, "DEC-031: Some Title"));
+        assert!(f.matches(1, "DEC-032: Another"));
+        assert!(!f.matches(1, "DEC-033: Nope"));
+    }
+
+    #[test]
+    fn parse_regex_empty_pattern_errors() {
+        assert!(SectionFilter::parse("~=").is_err());
+        assert!(SectionFilter::parse("~=/./").is_ok()); // valid
+    }
+
     // --- SectionFilter::matches ---
 
     #[test]
@@ -290,6 +418,33 @@ mod tests {
     }
 
     #[test]
+    fn matches_substring() {
+        // "Task" is a substring of "Tasks" and "My Task List"
+        let f = SectionFilter::parse("Task").unwrap();
+        assert!(f.matches(2, "Tasks"));
+        assert!(f.matches(2, "My Task List"));
+        assert!(!f.matches(2, "Notes"));
+    }
+
+    #[test]
+    fn matches_substring_with_suffix() {
+        // "Tasks [4/4]" matches filter "Tasks"
+        let f = SectionFilter::parse("Tasks").unwrap();
+        assert!(f.matches(2, "Tasks [4/4]"));
+    }
+
+    #[test]
+    fn matches_dec_ticket_prefix() {
+        // "DEC-031" is a substring of a full ticket heading
+        let f = SectionFilter::parse("DEC-031").unwrap();
+        assert!(f.matches(
+            1,
+            "DEC-031: Discoverable Drill-Down Hints Architecture (2026-03-22)"
+        ));
+        assert!(!f.matches(1, "DEC-032: Other"));
+    }
+
+    #[test]
     fn matches_pinned_level() {
         let f = SectionFilter::parse("## Tasks").unwrap();
         assert!(f.matches(2, "Tasks"));
@@ -299,10 +454,11 @@ mod tests {
     }
 
     #[test]
-    fn no_partial_match() {
-        let f = SectionFilter::parse("Task").unwrap();
-        assert!(!f.matches(2, "Tasks"));
-        assert!(!f.matches(2, "My Task"));
+    fn matches_pinned_level_substring() {
+        // Level-pinned + substring: "## Task" matches "## Tasks [4/4]" at level 2
+        let f = SectionFilter::parse("## Task").unwrap();
+        assert!(f.matches(2, "Tasks [4/4]"));
+        assert!(!f.matches(1, "Tasks [4/4]"));
     }
 
     // --- build_section_scope ---
@@ -341,10 +497,37 @@ mod tests {
 
     #[test]
     fn scope_includes_children() {
-        // ## Tasks (line 5) -> ### Subtasks (line 8) -> ## Other (line 15)
+        // ## Sprint (line 5) -> ### Sprint Notes (line 8) -> ## Other (line 15)
+        // NOTE: "Sprint" is a substring of "Sprint Notes", so both headings match.
+        // Each matched heading's scope extends to the next heading at equal-or-higher level.
+        // - "Sprint" (level 2, line 5): next level<=2 is "Other" at line 15 → range 5..14
+        // - "Sprint Notes" (level 3, line 8): next level<=3 is "Other" at line 15 → range 8..14
+        let sections = vec![
+            make_section(2, "Sprint", 5),
+            make_section(3, "Sprint Notes", 8),
+            make_section(2, "Other", 15),
+        ];
+        let filters = vec![SectionFilter::parse("Sprint").unwrap()];
+        let ranges = build_section_scope(&sections, &filters, 20);
+        // Both headings match because "Sprint" is a substring of "Sprint Notes"
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], SectionRange { start: 5, end: 14 });
+        assert_eq!(ranges[1], SectionRange { start: 8, end: 14 });
+        // Lines 5-14 are in scope
+        assert!(in_scope(&ranges, 5));
+        assert!(in_scope(&ranges, 8));
+        assert!(in_scope(&ranges, 12));
+        // Line 15 (## Other) is NOT in scope
+        assert!(!in_scope(&ranges, 15));
+    }
+
+    #[test]
+    fn scope_parent_only_when_child_not_matching() {
+        // ## Tasks (line 5) -> ### Work Items (line 8) -> ## Other (line 15)
+        // "Tasks" is NOT a substring of "Work Items", so only the parent matches.
         let sections = vec![
             make_section(2, "Tasks", 5),
-            make_section(3, "Subtasks", 8),
+            make_section(3, "Work Items", 8),
             make_section(2, "Other", 15),
         ];
         let filters = vec![SectionFilter::parse("Tasks").unwrap()];
@@ -352,7 +535,7 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         // Tasks scope: 5..14 (up to but not including ## Other at 15)
         assert_eq!(ranges[0], SectionRange { start: 5, end: 14 });
-        // Line 8 (### Subtasks) and line 12 are within scope
+        // Line 8 (### Work Items) and line 12 are within scope
         assert!(in_scope(&ranges, 8));
         assert!(in_scope(&ranges, 12));
         // Line 15 (## Other) is NOT in scope

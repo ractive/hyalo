@@ -86,7 +86,7 @@ fn apply_line_range<'a>(lines: &'a [String], range: &LineRange) -> &'a [String] 
 // Section extraction
 // ---------------------------------------------------------------------------
 
-/// Extract all sections matching `filter` (case-insensitive exact match on heading text,
+/// Extract all sections matching `filter` (case-insensitive substring match on heading text,
 /// optional level pinning). Returns a `Vec<Vec<String>>`, where each inner `Vec<String>`
 /// contains the lines of a matched section, from the heading through to (but not including)
 /// the next heading of equal or higher level.
@@ -261,11 +261,15 @@ pub fn run(
             let hint = if available.is_empty() {
                 "this file has no headings".to_owned()
             } else {
-                format!("available sections: {}", available.join(", "))
+                format!(
+                    "no heading contains {:?} (substring match); available sections: {}",
+                    query,
+                    available.join(", ")
+                )
             };
             return Ok(CommandOutcome::UserError(format_error(
                 format,
-                &format!("section not found: {query}"),
+                "section not found",
                 Some(&rel_path),
                 Some(&hint),
                 None,
@@ -477,11 +481,30 @@ mod tests {
     }
 
     #[test]
-    fn extract_section_no_match_substring() {
+    fn extract_section_substring_matches_longer_heading() {
+        // "Problem" is a substring of "Problems" — should now match
         let lines: Vec<String> = vec!["## Problems".into(), "text".into()];
         let filter = SectionFilter::parse("Problem").unwrap();
         let sections = extract_sections(&lines, &filter);
+        assert_eq!(sections.len(), 1);
+    }
+
+    #[test]
+    fn extract_section_no_match_unrelated() {
+        // "Design" is not a substring of "Problems"
+        let lines: Vec<String> = vec!["## Problems".into(), "text".into()];
+        let filter = SectionFilter::parse("Design").unwrap();
+        let sections = extract_sections(&lines, &filter);
         assert!(sections.is_empty());
+    }
+
+    #[test]
+    fn extract_section_suffix_count() {
+        // "Tasks" matches "Tasks [4/4]"
+        let lines: Vec<String> = vec!["## Tasks [4/4]".into(), "- [x] Done".into()];
+        let filter = SectionFilter::parse("Tasks").unwrap();
+        let sections = extract_sections(&lines, &filter);
+        assert_eq!(sections.len(), 1);
     }
 
     #[test]

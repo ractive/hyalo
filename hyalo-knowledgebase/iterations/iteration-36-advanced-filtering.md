@@ -1,10 +1,14 @@
 ---
-title: "Iteration 36 — Advanced Filtering"
-type: iteration
+branch: iter-36/absence-and-regex-filters
 date: 2026-03-25
-tags: [iteration, filtering, cli, ux]
-status: planned
-branch: iter-36/advanced-filtering
+status: in-progress
+tags:
+- iteration
+- filtering
+- cli
+- ux
+title: Iteration 36 — Advanced Filtering
+type: iteration
 ---
 
 # Iteration 36 — Advanced Filtering
