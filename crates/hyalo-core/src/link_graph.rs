@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::discovery;
-use crate::links::{Link, extract_links_from_text};
+use crate::links::{Link, LinkKind, extract_links_from_text};
 use crate::scanner::{self, FileVisitor, ScanAction, strip_inline_code};
 
 /// A single backlink: a file that links to some target.
@@ -41,12 +41,17 @@ impl LinkGraph {
                 .with_context(|| format!("scanning {}", file.display()))?;
 
             for (line, mut link) in visitor.links {
-                // Normalize relative markdown link targets (those containing path
-                // separators) so that `sub/a.md` linking to `../target.md` is
-                // stored as `target.md` — matching how callers query by vault-
-                // relative path.  Bare wikilink targets (no `/` or `\`) are left
-                // unchanged because they are note names, not file system paths.
-                if link.target.contains('/') || link.target.contains('\\') {
+                // Normalize relative markdown link targets so that `sub/a.md`
+                // linking to `../target.md` is stored as `target.md`, matching
+                // how callers query by vault-relative path.
+                //
+                // Wikilinks are vault-relative by definition — `[[backlog/item]]`
+                // written in any file always refers to `backlog/item.md` at the
+                // vault root, never a path relative to the source file.  They
+                // must NOT be passed through `normalize_target`.
+                if link.kind == LinkKind::Markdown
+                    && (link.target.contains('/') || link.target.contains('\\'))
+                {
                     link.target = normalize_target(&visitor.source, &link.target);
                 }
                 index
@@ -416,5 +421,108 @@ mod tests {
     #[test]
     fn relative_path_nested_common_prefix() {
         assert_eq!(relative_path_between("a/b/c.md", "a/d/e.md"), "../d/e.md");
+    }
+
+    #[test]
+    fn wikilink_with_path_separator_found_by_backlinks() {
+        // This is the core bug: [[backlog/item]] from any directory should
+        // be findable via backlinks("backlog/item.md") or backlinks("backlog/item").
+        let vault = create_vault(&[
+            ("backlog/item.md", "---\ntitle: Item\n---\nContent\n"),
+            (
+                "iterations/iter-1.md",
+                "---\ntitle: Iter 1\n---\nSee [[backlog/item]]\n",
+            ),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl = graph.backlinks("backlog/item");
+        assert_eq!(bl.len(), 1, "backlinks('backlog/item') should find 1 link");
+        assert_eq!(bl[0].source, PathBuf::from("iterations/iter-1.md"));
+
+        let bl = graph.backlinks("backlog/item.md");
+        assert_eq!(
+            bl.len(),
+            1,
+            "backlinks('backlog/item.md') should find 1 link"
+        );
+    }
+
+    #[test]
+    fn wikilink_with_path_and_md_extension() {
+        // [[backlog/item.md]] — explicit extension in wikilink
+        let vault = create_vault(&[
+            ("backlog/item.md", "Content\n"),
+            ("a.md", "See [[backlog/item.md]]\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl = graph.backlinks("backlog/item.md");
+        assert_eq!(bl.len(), 1);
+
+        let bl = graph.backlinks("backlog/item");
+        assert_eq!(bl.len(), 1);
+    }
+
+    #[test]
+    fn wikilink_from_subdirectory_with_path() {
+        // A file in sub/ links to [[other/target]] — the target is vault-relative,
+        // NOT relative to sub/.
+        let vault = create_vault(&[
+            ("other/target.md", "Content\n"),
+            ("sub/source.md", "See [[other/target]]\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        // Must find the backlink via vault-relative path
+        let bl = graph.backlinks("other/target");
+        assert_eq!(bl.len(), 1, "should find wikilink from sub/source.md");
+        assert_eq!(bl[0].source, PathBuf::from("sub/source.md"));
+
+        // Must NOT store it under the incorrectly-normalized key "sub/other/target"
+        let bl_wrong = graph.backlinks("sub/other/target");
+        assert!(
+            bl_wrong.is_empty(),
+            "should NOT find under sub/other/target"
+        );
+    }
+
+    #[test]
+    fn markdown_link_with_path_still_normalized() {
+        // Relative markdown links from subdirectories must STILL be normalized.
+        // This ensures we didn't break existing behavior.
+        let vault = create_vault(&[
+            ("target.md", "Content\n"),
+            ("sub/source.md", "See [link](../target.md)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl = graph.backlinks("target.md");
+        assert_eq!(
+            bl.len(),
+            1,
+            "relative markdown link should still be normalized"
+        );
+        assert_eq!(bl[0].source, PathBuf::from("sub/source.md"));
+    }
+
+    #[test]
+    fn mixed_wiki_and_markdown_links_with_paths() {
+        // Same file has both a wikilink and markdown link to different targets.
+        let vault = create_vault(&[
+            ("docs/a.md", "Content A\n"),
+            ("notes/b.md", "Content B\n"),
+            (
+                "sub/source.md",
+                "Wiki: [[docs/a]] and md: [link](../notes/b.md)\n",
+            ),
+        ]);
+        let graph = LinkGraph::build(vault.path()).unwrap();
+
+        let bl_a = graph.backlinks("docs/a");
+        assert_eq!(bl_a.len(), 1, "wikilink to docs/a should be found");
+
+        let bl_b = graph.backlinks("notes/b.md");
+        assert_eq!(bl_b.len(), 1, "markdown link to notes/b.md should be found");
     }
 }

@@ -233,7 +233,11 @@ fn plan_inbound_rewrites(
             let matches = match span.kind {
                 LinkKind::Wikilink => {
                     let t = &span.link.target;
-                    t == old_stem || t == old_rel
+                    // Only match wikilinks that already contain a path separator.
+                    // Bare name wikilinks (e.g. [[note]]) are left alone — they
+                    // don't encode a location and will work once shortest-path
+                    // resolution is implemented.
+                    (t.contains('/') || t.contains('\\')) && (t == old_stem || t == old_rel)
                 }
                 LinkKind::Markdown => {
                     // Normalize relative target against the source file's directory.
@@ -466,35 +470,80 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_inbound_wikilink() {
+    fn plan_mv_bare_wikilink_not_rewritten() {
+        // Bare wikilinks (no path separator) are left alone — they are name-based
+        // references that don't encode a location.
         let vault = create_vault(&[
             ("a.md", "---\ntitle: A\n---\nSee [[b]] for details\n"),
             ("b.md", "---\ntitle: B\n---\nContent\n"),
         ]);
         let plans = plan_mv(vault.path(), "b.md", "archive/b.md").unwrap();
+        assert!(
+            plans.is_empty(),
+            "bare wikilink [[b]] should not be rewritten"
+        );
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_with_alias_not_rewritten() {
+        let vault = create_vault(&[("a.md", "See [[b|my note]] here\n"), ("b.md", "Content\n")]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        assert!(
+            plans.is_empty(),
+            "bare wikilink [[b|my note]] should not be rewritten"
+        );
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_with_fragment_not_rewritten() {
+        let vault = create_vault(&[("a.md", "See [[b#section]] here\n"), ("b.md", "Content\n")]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        assert!(
+            plans.is_empty(),
+            "bare wikilink [[b#section]] should not be rewritten"
+        );
+    }
+
+    #[test]
+    fn plan_mv_inbound_wikilink_with_path() {
+        // Wikilinks that already contain a path ARE rewritten.
+        let vault = create_vault(&[
+            (
+                "a.md",
+                "---\ntitle: A\n---\nSee [[backlog/item]] for details\n",
+            ),
+            ("backlog/item.md", "---\ntitle: Item\n---\nContent\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "backlog/item.md", "backlog/done/item.md").unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "a.md");
         assert_eq!(plans[0].replacements.len(), 1);
-        assert_eq!(plans[0].replacements[0].old_text, "[[b]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+        assert_eq!(plans[0].replacements[0].old_text, "[[backlog/item]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[backlog/done/item]]");
     }
 
     #[test]
-    fn plan_mv_inbound_wikilink_with_alias() {
-        let vault = create_vault(&[("a.md", "See [[b|my note]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+    fn plan_mv_inbound_wikilink_with_path_and_alias() {
+        let vault = create_vault(&[
+            ("a.md", "See [[sub/b|my note]] here\n"),
+            ("sub/b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].replacements[0].old_text, "[[b|my note]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b|my note]]");
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b|my note]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b|my note]]");
     }
 
     #[test]
-    fn plan_mv_inbound_wikilink_with_fragment() {
-        let vault = create_vault(&[("a.md", "See [[b#section]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+    fn plan_mv_inbound_wikilink_with_path_and_fragment() {
+        let vault = create_vault(&[
+            ("a.md", "See [[sub/b#section]] here\n"),
+            ("sub/b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].replacements[0].old_text, "[[b#section]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#section]]");
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b#section]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b#section]]");
     }
 
     #[test]
@@ -530,27 +579,29 @@ mod tests {
     #[test]
     fn plan_mv_links_in_code_block_untouched() {
         let vault = create_vault(&[
-            ("a.md", "---\ntitle: A\n---\n```\n[[b]]\n```\nReal [[b]]\n"),
-            ("b.md", "Content\n"),
+            (
+                "a.md",
+                "---\ntitle: A\n---\n```\n[[sub/b]]\n```\nReal [[sub/b]]\n",
+            ),
+            ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
         // Only the real link outside code block should be rewritten.
         assert_eq!(plans[0].replacements.len(), 1);
-        assert_eq!(plans[0].replacements[0].line, 7); // line 7 is "Real [[b]]"
+        assert_eq!(plans[0].replacements[0].line, 7);
     }
 
     #[test]
     fn plan_mv_links_in_inline_code_untouched() {
         let vault = create_vault(&[
-            ("a.md", "Use `[[b]]` and real [[b]]\n"),
-            ("b.md", "Content\n"),
+            ("a.md", "Use `[[sub/b]]` and real [[sub/b]]\n"),
+            ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
-        // The replacement should be for the real link, not the one in inline code.
-        assert_eq!(plans[0].replacements[0].old_text, "[[b]]");
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b]]");
     }
 
     #[test]
@@ -563,22 +614,22 @@ mod tests {
     #[test]
     fn plan_mv_multiple_links_one_line() {
         let vault = create_vault(&[
-            ("a.md", "See [[b]] and [[b|alias]]\n"),
-            ("b.md", "Content\n"),
+            ("a.md", "See [[sub/b]] and [[sub/b|alias]]\n"),
+            ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
     }
 
     #[test]
     fn execute_plans_writes_files() {
-        let vault = create_vault(&[("a.md", "See [[b]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let vault = create_vault(&[("a.md", "See [[sub/b]] here\n"), ("sub/b.md", "Content\n")]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         execute_plans(&plans).unwrap();
         let content = fs::read_to_string(vault.path().join("a.md")).unwrap();
-        assert!(content.contains("[[sub/b]]"));
-        assert!(!content.contains("[[b]]"));
+        assert!(content.contains("[[archive/b]]"));
+        assert!(!content.contains("[[sub/b]]"));
     }
 
     // ---- Additional edge-case tests ----
@@ -613,13 +664,13 @@ mod tests {
     fn plan_mv_frontmatter_links_untouched() {
         // Links inside frontmatter must not be rewritten.
         let vault = create_vault(&[
-            ("a.md", "---\nrelated: \"[[b]]\"\n---\nBody [[b]]\n"),
-            ("b.md", "Content\n"),
+            ("a.md", "---\nrelated: \"[[sub/b]]\"\n---\nBody [[sub/b]]\n"),
+            ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
-        assert_eq!(plans[0].replacements[0].line, 4); // Body [[b]] is on line 4
+        assert_eq!(plans[0].replacements[0].line, 4); // Body line
     }
 
     #[test]
@@ -663,12 +714,26 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_wikilink_with_md_extension_target() {
-        // Some editors write [[b.md]] with extension — should still be matched.
+    fn plan_mv_bare_wikilink_with_md_extension_not_rewritten() {
+        // [[b.md]] is a bare wikilink (no path separator) — leave it alone.
         let vault = create_vault(&[("a.md", "See [[b.md]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        assert!(
+            plans.is_empty(),
+            "bare wikilink [[b.md]] should not be rewritten"
+        );
+    }
+
+    #[test]
+    fn plan_mv_wikilink_with_path_and_md_extension() {
+        // [[sub/b.md]] has a path separator — should be rewritten.
+        let vault = create_vault(&[
+            ("a.md", "See [[sub/b.md]] here\n"),
+            ("sub/b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].replacements[0].old_text, "[[b.md]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b]]");
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b.md]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
     }
 }
