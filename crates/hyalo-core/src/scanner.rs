@@ -300,6 +300,14 @@ pub trait FileVisitor {
     fn needs_body(&self) -> bool {
         true
     }
+
+    /// Whether this visitor needs parsed frontmatter properties.
+    /// If **no** visitor needs frontmatter, the scanner skips YAML accumulation
+    /// and `serde_yaml_ng` parsing (but still reads past the `---` delimiters).
+    /// Default: `true`.
+    fn needs_frontmatter(&self) -> bool {
+        true
+    }
 }
 
 /// Extract the info-string (language tag) from a fenced code block opening line.
@@ -355,12 +363,17 @@ pub fn scan_reader_multi<R: BufRead>(
     let first_trimmed = buf.trim_end_matches(['\n', '\r']).to_owned();
 
     // Try to parse frontmatter
+    let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
     let (fm_props, fm_lines) = if first_trimmed.trim() == "---" {
         const MAX_FRONTMATTER_LINES: usize = 100;
         const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
-        // Collect YAML lines
-        let mut yaml = String::new();
+        // Read past frontmatter lines, optionally collecting YAML content
+        let mut yaml = if any_needs_fm {
+            Some(String::new())
+        } else {
+            None
+        };
         let mut fm_line_count: usize = 1; // the opening `---`
         let mut found_close = false;
         loop {
@@ -375,24 +388,27 @@ pub fn scan_reader_multi<R: BufRead>(
                 found_close = true;
                 break;
             }
-            // Content line count is fm_line_count - 1 (excludes the opening `---`)
-            if fm_line_count - 1 > MAX_FRONTMATTER_LINES
-                || yaml.len() + trimmed.len() > MAX_FRONTMATTER_BYTES
-            {
-                anyhow::bail!(
-                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
-                );
+            if let Some(ref mut y) = yaml {
+                // Content line count is fm_line_count - 1 (excludes the opening `---`)
+                if fm_line_count - 1 > MAX_FRONTMATTER_LINES
+                    || y.len() + trimmed.len() > MAX_FRONTMATTER_BYTES
+                {
+                    anyhow::bail!(
+                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                    );
+                }
+                y.push_str(trimmed);
+                y.push('\n');
             }
-            yaml.push_str(trimmed);
-            yaml.push('\n');
         }
         if !found_close {
             anyhow::bail!("unclosed frontmatter (no closing `---` found)");
         }
-        let props: BTreeMap<String, Value> = if !yaml.trim().is_empty() {
-            serde_yaml_ng::from_str(&yaml).context("failed to parse YAML frontmatter")?
-        } else {
-            BTreeMap::new()
+        let props: BTreeMap<String, Value> = match yaml {
+            Some(ref y) if !y.trim().is_empty() => {
+                serde_yaml_ng::from_str(y).context("failed to parse YAML frontmatter")?
+            }
+            _ => BTreeMap::new(),
         };
         (props, fm_line_count)
     } else {
@@ -1036,6 +1052,63 @@ Line 2
             err_msg.contains("unclosed frontmatter"),
             "unexpected error: {err_msg}"
         );
+    }
+
+    #[test]
+    fn needs_frontmatter_false_skips_yaml_parse() {
+        // Malformed YAML that would fail serde_yaml_ng if parsed,
+        // but a body-only visitor with needs_frontmatter=false should succeed.
+        struct BodyOnly {
+            lines: Vec<(String, usize)>,
+        }
+        impl FileVisitor for BodyOnly {
+            fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+                self.lines.push((raw.to_owned(), line_num));
+                ScanAction::Continue
+            }
+            fn needs_frontmatter(&self) -> bool {
+                false
+            }
+        }
+
+        let input = b"---\n: invalid [[[{\ntags: !!bad\n---\nBody line\n";
+        let mut v = BodyOnly { lines: Vec::new() };
+        scan_reader_multi(input.as_slice(), &mut [&mut v]).unwrap();
+        assert_eq!(v.lines.len(), 1);
+        assert_eq!(v.lines[0].0, "Body line");
+        assert_eq!(v.lines[0].1, 5);
+    }
+
+    #[test]
+    fn needs_frontmatter_mixed_visitors() {
+        // One visitor needs frontmatter, one doesn't — YAML must still be parsed.
+        let input = md!(r"
+---
+title: Hello
+---
+Body
+");
+        let mut fm = FrontmatterCollector::new(true);
+        struct BodyOnly {
+            lines: Vec<String>,
+        }
+        impl FileVisitor for BodyOnly {
+            fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+                self.lines.push(raw.to_owned());
+                ScanAction::Continue
+            }
+            fn needs_frontmatter(&self) -> bool {
+                false
+            }
+        }
+        let mut body = BodyOnly { lines: Vec::new() };
+        scan_reader_multi(input.as_bytes(), &mut [&mut fm, &mut body]).unwrap();
+
+        // Frontmatter visitor still gets parsed props
+        let props = fm.into_props();
+        assert_eq!(props.get("title").unwrap().as_str(), Some("Hello"));
+        // Body visitor gets the body
+        assert_eq!(body.lines, vec!["Body"]);
     }
 
     #[test]

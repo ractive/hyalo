@@ -42,7 +42,7 @@ Most flags have short aliases for quick interactive use:
 | `-p` | `--property` | find, set, remove, append |
 | `-t` | `--tag` | find, set, remove |
 | `-s` | `--section` | find, read |
-| `-f` | `--file` | find, read, set, remove, append, task |
+| `-f` | `--file` | find, read, set, remove, append, task, backlinks |
 | `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary |
 | `-n` | `--limit` | find |
 | `-n` | `--recent` | summary |
@@ -276,6 +276,46 @@ hyalo task set-status --file path/to/note.md --line 42 --status /
 ```
 
 Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored.
+
+### backlinks
+
+Reverse link lookup — find all files that link to a given file. Scans all `.md` files in the vault and builds an in-memory link graph, then returns every incoming link (both `[[wikilinks]]` and `[markdown](links)`) pointing to the target file.
+
+```sh
+hyalo backlinks --file path/to/note.md
+```
+
+**JSON output** (default):
+
+```json
+{
+  "file": "path/to/note.md",
+  "backlinks": [
+    {
+      "source": "index.md",
+      "line": 5,
+      "target": "note"
+    },
+    {
+      "source": "journal/2026-03-20.md",
+      "line": 12,
+      "target": "note",
+      "label": "project notes"
+    }
+  ],
+  "total": 2
+}
+```
+
+**Text output** (`--format text`):
+
+```
+2 backlinks to path/to/note.md:
+  index.md:5
+  journal/2026-03-20.md:12 ("project notes")
+```
+
+The `label` field (and the parenthesised text in text mode) appears only for aliased wikilinks (`[[target|label]]`) and titled markdown links (`[label](target.md)`).
 
 ### Hints
 

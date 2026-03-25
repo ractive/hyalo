@@ -4,9 +4,9 @@ use std::process;
 use clap::{Parser, Subcommand};
 
 use hyalo_cli::commands::{
-    append as append_commands, find as find_commands, init as init_commands, properties,
-    read as read_commands, remove as remove_commands, set as set_commands,
-    summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    append as append_commands, backlinks as backlinks_commands, find as find_commands,
+    init as init_commands, properties, read as read_commands, remove as remove_commands,
+    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use hyalo_cli::hints::{HintContext, HintSource, generate_hints};
 use hyalo_cli::output::{CommandOutcome, Format, apply_jq_filter_result, format_with_hints};
@@ -52,7 +52,8 @@ use hyalo_core::filter;
         Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag\n  \
         Vault overview:               hyalo summary --format text\n  \
         Overview with drill-down:     hyalo summary --format text --hints\n  \
-        Toggle a task:                hyalo task toggle --file todo.md --line 5",
+        Toggle a task:                hyalo task toggle --file todo.md --line 5\n  \
+        Find backlinks:               hyalo backlinks --file decision-log.md",
     after_long_help = "\
 COMMAND REFERENCE:\n  \
   Find (search and filter, read-only):\n  \
@@ -78,6 +79,8 @@ COMMAND REFERENCE:\n  \
     hyalo task read       -f/--file F -l/--line N           Read task at a line\n  \
     hyalo task toggle     -f/--file F -l/--line N           Toggle completion\n  \
     hyalo task set-status -f/--file F -l/--line N -s/--status C\n\n  \
+  Backlinks (reverse link lookup, read-only):\n  \
+    hyalo backlinks -f/--file F\n\n  \
   Init (configuration, one-time setup):\n  \
     hyalo init [--claude] [-d/--dir DIR]\n\n  \
   Global flags (apply to all commands):\n  \
@@ -133,7 +136,9 @@ COOKBOOK:\n  \
   # Get just file paths (no metadata)\n  \
   hyalo find --property status=draft --jq '[.[].file]'\n\n  \
   # Pipe file paths for scripting (Unix)\n  \
-  hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}\n\n\
+  hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}\n\n  \
+  # Find all files that link to a given note\n  \
+  hyalo backlinks --file decision-log.md\n\n\
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
   [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
@@ -152,6 +157,8 @@ OUTPUT SHAPES (JSON, default):\n  \
   {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},\n   \
   \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},\n   \
   \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}\n\n  \
+  # backlinks\n  \
+  {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}], \"total\": 1}\n\n  \
   # --hints wraps JSON output in an envelope with drill-down commands\n  \
   {\"data\": { ... original output ... }, \"hints\": [\"hyalo properties\", ...]}\n\n  \
   # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
@@ -325,6 +332,20 @@ enum Commands {
         /// Limit directory listing depth (0 = root only; stats are always full)
         #[arg(long)]
         depth: Option<usize>,
+    },
+    /// List all files that link to a given file (read-only)
+    #[command(
+        long_about = "List all files that link to a given file (reverse link lookup).\n\n\
+            Builds an in-memory link graph by scanning all .md files in the vault, \
+            then returns every file that contains a [[wikilink]] or [markdown](link) \
+            pointing to the target file.\n\n\
+            OUTPUT: JSON object with file, backlinks array (source, line, target, label), and total count.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    Backlinks {
+        /// Target file to find backlinks for (relative to --dir)
+        #[arg(short, long)]
+        file: String,
     },
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
     #[command(
@@ -950,6 +971,9 @@ fn main() {
                 where_tags,
                 effective_format,
             )
+        }
+        Commands::Backlinks { ref file } => {
+            backlinks_commands::backlinks(&dir, file, effective_format)
         }
         // `Init` is handled as an early return before this match is reached.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
