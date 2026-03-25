@@ -247,7 +247,7 @@ enum Commands {
         /// Glob pattern to select files; prefix '!' to negate (e.g. '!**/draft-*' excludes matching files)
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
-        /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links (default: all). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array
+        /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links, backlinks (default: all except backlinks). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default) or 'modified'

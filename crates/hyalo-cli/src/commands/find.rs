@@ -12,11 +12,12 @@ use hyalo_core::discovery;
 use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
+use hyalo_core::link_graph::LinkGraph;
 use hyalo_core::links::Link;
 use hyalo_core::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use hyalo_core::tasks::TaskExtractor;
 use hyalo_core::types::{
-    ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
+    BacklinkInfo, ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
 };
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,14 @@ pub fn find(
     // Canonicalize the vault directory once so that resolve_target (called
     // per-link inside the loop) can avoid repeated canonicalization.
     let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
+
+    // Build the link graph lazily — only when backlinks field is requested.
+    // This requires scanning all files in the vault so it's opt-in.
+    let link_graph = if fields.backlinks {
+        Some(LinkGraph::build(dir)?)
+    } else {
+        None
+    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -221,6 +230,7 @@ pub fn find(
             link_collector,
             content_matches,
             &canonical_dir,
+            link_graph.as_ref(),
         );
 
         results.push(obj);
@@ -322,6 +332,7 @@ fn build_file_object(
     link_collector: Option<LinkCollector>,
     content_matches: Option<Vec<ContentMatch>>,
     canonical_dir: &Path,
+    link_graph: Option<&LinkGraph>,
 ) -> FileObject {
     let properties = if fields.properties {
         let mut map = serde_json::Map::new();
@@ -388,6 +399,24 @@ fn build_file_object(
 
     let matches: Option<Vec<ContentMatch>> = content_matches;
 
+    let backlinks = if fields.backlinks {
+        let entries = link_graph
+            .map(|graph| graph.backlinks(rel_path))
+            .unwrap_or_default();
+        Some(
+            entries
+                .into_iter()
+                .map(|e| BacklinkInfo {
+                    source: e.source.to_string_lossy().into_owned(),
+                    line: e.line,
+                    label: e.link.label.clone(),
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     FileObject {
         file: rel_path.to_owned(),
         modified: modified.to_owned(),
@@ -397,6 +426,7 @@ fn build_file_object(
         sections,
         tasks,
         links,
+        backlinks,
         matches,
     }
 }
@@ -1095,6 +1125,7 @@ Just some text here.
             sections: false,
             tasks: false,
             links: false,
+            backlinks: false,
         };
         assert!(!needs_body(&fields, false, false, false));
     }
@@ -1108,6 +1139,7 @@ Just some text here.
             sections: false,
             tasks: false,
             links: false,
+            backlinks: false,
         };
         assert!(needs_body(&fields, true, false, false));
     }
@@ -1121,6 +1153,7 @@ Just some text here.
             sections: true,
             tasks: false,
             links: false,
+            backlinks: false,
         };
         assert!(needs_body(&fields, false, false, false));
     }
@@ -1394,6 +1427,7 @@ Just intro, no tasks section.
             sections: false,
             tasks: false,
             links: false,
+            backlinks: false,
         };
         assert!(needs_body(&fields, false, false, true));
         assert!(!needs_body(&fields, false, false, false));
@@ -1565,5 +1599,101 @@ Just intro, no tasks section.
             .expect("status property missing");
         assert_eq!(status["type"], "text");
         assert_eq!(status["value"], "planned");
+    }
+
+    // --- find: backlinks field ---
+
+    #[test]
+    fn find_fields_backlinks_shows_incoming_links() {
+        let tmp = setup_vault();
+        // alpha.md links to [[beta]], so beta should have a backlink from alpha
+        let fields = Fields::parse(&["backlinks".to_owned()]).unwrap();
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                &["beta.md".to_owned()],
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        let beta = &arr[0];
+        let backlinks = beta["backlinks"].as_array().unwrap();
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0]["source"], "alpha.md");
+        assert!(backlinks[0]["line"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn find_fields_backlinks_not_included_by_default() {
+        let tmp = setup_vault();
+        let fields = Fields::default();
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                &[],
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        for entry in arr {
+            assert!(
+                entry["backlinks"].is_null(),
+                "backlinks should not be included by default"
+            );
+        }
+    }
+
+    #[test]
+    fn find_fields_backlinks_empty_when_no_incoming() {
+        let tmp = setup_vault();
+        // gamma has no frontmatter and nobody links to it
+        let fields = Fields::parse(&["backlinks".to_owned()]).unwrap();
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                &["gamma.md".to_owned()],
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        let gamma = &arr[0];
+        let backlinks = gamma["backlinks"].as_array().unwrap();
+        assert!(backlinks.is_empty());
     }
 }

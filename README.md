@@ -138,10 +138,12 @@ hyalo find --file a.md --file b.md
 hyalo find --glob "notes/*.md"
 hyalo find --glob '!**/draft-*'      # exclude files matching a pattern (glob negation)
 
-# Control returned fields (default: all)
+# Control returned fields (default: all except backlinks)
 hyalo find --fields properties,tags
 hyalo find --fields sections,tasks,links
 hyalo find --fields properties-typed     # [{name, type, value}] array instead of {key: value} map
+hyalo find --fields backlinks --file my-note.md    # show who links to this note
+hyalo find --fields properties,backlinks           # combine with other fields
 
 # Sort and limit
 hyalo find --sort modified --limit 10
