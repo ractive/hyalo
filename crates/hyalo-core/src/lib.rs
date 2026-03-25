@@ -4,6 +4,7 @@ pub mod filter;
 pub mod frontmatter;
 pub mod fs_util;
 pub mod heading;
+pub mod link_graph;
 pub mod links;
 pub mod scanner;
 pub mod tasks;

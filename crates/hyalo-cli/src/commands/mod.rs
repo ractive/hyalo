@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 pub mod append;
+pub mod backlinks;
 pub mod find;
 pub mod init;
 pub mod properties;
