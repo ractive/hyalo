@@ -40,6 +40,7 @@ pub fn mv(
     to_arg: &str,
     dry_run: bool,
     format: Format,
+    site_prefix: Option<&str>,
 ) -> Result<CommandOutcome> {
     // 1. Validate source exists
     let (_src_full, old_rel) = match discovery::resolve_file(dir, file_arg) {
@@ -55,7 +56,7 @@ pub fn mv(
     };
 
     // 3. Plan all rewrites
-    let plans = link_rewrite::plan_mv(dir, &old_rel, &new_rel)?;
+    let plans = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix)?;
 
     // 4. Build result
     let updated_files: Vec<UpdatedFile> = plans

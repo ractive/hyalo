@@ -227,9 +227,9 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
     if results.len() > 5 {
         hints.push(build_command_with_glob(
             ctx,
-            &["find", "--property", "<key>=<value>"],
+            &["find", "--property", "status=draft"],
         ));
-        hints.push(build_command_with_glob(ctx, &["find", "--tag", "<tag>"]));
+        hints.push(build_command_with_glob(ctx, &["find", "--tag", "draft"]));
     }
 
     hints

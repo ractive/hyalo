@@ -724,11 +724,13 @@ fn main() {
     // Derive site_prefix for absolute link resolution: when dir != ".",
     // absolute links like `/docs/page.md` are resolved by stripping `/<dir>/`.
     let site_prefix_owned = {
-        let s = dir.to_string_lossy();
-        if s == "." {
+        let s = dir.to_string_lossy().replace('\\', "/");
+        let s = s.trim().trim_end_matches('/');
+        let s = s.strip_prefix("./").unwrap_or(s);
+        if s == "." || s.is_empty() {
             None
         } else {
-            Some(s.trim_end_matches('/').to_owned())
+            Some(s.to_owned())
         }
     };
     let site_prefix = site_prefix_owned.as_deref();
@@ -837,7 +839,7 @@ fn main() {
     };
 
     // Warn when --hints is passed to mutation commands, which do not generate hints.
-    if hints_flag
+    if hints_from_cli
         && matches!(
             &cli.command,
             Commands::Set { .. } | Commands::Remove { .. } | Commands::Append { .. }
@@ -1063,7 +1065,7 @@ fn main() {
             ref file,
             ref to,
             dry_run,
-        } => mv_commands::mv(&dir, file, to, dry_run, effective_format),
+        } => mv_commands::mv(&dir, file, to, dry_run, effective_format, site_prefix),
         // `Init` is handled as an early return before this match is reached.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
     };

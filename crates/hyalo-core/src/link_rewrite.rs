@@ -64,9 +64,14 @@ pub struct RewritePlan {
 ///
 /// Both `old_rel` and `new_rel` must use forward slashes and be relative to
 /// `dir`.
-pub fn plan_mv(dir: &Path, old_rel: &str, new_rel: &str) -> Result<Vec<RewritePlan>> {
+pub fn plan_mv(
+    dir: &Path,
+    old_rel: &str,
+    new_rel: &str,
+    site_prefix: Option<&str>,
+) -> Result<Vec<RewritePlan>> {
     // Step 1: build link graph to discover inbound links.
-    let build = LinkGraph::build(dir, None).context("building link graph")?;
+    let build = LinkGraph::build(dir, site_prefix).context("building link graph")?;
     for (path, msg) in &build.warnings {
         eprintln!("warning: skipping {}: {msg}", path.display());
     }
@@ -481,7 +486,7 @@ mod tests {
             ("a.md", "---\ntitle: A\n---\nSee [[b]] for details\n"),
             ("b.md", "---\ntitle: B\n---\nContent\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
         assert!(
             plans.is_empty(),
             "bare wikilink [[b]] should not be rewritten"
@@ -491,7 +496,7 @@ mod tests {
     #[test]
     fn plan_mv_bare_wikilink_with_alias_not_rewritten() {
         let vault = create_vault(&[("a.md", "See [[b|my note]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert!(
             plans.is_empty(),
             "bare wikilink [[b|my note]] should not be rewritten"
@@ -501,7 +506,7 @@ mod tests {
     #[test]
     fn plan_mv_bare_wikilink_with_fragment_not_rewritten() {
         let vault = create_vault(&[("a.md", "See [[b#section]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert!(
             plans.is_empty(),
             "bare wikilink [[b#section]] should not be rewritten"
@@ -518,7 +523,13 @@ mod tests {
             ),
             ("backlog/item.md", "---\ntitle: Item\n---\nContent\n"),
         ]);
-        let plans = plan_mv(vault.path(), "backlog/item.md", "backlog/done/item.md").unwrap();
+        let plans = plan_mv(
+            vault.path(),
+            "backlog/item.md",
+            "backlog/done/item.md",
+            None,
+        )
+        .unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "a.md");
         assert_eq!(plans[0].replacements.len(), 1);
@@ -532,7 +543,7 @@ mod tests {
             ("a.md", "See [[sub/b|my note]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b|my note]]");
         assert_eq!(plans[0].replacements[0].new_text, "[[archive/b|my note]]");
@@ -544,7 +555,7 @@ mod tests {
             ("a.md", "See [[sub/b#section]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b#section]]");
         assert_eq!(plans[0].replacements[0].new_text, "[[archive/b#section]]");
@@ -553,7 +564,7 @@ mod tests {
     #[test]
     fn plan_mv_inbound_markdown_link() {
         let vault = create_vault(&[("a.md", "See [note](b.md) here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[note](b.md)");
         assert_eq!(plans[0].replacements[0].new_text, "[note](sub/b.md)");
@@ -564,7 +575,7 @@ mod tests {
         // b.md in root links to a.md. Moving b.md to sub/b.md means the
         // relative path changes.
         let vault = create_vault(&[("a.md", "Content A\n"), ("b.md", "See [note](a.md) here\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "sub/b.md").unwrap();
         assert_eq!(moved_plan.replacements[0].old_text, "[note](a.md)");
         assert_eq!(moved_plan.replacements[0].new_text, "[note](../a.md)");
@@ -574,7 +585,7 @@ mod tests {
     fn plan_mv_outbound_wikilink_unchanged() {
         // Wikilinks are vault-relative, so moving the file doesn't change them.
         let vault = create_vault(&[("a.md", "Content A\n"), ("b.md", "See [[a]] here\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         // b.md should NOT appear in plans (no outbound changes needed for wikilinks).
         let moved_plan = plans.iter().find(|p| p.rel_path == "b.md");
         assert!(moved_plan.is_none());
@@ -589,7 +600,7 @@ mod tests {
             ),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         // Only the real link outside code block should be rewritten.
         assert_eq!(plans[0].replacements.len(), 1);
@@ -602,7 +613,7 @@ mod tests {
             ("a.md", "Use `[[sub/b]]` and real [[sub/b]]\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b]]");
@@ -611,7 +622,7 @@ mod tests {
     #[test]
     fn plan_mv_no_links_empty_result() {
         let vault = create_vault(&[("a.md", "No links here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert!(plans.is_empty());
     }
 
@@ -621,7 +632,7 @@ mod tests {
             ("a.md", "See [[sub/b]] and [[sub/b|alias]]\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
     }
@@ -629,7 +640,7 @@ mod tests {
     #[test]
     fn execute_plans_writes_files() {
         let vault = create_vault(&[("a.md", "See [[sub/b]] here\n"), ("sub/b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         execute_plans(&plans).unwrap();
         let content = fs::read_to_string(vault.path().join("a.md")).unwrap();
         assert!(content.contains("[[archive/b]]"));
@@ -671,7 +682,7 @@ mod tests {
             ("a.md", "---\nrelated: \"[[sub/b]]\"\n---\nBody [[sub/b]]\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].line, 4); // Body line
@@ -682,7 +693,7 @@ mod tests {
         // Moving within the same directory: outbound relative links don't change.
         let vault = create_vault(&[("a.md", "Content A\n"), ("b.md", "See [note](a.md) here\n")]);
         // Both old and new are in the root → no outbound rewrite needed.
-        let plans = plan_mv(vault.path(), "b.md", "c.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "c.md", None).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "b.md");
         assert!(moved_plan.is_none());
     }
@@ -694,7 +705,7 @@ mod tests {
             ("sub/a.md", "See [note](../b.md) here\n"),
             ("b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "sub/a.md");
         assert_eq!(plans[0].replacements[0].old_text, "[note](../b.md)");
@@ -711,7 +722,7 @@ mod tests {
             ("sub/b.md", "Content sub\n"),
             ("b.md", "Content root\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
         // sub/a.md links to sub/b.md, not root b.md — should NOT be rewritten.
         let sub_plan = plans.iter().find(|p| p.rel_path == "sub/a.md");
         assert!(sub_plan.is_none(), "false positive: {plans:?}");
@@ -721,7 +732,7 @@ mod tests {
     fn plan_mv_bare_wikilink_with_md_extension_not_rewritten() {
         // [[b.md]] is a bare wikilink (no path separator) — leave it alone.
         let vault = create_vault(&[("a.md", "See [[b.md]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert!(
             plans.is_empty(),
             "bare wikilink [[b.md]] should not be rewritten"
@@ -735,7 +746,7 @@ mod tests {
             ("a.md", "See [[sub/b.md]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md").unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b.md]]");
         assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
