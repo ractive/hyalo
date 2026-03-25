@@ -1,15 +1,15 @@
 ---
-title: "Backlinks — which files link to this one?"
-type: backlog
-date: 2026-03-21
-status: deferred
-priority: medium
-origin: dogfooding iteration-06
 blocked-by: indexing
+date: 2026-03-21
+origin: dogfooding iteration-06
+priority: medium
+status: completed
 tags:
-  - backlog
-  - links
-  - indexing
+- backlog
+- links
+- indexing
+title: Backlinks — which files link to this one?
+type: backlog
 ---
 
 # Backlinks — which files link to this one?

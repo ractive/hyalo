@@ -22,7 +22,7 @@ This was hit during knowledgebase cleanup when moving `combined-queries.md` to `
 ## Proposal
 
 ```sh
-hyalo move --file backlog/combined-queries.md --to backlog/done/combined-queries.md
+hyalo mv --file backlog/combined-queries.md --to backlog/done/combined-queries.md
 ```
 
 Behaviour:
