@@ -23,7 +23,7 @@ pub fn summary(
     depth: Option<usize>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let files = collect_files(dir, None, glob, format)?;
+    let files = collect_files(dir, &[], glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),

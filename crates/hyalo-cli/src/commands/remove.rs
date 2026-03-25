@@ -166,7 +166,7 @@ pub fn remove(
     dir: &Path,
     property_args: &[String],
     tag_args: &[String],
-    file: Option<&str>,
+    files: &[String],
     glob: Option<&str>,
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
@@ -183,7 +183,7 @@ pub fn remove(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    if let Some(outcome) = require_file_or_glob(file, glob, "remove", format) {
+    if let Some(outcome) = require_file_or_glob(files, glob, "remove", format) {
         return Ok(outcome);
     }
 
@@ -217,7 +217,7 @@ pub fn remove(
         .map(|arg| parse_kv_optional(arg).expect("already validated"))
         .collect();
 
-    let files = collect_files(dir, file, glob, format)?;
+    let files = collect_files(dir, files, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -389,7 +389,7 @@ status: draft
             tmp.path(),
             &["status".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -426,7 +426,7 @@ title: Note
             tmp.path(),
             &["status".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -460,7 +460,7 @@ status: draft
             tmp.path(),
             &["status=draft".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -494,7 +494,7 @@ status: published
             tmp.path(),
             &["status=draft".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -532,7 +532,7 @@ aliases:
             tmp.path(),
             &["aliases=old-name".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -571,7 +571,7 @@ tags:
             tmp.path(),
             &[],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -608,7 +608,7 @@ tags:
             tmp.path(),
             &[],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -629,7 +629,7 @@ tags:
             tmp.path(),
             &["status".to_owned()],
             &[],
-            None,
+            &[],
             None,
             &[],
             &[],
@@ -646,7 +646,7 @@ tags:
             tmp.path(),
             &[],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -675,7 +675,7 @@ tags:
             tmp.path(),
             &["status".to_owned()],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -704,7 +704,7 @@ tags:
             tmp.path(),
             &["status".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -736,7 +736,7 @@ priority: low
             tmp.path(),
             &["status".to_owned(), "priority".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -779,7 +779,7 @@ priority: low
             tmp.path(),
             &["priority".to_owned()],
             &[],
-            None,
+            &[],
             Some("*.md"),
             &[filter],
             &[],
@@ -816,7 +816,7 @@ priority: low
             tmp.path(),
             &["status".to_owned()],
             &[],
-            None,
+            &[],
             Some("*.md"),
             &[],
             &["deprecated".to_owned()],

@@ -16,7 +16,7 @@ fn tags_bare_returns_summary() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -36,7 +36,7 @@ fn tags_empty_vault() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -55,7 +55,7 @@ fn tags_with_glob() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "--glob", "sub/*.md"])
+        .args(["tags", "summary", "--glob", "sub/*.md"])
         .output()
         .unwrap();
 
@@ -80,7 +80,7 @@ fn tags_glob_no_match() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "--glob", "nonexistent/*.md"])
+        .args(["tags", "summary", "--glob", "nonexistent/*.md"])
         .output()
         .unwrap();
 
@@ -100,6 +100,7 @@ fn tags_text_format() {
             "--format",
             "text",
             "tags",
+            "summary",
         ])
         .output()
         .unwrap();
@@ -121,7 +122,7 @@ fn tags_file_without_frontmatter() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -147,7 +148,7 @@ tags: rust
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -561,6 +562,103 @@ fn remove_tag_without_file_or_glob_is_user_error() {
 }
 
 // ---------------------------------------------------------------------------
+// tags rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_rename_basic() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "a.md", &["filtering", "cli"]);
+    write_tagged(tmp.path(), "b.md", &["filtering"]);
+    write_tagged(tmp.path(), "c.md", &["cli"]); // no "filtering"
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["tags", "rename", "--from", "filtering", "--to", "filters"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+
+    let a = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(a.contains("filters"));
+    assert!(!a.contains("filtering"));
+}
+
+#[test]
+fn tags_rename_already_has_new_tag() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "note.md", &["old-name", "new-name"]);
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["tags", "rename", "--from", "old-name", "--to", "new-name"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(!content.contains("old-name"));
+    // Should have exactly one "new-name", not duplicated
+    let count = content.matches("new-name").count();
+    assert_eq!(count, 1, "new tag should not be duplicated");
+}
+
+#[test]
+fn tags_rename_same_name_exits_1() {
+    let tmp = TempDir::new().unwrap();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["tags", "rename", "--from", "foo", "--to", "foo"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
+fn tags_rename_with_glob_scope() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "notes/a.md", &["old-tag"]);
+    write_tagged(tmp.path(), "other/b.md", &["old-tag"]);
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "tags",
+        "rename",
+        "--from",
+        "old-tag",
+        "--to",
+        "new-tag",
+        "--glob",
+        "notes/*.md",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    let a = std::fs::read_to_string(tmp.path().join("notes/a.md")).unwrap();
+    assert!(a.contains("new-tag"));
+    let b = std::fs::read_to_string(tmp.path().join("other/b.md")).unwrap();
+    assert!(b.contains("old-tag")); // unchanged
+}
+
+#[test]
+fn tags_rename_invalid_tag_exits_1() {
+    let tmp = TempDir::new().unwrap();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["tags", "rename", "--from", "valid", "--to", "invalid tag!"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+}
+
+// ---------------------------------------------------------------------------
 // Glob negation
 // ---------------------------------------------------------------------------
 
@@ -577,6 +675,7 @@ fn tags_glob_negation_excludes_files() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "tags",
+            "summary",
             "--glob",
             "!exclude.md",
         ])

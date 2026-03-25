@@ -46,8 +46,10 @@ use hyalo_core::filter;
         Remove a property:            hyalo remove --property status --file notes/todo.md\n  \
         Remove a tag from files:      hyalo remove --tag draft --glob '**/*.md'\n  \
         Append to a list property:    hyalo append --property aliases='My Note' --file note.md\n  \
-        Aggregate property summary:   hyalo properties\n  \
-        Aggregate tag summary:        hyalo tags\n  \
+        Aggregate property summary:   hyalo properties summary\n  \
+        Rename a property key:        hyalo properties rename --from old-key --to new-key\n  \
+        Aggregate tag summary:        hyalo tags summary\n  \
+        Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag\n  \
         Vault overview:               hyalo summary --format text\n  \
         Overview with drill-down:     hyalo summary --format text --hints\n  \
         Toggle a task:                hyalo task toggle --file todo.md --line 5",
@@ -64,10 +66,12 @@ COMMAND REFERENCE:\n  \
     hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
   Append (add to list properties, mutates files):\n  \
     hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
-  Properties (aggregate summary, read-only):\n  \
-    hyalo properties [-g/--glob G]   Unique property names, types, and file counts\n\n  \
-  Tags (aggregate summary, read-only):\n  \
-    hyalo tags [-g/--glob G]         Unique tags with file counts\n\n  \
+  Properties (subcommand group):\n  \
+    hyalo properties summary [-g/--glob G]                        Unique property names, types, and file counts (read-only)\n  \
+    hyalo properties rename --from OLD --to NEW [-g/--glob G]     Rename a property key across files (mutates files)\n\n  \
+  Tags (subcommand group):\n  \
+    hyalo tags summary [-g/--glob G]                              Unique tags with file counts (read-only)\n  \
+    hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)\n\n  \
   Summary (vault overview, read-only):\n  \
     hyalo summary [-g/--glob G] [-n/--recent N]\n\n  \
   Task (single-task operations):\n  \
@@ -84,8 +88,12 @@ COMMAND REFERENCE:\n  \
     --no-hints          Disable hints (overrides .hyalo.toml)\n\n\
 COOKBOOK:\n  \
   # Discover what metadata exists in a vault\n  \
-  hyalo properties\n  \
-  hyalo tags\n\n  \
+  hyalo properties summary\n  \
+  hyalo tags summary\n\n  \
+  # Rename a property key across all files\n  \
+  hyalo properties rename --from old-key --to new-key\n\n  \
+  # Rename a tag across all files\n  \
+  hyalo tags rename --from old-tag --to new-tag\n\n  \
   # Get a vault overview with drill-down hints\n  \
   hyalo summary --format text --hints\n\n  \
   # Find all files with status=draft\n  \
@@ -121,7 +129,7 @@ COOKBOOK:\n  \
   # Count tasks across all files\n  \
   hyalo summary --jq '.tasks.total'\n\n  \
   # List all property names as a flat list\n  \
-  hyalo properties --jq '[.[].name] | join(\", \")'\n\n  \
+  hyalo properties summary --jq '[.[].name] | join(\", \")'\n\n  \
   # Get just file paths (no metadata)\n  \
   hyalo find --property status=draft --jq '[.[].file]'\n\n  \
   # Pipe file paths for scripting (Unix)\n  \
@@ -224,9 +232,9 @@ enum Commands {
         /// prefix '##' to pin heading level; prefix '~=' for regex (e.g. '~=/DEC-03[12]/'). Repeatable (OR)
         #[arg(short, long = "section", value_name = "HEADING")]
         sections: Vec<String>,
-        /// Scan only this file (still returns an array)
+        /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
-        file: Option<String>,
+        file: Vec<String>,
         /// Glob pattern to select files; prefix '!' to negate (e.g. '!**/draft-*' excludes matching files)
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
@@ -265,29 +273,23 @@ enum Commands {
         #[arg(long)]
         frontmatter: bool,
     },
-    /// Show unique property names with types and file counts across matched files (read-only)
-    #[command(
-        long_about = "Aggregate summary of frontmatter properties across matched files.\n\n\
-            OUTPUT: List of unique property names, their inferred type, and how many files contain them.\n\
-            SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
-            SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need to discover what properties exist or audit frontmatter across a vault."
-    )]
+    /// Property operations: summary or bulk rename
+    #[command(long_about = "Property operations across matched files.\n\n\
+        Subcommands:\n\
+        - summary: Unique property names, types, and file counts (read-only).\n\
+        - rename: Rename a property key across files (mutates files).")]
     Properties {
-        /// Glob pattern to select files (e.g. 'notes/*.md'); prefix '!' to negate (e.g. '!**/draft-*')
-        #[arg(short, long)]
-        glob: Option<String>,
+        #[command(subcommand)]
+        action: PropertiesAction,
     },
-    /// Show unique tags with file counts across matched files (read-only)
-    #[command(long_about = "Aggregate summary of tags across matched files.\n\n\
-            OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
-            SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
-            SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
+    /// Tag operations: summary or bulk rename
+    #[command(long_about = "Tag operations across matched files.\n\n\
+        Subcommands:\n\
+        - summary: Unique tags with file counts (read-only).\n\
+        - rename: Rename a tag across files (mutates files).")]
     Tags {
-        /// Glob pattern to filter which files to scan (e.g. 'notes/**/*.md'); prefix '!' to negate
-        #[arg(short, long)]
-        glob: Option<String>,
+        #[command(subcommand)]
+        action: TagsAction,
     },
     /// Read, toggle, or set status on a single task checkbox
     #[command(
@@ -330,7 +332,8 @@ enum Commands {
             INPUT: One or more --property K=V arguments and/or --tag T arguments, with --file or --glob.\n\
             BEHAVIOR:\n\
             - --property K=V: creates or overwrites the property. Type is auto-inferred from V \
-              (number, bool, date, text). A file is skipped if the stored value is already identical.\n\
+              (number, bool, text). Use K=[a,b,c] to create a YAML list; values are comma-split and trimmed. \
+              A file is skipped if the stored value is already identical.\n\
             - --tag T: idempotent tag add. Creates the 'tags' list if absent. Skips files that already have the tag.\n\
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
@@ -353,9 +356,9 @@ Repeatable (AND).\n\
         /// Tag to add (idempotent). Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        /// Target a single file
+        /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
-        file: Option<String>,
+        file: Vec<String>,
         /// Glob pattern for multiple files
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
@@ -395,9 +398,9 @@ Repeatable (AND).\n\
         /// Tag to remove. Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        /// Target a single file
+        /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
-        file: Option<String>,
+        file: Vec<String>,
         /// Glob pattern for multiple files
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
@@ -447,9 +450,9 @@ Repeatable (AND).\n\
         /// Property to append to: K=V. Repeatable
         #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
-        /// Target a single file
+        /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
-        file: Option<String>,
+        file: Vec<String>,
         /// Glob pattern for multiple files
         #[arg(short, long, conflicts_with = "file")]
         glob: Option<String>,
@@ -513,6 +516,70 @@ enum TaskAction {
         /// Single character to set as the task status (e.g. '?', '-', '!')
         #[arg(short, long)]
         status: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PropertiesAction {
+    /// Show unique property names with types and file counts (read-only)
+    #[command(
+        long_about = "Aggregate summary of frontmatter properties across matched files.\n\n\
+        OUTPUT: List of unique property names, their inferred type, and how many files contain them.\n\
+        SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
+        SIDE EFFECTS: None (read-only).\n\
+        USE WHEN: You need to discover what properties exist or audit frontmatter across a vault."
+    )]
+    Summary {
+        /// Glob pattern to select files; prefix '!' to negate
+        #[arg(short, long)]
+        glob: Option<String>,
+    },
+    /// Rename a property key across all matched files
+    #[command(
+        long_about = "Rename a frontmatter property key across matched files.\n\n\
+        Preserves the value and type. Skips files where the target key already exists (conflict).\n\
+        SIDE EFFECTS: Modifies matched files on disk."
+    )]
+    Rename {
+        /// Property key to rename from
+        #[arg(long)]
+        from: String,
+        /// Property key to rename to
+        #[arg(long)]
+        to: String,
+        /// Glob pattern to scope which files to scan; prefix '!' to negate
+        #[arg(short, long)]
+        glob: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TagsAction {
+    /// Show unique tags with file counts (read-only)
+    #[command(long_about = "Aggregate summary of tags across matched files.\n\n\
+        OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
+        SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
+        SIDE EFFECTS: None (read-only).\n\
+        USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
+    Summary {
+        /// Glob pattern to filter which files to scan; prefix '!' to negate
+        #[arg(short, long)]
+        glob: Option<String>,
+    },
+    /// Rename a tag across all matched files
+    #[command(long_about = "Rename a tag across all matched files.\n\n\
+        Atomic per-file: if the new tag already exists on a file, only the old tag is removed.\n\
+        SIDE EFFECTS: Modifies matched files on disk.")]
+    Rename {
+        /// Tag to rename from
+        #[arg(long)]
+        from: String,
+        /// Tag to rename to
+        #[arg(long)]
+        to: String,
+        /// Glob pattern to scope which files to scan; prefix '!' to negate
+        #[arg(short, long)]
+        glob: Option<String>,
     },
 }
 
@@ -651,14 +718,18 @@ fn main() {
                 format: format_hint,
                 hints: hints_from_cli,
             }),
-            Commands::Properties { glob } => Some(HintContext {
+            Commands::Properties {
+                action: PropertiesAction::Summary { glob },
+            } => Some(HintContext {
                 source: HintSource::PropertiesSummary,
                 dir: dir_hint,
                 glob: glob.clone(),
                 format: format_hint,
                 hints: hints_from_cli,
             }),
-            Commands::Tags { glob } => Some(HintContext {
+            Commands::Tags {
+                action: TagsAction::Summary { glob },
+            } => Some(HintContext {
                 source: HintSource::TagsSummary,
                 dir: dir_hint,
                 glob: glob.clone(),
@@ -744,7 +815,7 @@ fn main() {
                 tag,
                 task_filter.as_ref(),
                 &section_filters,
-                file.as_deref(),
+                file,
                 glob.as_deref(),
                 &parsed_fields,
                 sort_field.as_ref(),
@@ -765,12 +836,26 @@ fn main() {
             frontmatter,
             effective_format,
         ),
-        Commands::Properties { ref glob } => {
-            properties::properties_summary(&dir, None, glob.as_deref(), effective_format)
-        }
-        Commands::Tags { ref glob } => {
-            tag_commands::tags_summary(&dir, None, glob.as_deref(), effective_format)
-        }
+        Commands::Properties { action } => match action {
+            PropertiesAction::Summary { ref glob } => {
+                properties::properties_summary(&dir, None, glob.as_deref(), effective_format)
+            }
+            PropertiesAction::Rename {
+                ref from,
+                ref to,
+                ref glob,
+            } => properties::properties_rename(&dir, from, to, glob.as_deref(), effective_format),
+        },
+        Commands::Tags { action } => match action {
+            TagsAction::Summary { ref glob } => {
+                tag_commands::tags_summary(&dir, None, glob.as_deref(), effective_format)
+            }
+            TagsAction::Rename {
+                ref from,
+                ref to,
+                ref glob,
+            } => tag_commands::tags_rename(&dir, from, to, glob.as_deref(), effective_format),
+        },
         Commands::Task { action } => match action {
             TaskAction::Read { ref file, line } => {
                 task_commands::task_read(&dir, file, line, effective_format)
@@ -821,7 +906,7 @@ fn main() {
                 &dir,
                 properties,
                 tag,
-                file.as_deref(),
+                file,
                 glob.as_deref(),
                 &where_prop_filters,
                 where_tags,
@@ -841,7 +926,7 @@ fn main() {
                 &dir,
                 properties,
                 tag,
-                file.as_deref(),
+                file,
                 glob.as_deref(),
                 &where_prop_filters,
                 where_tags,
@@ -859,7 +944,7 @@ fn main() {
             append_commands::append(
                 &dir,
                 properties,
-                file.as_deref(),
+                file,
                 glob.as_deref(),
                 &where_prop_filters,
                 where_tags,

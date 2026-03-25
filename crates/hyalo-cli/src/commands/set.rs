@@ -140,7 +140,7 @@ pub fn set(
     dir: &Path,
     property_args: &[String],
     tag_args: &[String],
-    file: Option<&str>,
+    files: &[String],
     glob: Option<&str>,
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
@@ -159,7 +159,7 @@ pub fn set(
     }
 
     // Mutation commands require --file or --glob
-    if let Some(outcome) = require_file_or_glob(file, glob, "set", format) {
+    if let Some(outcome) = require_file_or_glob(files, glob, "set", format) {
         return Ok(outcome);
     }
 
@@ -211,7 +211,7 @@ pub fn set(
         v
     };
 
-    let files = collect_files(dir, file, glob, format)?;
+    let files = collect_files(dir, files, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -383,7 +383,7 @@ title: Note
             tmp.path(),
             &["status=done".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -422,7 +422,7 @@ status: draft
             tmp.path(),
             &["status=published".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -452,7 +452,7 @@ status: done
             tmp.path(),
             &["status=done".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -485,7 +485,7 @@ title: Note
             tmp.path(),
             &[],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -521,7 +521,7 @@ tags:
             tmp.path(),
             &[],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -552,7 +552,7 @@ title: Note
             tmp.path(),
             &["status=done".to_owned()],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -574,7 +574,7 @@ title: Note
             tmp.path(),
             &["status=done".to_owned()],
             &[],
-            None,
+            &[],
             None,
             &[],
             &[],
@@ -591,7 +591,7 @@ title: Note
             tmp.path(),
             &[],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -609,7 +609,7 @@ title: Note
             tmp.path(),
             &["no-equals-sign".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -627,7 +627,7 @@ title: Note
             tmp.path(),
             &[],
             &["1984".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -651,7 +651,7 @@ title: Note
             tmp.path(),
             &["status=done".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -682,7 +682,7 @@ title: Note
             tmp.path(),
             &["status=done".to_owned(), "priority=high".to_owned()],
             &[],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -723,7 +723,7 @@ title: Note
             tmp.path(),
             &["status=done".to_owned()],
             &["rust".to_owned()],
-            Some("note.md"),
+            &["note.md".to_owned()],
             None,
             &[],
             &[],
@@ -758,7 +758,7 @@ title: Note
             tmp.path(),
             &["priority=high".to_owned()],
             &[],
-            None,
+            &[],
             Some("*.md"),
             &[filter],
             &[],
@@ -792,7 +792,7 @@ title: Note
             tmp.path(),
             &["status=reviewed".to_owned()],
             &[],
-            None,
+            &[],
             Some("*.md"),
             &[],
             &["rust".to_owned()],

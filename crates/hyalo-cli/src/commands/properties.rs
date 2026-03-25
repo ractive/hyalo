@@ -6,6 +6,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format, format_output};
 use hyalo_core::frontmatter;
 use hyalo_core::types::PropertySummaryEntry;
+use serde::Serialize;
 
 /// Aggregate summary: unique property names with types and file counts.
 /// Scope is filtered by `--file` / `--glob` (or all files if both are None).
@@ -15,7 +16,8 @@ pub fn properties_summary(
     glob: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let files = collect_files(dir, file, glob, format)?;
+    let file_vec: Vec<String> = file.map(|f| vec![f.to_owned()]).unwrap_or_default();
+    let files = collect_files(dir, &file_vec, glob, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -51,6 +53,96 @@ pub fn properties_summary(
         .collect();
 
     Ok(CommandOutcome::Success(format_output(format, &result)))
+}
+
+/// Result of a `properties rename` operation.
+#[derive(Debug, Serialize)]
+pub struct RenamePropertyResult {
+    pub from: String,
+    pub to: String,
+    pub modified: Vec<String>,
+    pub skipped: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub total: usize,
+    pub scanned: usize,
+}
+
+/// Rename a property key across all matched files.
+///
+/// - Preserves value and type (moves the `Value` in the BTreeMap)
+/// - Skips files where the source key is absent (reported in `skipped`)
+/// - Skips files where the target key already exists (reported in `conflicts`)
+pub fn properties_rename(
+    dir: &Path,
+    from: &str,
+    to: &str,
+    glob: Option<&str>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    if from == to {
+        let out = crate::output::format_error(
+            format,
+            "source and target property names are identical",
+            None,
+            None,
+            None,
+        );
+        return Ok(CommandOutcome::UserError(out));
+    }
+
+    let files = collect_files(dir, &[], glob, format)?;
+    let files = match files {
+        FilesOrOutcome::Files(f) => f,
+        FilesOrOutcome::Outcome(o) => return Ok(o),
+    };
+    let scanned = files.len();
+
+    let mut modified = Vec::new();
+    let mut skipped = Vec::new();
+    let mut conflicts = Vec::new();
+
+    for (full_path, rel_path) in &files {
+        let mut props = match frontmatter::read_frontmatter(full_path) {
+            Ok(p) => p,
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                eprintln!("warning: skipping {rel_path}: {e}");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Source key not present — skip
+        let Some(value) = props.remove(from) else {
+            skipped.push(rel_path.clone());
+            continue;
+        };
+
+        // Target key already exists — conflict, put the source back
+        if props.contains_key(to) {
+            props.insert(from.to_owned(), value);
+            conflicts.push(rel_path.clone());
+            continue;
+        }
+
+        props.insert(to.to_owned(), value);
+        frontmatter::write_frontmatter(full_path, &props)?;
+        modified.push(rel_path.clone());
+    }
+
+    let total = modified.len() + skipped.len() + conflicts.len();
+    let result = RenamePropertyResult {
+        from: from.to_owned(),
+        to: to.to_owned(),
+        modified,
+        skipped,
+        conflicts,
+        total,
+        scanned,
+    };
+
+    Ok(CommandOutcome::Success(crate::output::format_output(
+        format, &result,
+    )))
 }
 
 #[cfg(test)]
@@ -104,6 +196,90 @@ tags:
         let names: Vec<&str> = parsed.iter().map(|v| v["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"title"));
         assert!(names.contains(&"status"));
+    }
+
+    #[test]
+    fn properties_rename_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+keywords: test
+---
+"),
+        )
+        .unwrap();
+
+        let outcome =
+            properties_rename(tmp.path(), "keywords", "Keywords", None, Format::Json).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["from"], "keywords");
+        assert_eq!(parsed["to"], "Keywords");
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("Keywords:"));
+        assert!(!content.contains("keywords:"));
+    }
+
+    #[test]
+    fn properties_rename_skips_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+---
+"),
+        )
+        .unwrap();
+
+        let outcome =
+            properties_rename(tmp.path(), "keywords", "Keywords", None, Format::Json).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn properties_rename_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: Note
+keywords: test
+Keywords: other
+---
+"),
+        )
+        .unwrap();
+
+        let outcome =
+            properties_rename(tmp.path(), "keywords", "Keywords", None, Format::Json).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["conflicts"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn properties_rename_same_name_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = properties_rename(tmp.path(), "foo", "foo", None, Format::Json).unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod common;
 
 use common::{hyalo, md, sample_frontmatter, write_md};
+use std::fs;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ priority: 1
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties"])
+        .args(["properties", "summary"])
         .output()
         .unwrap();
 
@@ -67,7 +68,7 @@ fn properties_empty_dir() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties"])
+        .args(["properties", "summary"])
         .output()
         .unwrap();
 
@@ -101,7 +102,7 @@ only_in_sub: yes
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--glob", "sub/*.md"])
+        .args(["properties", "summary", "--glob", "sub/*.md"])
         .output()
         .unwrap();
 
@@ -144,6 +145,7 @@ title: B
             "--format",
             "text",
             "properties",
+            "summary",
         ])
         .output()
         .unwrap();
@@ -163,7 +165,7 @@ fn properties_glob_no_match() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--glob", "nonexistent/*.md"])
+        .args(["properties", "summary", "--glob", "nonexistent/*.md"])
         .output()
         .unwrap();
 
@@ -305,7 +307,7 @@ status: draft
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties"])
+        .args(["properties", "summary"])
         .output()
         .unwrap();
 
@@ -332,6 +334,105 @@ status: draft
 }
 
 // ---------------------------------------------------------------------------
+// properties rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn properties_rename_basic() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\nkeywords: test\n---\n");
+    write_md(tmp.path(), "b.md", "---\ntitle: B\nkeywords: other\n---\n");
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\n"); // no keywords
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "properties",
+        "rename",
+        "--from",
+        "keywords",
+        "--to",
+        "Keywords",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+
+    let a = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(a.contains("Keywords:"));
+    assert!(!a.contains("keywords:"));
+}
+
+#[test]
+fn properties_rename_conflict_skips() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\nfoo: old\nbar: existing\n---\n",
+    );
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["properties", "rename", "--from", "foo", "--to", "bar"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(json["modified"].as_array().unwrap().len(), 0);
+
+    // File should be unchanged
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(content.contains("foo: old"));
+    assert!(content.contains("bar: existing"));
+}
+
+#[test]
+fn properties_rename_with_glob_scope() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "notes/a.md", "---\nkeywords: test\n---\n");
+    write_md(tmp.path(), "other/b.md", "---\nkeywords: test\n---\n");
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "properties",
+        "rename",
+        "--from",
+        "keywords",
+        "--to",
+        "Keywords",
+        "--glob",
+        "notes/*.md",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    // Only notes/a.md should be renamed
+    let a = fs::read_to_string(tmp.path().join("notes/a.md")).unwrap();
+    assert!(a.contains("Keywords:"));
+    let b = fs::read_to_string(tmp.path().join("other/b.md")).unwrap();
+    assert!(b.contains("keywords:")); // unchanged
+}
+
+#[test]
+fn properties_rename_same_name_exits_1() {
+    let tmp = TempDir::new().unwrap();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["properties", "rename", "--from", "foo", "--to", "foo"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success());
+}
+
+// ---------------------------------------------------------------------------
 // Glob negation
 // ---------------------------------------------------------------------------
 
@@ -354,6 +455,7 @@ fn properties_glob_negation_excludes_files() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "properties",
+            "summary",
             "--glob",
             "!exclude.md",
         ])

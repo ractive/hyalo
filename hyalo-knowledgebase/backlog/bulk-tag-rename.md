@@ -1,15 +1,15 @@
 ---
-title: "Bulk tag rename command"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: low
 origin: dogfooding knowledgebase housekeeping
+priority: low
+status: completed
 tags:
-  - backlog
-  - cli
-  - tags
-  - ux
+- backlog
+- cli
+- tags
+- ux
+title: Bulk tag rename command
+type: backlog
 ---
 
 # Bulk tag rename command

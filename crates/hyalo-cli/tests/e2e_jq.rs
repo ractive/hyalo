@@ -26,7 +26,7 @@ fn jq_extracts_total_from_tags_summary() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".total"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -46,7 +46,7 @@ fn jq_maps_tag_names_to_array() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "[.tags[].name] | sort | join(\", \")"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -69,7 +69,7 @@ fn jq_works_on_properties_command() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "[.[].name] | sort | join(\", \")"])
-        .arg("properties")
+        .args(["properties", "summary"])
         .output()
         .unwrap();
 
@@ -168,7 +168,7 @@ fn jq_with_format_text_errors() {
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["--jq", ".total"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -193,7 +193,7 @@ fn jq_with_format_json_works() {
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "json"])
         .args(["--jq", ".total"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -217,7 +217,7 @@ fn jq_invalid_filter_exits_nonzero() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "this is not %%% valid jq"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -242,7 +242,7 @@ fn jq_runtime_error_exits_nonzero() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "error(\"deliberate\")"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -268,7 +268,7 @@ fn jq_filter_error_is_json_when_format_json() {
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "json"])
         .args(["--jq", "error(\"structured-error\")"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 
@@ -384,7 +384,7 @@ fn jq_multiple_outputs_joined_by_newline() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".tags[].name"])
-        .arg("tags")
+        .args(["tags", "summary"])
         .output()
         .unwrap();
 

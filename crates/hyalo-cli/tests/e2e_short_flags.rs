@@ -202,6 +202,7 @@ fn properties_short_g_for_glob() {
     let output = hyalo()
         .args([
             "properties",
+            "summary",
             "-g",
             "note*",
             "-d",
@@ -218,7 +219,14 @@ fn properties_short_g_for_glob() {
 fn tags_short_g_for_glob() {
     let dir = setup();
     let output = hyalo()
-        .args(["tags", "-g", "note*", "-d", dir.path().to_str().unwrap()])
+        .args([
+            "tags",
+            "summary",
+            "-g",
+            "note*",
+            "-d",
+            dir.path().to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(output.status.success());

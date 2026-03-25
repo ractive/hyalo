@@ -1,15 +1,15 @@
 ---
-title: "set command: support creating list-type properties"
-type: backlog
 date: 2026-03-23
-status: planned
-priority: medium
 origin: dogfooding vscode-docs vault
+priority: medium
+status: completed
 tags:
-  - backlog
-  - cli
-  - frontmatter
-  - ux
+- backlog
+- cli
+- frontmatter
+- ux
+title: 'set command: support creating list-type properties'
+type: backlog
 ---
 
 # set command: support creating list-type properties

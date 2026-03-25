@@ -53,7 +53,7 @@ fn error_invalid_yaml() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--glob", "bad.md"])
+        .args(["properties", "summary", "--glob", "bad.md"])
         .output()
         .unwrap();
 

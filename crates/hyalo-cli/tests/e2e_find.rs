@@ -1875,3 +1875,25 @@ fn find_glob_positive_still_works() {
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(files.iter().all(|f| f.starts_with("notes/")));
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file --file targeting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_multi_file_returns_array() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n");
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\n");
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--file", "a.md", "--file", "b.md"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(json.is_array());
+    assert_eq!(json.as_array().unwrap().len(), 2);
+}

@@ -43,7 +43,7 @@ Most flags have short aliases for quick interactive use:
 | `-t` | `--tag` | find, set, remove |
 | `-s` | `--section` | find, read |
 | `-f` | `--file` | find, read, set, remove, append, task |
-| `-g` | `--glob` | find, set, remove, append, properties, tags, summary |
+| `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary |
 | `-n` | `--limit` | find |
 | `-n` | `--recent` | summary |
 | `-l` | `--lines` | read |
@@ -132,8 +132,9 @@ hyalo find --section "# Introduction" --fields sections  # level-pinned: only # 
 hyalo find --section "Tasks" --section "Notes"    # OR: match either section
 hyalo find --section "~=/DEC-03[12]/"             # regex section match
 
-# Scope to file(s)
+# Scope to file(s) (--file is repeatable)
 hyalo find --file path/to/note.md
+hyalo find --file a.md --file b.md
 hyalo find --glob "notes/*.md"
 hyalo find --glob '!**/draft-*'      # exclude files matching a pattern (glob negation)
 
@@ -173,20 +174,30 @@ hyalo read --file path/to/note.md --format json --jq '.content'
 
 ### properties
 
-Aggregate summary of unique property names with inferred types and file counts.
+Subcommand group for property operations.
 
 ```sh
-hyalo properties
-hyalo properties --glob "notes/*.md"
+# Aggregate summary of unique property names with inferred types and file counts
+hyalo properties summary
+hyalo properties summary --glob "notes/*.md"
+
+# Bulk rename a property key across all files
+hyalo properties rename --from old-key --to new-key
+hyalo properties rename --from old-key --to new-key --glob "notes/*.md"
 ```
 
 ### tags
 
-Aggregate summary of unique tags with file counts.
+Subcommand group for tag operations.
 
 ```sh
-hyalo tags
-hyalo tags --glob "notes/*.md"
+# Aggregate summary of unique tags with file counts
+hyalo tags summary
+hyalo tags summary --glob "notes/*.md"
+
+# Bulk rename a tag across all files
+hyalo tags rename --from old-tag --to new-tag
+hyalo tags rename --from old-tag --to new-tag --glob "notes/*.md"
 ```
 
 ### summary
@@ -212,6 +223,12 @@ hyalo set --property status=done --file path/to/note.md
 hyalo set --property status=active --glob "notes/*.md"
 hyalo set --tag cli --file path/to/note.md
 hyalo set --property status=done --tag reviewed --file path/to/note.md
+
+# Set a list-type (YAML sequence) property
+hyalo set --property 'authors=[Alice, Bob, Charlie]' --file path/to/note.md
+
+# Multi-file targeting (--file is repeatable)
+hyalo set --property status=reviewed --file a.md --file b.md
 
 # Bulk-update: set status on files matching a filter
 hyalo set --property status=completed --where-property status=done --glob '**/*.md'
@@ -276,8 +293,8 @@ Tags: 15 unique
 Status: completed (10), in-progress (2), planned (2)
 Tasks: 89/174
 
-  -> hyalo --dir . properties
-  -> hyalo --dir . tags
+  -> hyalo --dir . properties summary
+  -> hyalo --dir . tags summary
   -> hyalo --dir . find --task todo
   -> hyalo --dir . find --property status=in-progress
 ```

@@ -91,9 +91,11 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **find** — search/filter by text, regex, property, tag, task status
 - **read** — extract body content, a section, or line range
 - **summary** — directory overview: file counts, tags, tasks, recent files
-- **properties** — list property names and types
-- **tags** — list tags with counts
-- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates)
+- **properties summary** — list property names and types
+- **properties rename** — bulk rename a property key across files (`--from old --to new`)
+- **tags summary** — list tags with counts
+- **tags rename** — bulk rename a tag across files (`--from old --to new`)
+- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; `--file` is repeatable)
 - **remove** — delete properties or tags
 - **append** — add to list properties
 - **task** — read, toggle, or set status on checkboxes

@@ -163,7 +163,7 @@ fn properties_hints_text() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["properties", "--hints", "--format", "text"])
+        .args(["properties", "summary", "--hints", "--format", "text"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -184,7 +184,7 @@ fn tags_hints_text() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["tags", "--hints", "--format", "text"])
+        .args(["tags", "summary", "--hints", "--format", "text"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -294,6 +294,7 @@ fn hints_propagate_glob_for_aggregate_commands() {
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "properties",
+            "summary",
             "--glob",
             "notes/*.md",
             "--hints",
