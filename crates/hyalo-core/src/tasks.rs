@@ -112,7 +112,7 @@ impl TaskCollector {
 }
 
 impl FileVisitor for TaskCollector {
-    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
         if let Some((status_char, done)) = detect_task_checkbox(raw) {
             self.tasks.push(TaskInfo {
                 line: line_num,
@@ -154,7 +154,7 @@ impl TaskCounter {
 }
 
 impl FileVisitor for TaskCounter {
-    fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
         if let Some((_status, is_done)) = detect_task_checkbox(raw) {
             self.total += 1;
             if is_done {
@@ -201,7 +201,7 @@ impl TaskExtractor {
 }
 
 impl FileVisitor for TaskExtractor {
-    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
         // Track current heading
         if raw.starts_with('#')
             && let Some((level, text)) = parse_atx_heading(raw)

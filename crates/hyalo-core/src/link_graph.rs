@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::discovery;
 use crate::frontmatter;
 use crate::links::{Link, LinkKind, extract_links_from_text};
-use crate::scanner::{self, FileVisitor, ScanAction, strip_inline_code};
+use crate::scanner::{self, FileVisitor, ScanAction};
 
 /// A single backlink: a file that links to some target.
 #[derive(Debug, Clone)]
@@ -137,10 +137,11 @@ impl LinkGraphVisitor {
 }
 
 impl FileVisitor for LinkGraphVisitor {
-    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
-        let cleaned = strip_inline_code(raw);
+    fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+        // Use `cleaned` (inline code and comments stripped) so that [[links]]
+        // inside backtick spans are not indexed as real links.
         self.scratch.clear();
-        extract_links_from_text(&cleaned, &mut self.scratch);
+        extract_links_from_text(cleaned, &mut self.scratch);
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));
         }

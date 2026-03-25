@@ -93,8 +93,9 @@ impl SectionScanner {
 }
 
 impl FileVisitor for SectionScanner {
-    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
-        // ATX heading detection
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+        // Use raw for ATX heading detection to preserve code spans in heading text
+        // (e.g. `## The \`versions\` field` → heading text is `The \`versions\` field`).
         if let Some((level, heading_text)) = parse_atx_heading(raw) {
             let finished = std::mem::replace(
                 &mut self.current,
@@ -113,10 +114,10 @@ impl FileVisitor for SectionScanner {
             return ScanAction::Continue;
         }
 
-        // Normal text line — extract links and count tasks
-        // (`dispatch_body_line` already stripped inline code spans)
+        // Normal text line — use cleaned (inline code spans stripped) so that
+        // [[links]] inside backtick spans are not extracted as real links.
         let mut line_links: Vec<links::Link> = Vec::new();
-        links::extract_links_from_text(raw, &mut line_links);
+        links::extract_links_from_text(cleaned, &mut line_links);
 
         for link in line_links {
             let formatted = format_link_string(&link);
@@ -510,5 +511,48 @@ title: Test
         assert_eq!(sections[0].line, 4);
         // Blank line at 5, second heading at 6
         assert_eq!(sections[1].line, 6);
+    }
+
+    #[test]
+    fn heading_with_inline_code_span_preserved() {
+        // Regression test: heading text must include code spans verbatim.
+        // A heading like `## The \`versions\` field` must NOT have its backtick
+        // content replaced with spaces in the section heading field.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("note.md");
+        fs::write(
+            &path,
+            md!(r"
+## The `versions` field
+
+Some text.
+"),
+        )
+        .unwrap();
+        let sections = scan_sections(&path);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading.as_deref(), Some("The `versions` field"));
+    }
+
+    #[test]
+    fn links_inside_inline_code_in_heading_not_extracted() {
+        // A heading like `## See \`[[not-a-link]]\`` must not emit the wikilink as
+        // a real outbound link. The code span sits on the heading line itself
+        // and `cleaned` (not `raw`) is used for link extraction.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("note.md");
+        fs::write(
+            &path,
+            md!(r"
+## See `[[not-a-link]]`
+
+Real link: [[real-link]].
+"),
+        )
+        .unwrap();
+        let sections = scan_sections(&path);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].links.len(), 1);
+        assert_eq!(sections[0].links[0], "[[real-link]]");
     }
 }

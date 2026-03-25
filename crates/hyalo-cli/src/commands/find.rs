@@ -460,9 +460,10 @@ impl LinkCollector {
 }
 
 impl FileVisitor for LinkCollector {
-    fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
-        // `dispatch_body_line` already stripped inline code spans.
-        hyalo_core::links::extract_links_from_text(raw, &mut self.links);
+    fn on_body_line(&mut self, _raw: &str, cleaned: &str, _line_num: usize) -> ScanAction {
+        // Use `cleaned` (inline code spans stripped) so that links inside
+        // backtick spans are not extracted.
+        hyalo_core::links::extract_links_from_text(cleaned, &mut self.links);
         ScanAction::Continue
     }
 }

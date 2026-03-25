@@ -23,8 +23,9 @@ struct ClosureVisitor<F: FnMut(&str, usize) -> ScanAction> {
 }
 
 impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
-    fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
-        (self.visitor)(raw, line_num)
+    fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+        // Legacy closure-based API receives cleaned text for backward compatibility.
+        (self.visitor)(cleaned, line_num)
     }
 }
 
@@ -279,8 +280,14 @@ pub trait FileVisitor {
     }
 
     /// Called for each body line outside fenced code blocks and comment blocks.
-    /// Inline `%%comment%%` spans are stripped; inline code spans are **not**.
-    fn on_body_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {
+    ///
+    /// `raw` is the original line text (code spans and comments intact).
+    /// `cleaned` has inline code spans and `%%comment%%` spans replaced with spaces
+    /// so that `[[links]]` inside backticks or comments are not extracted.
+    ///
+    /// Use `raw` for heading text extraction (to preserve code span content).
+    /// Use `cleaned` for link and task extraction (to skip backtick-escaped markup).
+    fn on_body_line(&mut self, _raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
         ScanAction::Continue
     }
 
@@ -291,6 +298,12 @@ pub trait FileVisitor {
 
     /// Called when a fenced code block closes.
     fn on_code_fence_close(&mut self, _line_num: usize) -> ScanAction {
+        ScanAction::Continue
+    }
+
+    /// Called for each line inside a fenced code block (between open/close fences).
+    /// Default: no-op. Override this to receive code block content.
+    fn on_code_block_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {
         ScanAction::Continue
     }
 
@@ -498,8 +511,14 @@ fn dispatch_body_line(
                     active[i] = false;
                 }
             }
+        } else {
+            // Deliver code block content lines to interested visitors
+            for (i, v) in visitors.iter_mut().enumerate() {
+                if active[i] && v.on_code_block_line(line, line_num) == ScanAction::Stop {
+                    active[i] = false;
+                }
+            }
         }
-        // Lines inside code blocks are not delivered as body lines
         return;
     }
 
@@ -530,10 +549,13 @@ fn dispatch_body_line(
     // Normal body line — strip inline code spans first, then inline comments.
     // Inline code must be removed before comment stripping so that `%%` inside
     // a backtick span is not mistakenly treated as a comment delimiter.
+    //
+    // `line` (raw) is passed alongside `cleaned` so visitors that parse heading
+    // text can use the original content (preserving code spans in headings).
     let cleaned = strip_inline_code(line);
     let cleaned = strip_inline_comments(&cleaned);
     for (i, v) in visitors.iter_mut().enumerate() {
-        if active[i] && v.on_body_line(&cleaned, line_num) == ScanAction::Stop {
+        if active[i] && v.on_body_line(line, &cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
         }
     }
@@ -851,8 +873,8 @@ After
     }
 
     impl FileVisitor for BodyCollector {
-        fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
-            self.lines.push((raw.to_owned(), line_num));
+        fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+            self.lines.push((cleaned.to_owned(), line_num));
             ScanAction::Continue
         }
     }
@@ -1053,7 +1075,7 @@ Line 2
             lines: Vec<String>,
         }
         impl FileVisitor for BodyOnly {
-            fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+            fn on_body_line(&mut self, raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
                 self.lines.push(raw.to_owned());
                 ScanAction::Continue
             }
@@ -1103,7 +1125,7 @@ Line 2
             lines: Vec<(String, usize)>,
         }
         impl FileVisitor for BodyOnly {
-            fn on_body_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+            fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
                 self.lines.push((raw.to_owned(), line_num));
                 ScanAction::Continue
             }
@@ -1134,7 +1156,7 @@ Body
             lines: Vec<String>,
         }
         impl FileVisitor for BodyOnly {
-            fn on_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+            fn on_body_line(&mut self, raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
                 self.lines.push(raw.to_owned());
                 ScanAction::Continue
             }
@@ -1364,6 +1386,93 @@ Line 8
         assert_eq!(body.lines.len(), 1);
         assert!(!body.lines[0].0.contains("hidden"));
         assert!(body.lines[0].0.contains("[[visible]]"));
+    }
+
+    // --- on_code_block_line tests ---
+
+    /// Test visitor that collects code block body lines.
+    struct CodeBlockCollector {
+        lines: Vec<(String, usize)>,
+    }
+
+    impl CodeBlockCollector {
+        fn new() -> Self {
+            Self { lines: Vec::new() }
+        }
+    }
+
+    impl FileVisitor for CodeBlockCollector {
+        fn on_code_block_line(&mut self, raw: &str, line_num: usize) -> ScanAction {
+            self.lines.push((raw.to_owned(), line_num));
+            ScanAction::Continue
+        }
+    }
+
+    #[test]
+    fn code_block_line_called_for_lines_inside_fence() {
+        let input = md!(r"
+Line 1
+```rust
+let x = 1;
+let y = 2;
+```
+Line 6
+");
+        let mut body = BodyCollector::new();
+        let mut code = CodeBlockCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body, &mut code]).unwrap();
+
+        // Body visitor sees only non-code-block lines
+        assert_eq!(body.lines.len(), 2);
+        assert_eq!(body.lines[0].0, "Line 1");
+        assert_eq!(body.lines[1].0, "Line 6");
+
+        // Code block visitor sees interior lines (not the fence delimiters)
+        assert_eq!(code.lines.len(), 2);
+        assert_eq!(code.lines[0], ("let x = 1;".to_string(), 3));
+        assert_eq!(code.lines[1], ("let y = 2;".to_string(), 4));
+    }
+
+    #[test]
+    fn code_block_line_not_called_for_fence_delimiters() {
+        // Opening and closing fence lines are NOT delivered via on_code_block_line
+        let input = "```\ncode\n```\n";
+        let mut code = CodeBlockCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut code]).unwrap();
+        assert_eq!(code.lines.len(), 1);
+        assert_eq!(code.lines[0].0, "code");
+    }
+
+    #[test]
+    fn code_block_line_not_called_inside_comment_block() {
+        // Lines inside Obsidian `%%` comment blocks are fully suppressed
+        let input = md!(r"
+%%
+```
+inside comment
+```
+%%
+after
+");
+        let mut code = CodeBlockCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut code]).unwrap();
+        assert!(code.lines.is_empty());
+    }
+
+    #[test]
+    fn default_visitor_ignores_code_block_lines() {
+        // A visitor that only implements on_body_line must not see code block lines
+        let input = md!(r"
+normal
+```
+code only
+```
+");
+        let mut body = BodyCollector::new();
+        scan_reader_multi(input.as_bytes(), &mut [&mut body]).unwrap();
+        // "code only" must NOT appear in body lines
+        assert_eq!(body.lines.len(), 1);
+        assert_eq!(body.lines[0].0, "normal");
     }
 
     // --- is_comment_fence unit tests ---
