@@ -378,7 +378,7 @@ pub fn scan_reader_multi<R: BufRead>(
     // Try to parse frontmatter
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
     let (fm_props, fm_lines) = if first_trimmed.trim() == "---" {
-        const MAX_FRONTMATTER_LINES: usize = 100;
+        const MAX_FRONTMATTER_LINES: usize = 200;
         const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
         // Read past frontmatter lines, optionally collecting YAML content
@@ -1049,10 +1049,10 @@ Line 2
 
     #[test]
     fn multi_visitor_frontmatter_exceeds_budget_returns_error() {
-        // Build a frontmatter block with 101 content lines and no closing `---`,
-        // which exceeds the 100-line budget enforced by scan_reader_multi.
+        // Build a frontmatter block with 201 content lines and no closing `---`,
+        // which exceeds the 200-line budget enforced by scan_reader_multi.
         let mut input = String::from("---\n");
-        for i in 0..101usize {
+        for i in 0..201usize {
             input.push_str(&format!("k{i}: v\n"));
         }
         // Deliberately omit the closing `---` so the budget is hit before EOF.
@@ -1084,9 +1084,9 @@ Line 2
             }
         }
 
-        // 101 content lines, no closing `---` — must exceed the 100-line budget.
+        // 201 content lines, no closing `---` — must exceed the 200-line budget.
         let mut input = String::from("---\n");
-        for i in 0..101usize {
+        for i in 0..201usize {
             input.push_str(&format!("k{i}: v\n"));
         }
         let mut v = BodyOnly { lines: Vec::new() };

@@ -59,6 +59,10 @@ pub fn find(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    // Normalize empty / whitespace-only pattern to None so that
+    // `hyalo find ""` behaves the same as `hyalo find` (no filter).
+    let pattern = pattern.and_then(|p| if p.trim().is_empty() { None } else { Some(p) });
+
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
@@ -238,6 +242,7 @@ pub fn find(
             content_matches,
             &canonical_dir,
             link_graph.as_ref(),
+            site_prefix,
         );
 
         results.push(obj);
@@ -340,6 +345,7 @@ fn build_file_object(
     content_matches: Option<Vec<ContentMatch>>,
     canonical_dir: &Path,
     link_graph: Option<&LinkGraph>,
+    site_prefix: Option<&str>,
 ) -> FileObject {
     let properties = if fields.properties {
         let mut map = serde_json::Map::new();
@@ -391,7 +397,7 @@ fn build_file_object(
             lc.into_links()
                 .into_iter()
                 .map(|link| {
-                    let path = discovery::resolve_target(canonical_dir, &link.target);
+                    let path = discovery::resolve_target(canonical_dir, &link.target, site_prefix);
                     LinkInfo {
                         target: link.target,
                         path,
@@ -461,10 +467,11 @@ impl LinkCollector {
 }
 
 impl FileVisitor for LinkCollector {
-    fn on_body_line(&mut self, _raw: &str, cleaned: &str, _line_num: usize) -> ScanAction {
-        // Use `cleaned` (inline code spans stripped) so that links inside
-        // backtick spans are not extracted.
-        hyalo_core::links::extract_links_from_text(cleaned, &mut self.links);
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, _line_num: usize) -> ScanAction {
+        // Use `cleaned` for structural parsing (so links inside backtick spans
+        // are not extracted) but `raw` for label text (so backtick-wrapped
+        // content like [`file.ts`](path) is preserved).
+        hyalo_core::links::extract_links_from_text_with_original(cleaned, raw, &mut self.links);
         ScanAction::Continue
     }
 }
@@ -852,6 +859,134 @@ Just some text here.
         for entry in arr {
             assert!(entry["matches"].is_null(), "matches should be absent");
         }
+    }
+
+    // --- find: empty / whitespace pattern treated as no-filter ---
+
+    /// A vault with two files: one with body content and one with an empty body.
+    fn setup_vault_with_empty_body() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+
+        fs::write(
+            tmp.path().join("has_body.md"),
+            md!(r"
+---
+title: Has Body
+---
+Some content here.
+"),
+        )
+        .unwrap();
+
+        fs::write(
+            tmp.path().join("empty_body.md"),
+            md!(r"
+---
+title: Empty Body
+---
+"),
+        )
+        .unwrap();
+
+        tmp
+    }
+
+    #[test]
+    fn find_empty_string_pattern_matches_all_files() {
+        // `hyalo find ""` must return the same count as `hyalo find`.
+        // Previously, files with empty bodies were excluded because no body
+        // line could match the empty-string pattern, producing an empty
+        // content_matches vec that the filter treated as "no match".
+        let tmp = setup_vault_with_empty_body();
+        let fields = Fields::default();
+
+        let count_no_pattern = {
+            let out = unwrap_success(
+                find(
+                    tmp.path(),
+                    None,
+                    None,
+                    None,
+                    &[],
+                    &[],
+                    None,
+                    &[],
+                    &[],
+                    None,
+                    &fields,
+                    None,
+                    None,
+                    Format::Json,
+                )
+                .unwrap(),
+            );
+            let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+            parsed.as_array().unwrap().len()
+        };
+
+        let count_empty_pattern = {
+            let out = unwrap_success(
+                find(
+                    tmp.path(),
+                    None,
+                    Some(""),
+                    None,
+                    &[],
+                    &[],
+                    None,
+                    &[],
+                    &[],
+                    None,
+                    &fields,
+                    None,
+                    None,
+                    Format::Json,
+                )
+                .unwrap(),
+            );
+            let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+            parsed.as_array().unwrap().len()
+        };
+
+        assert_eq!(
+            count_empty_pattern, count_no_pattern,
+            "empty pattern should return the same files as no pattern"
+        );
+        assert_eq!(count_no_pattern, 2, "vault has 2 files");
+    }
+
+    #[test]
+    fn find_whitespace_only_pattern_matches_all_files() {
+        // `hyalo find "   "` should also be treated as no filter.
+        let tmp = setup_vault_with_empty_body();
+        let fields = Fields::default();
+
+        let out = unwrap_success(
+            find(
+                tmp.path(),
+                None,
+                Some("   "),
+                None,
+                &[],
+                &[],
+                None,
+                &[],
+                &[],
+                None,
+                &fields,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(
+            arr.len(),
+            2,
+            "whitespace-only pattern should match all files"
+        );
     }
 
     // --- find: task filter ---

@@ -600,3 +600,24 @@ fn mv_wikilink_with_path_from_subdirectory_not_false_positive() {
         "unrelated wikilink was touched: {content}"
     );
 }
+
+#[test]
+fn mv_same_source_and_destination_error() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "Content.\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "a.md", "--to", "a.md"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("same path"),
+        "expected 'same path' in stderr, got: {stderr}"
+    );
+    // The file must remain untouched
+    assert!(tmp.path().join("a.md").exists());
+}
