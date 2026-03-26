@@ -140,6 +140,9 @@ impl LinkGraph {
     /// `target` should be the relative path without `.md` extension (matching
     /// how wikilinks are written), or with `.md` for markdown-style links.
     /// Both forms are checked.
+    ///
+    /// Self-links are excluded: if a file links to itself, it will not appear
+    /// in its own backlinks list.
     pub fn backlinks(&self, target: &str) -> Vec<&BacklinkEntry> {
         let mut results = Vec::new();
 
@@ -157,6 +160,24 @@ impl LinkGraph {
         if let Some(entries) = self.index.get(&alt) {
             results.extend(entries);
         }
+
+        // Exclude self-links: a file should not appear in its own backlinks.
+        // Normalize both sides to forward-slash paths and compare with and
+        // without the `.md` extension so all link forms are covered.
+        let target_with_md = if target.ends_with(".md") {
+            target.to_string()
+        } else {
+            format!("{target}.md")
+        };
+        let target_without_md = target_with_md
+            .strip_suffix(".md")
+            .unwrap_or(&target_with_md)
+            .to_string();
+
+        results.retain(|e| {
+            let source = e.source.to_string_lossy().replace('\\', "/");
+            source != target_with_md && source != target_without_md
+        });
 
         results
     }
@@ -740,6 +761,59 @@ mod tests {
         // The raw `/page.md` form must NOT appear in the index.
         let raw_bl = graph.backlinks("/page.md");
         assert!(raw_bl.is_empty(), "raw absolute path must not be indexed");
+    }
+
+    #[test]
+    fn self_links_excluded_from_backlinks() {
+        // a.md links to itself via [[a]] — should not appear in its own backlinks.
+        let vault = create_vault(&[
+            ("a.md", "Self-reference: [[a]] and also [[b]]\n"),
+            ("b.md", "Link to [[a]]\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let graph = build.graph;
+
+        let bl_a = graph.backlinks("a");
+        // Only b.md should appear, not a.md itself
+        assert_eq!(bl_a.len(), 1, "self-link must be excluded");
+        assert_eq!(bl_a[0].source, PathBuf::from("b.md"));
+
+        // b.md has no external links to itself
+        let bl_b = graph.backlinks("b");
+        assert_eq!(bl_b.len(), 1, "a.md links to b, so 1 backlink expected");
+        assert_eq!(bl_b[0].source, PathBuf::from("a.md"));
+    }
+
+    #[test]
+    fn self_links_excluded_with_md_extension() {
+        // a.md links to itself via [link](a.md) — markdown-style self-link.
+        let vault = create_vault(&[
+            ("a.md", "Self: [me](a.md)\n"),
+            ("b.md", "Also: [a](a.md)\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let graph = build.graph;
+
+        let bl = graph.backlinks("a.md");
+        assert_eq!(bl.len(), 1, "self-link via .md must be excluded");
+        assert_eq!(bl[0].source, PathBuf::from("b.md"));
+    }
+
+    #[test]
+    fn self_link_only_produces_empty_backlinks() {
+        // a.md only links to itself — backlinks should be empty.
+        let vault = create_vault(&[("a.md", "See [[a]] for details.\n")]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let graph = build.graph;
+
+        assert!(
+            graph.backlinks("a").is_empty(),
+            "only self-link must yield empty backlinks"
+        );
+        assert!(
+            graph.backlinks("a.md").is_empty(),
+            "only self-link must yield empty backlinks (.md form)"
+        );
     }
 
     #[test]
