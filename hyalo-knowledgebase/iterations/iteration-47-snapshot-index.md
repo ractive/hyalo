@@ -1,7 +1,7 @@
 ---
 branch: iter-47/snapshot-index
 date: 2026-03-26
-status: in-progress
+status: completed
 tags:
 - performance
 - index
