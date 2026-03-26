@@ -2207,3 +2207,241 @@ TYPESCRIPT is uppercase
     );
     assert_eq!(matches[0]["text"], "TypeScript is great");
 }
+
+// ---------------------------------------------------------------------------
+// Repeatable --glob tests
+// ---------------------------------------------------------------------------
+
+fn setup_multi_glob_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(tmp.path(), "root.md", "---\ntitle: Root\n---\n# Root\n");
+    write_md(
+        tmp.path(),
+        "sub1/a.md",
+        "---\ntitle: Sub1 A\n---\n# Sub1 A\n",
+    );
+    write_md(
+        tmp.path(),
+        "sub1/b.md",
+        "---\ntitle: Sub1 B\n---\n# Sub1 B\n",
+    );
+    write_md(
+        tmp.path(),
+        "sub2/c.md",
+        "---\ntitle: Sub2 C\n---\n# Sub2 C\n",
+    );
+    write_md(
+        tmp.path(),
+        "sub2/draft.md",
+        "---\ntitle: Sub2 Draft\n---\n# Sub2 Draft\n",
+    );
+    tmp
+}
+
+#[test]
+fn find_repeatable_glob_union_of_two_dirs() {
+    let tmp = setup_multi_glob_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "sub1/**", "--glob", "sub2/**"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(
+        arr.len(),
+        4,
+        "expected 4 files from sub1 + sub2, got: {files:?}"
+    );
+    assert!(files.contains(&"sub1/a.md"));
+    assert!(files.contains(&"sub1/b.md"));
+    assert!(files.contains(&"sub2/c.md"));
+    assert!(files.contains(&"sub2/draft.md"));
+    assert!(
+        !files.contains(&"root.md"),
+        "root.md should not be included"
+    );
+}
+
+#[test]
+fn find_repeatable_glob_positive_and_negative() {
+    let tmp = setup_multi_glob_vault();
+    // Include all of sub2, but exclude draft.md
+    let (status, json, stderr) =
+        find_json(&tmp, &["--glob", "sub2/**", "--glob", "!sub2/draft.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(arr.len(), 1, "expected only c.md, got: {files:?}");
+    assert!(files.contains(&"sub2/c.md"));
+    assert!(
+        !files.contains(&"sub2/draft.md"),
+        "draft.md should be excluded by negation"
+    );
+}
+
+#[test]
+fn find_repeatable_glob_multiple_negations_only() {
+    // When ALL globs are negations (no positive pattern), start from all files and exclude.
+    let tmp = setup_multi_glob_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--glob", "!sub1/**", "--glob", "!sub2/draft.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    // root.md + sub2/c.md should remain (sub1/** excluded, sub2/draft.md excluded)
+    assert_eq!(arr.len(), 2, "expected root.md + sub2/c.md, got: {files:?}");
+    assert!(files.contains(&"root.md"));
+    assert!(files.contains(&"sub2/c.md"));
+    assert!(
+        !files.contains(&"sub1/a.md"),
+        "sub1 files should be excluded"
+    );
+    assert!(
+        !files.contains(&"sub2/draft.md"),
+        "draft.md should be excluded"
+    );
+}
+
+#[test]
+fn find_repeatable_glob_one_positive_one_negative() {
+    // One inclusive glob and one exclusive glob — should include sub1 files except b.md
+    let tmp = setup_multi_glob_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "sub1/**", "--glob", "!sub1/b.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(arr.len(), 1, "expected only sub1/a.md, got: {files:?}");
+    assert!(files.contains(&"sub1/a.md"));
+}
+
+#[test]
+fn find_single_glob_backward_compat() {
+    let tmp = setup_multi_glob_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "sub1/**"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(arr.len(), 2, "expected 2 files in sub1, got: {files:?}");
+    assert!(files.contains(&"sub1/a.md"));
+    assert!(files.contains(&"sub1/b.md"));
+}
+
+// ---------------------------------------------------------------------------
+// --limit 0 = unlimited
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_limit_zero_returns_all_files() {
+    let tmp = setup_vault();
+    let (status_zero, json_zero, stderr) = find_json(&tmp, &["--limit", "0"]);
+    assert!(status_zero.success(), "stderr: {stderr}");
+
+    let (status_all, json_all, _) = find_json(&tmp, &[]);
+    assert!(status_all.success());
+
+    let count_zero = json_zero.as_array().unwrap().len();
+    let count_all = json_all.as_array().unwrap().len();
+    assert_eq!(
+        count_zero, count_all,
+        "--limit 0 should return all files ({count_all}), got {count_zero}"
+    );
+    assert!(count_all > 0, "vault should have files");
+}
+
+// ---------------------------------------------------------------------------
+// Sort by backlinks_count / links_count
+// ---------------------------------------------------------------------------
+
+fn setup_link_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    // a.md links to b and c (2 outbound links)
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\nSee [[b]] and [[c]].\n",
+    );
+    // b.md links to c (1 outbound link)
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nSee [[c]].\n");
+    // c.md has no outbound links (0)
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\nNo links here.\n");
+    tmp
+}
+
+#[test]
+fn find_sort_backlinks_count() {
+    let tmp = setup_link_vault();
+    // c has 2 backlinks (from a and b), b has 1 (from a), a has 0
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &["--sort", "backlinks_count", "--fields", "backlinks"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files.len(), 3, "expected 3 files, got: {files:?}");
+    assert_eq!(files[0], "c.md", "c.md should be first (2 backlinks)");
+    assert_eq!(files[1], "b.md", "b.md should be second (1 backlink)");
+    assert_eq!(files[2], "a.md", "a.md should be last (0 backlinks)");
+}
+
+#[test]
+fn find_sort_links_count() {
+    let tmp = setup_link_vault();
+    // a has 2 outbound links, b has 1, c has 0
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "links_count", "--fields", "links"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files.len(), 3, "expected 3 files, got: {files:?}");
+    assert_eq!(files[0], "a.md", "a.md should be first (2 links)");
+    assert_eq!(files[1], "b.md", "b.md should be second (1 link)");
+    assert_eq!(files[2], "c.md", "c.md should be last (0 links)");
+}
+
+#[test]
+fn find_sort_backlinks_count_without_fields_backlinks() {
+    // Sort by backlinks_count should work even without --fields backlinks
+    let tmp = setup_link_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "backlinks_count"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files[0], "c.md", "c.md should be first (most backlinks)");
+    // Verify backlinks field is NOT in output (user didn't request it)
+    assert!(
+        arr[0].get("backlinks").is_none(),
+        "backlinks should not appear in output when not in --fields"
+    );
+}
+
+#[test]
+fn find_sort_links_count_without_fields_links() {
+    // Sort by links_count should work even when --fields excludes links
+    let tmp = setup_link_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--sort", "links_count", "--fields", "properties"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files[0], "a.md", "a.md should be first (most links)");
+    // Verify links field is NOT in output (user excluded it via --fields)
+    assert!(
+        arr[0].get("links").is_none(),
+        "links should not appear in output when not in --fields"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Empty body pattern warning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_empty_body_pattern_warns() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &[""]);
+    assert!(status.success(), "should succeed: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert!(!arr.is_empty(), "empty pattern should still return files");
+    assert!(
+        stderr.contains("warning"),
+        "stderr should contain a warning about empty pattern, got: {stderr}"
+    );
+}

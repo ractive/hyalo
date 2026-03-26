@@ -167,7 +167,7 @@ pub fn remove(
     property_args: &[String],
     tag_args: &[String],
     files: &[String],
-    glob: Option<&str>,
+    globs: &[String],
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
@@ -183,7 +183,7 @@ pub fn remove(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    if let Some(outcome) = require_file_or_glob(files, glob, "remove", format) {
+    if let Some(outcome) = require_file_or_glob(files, globs, "remove", format) {
         return Ok(outcome);
     }
 
@@ -217,7 +217,7 @@ pub fn remove(
         .map(|arg| parse_kv_optional(arg).expect("already validated"))
         .collect();
 
-    let files = collect_files(dir, files, glob, format)?;
+    let files = collect_files(dir, files, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -390,7 +390,7 @@ status: draft
             &["status".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -427,7 +427,7 @@ title: Note
             &["status".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -461,7 +461,7 @@ status: draft
             &["status=draft".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -495,7 +495,7 @@ status: published
             &["status=draft".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -533,7 +533,7 @@ aliases:
             &["aliases=old-name".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -572,7 +572,7 @@ tags:
             &[],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -609,7 +609,7 @@ tags:
             &[],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -630,7 +630,7 @@ tags:
             &["status".to_owned()],
             &[],
             &[],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -647,7 +647,7 @@ tags:
             &[],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -676,7 +676,7 @@ tags:
             &["status".to_owned()],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -705,7 +705,7 @@ tags:
             &["status".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -737,7 +737,7 @@ priority: low
             &["status".to_owned(), "priority".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -780,7 +780,7 @@ priority: low
             &["priority".to_owned()],
             &[],
             &[],
-            Some("*.md"),
+            &["*.md".to_owned()],
             &[filter],
             &[],
             Format::Json,
@@ -817,7 +817,7 @@ priority: low
             &["status".to_owned()],
             &[],
             &[],
-            Some("*.md"),
+            &["*.md".to_owned()],
             &[],
             &["deprecated".to_owned()],
             Format::Json,

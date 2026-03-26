@@ -594,6 +594,8 @@ impl Fields {
 pub enum SortField {
     File,
     Modified,
+    BacklinksCount,
+    LinksCount,
 }
 
 /// Parse a sort field from a string.
@@ -601,8 +603,10 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
     match input {
         "file" => Ok(SortField::File),
         "modified" => Ok(SortField::Modified),
+        "backlinks_count" => Ok(SortField::BacklinksCount),
+        "links_count" => Ok(SortField::LinksCount),
         other => bail!(
-            "unknown sort field {:?}: valid values are 'file' and 'modified'",
+            "unknown sort field {:?}: valid values are 'file', 'modified', 'backlinks_count', 'links_count'",
             other
         ),
     }

@@ -36,11 +36,11 @@ pub enum FilesOrOutcome {
 pub fn collect_files(
     dir: &Path,
     files: &[String],
-    glob: Option<&str>,
+    globs: &[String],
     format: Format,
 ) -> Result<FilesOrOutcome> {
-    match (files.is_empty(), glob) {
-        (false, None) => {
+    match (files.is_empty(), globs.is_empty()) {
+        (false, true) => {
             // Resolve each file, best-effort: collect successes and errors
             let mut resolved = Vec::new();
             let mut errors = Vec::new();
@@ -72,12 +72,12 @@ pub fn collect_files(
             }
             Ok(FilesOrOutcome::Files(resolved))
         }
-        (true, Some(pattern)) => {
+        (true, false) => {
             let all = discovery::discover_files(dir)?;
-            let matched = discovery::match_glob(dir, &all, pattern)?;
+            let matched = discovery::match_globs(dir, &all, globs)?;
             Ok(FilesOrOutcome::Files(matched))
         }
-        (true, None) => {
+        (true, true) => {
             // Operate on all .md files
             let all = discovery::discover_files(dir)?;
             let with_rel: Vec<(PathBuf, String)> = all
@@ -89,7 +89,7 @@ pub fn collect_files(
                 .collect();
             Ok(FilesOrOutcome::Files(with_rel))
         }
-        (false, Some(_)) => {
+        (false, false) => {
             // Clap enforces mutual exclusivity; this branch is unreachable in practice
             let out = crate::output::format_error(
                 format,
@@ -110,11 +110,11 @@ pub fn collect_files(
 #[must_use]
 pub fn require_file_or_glob(
     files: &[String],
-    glob: Option<&str>,
+    globs: &[String],
     command_name: &str,
     format: Format,
 ) -> Option<CommandOutcome> {
-    if files.is_empty() && glob.is_none() {
+    if files.is_empty() && globs.is_empty() {
         let out = crate::output::format_error(
             format,
             &format!("{command_name} requires --file or --glob"),
