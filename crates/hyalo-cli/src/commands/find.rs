@@ -462,13 +462,19 @@ fn filter_index_entries<'a>(
     let filtered: Vec<&IndexEntry> = entries
         .iter()
         .filter(|e| {
+            // When files_arg is non-empty, an entry also passes if it is listed
+            // explicitly — this handles the case where both files_arg and globs
+            // are present (OR semantics between the two inclusion criteria).
+            let passes_files = !files_arg.is_empty() && files_arg.iter().any(|f| f == &e.rel_path);
             let passes_positive = positive_set
                 .as_ref()
                 .is_none_or(|gs| gs.is_match(&e.rel_path));
             let passes_negative = negative_set
                 .as_ref()
                 .is_none_or(|gs| !gs.is_match(&e.rel_path));
-            passes_positive && passes_negative
+            // An entry is included if it matches files_arg OR (matches positive
+            // globs AND is not excluded by a negative glob).
+            passes_files || (passes_positive && passes_negative)
         })
         .collect();
 
@@ -800,8 +806,8 @@ pub fn find_from_index(
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
         .into_iter()
-        .map(|obj| serde_json::to_value(obj).expect("derived Serialize impl should not fail"))
-        .collect();
+        .map(|obj| serde_json::to_value(obj).context("failed to serialize find result"))
+        .collect::<Result<_>>()?;
 
     if format == crate::output::Format::Text && json_array.is_empty() {
         eprintln!("warning: No files matched.");

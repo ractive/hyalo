@@ -433,8 +433,7 @@ pub fn summary_from_index(
         recent_files,
     };
 
-    let json_value =
-        serde_json::to_value(&vault_summary).expect("derived Serialize impl should not fail");
+    let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
         &json_value,

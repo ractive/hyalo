@@ -26,13 +26,15 @@ and reused across all subsequent queries in a session.
   Commands receive `&dyn VaultIndex` and don't know whether data came from a filesystem
   scan or a serialized file. This enables future backends (SQLite, etc.) without changing
   command code.
-- **First backend**: bincode snapshot file (`.hyalo-index`) — binary, opaque, not an API
+- **First backend**: MessagePack snapshot file (`.hyalo-index`) via `rmp-serde` — binary, opaque, not an API.
+  Initially attempted bincode, but it doesn't support `deserialize_any` (needed by `serde_yaml_ng::Value`)
+  or `skip_serializing_if` (used by `OutlineSection`). MessagePack in named-map mode handles both natively.
 - **Scope**: read-only commands only (`find`, `summary`, `tags`, `properties`, `backlinks`);
   mutation commands (`set`, `remove`, `append`, `mv`) always scan from disk
 - **Content search**: always scans disk regardless of `--index` — it's query-dependent
   and can't be pre-indexed. No warning needed, no special handling
 - **No partial indexes**: full vault snapshot every time (rebuild is <500ms)
-- **No backwards compatibility**: if bincode deserialization fails (e.g. after a hyalo upgrade),
+- **No backwards compatibility**: if MessagePack deserialization fails (e.g. after a hyalo upgrade),
   warn and fall back to normal scanning
 - **No daemon / file watcher**: deferred to a future iteration if needed
 - **Stale detection**: PID in index header; `create-index` checks for existing `.hyalo-index`
@@ -70,7 +72,7 @@ The intermediate data between scan and filter/format:
 builder. This is not new functionality — it's a refactor of what each command does today
 into a shared struct behind the `VaultIndex` trait.
 
-**`SnapshotIndex`** — deserializes a `.hyalo-index` file (bincode). Contains the same
+**`SnapshotIndex`** — deserializes a `.hyalo-index` file (MessagePack). Contains the same
 `IndexEntry` data plus a header with metadata:
 
 - `vault_dir: String` — canonical vault path (validated on load)
@@ -97,25 +99,25 @@ main() decides based on --index flag:
 ## Tasks
 
 ### Phase 1: Abstraction (the main deliverable)
-- [ ] Define `IndexEntry` struct in `hyalo-core` (new module `index.rs`)
-- [ ] Define `VaultIndex` trait with `entries()`, `get()`, `link_graph()`
-- [ ] Implement `ScannedIndex` — extract current per-file scan logic from `find`/`summary`/etc. into a shared builder behind the trait
-- [ ] Add `Serialize`/`Deserialize` derives to: `IndexEntry`, `BacklinkEntry`, `Link`, `LinkKind`, `LinkGraph`, `OutlineSection`, `FindTaskInfo`
-- [ ] Refactor `find` command to use `&dyn VaultIndex` instead of inline scanning; content search stays as disk I/O
-- [ ] Refactor `summary`, `tags summary`, `properties summary`, `backlinks` to use `&dyn VaultIndex`
+- [x] Define `IndexEntry` struct in `hyalo-core` (new module `index.rs`)
+- [x] Define `VaultIndex` trait with `entries()`, `get()`, `link_graph()`
+- [x] Implement `ScannedIndex` — extract current per-file scan logic from `find`/`summary`/etc. into a shared builder behind the trait
+- [x] Add `Serialize`/`Deserialize` derives to: `IndexEntry`, `BacklinkEntry`, `Link`, `LinkKind`, `LinkGraph`, `OutlineSection`, `FindTaskInfo`
+- [x] Refactor `find` command to use `&dyn VaultIndex` instead of inline scanning; content search stays as disk I/O
+- [x] Refactor `summary`, `tags summary`, `properties summary`, `backlinks` to use `&dyn VaultIndex`
 
 ### Phase 2: Snapshot Backend
-- [ ] Add `bincode` dependency to `hyalo-core/Cargo.toml`
-- [ ] Implement `SnapshotIndex` — `load(path)` deserializes bincode, validates header, returns `impl VaultIndex`; graceful fallback to `ScannedIndex` on deserialization error
-- [ ] Implement `SnapshotIndex::save(index: &dyn VaultIndex, path)` — serializes to bincode with header
-- [ ] Add `create-index` subcommand: builds `ScannedIndex`, saves as snapshot, detects stale orphan `.hyalo-index` files
-- [ ] Add `drop-index` subcommand: deletes index file, warns about other stale `.hyalo-index` files
-- [ ] Add `--index <PATH>` global CLI flag (clap `global = true`)
-- [ ] Wire up in `main()`: `--index` → `SnapshotIndex::load()`, else `ScannedIndex::build()`
+- [x] Add `rmp-serde` dependency to `hyalo-core/Cargo.toml`
+- [x] Implement `SnapshotIndex` — `load(path)` deserializes MessagePack, validates header, returns `impl VaultIndex`; graceful fallback to `ScannedIndex` on deserialization error
+- [x] Implement `SnapshotIndex::save(index: &dyn VaultIndex, path)` — serializes to MessagePack with header
+- [x] Add `create-index` subcommand: builds `ScannedIndex`, saves as snapshot, detects stale orphan `.hyalo-index` files
+- [x] Add `drop-index` subcommand: deletes index file, warns about other stale `.hyalo-index` files
+- [x] Add `--index <PATH>` global CLI flag (clap `global = true`)
+- [x] Wire up in `main()`: `--index` → `SnapshotIndex::load()`, else `ScannedIndex::build()`
 
 ### Phase 3: Tests & Validation
-- [ ] Add e2e tests: create-index → find --index, drop-index, stale detection, incompatible index fallback, content search with --index
-- [ ] Add benchmark: repeated `find --index` vs repeated `find` (measure cumulative savings)
+- [x] Add e2e tests: create-index → find --index, drop-index, stale detection, incompatible index fallback, content search with --index
+- [x] Add benchmark: repeated `find --index` vs repeated `find` (measure cumulative savings)
 
 ## Future (deferred)
 

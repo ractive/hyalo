@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -70,6 +70,8 @@ pub trait VaultIndex {
 /// scanning patterns.
 pub struct ScannedIndex {
     entries: Vec<IndexEntry>,
+    /// Fast path → index lookup built at construction time.
+    path_index: HashMap<String, usize>,
     graph: LinkGraph,
 }
 
@@ -126,9 +128,16 @@ impl ScannedIndex {
         // from_file_links never produces warnings (callers handle parse errors
         // before collecting FileLinks), but we could extend this if needed.
 
+        let path_index: HashMap<String, usize> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.rel_path.clone(), i))
+            .collect();
+
         Ok(ScannedIndexBuild {
             index: ScannedIndex {
                 entries,
+                path_index,
                 graph: graph_build.graph,
             },
             warnings,
@@ -142,7 +151,7 @@ impl VaultIndex for ScannedIndex {
     }
 
     fn get(&self, rel_path: &str) -> Option<&IndexEntry> {
-        self.entries.iter().find(|e| e.rel_path == rel_path)
+        self.path_index.get(rel_path).map(|&i| &self.entries[i])
     }
 
     fn link_graph(&self) -> &LinkGraph {
@@ -181,6 +190,8 @@ struct SnapshotData {
 /// Implements [`VaultIndex`] so commands can use it transparently.
 pub struct SnapshotIndex {
     entries: Vec<IndexEntry>,
+    /// Fast path → index lookup built after deserialization.
+    path_index: HashMap<String, usize>,
     graph: LinkGraph,
     header: SnapshotHeader,
 }
@@ -198,11 +209,20 @@ impl SnapshotIndex {
             .with_context(|| format!("failed to read index file: {}", path.display()))?;
 
         match rmp_serde::from_slice::<SnapshotData>(&bytes) {
-            Ok(data) => Ok(Some(Self {
-                entries: data.entries,
-                graph: data.graph,
-                header: data.header,
-            })),
+            Ok(data) => {
+                let path_index: HashMap<String, usize> = data
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| (e.rel_path.clone(), i))
+                    .collect();
+                Ok(Some(Self {
+                    entries: data.entries,
+                    path_index,
+                    graph: data.graph,
+                    header: data.header,
+                }))
+            }
             Err(e) => {
                 eprintln!(
                     "warning: index file is incompatible ({}); falling back to disk scan",
@@ -238,8 +258,11 @@ impl SnapshotIndex {
             graph: index.link_graph().clone(),
         };
         let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-        std::fs::write(path, bytes)
-            .with_context(|| format!("failed to write index file: {}", path.display()))?;
+        let tmp_path = path.with_extension("hyalo-index.tmp");
+        std::fs::write(&tmp_path, &bytes)
+            .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
+        std::fs::rename(&tmp_path, path)
+            .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
         Ok(())
     }
 
@@ -260,7 +283,7 @@ impl VaultIndex for SnapshotIndex {
     }
 
     fn get(&self, rel_path: &str) -> Option<&IndexEntry> {
-        self.entries.iter().find(|e| e.rel_path == rel_path)
+        self.path_index.get(rel_path).map(|&i| &self.entries[i])
     }
 
     fn link_graph(&self) -> &LinkGraph {
@@ -276,19 +299,13 @@ impl VaultIndex for SnapshotIndex {
 fn is_pid_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        use std::process::Command;
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(true)
+        // SAFETY: kill(pid, 0) is a pure existence check — no signal is sent.
+        // Returns 0 if the process exists (and we have permission), -1 otherwise.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
     #[cfg(not(unix))]
     {
         let _ = pid;
-        // Can't cheaply check on non-Unix; assume alive to avoid false positives.
         true
     }
 }
@@ -307,7 +324,11 @@ pub fn find_stale_indexes(dir: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
     for entry in read_dir {
         let entry = entry?;
         let path = entry.path();
-        if path.file_name().and_then(|n| n.to_str()) != Some(".hyalo-index") {
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.ends_with(".hyalo-index") {
             continue;
         }
         if let Ok(Some(idx)) = SnapshotIndex::load(&path) {
@@ -386,7 +407,7 @@ fn format_modified(path: &Path) -> Result<String> {
 }
 
 /// Format Unix timestamp as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
-fn format_iso8601(secs: u64) -> String {
+pub fn format_iso8601(secs: u64) -> String {
     const SECS_PER_MIN: u64 = 60;
     const SECS_PER_HOUR: u64 = 3600;
     const SECS_PER_DAY: u64 = 86400;

@@ -478,6 +478,7 @@ dependencies = [
  "dunce",
  "globset",
  "ignore",
+ "libc",
  "regex",
  "rmp-serde",
  "serde",
