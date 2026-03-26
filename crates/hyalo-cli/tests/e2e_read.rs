@@ -612,9 +612,10 @@ fn read_frontmatter_broken_errors() {
         .output()
         .unwrap();
 
-    assert!(
-        !output.status.success(),
-        "expected failure for broken frontmatter; stdout: {}",
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit 1 (user error) for broken frontmatter; stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();

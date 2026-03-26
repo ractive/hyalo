@@ -224,10 +224,22 @@ pub fn run(
         None
     };
 
-    // Read frontmatter if requested
+    // Read frontmatter if requested.  Parse errors (e.g. unclosed `---`) are
+    // user errors (exit 1), not internal errors (exit 2).
     let fm_value = if frontmatter_flag {
-        let props = frontmatter::read_frontmatter(&full_path)?;
-        Some(props)
+        match frontmatter::read_frontmatter(&full_path) {
+            Ok(props) => Some(props),
+            Err(e) if frontmatter::is_parse_error(&e) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format,
+                    &e.to_string(),
+                    Some(&rel_path),
+                    None,
+                    None,
+                )));
+            }
+            Err(e) => return Err(e),
+        }
     } else {
         None
     };
