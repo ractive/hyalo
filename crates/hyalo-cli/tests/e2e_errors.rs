@@ -235,6 +235,48 @@ title: Target
     assert_eq!(backlinks.len(), 1, "source.md should link to target.md");
 }
 
+/// `hyalo find --fields links,backlinks` must warn exactly once for a broken file,
+/// not twice (once from link graph build, once from the per-file scan loop).
+#[test]
+fn error_find_links_backlinks_warning_deduplicated() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\nunclosed frontmatter without closing delimiter\n",
+    );
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: Good
+---
+# Good
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--fields", "links,backlinks"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected graceful skip; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    // The warning for bad.md must appear exactly once
+    let warning_count = stderr.matches("bad.md").count();
+    assert_eq!(
+        warning_count, 1,
+        "expected exactly one warning for bad.md, got {warning_count}; full stderr:\n{stderr}"
+    );
+}
+
 /// `hyalo find --fields backlinks` must also gracefully skip broken files
 /// during link graph construction.
 #[test]
