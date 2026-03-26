@@ -84,7 +84,24 @@ fn tags_glob_no_match() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "non-matching glob should exit 0, not error; stderr: {stderr}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["total"], 0,
+        "non-matching glob should return total 0; got: {json}"
+    );
+    assert!(
+        json["tags"].as_array().is_some_and(|a| a.is_empty()),
+        "non-matching glob should return empty tags array; got: {json}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "non-matching glob should produce no stderr output; got: {stderr}"
+    );
 }
 
 #[test]

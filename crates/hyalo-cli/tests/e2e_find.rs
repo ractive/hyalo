@@ -1001,15 +1001,22 @@ fn find_sort_bogus_exits_1() {
 }
 
 #[test]
-fn find_glob_no_match_exits_1() {
+fn find_glob_no_match_returns_empty_array() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
-    cmd.args(["find", "--glob", "nonexistent/**/*.md"]);
-    let output = cmd.output().unwrap();
-
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(1));
+    let (status, json, stderr) = find_json(&tmp, &["--glob", "nonexistent/**/*.md"]);
+    assert!(
+        status.success(),
+        "non-matching glob should exit 0; stderr: {stderr}"
+    );
+    assert_eq!(
+        json.as_array().unwrap().len(),
+        0,
+        "non-matching glob should return empty array"
+    );
+    assert!(
+        stderr.is_empty(),
+        "non-matching glob should produce no stderr output; got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

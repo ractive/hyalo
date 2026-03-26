@@ -31,7 +31,8 @@ pub enum FilesOrOutcome {
 }
 
 /// Resolve the set of files to operate on based on `--file` / `--glob` / all files.
-/// Returns a user-error outcome for invalid inputs (file not found, no glob matches).
+/// Returns a user-error outcome for invalid inputs (e.g. file not found).
+/// A glob that matches no files returns an empty file list with exit 0, not an error.
 pub fn collect_files(
     dir: &Path,
     files: &[String],
@@ -74,21 +75,6 @@ pub fn collect_files(
         (true, Some(pattern)) => {
             let all = discovery::discover_files(dir)?;
             let matched = discovery::match_glob(dir, &all, pattern)?;
-            if matched.is_empty() {
-                let hint = if pattern.starts_with('!') {
-                    Some("negation glob excluded all files")
-                } else {
-                    None
-                };
-                let out = crate::output::format_error(
-                    format,
-                    "no files match pattern",
-                    Some(pattern),
-                    hint,
-                    None,
-                );
-                return Ok(FilesOrOutcome::Outcome(CommandOutcome::UserError(out)));
-            }
             Ok(FilesOrOutcome::Files(matched))
         }
         (true, None) => {
