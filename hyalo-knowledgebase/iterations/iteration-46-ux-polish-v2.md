@@ -1,7 +1,7 @@
 ---
 branch: iter-46/ux-polish-v2
 date: 2026-03-26
-status: in-progress
+status: completed
 tags:
 - iteration
 - ux
