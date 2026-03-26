@@ -111,6 +111,15 @@ pub fn find(
         None
     };
 
+    // Short-circuit: when sort order is by file path (the same order
+    // `discover_files` already returns) and backlinks are not requested
+    // (which would need a full-vault scan regardless), we can stop as soon
+    // as we have accumulated `limit` matching results instead of scanning
+    // every file and truncating afterwards.
+    let can_short_circuit = limit.is_some()
+        && matches!(sort.unwrap_or(&SortField::File), SortField::File)
+        && !fields.backlinks;
+
     let mut results: Vec<FileObject> = Vec::new();
 
     for (full_path, rel_path) in &files {
@@ -246,6 +255,11 @@ pub fn find(
         );
 
         results.push(obj);
+
+        // Early exit when we have enough results and a full scan is not needed.
+        if can_short_circuit && results.len() >= limit.unwrap_or(usize::MAX) {
+            break;
+        }
     }
 
     // --- Sort ---

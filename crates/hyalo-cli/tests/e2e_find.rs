@@ -657,6 +657,74 @@ fn find_limit_larger_than_results() {
     assert_eq!(arr.len(), 4);
 }
 
+/// Short-circuit path: --limit with default sort (file) must return the same
+/// first N results as a full scan with explicit --sort file and truncation.
+#[test]
+fn find_limit_short_circuit_matches_full_scan() {
+    let tmp = setup_vault();
+
+    // Full scan, explicit file sort — reference result set.
+    let (status, full_json, stderr) = find_json(&tmp, &["--sort", "file"]);
+    assert!(status.success(), "full scan stderr: {stderr}");
+    let full_arr = full_json.as_array().unwrap();
+
+    // Short-circuit path: limit=2, default sort (file).
+    let (status, limited_json, stderr) = find_json(&tmp, &["--limit", "2"]);
+    assert!(status.success(), "limited scan stderr: {stderr}");
+    let limited_arr = limited_json.as_array().unwrap();
+
+    assert_eq!(limited_arr.len(), 2);
+
+    // The first 2 files from the short-circuit path must match the first 2
+    // from the full sorted scan — same files, same order.
+    let full_files: Vec<&str> = full_arr[..2]
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    let limited_files: Vec<&str> = limited_arr
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        limited_files, full_files,
+        "short-circuit result order differs from full-scan order"
+    );
+}
+
+/// When --sort modified is used with --limit, short-circuit must NOT
+/// activate: all files must be scanned so the sort is correct.
+#[test]
+fn find_limit_with_sort_modified_returns_correct_results() {
+    let tmp = setup_vault();
+
+    // Full scan sorted by modified — reference.
+    let (status, full_json, stderr) = find_json(&tmp, &["--sort", "modified"]);
+    assert!(status.success(), "full scan stderr: {stderr}");
+    let full_arr = full_json.as_array().unwrap();
+
+    // Limit=2 with sort modified must return the 2 most-recently-modified
+    // files from the full sorted result, not the first 2 by file path.
+    let (status, limited_json, stderr) =
+        find_json(&tmp, &["--sort", "modified", "--limit", "2"]);
+    assert!(status.success(), "limited stderr: {stderr}");
+    let limited_arr = limited_json.as_array().unwrap();
+
+    assert_eq!(limited_arr.len(), 2);
+
+    let expected_files: Vec<&str> = full_arr[..2]
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    let actual_files: Vec<&str> = limited_arr
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actual_files, expected_files,
+        "--sort-by modified + --limit must sort first then truncate"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Text format
 // ---------------------------------------------------------------------------
