@@ -16,6 +16,7 @@ clap = { workspace = true, features = ["derive"] }
 jaq-core = { workspace = true }
 jaq-json = { workspace = true }
 jaq-std = { workspace = true }
+globset = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

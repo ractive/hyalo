@@ -152,6 +152,8 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **task** — read, toggle, or set status on checkboxes
 - **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
+- **create-index** — build a snapshot index for faster repeated read-only queries
+- **drop-index** — delete a snapshot index file created with create-index
 
 ## The --format text flag
 
@@ -178,3 +180,29 @@ hyalo backlinks --file iterations/iteration-37-bulk-mutations.md --format json
 
 Supports `--format text` (default, compact) and `--format json`. Useful for impact analysis
 (what depends on this file?), finding orphan pages, and navigating link structure.
+
+## Snapshot index for batch queries
+
+When running many read-only queries (e.g., during a dream/consolidation pass or any multi-step
+analysis), create a snapshot index first to avoid repeated disk scans:
+
+```bash
+# Create the index (one scan, reused by all subsequent queries)
+hyalo create-index
+
+# All read-only queries use the index — no disk scan
+hyalo find --property status=in-progress --index .hyalo-index
+hyalo summary --index .hyalo-index
+hyalo tags summary --index .hyalo-index
+hyalo backlinks --file some-note.md --index .hyalo-index
+
+# Drop the index when done
+hyalo drop-index
+```
+
+The index is **ephemeral** — create it, use it, drop it within the same session. It becomes
+stale the moment any file in the vault changes. Never persist it across sessions.
+
+**For mixed read/write workflows:** gather all information with `--index` first, then drop the
+index, then execute mutations. Mutation commands (`set`, `remove`, `append`, `task`, `mv`,
+`tags rename`, `properties rename`) ignore `--index` — they always scan fresh from disk.

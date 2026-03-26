@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format, format_output};
 use hyalo_core::frontmatter;
+use hyalo_core::index::VaultIndex;
 use hyalo_core::types::PropertySummaryEntry;
 use serde::Serialize;
 
@@ -37,6 +38,49 @@ pub fn properties_summary(
             Err(e) => return Err(e),
         };
         for (key, value) in props.iter().filter(|(k, _)| k.as_str() != "tags") {
+            let prop_type = frontmatter::infer_type(value).to_owned();
+            *agg.entry((key.clone(), prop_type)).or_insert(0) += 1;
+        }
+    }
+
+    let mut result: Vec<PropertySummaryEntry> = agg
+        .into_iter()
+        .map(|((name, prop_type), count)| PropertySummaryEntry {
+            name,
+            prop_type,
+            count,
+        })
+        .collect();
+    result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
+
+    Ok(CommandOutcome::Success(format_output(format, &result)))
+}
+
+/// Aggregate property summary using pre-scanned index data.
+///
+/// `file_filter` is an optional list of vault-relative paths to include.
+/// When `None` (or an empty slice), all index entries are used.
+pub fn properties_summary_from_index(
+    index: &dyn VaultIndex,
+    file_filter: Option<&[String]>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    let mut agg: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+
+    for entry in index.entries() {
+        // Apply optional file-level filter
+        if let Some(filter) = file_filter
+            && !filter.is_empty()
+            && !filter.iter().any(|f| f == &entry.rel_path)
+        {
+            continue;
+        }
+        for (key, value) in entry
+            .properties
+            .iter()
+            .filter(|(k, _)| k.as_str() != "tags")
+        {
             let prop_type = frontmatter::infer_type(value).to_owned();
             *agg.entry((key.clone(), prop_type)).or_insert(0) += 1;
         }

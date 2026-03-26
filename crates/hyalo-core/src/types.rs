@@ -4,7 +4,7 @@
 //! `FileObject`). Some commands also define result structs in their own
 //! modules (e.g. `SetPropertyResult`, `RemoveTagResult`).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Property types
@@ -77,7 +77,7 @@ pub struct BacklinkInfo {
 // ---------------------------------------------------------------------------
 
 /// Task checkbox counts within a section.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCount {
     pub total: usize,
     pub done: usize,
@@ -85,7 +85,7 @@ pub struct TaskCount {
 
 /// A single section in the document outline.
 /// Used by `find` (sections field).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutlineSection {
     pub level: u8,
     pub heading: Option<String>,
@@ -179,7 +179,7 @@ pub struct RecentFile {
 
 /// A single task with section context, used by the `find` command.
 /// Extends `TaskInfo` with section heading information.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FindTaskInfo {
     pub line: usize,
     pub section: String,
