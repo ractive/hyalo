@@ -8,7 +8,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::{infer_type, yaml_to_json};
-use hyalo_core::link_graph::LinkGraph;
+use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
@@ -30,28 +30,28 @@ pub fn summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    // When no glob filter is active, we collect links alongside frontmatter+tasks
+    // in a single pass per file, then build the LinkGraph from collected data.
+    // This avoids a second full-vault scan for orphan detection.
+    // When a glob IS active, orphan detection needs a vault-wide link graph
+    // (links from outside the glob count), so we do a separate LinkGraph::build.
+    let collect_links = glob.is_none();
+
     // Aggregation state
     let mut total_files: usize = 0;
-    // directory -> count
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
-    // (name, type) -> count
     let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
-    // tag (lowercase) -> (display_name, count)
     let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    // status_value -> Vec<rel_path>
     let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // aggregate task counts
     let mut total_tasks: usize = 0;
     let mut done_tasks: usize = 0;
-    // (mtime_secs_as_i64_negated, rel_path) for sorting most-recent first
     let mut recent_entries: Vec<(i64, String)> = Vec::new();
-    // Track successfully processed files for orphan detection (excludes parse-error files)
     let mut good_files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut collected_links: Vec<FileLinks> = Vec::new();
 
     for (full_path, rel_path) in &files {
         total_files += 1;
 
-        // Count by parent directory (relative to vault root)
         let dir_key = {
             use std::path::Path as P;
             let rel = P::new(rel_path.as_str());
@@ -60,10 +60,26 @@ pub fn summary(
                 _ => ".".to_owned(),
             }
         };
-        // Single-pass scan: collect frontmatter + count tasks
+
+        // Single-pass scan: collect frontmatter + tasks + links (when applicable)
         let mut fm = FrontmatterCollector::new(true);
         let mut counter = TaskCounter::new();
-        match scan_file_multi(full_path, &mut [&mut fm, &mut counter]) {
+        let mut link_visitor = if collect_links {
+            Some(LinkGraphVisitor::new(PathBuf::from(rel_path)))
+        } else {
+            None
+        };
+
+        let scan_result = {
+            let mut visitor_refs: Vec<&mut dyn hyalo_core::scanner::FileVisitor> = Vec::new();
+            visitor_refs.push(&mut fm);
+            visitor_refs.push(&mut counter);
+            if let Some(ref mut lv) = link_visitor {
+                visitor_refs.push(lv);
+            }
+            scan_file_multi(full_path, &mut visitor_refs)
+        };
+        match scan_result {
             Ok(()) => {}
             Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
                 eprintln!("warning: skipping {rel_path}: {e}");
@@ -72,7 +88,11 @@ pub fn summary(
             }
             Err(e) => return Err(e),
         }
+
         good_files.push((full_path.clone(), PathBuf::from(rel_path)));
+        if let Some(lv) = link_visitor {
+            collected_links.push(lv.into_file_links());
+        }
         *dir_counts.entry(dir_key).or_insert(0) += 1;
         let props = fm.into_props();
         let TaskCount { total, done } = counter.into_count();
@@ -112,7 +132,6 @@ pub fn summary(
         if let Ok(meta) = std::fs::metadata(full_path)
             && let Ok(mtime) = meta.modified()
         {
-            // Negate so that sorting ascending gives most-recent first
             let secs = mtime
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -171,9 +190,7 @@ pub fn summary(
         .into_iter()
         .map(|(value, files)| StatusGroup { value, files })
         .collect();
-    // Already sorted because BTreeMap is ordered by key
 
-    // Build task count
     let tasks = TaskCount {
         total: total_tasks,
         done: done_tasks,
@@ -192,12 +209,15 @@ pub fn summary(
         .collect();
 
     // Build orphan list: files with no inbound AND no outbound links (fully isolated).
-    // The link graph is built vault-wide (not glob-filtered) so that links from files
-    // outside the glob still count — a file linked from anywhere is not an orphan.
-    // Orphan candidates are restricted to good_files (glob-scoped, parse-error-free).
+    // When no glob: use pre-collected link data (single pass, no re-read).
+    // When glob: build vault-wide link graph so links from outside the glob count.
     let orphans = {
-        let build =
-            LinkGraph::build(dir, None).context("failed to build link graph for orphan detection")?;
+        let build = if collect_links {
+            LinkGraph::from_file_links(collected_links, None)
+        } else {
+            LinkGraph::build(dir, None)
+                .context("failed to build link graph for orphan detection")?
+        };
         let targets = build.graph.all_targets();
         let sources = build.graph.all_sources();
         let mut orphan_files: Vec<String> = good_files

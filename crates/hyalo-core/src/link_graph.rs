@@ -83,43 +83,32 @@ impl LinkGraph {
                 }
                 Err(e) => return Err(e),
             }
-
-            for (line, mut link) in visitor.links {
-                // Normalize markdown link targets that contain path separators
-                // so that, for example, `sub/a.md` linking to `../target.md`
-                // is stored as `target.md`, matching how callers query by
-                // vault-relative path.
-                //
-                // Wikilinks are vault-relative by definition — `[[backlog/item]]`
-                // written in any file always refers to `backlog/item.md` at the
-                // vault root, never a path relative to the source file.  They
-                // must NOT be passed through `normalize_target`.
-                if link.kind == LinkKind::Markdown
-                    && (link.target.contains('/') || link.target.contains('\\'))
-                {
-                    if link.target.starts_with('/') {
-                        // Site-absolute link: strip leading `/` and optional
-                        // site_prefix to produce a vault-relative path.
-                        link.target = strip_site_prefix(&link.target, site_prefix);
-                    } else {
-                        link.target = normalize_target(&visitor.source, &link.target);
-                    }
-                }
-                index
-                    .entry(link.target.clone())
-                    .or_default()
-                    .push(BacklinkEntry {
-                        source: visitor.source.clone(),
-                        line,
-                        link,
-                    });
-            }
+            insert_file_links(&mut index, visitor.into_file_links(), site_prefix);
         }
 
         Ok(LinkGraphBuild {
             graph: Self { index },
             warnings,
         })
+    }
+
+    /// Build a link graph from pre-collected per-file link data.
+    ///
+    /// Use this when the caller has already scanned files (e.g. `summary` combining
+    /// frontmatter + task + link visitors in a single pass) and wants to build the
+    /// graph without re-reading files.
+    pub fn from_file_links(
+        file_links: Vec<FileLinks>,
+        site_prefix: Option<&str>,
+    ) -> LinkGraphBuild {
+        let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::new();
+        for fl in file_links {
+            insert_file_links(&mut index, fl, site_prefix);
+        }
+        LinkGraphBuild {
+            graph: Self { index },
+            warnings: Vec::new(),
+        }
     }
 
     /// Return the set of all normalized link targets that have at least one
@@ -169,20 +158,74 @@ impl LinkGraph {
     }
 }
 
+/// Per-file link data produced by scanning a single file.
+pub struct FileLinks {
+    /// Relative path of the source file (vault-relative).
+    pub source: PathBuf,
+    /// Links extracted from the file body, with 1-based line numbers.
+    pub links: Vec<(usize, Link)>,
+}
+
+/// Outcome of scanning a single file for links during parallel processing.
+/// Normalize and insert one file's links into the shared index.
+fn insert_file_links(
+    index: &mut HashMap<String, Vec<BacklinkEntry>>,
+    file_links: FileLinks,
+    site_prefix: Option<&str>,
+) {
+    for (line, mut link) in file_links.links {
+        // Normalize markdown link targets that contain path separators
+        // so that, for example, `sub/a.md` linking to `../target.md`
+        // is stored as `target.md`, matching how callers query by
+        // vault-relative path.
+        //
+        // Wikilinks are vault-relative by definition — `[[backlog/item]]`
+        // written in any file always refers to `backlog/item.md` at the
+        // vault root, never a path relative to the source file.  They
+        // must NOT be passed through `normalize_target`.
+        if link.kind == LinkKind::Markdown
+            && (link.target.contains('/') || link.target.contains('\\'))
+        {
+            if link.target.starts_with('/') {
+                link.target = strip_site_prefix(&link.target, site_prefix);
+            } else {
+                link.target = normalize_target(&file_links.source, &link.target);
+            }
+        }
+        index
+            .entry(link.target.clone())
+            .or_default()
+            .push(BacklinkEntry {
+                source: file_links.source.clone(),
+                line,
+                link,
+            });
+    }
+}
+
 /// Visitor that collects links with their line numbers.
 /// Skips frontmatter parsing for performance.
-struct LinkGraphVisitor {
+pub struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
     scratch: Vec<Link>,
 }
 
 impl LinkGraphVisitor {
-    fn new(source: PathBuf) -> Self {
+    /// Create a new visitor for the given source file (vault-relative path).
+    pub fn new(source: PathBuf) -> Self {
         Self {
             source,
             links: Vec::new(),
             scratch: Vec::new(),
+        }
+    }
+
+    /// Consume the visitor and return the collected per-file link data.
+    pub fn into_file_links(self) -> FileLinks {
+        FileLinks {
+            source: self.source,
+            links: self.links,
         }
     }
 }

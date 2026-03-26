@@ -5,6 +5,7 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery::discover_files;
 use hyalo_core::frontmatter::read_frontmatter;
+use hyalo_core::link_graph::LinkGraph;
 use hyalo_core::scanner::{FileVisitor, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 
@@ -87,11 +88,28 @@ fn bench_scan_all_files(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// LinkGraph benchmark — full vault scan for link extraction
+// ---------------------------------------------------------------------------
+
+fn bench_link_graph_build(c: &mut Criterion) {
+    let Some(vault) = vault_path() else { return };
+
+    let mut group = c.benchmark_group("link_graph");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(30));
+    group.bench_function("build", |b| {
+        b.iter(|| LinkGraph::build(black_box(&vault), None).unwrap())
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_discover_files,
     bench_read_frontmatter,
     bench_read_all_frontmatter,
     bench_scan_all_files,
+    bench_link_graph_build,
 );
 criterion_main!(benches);
