@@ -768,6 +768,11 @@ fn main() {
         cmd = cmd.mut_arg("format", |a| a.hide(true));
     }
 
+    // Global args (--format, --jq, etc.) are only defined on the root Command
+    // in clap derive — they aren't propagated to subcommands until parse time.
+    // We can't use mut_subcommand to hide them from `init --help` because
+    // they don't exist on the subcommand Command node yet.  This is a known
+    // clap limitation with `global = true` derive args.
     let matches = cmd.get_matches();
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
