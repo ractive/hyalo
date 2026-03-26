@@ -1,7 +1,7 @@
 ---
 branch: iter-48/index-aware-mutations
 date: 2026-03-26
-status: in-progress
+status: completed
 tags:
 - iteration
 - index
