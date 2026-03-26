@@ -435,7 +435,7 @@ hyalo drop-index
 
 **When to use:** workflows that run many read-only queries in a short window — CI pipelines, automation scripts, LLM tool loops. Create the index at the start, query against it, then drop it.
 
-**Staleness:** the index is a frozen snapshot. Mutation commands (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) always scan from disk and ignore `--index`. If your workflow mixes reads and writes, do all reads first with the index, drop it, then execute mutations.
+**Mutations with `--index`:** mutation commands (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) now support `--index`. They still read and write individual files on disk, but after each mutation they patch the index entry in-place and save it back — keeping the index current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active. If your workflow only uses hyalo for mutations, the index stays consistent across interleaved reads and writes.
 
 Never commit `.hyalo-index` files to version control — they are throwaway artifacts.
 

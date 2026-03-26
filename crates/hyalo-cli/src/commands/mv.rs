@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
+use hyalo_core::index::{IndexEntry, SnapshotIndex, now_iso8601};
 use hyalo_core::link_rewrite::{self, Replacement, RewritePlan};
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ struct UpdatedFile {
 // ---------------------------------------------------------------------------
 
 /// Run `hyalo mv --file <old> --to <new> [--dry-run]`.
+#[allow(clippy::too_many_arguments)]
 pub fn mv(
     dir: &Path,
     file_arg: &str,
@@ -41,6 +43,8 @@ pub fn mv(
     dry_run: bool,
     format: Format,
     site_prefix: Option<&str>,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     // 1. Validate source exists
     let (_src_full, old_rel) = match discovery::resolve_file(dir, file_arg) {
@@ -80,6 +84,21 @@ pub fn mv(
     // 5. If not dry-run, execute the move and rewrites
     if !dry_run {
         execute_mv(dir, &old_rel, &new_rel, &plans)?;
+
+        // Patch index: update rel_path for the moved file
+        if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+            // Clone the old entry first (releasing the &mut borrow) so we can
+            // then call remove_entry and insert_entry which also need &mut self.
+            let old_entry_opt: Option<IndexEntry> = idx.get_mut(&old_rel).cloned();
+            if let Some(old_entry) = old_entry_opt {
+                idx.remove_entry(&old_rel);
+                let mut new_entry = old_entry;
+                new_entry.rel_path = new_rel.clone();
+                new_entry.modified = now_iso8601();
+                idx.insert_entry(new_entry);
+            }
+            idx.save_to(idx_path)?;
+        }
     }
 
     // 6. Format output

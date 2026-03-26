@@ -6,8 +6,9 @@ use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::filter::{self, PropertyFilter};
+use hyalo_core::filter::{self, PropertyFilter, extract_tags};
 use hyalo_core::frontmatter;
+use hyalo_core::index::{SnapshotIndex, now_iso8601};
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -145,6 +146,8 @@ pub fn set(
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     // At least one mutation target required
     if property_args.is_empty() && tag_args.is_empty() {
@@ -271,7 +274,18 @@ pub fn set(
 
         if file_changed {
             frontmatter::write_frontmatter(full_path, &props)?;
+            if let Some(idx) = snapshot_index.as_mut()
+                && let Some(entry) = idx.get_mut(rel_path)
+            {
+                entry.properties = props.clone();
+                entry.tags = extract_tags(&props);
+                entry.modified = now_iso8601();
+            }
         }
+    }
+
+    if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+        idx.save_to(idx_path)?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -388,6 +402,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let out = match outcome {
@@ -427,6 +443,8 @@ status: draft
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
 
@@ -457,6 +475,8 @@ status: done
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -490,6 +510,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -526,6 +548,8 @@ tags:
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -557,6 +581,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -579,6 +605,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -596,6 +624,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -614,6 +644,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -632,6 +664,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -656,6 +690,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
 
@@ -687,6 +723,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -728,6 +766,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -763,6 +803,8 @@ title: Note
             &[filter],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -797,6 +839,8 @@ title: Note
             &[],
             &["rust".to_owned()],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {

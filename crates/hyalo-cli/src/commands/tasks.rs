@@ -5,7 +5,8 @@ use std::path::Path;
 use crate::commands::resolve_error_to_outcome;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
-use hyalo_core::types::TaskReadResult;
+use hyalo_core::index::{SnapshotIndex, now_iso8601};
+use hyalo_core::types::{TaskInfo, TaskReadResult};
 
 // ---------------------------------------------------------------------------
 // `hyalo task read` — read single task at a line
@@ -62,6 +63,8 @@ pub fn task_toggle(
     file_arg: &str,
     line: usize,
     format: Format,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
         Ok(r) => r,
@@ -70,6 +73,7 @@ pub fn task_toggle(
 
     match hyalo_core::tasks::toggle_task(&full_path, line) {
         Ok(info) => {
+            patch_index(&rel_path, &info, snapshot_index, index_path)?;
             let result = TaskReadResult {
                 file: rel_path,
                 line: info.line,
@@ -105,6 +109,8 @@ pub fn task_set_status(
     line: usize,
     status: char,
     format: Format,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
         Ok(r) => r,
@@ -113,6 +119,7 @@ pub fn task_set_status(
 
     match hyalo_core::tasks::set_task_status(&full_path, line, status) {
         Ok(info) => {
+            patch_index(&rel_path, &info, snapshot_index, index_path)?;
             let result = TaskReadResult {
                 file: rel_path,
                 line: info.line,
@@ -135,6 +142,29 @@ pub fn task_set_status(
             )))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Index patching helper
+// ---------------------------------------------------------------------------
+
+fn patch_index(
+    rel_path: &str,
+    info: &TaskInfo,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
+) -> Result<()> {
+    if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+        if let Some(entry) = idx.get_mut(rel_path) {
+            if let Some(task) = entry.tasks.iter_mut().find(|t| t.line == info.line) {
+                task.status = info.status.clone();
+                task.done = info.done;
+            }
+            entry.modified = now_iso8601();
+        }
+        idx.save_to(idx_path)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +219,9 @@ mod tests {
     fn task_toggle_open_to_done() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "- [ ] My task\n").unwrap();
-        let out = unwrap_success(task_toggle(tmp.path(), "note.md", 1, Format::Json).unwrap());
+        let out = unwrap_success(
+            task_toggle(tmp.path(), "note.md", 1, Format::Json, &mut None, None).unwrap(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"], "x");
         assert_eq!(parsed["done"], true);
@@ -202,7 +234,9 @@ mod tests {
     fn task_toggle_done_to_open() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "- [x] Done task\n").unwrap();
-        let out = unwrap_success(task_toggle(tmp.path(), "note.md", 1, Format::Json).unwrap());
+        let out = unwrap_success(
+            task_toggle(tmp.path(), "note.md", 1, Format::Json, &mut None, None).unwrap(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"], " ");
         assert_eq!(parsed["done"], false);
@@ -212,7 +246,7 @@ mod tests {
     fn task_toggle_non_task_returns_user_error() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "Not a task\n").unwrap();
-        let outcome = task_toggle(tmp.path(), "note.md", 1, Format::Json).unwrap();
+        let outcome = task_toggle(tmp.path(), "note.md", 1, Format::Json, &mut None, None).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -222,8 +256,9 @@ mod tests {
     fn task_set_status_custom_char() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "- [ ] My task\n").unwrap();
-        let out =
-            unwrap_success(task_set_status(tmp.path(), "note.md", 1, '?', Format::Json).unwrap());
+        let out = unwrap_success(
+            task_set_status(tmp.path(), "note.md", 1, '?', Format::Json, &mut None, None).unwrap(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"], "?");
         assert_eq!(parsed["done"], false);
@@ -236,8 +271,9 @@ mod tests {
     fn task_set_status_to_done() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "- [ ] My task\n").unwrap();
-        let out =
-            unwrap_success(task_set_status(tmp.path(), "note.md", 1, 'x', Format::Json).unwrap());
+        let out = unwrap_success(
+            task_set_status(tmp.path(), "note.md", 1, 'x', Format::Json, &mut None, None).unwrap(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"], "x");
         assert_eq!(parsed["done"], true);
@@ -247,7 +283,8 @@ mod tests {
     fn task_set_status_non_task_returns_user_error() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("note.md"), "# Heading\n").unwrap();
-        let outcome = task_set_status(tmp.path(), "note.md", 1, 'x', Format::Json).unwrap();
+        let outcome =
+            task_set_status(tmp.path(), "note.md", 1, 'x', Format::Json, &mut None, None).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 }

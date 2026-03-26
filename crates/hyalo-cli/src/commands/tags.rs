@@ -7,7 +7,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
-use hyalo_core::index::VaultIndex;
+use hyalo_core::index::{SnapshotIndex, VaultIndex, now_iso8601};
 use hyalo_core::types::{TagSummary, TagSummaryEntry};
 use serde::Serialize;
 use serde_yaml_ng::Value;
@@ -165,6 +165,8 @@ pub fn tags_rename(
     to: &str,
     globs: &[String],
     format: Format,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     // Validate both tag names
     if let Err(msg) = validate_tag(from) {
@@ -245,7 +247,18 @@ pub fn tags_rename(
         }
 
         frontmatter::write_frontmatter(full_path, &props)?;
+        if let Some(idx) = snapshot_index.as_mut()
+            && let Some(entry) = idx.get_mut(rel_path)
+        {
+            entry.properties = props.clone();
+            entry.tags = extract_tags(&props);
+            entry.modified = now_iso8601();
+        }
         modified.push(rel_path.clone());
+    }
+
+    if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+        idx.save_to(idx_path)?;
     }
 
     let total = modified.len() + skipped.len();
@@ -482,7 +495,16 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_rename(tmp.path(), "filtering", "filters", &[], Format::Json).unwrap();
+        let outcome = tags_rename(
+            tmp.path(),
+            "filtering",
+            "filters",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -511,7 +533,16 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_rename(tmp.path(), "filtering", "filters", &[], Format::Json).unwrap();
+        let outcome = tags_rename(
+            tmp.path(),
+            "filtering",
+            "filters",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -540,7 +571,16 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_rename(tmp.path(), "filtering", "filters", &[], Format::Json).unwrap();
+        let outcome = tags_rename(
+            tmp.path(),
+            "filtering",
+            "filters",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -552,14 +592,24 @@ tags:
     #[test]
     fn tags_rename_same_name_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = tags_rename(tmp.path(), "foo", "foo", &[], Format::Json).unwrap();
+        let outcome =
+            tags_rename(tmp.path(), "foo", "foo", &[], Format::Json, &mut None, None).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
     #[test]
     fn tags_rename_invalid_tag_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = tags_rename(tmp.path(), "1984", "filters", &[], Format::Json).unwrap();
+        let outcome = tags_rename(
+            tmp.path(),
+            "1984",
+            "filters",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 

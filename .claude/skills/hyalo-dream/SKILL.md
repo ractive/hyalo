@@ -175,19 +175,14 @@ hyalo find --property status=completed --task todo --index .hyalo-index --jq 'ma
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.
 
-## Drop the index before mutations
-
-Before executing any changes, drop the snapshot index. It is stale once files change,
-and mutation commands always scan from disk anyway.
-
-```bash
-hyalo drop-index
-```
-
 ## Phase 4 — Consolidate
 
 Fix what you can. Be conservative — prefer fixing metadata over deleting files. For
 each change, note what you did and why.
+
+**Keep using `--index .hyalo-index`** for all mutations — hyalo now patches the index
+in-place after each file write, so it stays current for subsequent queries. No need to
+drop the index before making changes. Only drop it at the very end (Phase 5).
 
 ### Fix broken links
 For resolvable broken links (target moved to `done/` etc.), update the wikilink text
@@ -199,12 +194,12 @@ For truly broken links (target never existed), leave them and report them.
 ### Update stale statuses
 If an iteration's branch was merged:
 ```bash
-hyalo set --property status=completed --file <path>
+hyalo set --property status=completed --file <path> --index .hyalo-index
 ```
 
 If a backlog item's feature clearly shipped:
 ```bash
-hyalo set --property status=completed --file <path>
+hyalo set --property status=completed --file <path> --index .hyalo-index
 ```
 
 Only update when the evidence is clear. When uncertain, flag it in the report.
@@ -212,13 +207,13 @@ Only update when the evidence is clear. When uncertain, flag it in the report.
 ### Archive completed items
 If completed items are in a top-level directory and a `done/` subfolder exists:
 ```bash
-hyalo mv --file <old-path> --to <done-subdir/filename> --dry-run
+hyalo mv --file <old-path> --to <done-subdir/filename> --dry-run --index .hyalo-index
 ```
 Review the dry-run output. If correct, execute without `--dry-run`.
 
 ### Normalize tags
 ```bash
-hyalo tags rename --from <variant> --to <canonical>
+hyalo tags rename --from <variant> --to <canonical> --index .hyalo-index
 ```
 
 ### Add missing cross-references
@@ -259,5 +254,6 @@ normalized, files moved.
   wikilink text in prose, adding cross-reference lines).
 - **Batch similar findings**: if 15 completed items have unchecked tasks, say that once
   with the count. The report should be scannable in 30 seconds.
-- **Minimize disk scans**: use `--index .hyalo-index` for all read-only queries.
-  Drop the index before Phase 4 mutations.
+- **Minimize disk scans**: use `--index .hyalo-index` for all queries and mutations.
+  Mutations automatically patch the index in-place — no need to drop and recreate.
+  Only drop the index at the very end when the session is complete.
