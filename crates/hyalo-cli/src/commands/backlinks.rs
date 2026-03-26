@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
-use hyalo_core::link_graph::LinkGraph;
+use hyalo_core::link_graph::{LinkGraph, is_self_link};
 
 #[derive(Serialize)]
 struct BacklinkResult {
@@ -44,8 +44,14 @@ pub fn backlinks(
         eprintln!("warning: skipping {}: {msg}", path.display());
     }
 
-    // Look up backlinks — try with and without .md since wikilinks may use either
-    let entries = build.graph.backlinks(&rel);
+    // Look up backlinks, then exclude self-links at the display boundary.
+    // Self-links are kept in the core graph so that `mv` can rewrite them.
+    let entries: Vec<_> = build
+        .graph
+        .backlinks(&rel)
+        .into_iter()
+        .filter(|e| !is_self_link(e, &rel))
+        .collect();
 
     let items: Vec<BacklinkItem> = entries
         .iter()

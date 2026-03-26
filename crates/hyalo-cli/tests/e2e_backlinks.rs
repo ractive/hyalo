@@ -335,6 +335,29 @@ fn backlinks_resolves_absolute_links_with_dir_config() {
 }
 
 #[test]
+fn backlinks_excludes_self_links() {
+    // a.md links to itself — self-link must not appear in its own backlinks list.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "Self-ref: [[a]]\n");
+    write_md(tmp.path(), "b.md", "Link to [[a]]\n");
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "a.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "self-link must be excluded, got: {json}");
+    assert_eq!(json["backlinks"][0]["source"], "b.md");
+}
+
+#[test]
 fn backlinks_wikilink_with_path_from_subdirectory() {
     // A file in sub/ linking [[other/target]] must store the link as
     // "other/target", not "sub/other/target" (the incorrect normalized form).

@@ -829,3 +829,47 @@ fn mv_site_prefix_cli_empty_disables_prefix() {
         "--site-prefix='': expected 0 links updated, json={json}"
     );
 }
+
+#[test]
+fn mv_rewrites_self_link() {
+    // a.md contains a markdown self-link [me](a.md).
+    // When a.md is moved to archive/a.md the self-link must be rewritten —
+    // just like any other inbound link to the file.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+See [me](a.md) for details.
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "a.md", "--to", "archive/a.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["from"], "a.md");
+    assert_eq!(json["to"], "archive/a.md");
+    assert!(
+        json["total_links_updated"].as_u64().unwrap() >= 1,
+        "self-link must be counted as rewritten: {json}"
+    );
+
+    // The moved file must exist and the original self-link target must be gone.
+    let content = fs::read_to_string(tmp.path().join("archive/a.md")).unwrap();
+    assert!(
+        !content.contains("[me](a.md)"),
+        "old self-link must be gone after move: {content}"
+    );
+}

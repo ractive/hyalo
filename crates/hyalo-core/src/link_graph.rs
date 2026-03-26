@@ -140,6 +140,12 @@ impl LinkGraph {
     /// `target` should be the relative path without `.md` extension (matching
     /// how wikilinks are written), or with `.md` for markdown-style links.
     /// Both forms are checked.
+    ///
+    /// Self-links are **not** filtered here — the raw index is returned.
+    /// Callers that present results to users (e.g. the `backlinks` command and
+    /// `find --fields backlinks`) should filter with [`is_self_link`].  The
+    /// `mv` command must *not* filter so that a file's own self-references are
+    /// also rewritten when it is renamed.
     pub fn backlinks(&self, target: &str) -> Vec<&BacklinkEntry> {
         let mut results = Vec::new();
 
@@ -160,6 +166,24 @@ impl LinkGraph {
 
         results
     }
+}
+
+/// Returns `true` when `entry` is a self-link — i.e. the source file and the
+/// lookup target refer to the same vault-relative path.
+///
+/// Both sides are normalised to forward-slash form and compared with and
+/// without the `.md` extension so all link styles are covered.
+///
+/// Use this to filter [`LinkGraph::backlinks`] results at display boundaries
+/// (CLI commands) where self-links should be hidden from the user.
+pub fn is_self_link(entry: &BacklinkEntry, target: &str) -> bool {
+    let alt = if let Some(stem) = target.strip_suffix(".md") {
+        stem.to_string()
+    } else {
+        format!("{target}.md")
+    };
+    let source = entry.source.to_string_lossy().replace('\\', "/");
+    source == target || source == alt
 }
 
 /// Per-file link data produced by scanning a single file.
@@ -740,6 +764,92 @@ mod tests {
         // The raw `/page.md` form must NOT appear in the index.
         let raw_bl = graph.backlinks("/page.md");
         assert!(raw_bl.is_empty(), "raw absolute path must not be indexed");
+    }
+
+    #[test]
+    fn self_links_present_in_raw_backlinks() {
+        // backlinks() returns the raw index — self-links are included.
+        // Filtering is delegated to is_self_link() at the CLI layer.
+        let vault = create_vault(&[
+            ("a.md", "Self-reference: [[a]] and also [[b]]\n"),
+            ("b.md", "Link to [[a]]\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let graph = build.graph;
+
+        // Raw backlinks for "a" include the self-link from a.md
+        let bl_a = graph.backlinks("a");
+        assert_eq!(bl_a.len(), 2, "raw results must include the self-link");
+        let sources: Vec<_> = bl_a.iter().map(|e| e.source.to_str().unwrap()).collect();
+        assert!(
+            sources.contains(&"a.md"),
+            "self-link must be in raw results"
+        );
+        assert!(sources.contains(&"b.md"));
+
+        // After filtering with is_self_link, only b.md remains
+        let filtered: Vec<_> = bl_a.into_iter().filter(|e| !is_self_link(e, "a")).collect();
+        assert_eq!(filtered.len(), 1, "filtered result excludes the self-link");
+        assert_eq!(filtered[0].source, PathBuf::from("b.md"));
+
+        // b.md has no external links to itself — raw count is still 1
+        let bl_b = graph.backlinks("b");
+        assert_eq!(bl_b.len(), 1, "a.md links to b, so 1 raw backlink expected");
+        assert_eq!(bl_b[0].source, PathBuf::from("a.md"));
+    }
+
+    #[test]
+    fn self_links_present_with_md_extension() {
+        // a.md links to itself via [link](a.md) — markdown-style self-link.
+        // backlinks() returns it; is_self_link() detects it.
+        let vault = create_vault(&[
+            ("a.md", "Self: [me](a.md)\n"),
+            ("b.md", "Also: [a](a.md)\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let graph = build.graph;
+
+        let bl = graph.backlinks("a.md");
+        assert_eq!(
+            bl.len(),
+            2,
+            "raw results include both self and external link"
+        );
+
+        let filtered: Vec<_> = bl
+            .into_iter()
+            .filter(|e| !is_self_link(e, "a.md"))
+            .collect();
+        assert_eq!(filtered.len(), 1, "only b.md after filtering");
+        assert_eq!(filtered[0].source, PathBuf::from("b.md"));
+    }
+
+    #[test]
+    fn self_link_only_raw_has_one_entry() {
+        // a.md only links to itself — raw backlinks has one entry (the self-link).
+        // After filtering with is_self_link the result is empty.
+        let vault = create_vault(&[("a.md", "See [[a]] for details.\n")]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let graph = build.graph;
+
+        let raw_a = graph.backlinks("a");
+        assert_eq!(raw_a.len(), 1, "raw result contains the self-link");
+        assert!(is_self_link(raw_a[0], "a"));
+
+        let raw_a_md = graph.backlinks("a.md");
+        assert_eq!(raw_a_md.len(), 1, "same via .md form");
+        assert!(is_self_link(raw_a_md[0], "a.md"));
+
+        // After filtering, empty
+        assert_eq!(
+            graph
+                .backlinks("a")
+                .into_iter()
+                .filter(|e| !is_self_link(e, "a"))
+                .count(),
+            0,
+            "filtered backlinks must be empty for a self-link-only file"
+        );
     }
 
     #[test]
