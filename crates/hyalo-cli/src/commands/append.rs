@@ -7,8 +7,9 @@ use std::path::Path;
 use crate::commands::set::parse_kv;
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::filter::{self, PropertyFilter};
+use hyalo_core::filter::{self, PropertyFilter, extract_tags};
 use hyalo_core::frontmatter;
+use hyalo_core::index::{SnapshotIndex, format_modified};
 
 // ---------------------------------------------------------------------------
 // Output type
@@ -112,6 +113,7 @@ fn append_value_in_memory(
 /// - `property_args`: one or more `"K=V"` strings
 /// - Requires `--file` or `--glob`
 /// - At least one `property_args` entry required
+#[allow(clippy::too_many_arguments)]
 pub fn append(
     dir: &Path,
     property_args: &[String],
@@ -120,6 +122,8 @@ pub fn append(
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() {
         let out = crate::output::format_error(
@@ -167,6 +171,8 @@ pub fn append(
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); parsed_args.len()];
 
+    let mut index_dirty = false;
+
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
@@ -200,7 +206,19 @@ pub fn append(
 
         if file_changed {
             frontmatter::write_frontmatter(full_path, &props)?;
+            if let Some(idx) = snapshot_index.as_mut()
+                && let Some(entry) = idx.get_mut(rel_path)
+            {
+                entry.properties = props.clone();
+                entry.tags = extract_tags(&props);
+                entry.modified = format_modified(full_path)?;
+                index_dirty = true;
+            }
         }
+    }
+
+    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+        idx.save_to(idx_path)?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -270,6 +288,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -308,6 +328,8 @@ aliases:
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
 
@@ -338,6 +360,8 @@ aliases:
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -371,6 +395,8 @@ author: Alice
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
 
@@ -402,6 +428,8 @@ author: Alice
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -434,6 +462,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -457,6 +487,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -473,6 +505,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -490,6 +524,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -507,6 +543,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -530,6 +568,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
 
@@ -559,6 +599,8 @@ title: Note
             &[],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -593,6 +635,8 @@ title: Note
             &[filter],
             &[],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -625,6 +669,8 @@ title: Note
             &[],
             &["rust".to_owned()],
             Format::Json,
+            &mut None,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {

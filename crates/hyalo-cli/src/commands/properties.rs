@@ -4,8 +4,9 @@ use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format, format_output};
+use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
-use hyalo_core::index::VaultIndex;
+use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
 use hyalo_core::types::PropertySummaryEntry;
 use serde::Serialize;
 
@@ -24,7 +25,7 @@ pub fn properties_summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    // Aggregate: (name, type) -> count — same key as summary command so both agree.
+    // Aggregate: (name, type) -> count -- same key as summary command so both agree.
     let mut agg: std::collections::BTreeMap<(String, String), usize> =
         std::collections::BTreeMap::new();
 
@@ -122,6 +123,8 @@ pub fn properties_rename(
     to: &str,
     globs: &[String],
     format: Format,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     if from == to {
         let out = crate::output::format_error(
@@ -144,6 +147,7 @@ pub fn properties_rename(
     let mut modified = Vec::new();
     let mut skipped = Vec::new();
     let mut conflicts = Vec::new();
+    let mut index_dirty = false;
 
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
@@ -155,13 +159,13 @@ pub fn properties_rename(
             Err(e) => return Err(e),
         };
 
-        // Source key not present — skip
+        // Source key not present -- skip
         let Some(value) = props.remove(from) else {
             skipped.push(rel_path.clone());
             continue;
         };
 
-        // Target key already exists — conflict, put the source back
+        // Target key already exists -- conflict, put the source back
         if props.contains_key(to) {
             props.insert(from.to_owned(), value);
             conflicts.push(rel_path.clone());
@@ -170,7 +174,19 @@ pub fn properties_rename(
 
         props.insert(to.to_owned(), value);
         frontmatter::write_frontmatter(full_path, &props)?;
+        if let Some(idx) = snapshot_index.as_mut()
+            && let Some(entry) = idx.get_mut(rel_path)
+        {
+            entry.properties = props.clone();
+            entry.tags = extract_tags(&props);
+            entry.modified = format_modified(full_path)?;
+            index_dirty = true;
+        }
         modified.push(rel_path.clone());
+    }
+
+    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+        idx.save_to(idx_path)?;
     }
 
     let total = modified.len() + skipped.len() + conflicts.len();
@@ -256,8 +272,16 @@ keywords: test
         )
         .unwrap();
 
-        let outcome =
-            properties_rename(tmp.path(), "keywords", "Keywords", &[], Format::Json).unwrap();
+        let outcome = properties_rename(
+            tmp.path(),
+            "keywords",
+            "Keywords",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -284,8 +308,16 @@ title: Note
         )
         .unwrap();
 
-        let outcome =
-            properties_rename(tmp.path(), "keywords", "Keywords", &[], Format::Json).unwrap();
+        let outcome = properties_rename(
+            tmp.path(),
+            "keywords",
+            "Keywords",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -309,8 +341,16 @@ Keywords: other
         )
         .unwrap();
 
-        let outcome =
-            properties_rename(tmp.path(), "keywords", "Keywords", &[], Format::Json).unwrap();
+        let outcome = properties_rename(
+            tmp.path(),
+            "keywords",
+            "Keywords",
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -322,7 +362,9 @@ Keywords: other
     #[test]
     fn properties_rename_same_name_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = properties_rename(tmp.path(), "foo", "foo", &[], Format::Json).unwrap();
+        let outcome =
+            properties_rename(tmp.path(), "foo", "foo", &[], Format::Json, &mut None, None)
+                .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -340,7 +382,7 @@ Keywords: other
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         let priority_entries: Vec<&serde_json::Value> =
             parsed.iter().filter(|p| p["name"] == "priority").collect();
-        // Two entries: one text, one number — not collapsed into a single entry
+        // Two entries: one text, one number -- not collapsed into a single entry
         assert_eq!(
             priority_entries.len(),
             2,

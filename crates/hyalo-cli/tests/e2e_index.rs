@@ -693,3 +693,398 @@ fn incompatible_index_falls_back_for_summary() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["files"]["total"].as_u64().unwrap(), 4);
 }
+
+// ---------------------------------------------------------------------------
+// Mutation commands with --index (index-aware mutations)
+// ---------------------------------------------------------------------------
+
+/// Helper: run a hyalo command with --index and assert success.
+fn run_with_index(tmp: &TempDir, index_path: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--index", index_path.to_str().unwrap()]);
+    cmd.args(args);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "command {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        panic!("invalid JSON from {:?}: {e}\nstdout: {stdout}", args)
+    })
+}
+
+#[test]
+fn set_with_index_updates_index_for_subsequent_find() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Set a new property via --index
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["set", "--property", "reviewed=true", "--file", "alpha.md"],
+    );
+
+    // Query the index — should see the updated property without re-scanning
+    let json = run_find(
+        &tmp,
+        &[
+            "--property",
+            "reviewed=true",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    let files = sorted_files(&json);
+    assert_eq!(files, vec!["alpha.md"]);
+    assert_eq!(
+        json.as_array().unwrap()[0]["properties"]["reviewed"]
+            .as_str()
+            .or_else(|| json.as_array().unwrap()[0]["properties"]["reviewed"]
+                .as_bool()
+                .map(|_| "true")),
+        Some("true"),
+    );
+}
+
+#[test]
+fn remove_with_index_updates_index_for_subsequent_find() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Verify alpha has status=draft initially
+    let before = run_find(
+        &tmp,
+        &[
+            "--property",
+            "status=draft",
+            "--file",
+            "alpha.md",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(before.as_array().unwrap().len(), 1);
+
+    // Remove the status property via --index
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["remove", "--property", "status", "--file", "alpha.md"],
+    );
+
+    // Query the index — alpha should no longer match status=draft
+    let after = run_find(
+        &tmp,
+        &[
+            "--property",
+            "status=draft",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    let files = sorted_files(&after);
+    assert!(
+        !files.contains(&"alpha.md".to_owned()),
+        "alpha.md should no longer have status=draft after remove; got: {files:?}"
+    );
+}
+
+#[test]
+fn append_with_index_updates_index_for_subsequent_find() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Append a new alias
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "append",
+            "--property",
+            "aliases=The Alpha",
+            "--file",
+            "alpha.md",
+        ],
+    );
+
+    // Find by the new property via index
+    let json = run_find(
+        &tmp,
+        &[
+            "--property",
+            "aliases",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    let files = sorted_files(&json);
+    assert_eq!(files, vec!["alpha.md"]);
+}
+
+#[test]
+fn task_toggle_with_index_updates_index() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // alpha.md has tasks at lines 31 and 32 (line 31: "- [ ] Write tests", line 32: "- [x] Write code")
+    // Find the actual task line by querying
+    let before = run_find(
+        &tmp,
+        &[
+            "--task",
+            "todo",
+            "--file",
+            "alpha.md",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let todo_tasks: Vec<&serde_json::Value> = before.as_array().unwrap()[0]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| !t["done"].as_bool().unwrap())
+        .collect();
+    assert!(
+        !todo_tasks.is_empty(),
+        "alpha.md should have open tasks before toggle"
+    );
+    let task_line = todo_tasks[0]["line"].as_u64().unwrap();
+
+    // Toggle the first open task
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "task",
+            "toggle",
+            "--file",
+            "alpha.md",
+            "--line",
+            &task_line.to_string(),
+        ],
+    );
+
+    // Query the index — the task should now be done
+    let after = run_find(
+        &tmp,
+        &[
+            "--file",
+            "alpha.md",
+            "--fields",
+            "tasks",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let tasks = after.as_array().unwrap()[0]["tasks"].as_array().unwrap();
+    let toggled = tasks
+        .iter()
+        .find(|t| t["line"].as_u64().unwrap() == task_line)
+        .expect("task at toggled line should still exist");
+    assert!(
+        toggled["done"].as_bool().unwrap(),
+        "task at line {task_line} should be done after toggle"
+    );
+}
+
+#[test]
+fn mv_with_index_updates_index_path() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Move gamma.md to archive/gamma.md
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["mv", "--file", "gamma.md", "--to", "archive/gamma.md"],
+    );
+
+    // The index should now have archive/gamma.md and not gamma.md
+    let json = run_find(&tmp, &["--index", index_path.to_str().unwrap()]);
+    let files = sorted_files(&json);
+    assert!(
+        files.contains(&"archive/gamma.md".to_owned()),
+        "archive/gamma.md should be in index; got: {files:?}"
+    );
+    assert!(
+        !files.contains(&"gamma.md".to_owned()),
+        "gamma.md should no longer be in index; got: {files:?}"
+    );
+
+    // Properties/tags on the moved file are still queryable
+    let json = run_find(
+        &tmp,
+        &[
+            "--property",
+            "status=draft",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let files = sorted_files(&json);
+    assert!(
+        files.contains(&"archive/gamma.md".to_owned()),
+        "moved file should still be findable by property; got: {files:?}"
+    );
+
+    // Note: link graph / backlinks in the index are NOT updated after mv.
+    // This is a known limitation — backlink queries may be stale.
+    // Property, tag, and task queries remain accurate.
+}
+
+#[test]
+fn tags_rename_with_index_updates_index() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Rename tag 'cli' to 'command-line'
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["tags", "rename", "--from", "cli", "--to", "command-line"],
+    );
+
+    // Query via index — alpha.md should have 'command-line' tag, not 'cli'
+    let json = run_find(
+        &tmp,
+        &[
+            "--tag",
+            "command-line",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let files = sorted_files(&json);
+    assert_eq!(files, vec!["alpha.md"]);
+
+    // Old tag should find nothing
+    let old = run_find(
+        &tmp,
+        &["--tag", "cli", "--index", index_path.to_str().unwrap()],
+    );
+    assert!(
+        old.as_array().unwrap().is_empty(),
+        "old tag 'cli' should match nothing after rename"
+    );
+}
+
+#[test]
+fn properties_rename_with_index_updates_index() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Rename 'priority' to 'importance' (only alpha.md has it)
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "properties",
+            "rename",
+            "--from",
+            "priority",
+            "--to",
+            "importance",
+        ],
+    );
+
+    // Query via index — alpha.md should have 'importance', not 'priority'
+    let json = run_find(
+        &tmp,
+        &[
+            "--property",
+            "importance",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let files = sorted_files(&json);
+    assert_eq!(files, vec!["alpha.md"]);
+
+    let old = run_find(
+        &tmp,
+        &[
+            "--property",
+            "priority",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        old.as_array().unwrap().is_empty(),
+        "old property 'priority' should match nothing after rename"
+    );
+}
+
+#[test]
+fn chained_mutations_with_index_keep_index_consistent() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Chain: set status=archived on alpha, remove tag 'rust' from alpha, add tag 'legacy'
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["set", "--property", "status=archived", "--file", "alpha.md"],
+    );
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["remove", "--tag", "rust", "--file", "alpha.md"],
+    );
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["set", "--tag", "legacy", "--file", "alpha.md"],
+    );
+
+    // Query via index — should reflect all three mutations
+    let json = run_find(
+        &tmp,
+        &[
+            "--file",
+            "alpha.md",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let entry = &json.as_array().unwrap()[0];
+    assert_eq!(entry["properties"]["status"], "archived");
+    let tags: Vec<&str> = entry["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    assert!(
+        !tags.contains(&"rust"),
+        "tag 'rust' should be removed; got: {tags:?}"
+    );
+    assert!(
+        tags.contains(&"legacy"),
+        "tag 'legacy' should be present; got: {tags:?}"
+    );
+
+    // Now do a fresh disk scan (no --index) and verify it matches
+    let disk_json = run_find(&tmp, &["--file", "alpha.md"]);
+    let disk_entry = &disk_json.as_array().unwrap()[0];
+    assert_eq!(disk_entry["properties"]["status"], "archived");
+    let disk_tags: Vec<&str> = disk_entry["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        tags, disk_tags,
+        "index and disk scan should agree after chained mutations"
+    );
+}

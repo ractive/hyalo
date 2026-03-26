@@ -241,13 +241,15 @@ struct Cli {
 
     /// Use a pre-built snapshot index instead of scanning files from disk.
     ///
-    /// The index is a frozen point-in-time snapshot — it becomes stale as
-    /// soon as any file in the vault is modified. Best used as a bracketed
-    /// session: create-index, run read-only queries, drop-index.
-    ///
     /// Read-only commands (find, summary, tags summary, properties summary,
-    /// backlinks) use the index; mutation commands (set, remove, append, task,
-    /// mv, tags rename, properties rename) always scan from disk and ignore it.
+    /// backlinks) use the index to skip disk scans entirely.
+    ///
+    /// Mutation commands (set, remove, append, task, mv, tags rename,
+    /// properties rename) still read and write individual files on disk,
+    /// but when --index is provided they also update the index entry
+    /// in-place after each mutation and save it back — keeping the index
+    /// current for subsequent queries. This is safe as long as no external
+    /// tool modifies files in the vault while the index is active.
     ///
     /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
     /// falls back to a full disk scan automatically.
@@ -531,12 +533,13 @@ Repeatable (AND).\n\
         name = "create-index",
         long_about = "Scan the vault and write a binary snapshot index to disk.\n\n\
             The index captures a point-in-time snapshot of all vault metadata.\n\
-            It is short-lived — it becomes stale when any vault file changes.\n\
             Delete it after use via `hyalo drop-index`.\n\n\
-            The index file can then be passed to subsequent read-only commands via\n\
-            `--index <PATH>` to skip the disk scan entirely.  Mutation commands\n\
-            (set, remove, append, task, mv, tags rename, properties rename) always\n\
-            scan from disk and ignore --index.\n\n\
+            The index file can be passed to any command via `--index <PATH>`.\n\
+            Read-only commands skip the disk scan entirely. Mutation commands\n\
+            (set, remove, append, task, mv, tags rename, properties rename) still\n\
+            read/write files on disk but also patch the index in-place after each\n\
+            mutation — keeping it current for subsequent queries. This is safe as\n\
+            long as no external tool modifies vault files while the index is active.\n\n\
             OUTPUT: JSON object with `path`, `files_indexed`, and `warnings`.\n\
             SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir)."
     )]
@@ -549,9 +552,8 @@ Repeatable (AND).\n\
     #[command(
         name = "drop-index",
         long_about = "Delete a snapshot index file.\n\n\
-            Always drop the index before running mutation commands if you\n\
-            created one, since mutations need fresh disk data. The index is\n\
-            a frozen snapshot and should not outlive its session.\n\n\
+            Drop the index when your session is complete. The index should\n\
+            not outlive its session.\n\n\
             If --path is omitted, deletes .hyalo-index in --dir.\n\n\
             OUTPUT: JSON object with `deleted` path.\n\
             SIDE EFFECTS: Deletes the index file from disk."
@@ -957,22 +959,18 @@ fn main() {
         eprintln!("warning: --hints has no effect on mutation commands");
     }
 
-    // Load snapshot index if --index is provided, but only for read-only commands.
-    // Mutation commands (set, remove, append, task, mv, tags rename, properties rename)
-    // always scan from disk and never consult the index.
-    let uses_index = matches!(
+    // Load snapshot index if --index is provided.
+    // Read-only commands use it to skip disk scans. Mutation commands use it to
+    // keep the index up-to-date after each file write (they still read/write
+    // individual files on disk, but patch the index entry in-place).
+    let uses_index = !matches!(
         &cli.command,
-        Commands::Find { .. }
-            | Commands::Summary { .. }
-            | Commands::Tags {
-                action: None | Some(TagsAction::Summary { .. })
-            }
-            | Commands::Properties {
-                action: None | Some(PropertiesAction::Summary { .. })
-            }
-            | Commands::Backlinks { .. }
+        Commands::Init { .. }
+            | Commands::CreateIndex { .. }
+            | Commands::DropIndex { .. }
+            | Commands::Read { .. }
     );
-    let snapshot_index: Option<SnapshotIndex> = if uses_index {
+    let mut snapshot_index: Option<SnapshotIndex> = if uses_index {
         if let Some(ref index_path) = cli.index {
             match SnapshotIndex::load(index_path) {
                 Ok(Some(idx)) => {
@@ -1152,7 +1150,15 @@ fn main() {
                     ref from,
                     ref to,
                     ref glob,
-                } => properties::properties_rename(&dir, from, to, glob, effective_format),
+                } => properties::properties_rename(
+                    &dir,
+                    from,
+                    to,
+                    glob,
+                    effective_format,
+                    &mut snapshot_index,
+                    cli.index.as_deref(),
+                ),
             }
         }
         Commands::Tags { action } => {
@@ -1187,16 +1193,29 @@ fn main() {
                     ref from,
                     ref to,
                     ref glob,
-                } => tag_commands::tags_rename(&dir, from, to, glob, effective_format),
+                } => tag_commands::tags_rename(
+                    &dir,
+                    from,
+                    to,
+                    glob,
+                    effective_format,
+                    &mut snapshot_index,
+                    cli.index.as_deref(),
+                ),
             }
         }
         Commands::Task { action } => match action {
             TaskAction::Read { ref file, line } => {
                 task_commands::task_read(&dir, file, line, effective_format)
             }
-            TaskAction::Toggle { ref file, line } => {
-                task_commands::task_toggle(&dir, file, line, effective_format)
-            }
+            TaskAction::Toggle { ref file, line } => task_commands::task_toggle(
+                &dir,
+                file,
+                line,
+                effective_format,
+                &mut snapshot_index,
+                cli.index.as_deref(),
+            ),
             TaskAction::SetStatus {
                 ref file,
                 line,
@@ -1219,6 +1238,8 @@ fn main() {
                     line,
                     status.chars().next().unwrap(),
                     effective_format,
+                    &mut snapshot_index,
+                    cli.index.as_deref(),
                 )
             }
         },
@@ -1251,6 +1272,8 @@ fn main() {
                 &where_prop_filters,
                 where_tags,
                 effective_format,
+                &mut snapshot_index,
+                cli.index.as_deref(),
             )
         }
         Commands::Remove {
@@ -1271,6 +1294,8 @@ fn main() {
                 &where_prop_filters,
                 where_tags,
                 effective_format,
+                &mut snapshot_index,
+                cli.index.as_deref(),
             )
         }
         Commands::Append {
@@ -1289,6 +1314,8 @@ fn main() {
                 &where_prop_filters,
                 where_tags,
                 effective_format,
+                &mut snapshot_index,
+                cli.index.as_deref(),
             )
         }
         Commands::Backlinks { ref file } => {
@@ -1302,7 +1329,16 @@ fn main() {
             ref file,
             ref to,
             dry_run,
-        } => mv_commands::mv(&dir, file, to, dry_run, effective_format, site_prefix),
+        } => mv_commands::mv(
+            &dir,
+            file,
+            to,
+            dry_run,
+            effective_format,
+            site_prefix,
+            &mut snapshot_index,
+            cli.index.as_deref(),
+        ),
         Commands::CreateIndex { ref output } => create_index_commands::create_index(
             &dir,
             site_prefix,

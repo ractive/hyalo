@@ -183,26 +183,33 @@ Supports `--format text` (default, compact) and `--format json`. Useful for impa
 
 ## Snapshot index for batch queries
 
-When running many read-only queries (e.g., during a dream/consolidation pass or any multi-step
+When running many queries (e.g., during a dream/consolidation pass or any multi-step
 analysis), create a snapshot index first to avoid repeated disk scans:
 
 ```bash
 # Create the index (one scan, reused by all subsequent queries)
 hyalo create-index
 
-# All read-only queries use the index — no disk scan
+# Read-only queries use the index — no disk scan
 hyalo find --property status=in-progress --index .hyalo-index
 hyalo summary --index .hyalo-index
 hyalo tags summary --index .hyalo-index
 hyalo backlinks --file some-note.md --index .hyalo-index
 
+# Mutations also work with --index — they patch the index after each write
+hyalo set --property status=completed --file note.md --index .hyalo-index
+hyalo task toggle --file note.md --line 5 --index .hyalo-index
+
 # Drop the index when done
 hyalo drop-index
 ```
 
-The index is **ephemeral** — create it, use it, drop it within the same session. It becomes
-stale the moment any file in the vault changes. Never persist it across sessions.
+The index is **ephemeral** — create it, use it, drop it within the same session. Never persist
+it across sessions.
 
-**For mixed read/write workflows:** gather all information with `--index` first, then drop the
-index, then execute mutations. Mutation commands (`set`, `remove`, `append`, `task`, `mv`,
-`tags rename`, `properties rename`) ignore `--index` — they always scan fresh from disk.
+**Index-aware mutations:** all mutation commands (`set`, `remove`, `append`, `task`, `mv`,
+`tags rename`, `properties rename`) support `--index`. They still read/write individual files
+on disk, but after each mutation they patch the in-memory index entry and save the snapshot
+back — keeping it current for subsequent queries. This is safe as long as **no external tool
+modifies files in the vault** while the index is active. If only hyalo touches the files,
+the index stays consistent across interleaved reads and writes.

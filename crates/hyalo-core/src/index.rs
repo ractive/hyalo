@@ -202,6 +202,62 @@ pub struct SnapshotIndex {
 }
 
 impl SnapshotIndex {
+    // ------------------------------------------------------------------
+    // Mutation helpers — update entries in-place after a mutation command
+    // ------------------------------------------------------------------
+
+    /// Remove an entry by vault-relative path (for `mv` old path).
+    pub fn remove_entry(&mut self, rel_path: &str) {
+        if let Some(&idx) = self.path_index.get(rel_path) {
+            self.entries.remove(idx);
+            self.rebuild_path_index();
+        }
+    }
+
+    /// Insert a new entry (for `mv` new path). Maintains sorted order.
+    pub fn insert_entry(&mut self, entry: IndexEntry) {
+        let pos = self
+            .entries
+            .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
+            .unwrap_or_else(|i| i);
+        self.entries.insert(pos, entry);
+        self.rebuild_path_index();
+    }
+
+    /// Get a mutable reference to an entry by path.
+    pub fn get_mut(&mut self, rel_path: &str) -> Option<&mut IndexEntry> {
+        self.path_index
+            .get(rel_path)
+            .copied()
+            .map(|i| &mut self.entries[i])
+    }
+
+    /// Rebuild the path → index lookup after insertions/removals.
+    fn rebuild_path_index(&mut self) {
+        self.path_index = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.rel_path.clone(), i))
+            .collect();
+    }
+
+    /// Re-serialize and atomically save the (possibly mutated) snapshot.
+    ///
+    /// Reuses the original header's `vault_dir` and `site_prefix`.
+    pub fn save_to(&self, path: &Path) -> Result<()> {
+        write_snapshot(
+            self,
+            path,
+            &self.header.vault_dir,
+            self.header.site_prefix.as_deref(),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Deserialization
+    // ------------------------------------------------------------------
+
     /// Deserialize snapshot bytes into a `SnapshotIndex`, optionally printing a
     /// warning when the schema is incompatible.
     ///
@@ -280,27 +336,7 @@ impl SnapshotIndex {
         vault_dir: &str,
         site_prefix: Option<&str>,
     ) -> Result<()> {
-        let header = SnapshotHeader {
-            vault_dir: vault_dir.to_owned(),
-            site_prefix: site_prefix.map(str::to_owned),
-            created_at: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            pid: std::process::id(),
-        };
-        let data = SnapshotData {
-            header,
-            entries: index.entries().to_vec(),
-            graph: index.link_graph().clone(),
-        };
-        let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-        let tmp_path = path.with_extension("hyalo-index.tmp");
-        std::fs::write(&tmp_path, &bytes)
-            .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
-        std::fs::rename(&tmp_path, path)
-            .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
-        Ok(())
+        write_snapshot(index, path, vault_dir, site_prefix)
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -312,6 +348,38 @@ impl SnapshotIndex {
             self.header.pid,
         )
     }
+}
+
+/// Shared serialization logic for saving a snapshot index to disk.
+///
+/// Writes to a temporary file first, then atomically renames into place.
+fn write_snapshot(
+    index: &dyn VaultIndex,
+    path: &Path,
+    vault_dir: &str,
+    site_prefix: Option<&str>,
+) -> Result<()> {
+    let header = SnapshotHeader {
+        vault_dir: vault_dir.to_owned(),
+        site_prefix: site_prefix.map(str::to_owned),
+        created_at: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        pid: std::process::id(),
+    };
+    let data = SnapshotData {
+        header,
+        entries: index.entries().to_vec(),
+        graph: index.link_graph().clone(),
+    };
+    let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
+    let tmp_path = path.with_extension("hyalo-index.tmp");
+    std::fs::write(&tmp_path, &bytes)
+        .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
+    Ok(())
 }
 
 impl VaultIndex for SnapshotIndex {
@@ -440,7 +508,7 @@ fn scan_one_file(full_path: &Path, rel_path: &str) -> Result<(IndexEntry, FileLi
 }
 
 /// Format a file's last-modified time as ISO 8601 UTC.
-fn format_modified(path: &Path) -> Result<String> {
+pub fn format_modified(path: &Path) -> Result<String> {
     let meta = std::fs::metadata(path)
         .with_context(|| format!("failed to read metadata for {}", path.display()))?;
     let mtime = meta
