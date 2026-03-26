@@ -206,21 +206,6 @@ impl SnapshotIndex {
     // Mutation helpers — update entries in-place after a mutation command
     // ------------------------------------------------------------------
 
-    /// Replace the entry for `rel_path` with `entry` (in-place).
-    ///
-    /// If the entry's `rel_path` differs from the lookup key (shouldn't happen
-    /// for set/remove/append — only `mv` changes the path), use
-    /// `remove_entry` + `insert_entry` instead.
-    ///
-    /// Panics in debug mode if `rel_path` is not found.
-    pub fn update_entry(&mut self, rel_path: &str, entry: IndexEntry) {
-        if let Some(&idx) = self.path_index.get(rel_path) {
-            self.entries[idx] = entry;
-        } else {
-            debug_assert!(false, "update_entry: {rel_path} not in index");
-        }
-    }
-
     /// Remove an entry by vault-relative path (for `mv` old path).
     pub fn remove_entry(&mut self, rel_path: &str) {
         if let Some(&idx) = self.path_index.get(rel_path) {
@@ -237,11 +222,6 @@ impl SnapshotIndex {
             .unwrap_or_else(|i| i);
         self.entries.insert(pos, entry);
         self.rebuild_path_index();
-    }
-
-    /// Replace the link graph (needed after `mv` rewrites targets).
-    pub fn set_link_graph(&mut self, graph: LinkGraph) {
-        self.graph = graph;
     }
 
     /// Get a mutable reference to an entry by path.
@@ -264,31 +244,14 @@ impl SnapshotIndex {
 
     /// Re-serialize and atomically save the (possibly mutated) snapshot.
     ///
-    /// Uses the same header metadata (vault_dir, site_prefix, etc.) as the
-    /// original snapshot. Only `created_at` and `pid` are updated to reflect
-    /// the current process.
+    /// Reuses the original header's `vault_dir` and `site_prefix`.
     pub fn save_to(&self, path: &Path) -> Result<()> {
-        let header = SnapshotHeader {
-            vault_dir: self.header.vault_dir.clone(),
-            site_prefix: self.header.site_prefix.clone(),
-            created_at: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            pid: std::process::id(),
-        };
-        let data = SnapshotData {
-            header,
-            entries: self.entries.clone(),
-            graph: self.graph.clone(),
-        };
-        let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-        let tmp_path = path.with_extension("hyalo-index.tmp");
-        std::fs::write(&tmp_path, &bytes)
-            .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
-        std::fs::rename(&tmp_path, path)
-            .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
-        Ok(())
+        write_snapshot(
+            self,
+            path,
+            &self.header.vault_dir,
+            self.header.site_prefix.as_deref(),
+        )
     }
 
     // ------------------------------------------------------------------
@@ -373,27 +336,7 @@ impl SnapshotIndex {
         vault_dir: &str,
         site_prefix: Option<&str>,
     ) -> Result<()> {
-        let header = SnapshotHeader {
-            vault_dir: vault_dir.to_owned(),
-            site_prefix: site_prefix.map(str::to_owned),
-            created_at: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            pid: std::process::id(),
-        };
-        let data = SnapshotData {
-            header,
-            entries: index.entries().to_vec(),
-            graph: index.link_graph().clone(),
-        };
-        let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-        let tmp_path = path.with_extension("hyalo-index.tmp");
-        std::fs::write(&tmp_path, &bytes)
-            .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
-        std::fs::rename(&tmp_path, path)
-            .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
-        Ok(())
+        write_snapshot(index, path, vault_dir, site_prefix)
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -405,6 +348,38 @@ impl SnapshotIndex {
             self.header.pid,
         )
     }
+}
+
+/// Shared serialization logic for saving a snapshot index to disk.
+///
+/// Writes to a temporary file first, then atomically renames into place.
+fn write_snapshot(
+    index: &dyn VaultIndex,
+    path: &Path,
+    vault_dir: &str,
+    site_prefix: Option<&str>,
+) -> Result<()> {
+    let header = SnapshotHeader {
+        vault_dir: vault_dir.to_owned(),
+        site_prefix: site_prefix.map(str::to_owned),
+        created_at: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        pid: std::process::id(),
+    };
+    let data = SnapshotData {
+        header,
+        entries: index.entries().to_vec(),
+        graph: index.link_graph().clone(),
+    };
+    let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
+    let tmp_path = path.with_extension("hyalo-index.tmp");
+    std::fs::write(&tmp_path, &bytes)
+        .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
+    Ok(())
 }
 
 impl VaultIndex for SnapshotIndex {
@@ -533,7 +508,7 @@ fn scan_one_file(full_path: &Path, rel_path: &str) -> Result<(IndexEntry, FileLi
 }
 
 /// Format a file's last-modified time as ISO 8601 UTC.
-fn format_modified(path: &Path) -> Result<String> {
+pub fn format_modified(path: &Path) -> Result<String> {
     let meta = std::fs::metadata(path)
         .with_context(|| format!("failed to read metadata for {}", path.display()))?;
     let mtime = meta
@@ -544,15 +519,6 @@ fn format_modified(path: &Path) -> Result<String> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     Ok(format_iso8601(secs))
-}
-
-/// Return the current time formatted as ISO 8601 UTC.
-pub fn now_iso8601() -> String {
-    let secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format_iso8601(secs)
 }
 
 /// Format Unix timestamp as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).

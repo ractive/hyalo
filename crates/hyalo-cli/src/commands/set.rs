@@ -8,7 +8,7 @@ use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::{self, PropertyFilter, extract_tags};
 use hyalo_core::frontmatter;
-use hyalo_core::index::{SnapshotIndex, now_iso8601};
+use hyalo_core::index::{SnapshotIndex, format_modified};
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -228,6 +228,8 @@ pub fn set(
     let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); tag_args.len()];
 
+    let mut index_dirty = false;
+
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
@@ -279,12 +281,13 @@ pub fn set(
             {
                 entry.properties = props.clone();
                 entry.tags = extract_tags(&props);
-                entry.modified = now_iso8601();
+                entry.modified = format_modified(full_path)?;
+                index_dirty = true;
             }
         }
     }
 
-    if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
         idx.save_to(idx_path)?;
     }
 

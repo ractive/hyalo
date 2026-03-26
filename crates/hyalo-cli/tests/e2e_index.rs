@@ -919,6 +919,26 @@ fn mv_with_index_updates_index_path() {
         !files.contains(&"gamma.md".to_owned()),
         "gamma.md should no longer be in index; got: {files:?}"
     );
+
+    // Properties/tags on the moved file are still queryable
+    let json = run_find(
+        &tmp,
+        &[
+            "--property",
+            "status=draft",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+    let files = sorted_files(&json);
+    assert!(
+        files.contains(&"archive/gamma.md".to_owned()),
+        "moved file should still be findable by property; got: {files:?}"
+    );
+
+    // Note: link graph / backlinks in the index are NOT updated after mv.
+    // This is a known limitation — backlink queries may be stale.
+    // Property, tag, and task queries remain accurate.
 }
 
 #[test]

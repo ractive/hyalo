@@ -6,7 +6,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format, format_output};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
-use hyalo_core::index::{SnapshotIndex, VaultIndex, now_iso8601};
+use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
 use hyalo_core::types::PropertySummaryEntry;
 use serde::Serialize;
 
@@ -147,6 +147,7 @@ pub fn properties_rename(
     let mut modified = Vec::new();
     let mut skipped = Vec::new();
     let mut conflicts = Vec::new();
+    let mut index_dirty = false;
 
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
@@ -178,12 +179,13 @@ pub fn properties_rename(
         {
             entry.properties = props.clone();
             entry.tags = extract_tags(&props);
-            entry.modified = now_iso8601();
+            entry.modified = format_modified(full_path)?;
+            index_dirty = true;
         }
         modified.push(rel_path.clone());
     }
 
-    if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
         idx.save_to(idx_path)?;
     }
 
