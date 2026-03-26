@@ -115,7 +115,7 @@ becomes the vault-relative path `guides/setup.md`.
 **Auto-derived by default** from the last path component of `--dir`:
 - `--dir ../vscode-docs/docs` → prefix = `docs`
 - `--dir /home/me/wiki` → prefix = `wiki`
-- `--dir .` → no prefix (absolute links stay unresolved)
+- `--dir .` → prefix = name of the current directory (e.g. `wiki`)
 
 **Override when the directory name doesn't match the URL prefix:**
 ```bash

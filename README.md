@@ -77,7 +77,7 @@ By default, hyalo auto-derives the prefix from the last component of `--dir`:
 ```
 --dir ../vscode-docs/docs  →  prefix = "docs"   (/docs/foo.md → foo.md)
 --dir /home/me/wiki        →  prefix = "wiki"    (/wiki/foo.md → foo.md)
---dir .                    →  no prefix           (absolute links stay unresolved)
+--dir .                    →  prefix = current directory name (e.g. "wiki")
 ```
 
 Override when the directory name doesn't match the URL prefix:

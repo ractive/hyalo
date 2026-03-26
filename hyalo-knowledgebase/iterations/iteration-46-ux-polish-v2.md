@@ -1,13 +1,13 @@
 ---
-title: "Iteration 46 — UX Polish v2 (Dogfood v0.4.1 Follow-ups)"
-type: iteration
-date: 2026-03-26
-tags:
-  - iteration
-  - ux
-  - dogfooding
-status: planned
 branch: iter-46/ux-polish-v2
+date: 2026-03-26
+status: in-progress
+tags:
+- iteration
+- ux
+- dogfooding
+title: Iteration 46 — UX Polish v2 (Dogfood v0.4.1 Follow-ups)
+type: iteration
 ---
 
 # Iteration 46 — UX Polish v2

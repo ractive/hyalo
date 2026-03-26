@@ -227,7 +227,7 @@ struct Cli {
     /// By default, hyalo auto-derives the prefix from --dir's last path component:
     ///   --dir ../vscode-docs/docs  →  prefix = "docs"
     ///   --dir /home/me/wiki        →  prefix = "wiki"
-    ///   --dir .                    →  no prefix (absolute links stay unresolved)
+    ///   --dir .                    →  prefix = name of the current directory
     ///
     /// Use --site-prefix to override when the directory name doesn't match the URL prefix,
     /// or pass --site-prefix "" to disable absolute-link resolution entirely.

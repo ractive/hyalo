@@ -334,6 +334,9 @@ pub fn find(
             obj.links = None;
         }
     }
+    // Note: no strip needed for BacklinksCount — build_file_object only populates
+    // obj.backlinks when fields.backlinks is true. The sort closure queries
+    // link_graph directly when obj.backlinks is None.
 
     // --- Limit ---
     if let Some(n) = limit {
