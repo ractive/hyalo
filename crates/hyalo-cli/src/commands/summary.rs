@@ -70,14 +70,9 @@ pub fn summary(
             None
         };
 
-        let scan_result = {
-            let mut visitor_refs: Vec<&mut dyn hyalo_core::scanner::FileVisitor> = Vec::new();
-            visitor_refs.push(&mut fm);
-            visitor_refs.push(&mut counter);
-            if let Some(ref mut lv) = link_visitor {
-                visitor_refs.push(lv);
-            }
-            scan_file_multi(full_path, &mut visitor_refs)
+        let scan_result = match link_visitor.as_mut() {
+            Some(lv) => scan_file_multi(full_path, &mut [&mut fm, &mut counter, lv]),
+            None => scan_file_multi(full_path, &mut [&mut fm, &mut counter]),
         };
         match scan_result {
             Ok(()) => {}
@@ -534,6 +529,89 @@ No tasks here.
         assert_eq!(val_no_depth["tasks"], val_depth0["tasks"]);
         assert_eq!(val_no_depth["tags"], val_depth0["tags"]);
         assert_eq!(val_no_depth["properties"], val_depth0["properties"]);
+    }
+
+    /// Orphan detection: a.md links to b.md, orphan.md has no links in or out.
+    /// Both code paths (no glob = single-pass, glob = separate scan) must agree.
+    #[test]
+    fn summary_orphan_detection_no_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\n[[b]]\n").unwrap();
+        fs::write(tmp.path().join("b.md"), "---\ntitle: B\n---\nNo links.\n").unwrap();
+        fs::write(
+            tmp.path().join("orphan.md"),
+            "---\ntitle: Orphan\n---\nNo links.\n",
+        )
+        .unwrap();
+
+        // No glob: single-pass code path
+        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let orphan_files: Vec<&str> = val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        // orphan.md has no inbound and no outbound links
+        assert!(
+            orphan_files.iter().any(|f| f.contains("orphan")),
+            "orphan.md must appear in orphans: {orphan_files:?}"
+        );
+        // a.md links out, so it is not an orphan
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/a") || *f == "a.md"),
+            "a.md must NOT appear in orphans: {orphan_files:?}"
+        );
+        // b.md has an inbound link from a.md, so it is not an orphan
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/b") || *f == "b.md"),
+            "b.md must NOT appear in orphans: {orphan_files:?}"
+        );
+    }
+
+    /// Same assertion via the glob code path (separate vault-wide scan).
+    #[test]
+    fn summary_orphan_detection_with_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\n[[b]]\n").unwrap();
+        fs::write(tmp.path().join("b.md"), "---\ntitle: B\n---\nNo links.\n").unwrap();
+        fs::write(
+            tmp.path().join("orphan.md"),
+            "---\ntitle: Orphan\n---\nNo links.\n",
+        )
+        .unwrap();
+
+        // Passing "*.md" glob activates the separate LinkGraph::build code path.
+        let val =
+            unwrap_success(summary(tmp.path(), Some("*.md"), 10, None, Format::Json).unwrap());
+        let orphan_files: Vec<&str> = val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(
+            orphan_files.iter().any(|f| f.contains("orphan")),
+            "orphan.md must appear in orphans (glob path): {orphan_files:?}"
+        );
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/a") || *f == "a.md"),
+            "a.md must NOT appear in orphans (glob path): {orphan_files:?}"
+        );
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/b") || *f == "b.md"),
+            "b.md must NOT appear in orphans (glob path): {orphan_files:?}"
+        );
     }
 
     #[test]

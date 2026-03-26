@@ -70,7 +70,7 @@ impl LinkGraph {
         files: &[(PathBuf, PathBuf)],
         site_prefix: Option<&str>,
     ) -> Result<LinkGraphBuild> {
-        let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::new();
+        let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::with_capacity(files.len());
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
 
         for (full_path, rel) in files {
@@ -97,11 +97,15 @@ impl LinkGraph {
     /// Use this when the caller has already scanned files (e.g. `summary` combining
     /// frontmatter + task + link visitors in a single pass) and wants to build the
     /// graph without re-reading files.
+    ///
+    /// Warnings are always empty because callers are expected to handle parse errors
+    /// before collecting `FileLinks`.
     pub fn from_file_links(
         file_links: Vec<FileLinks>,
         site_prefix: Option<&str>,
     ) -> LinkGraphBuild {
-        let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::new();
+        let mut index: HashMap<String, Vec<BacklinkEntry>> =
+            HashMap::with_capacity(file_links.len());
         for fl in file_links {
             insert_file_links(&mut index, fl, site_prefix);
         }
@@ -161,12 +165,11 @@ impl LinkGraph {
 /// Per-file link data produced by scanning a single file.
 pub struct FileLinks {
     /// Relative path of the source file (vault-relative).
-    pub source: PathBuf,
+    pub(crate) source: PathBuf,
     /// Links extracted from the file body, with 1-based line numbers.
-    pub links: Vec<(usize, Link)>,
+    pub(crate) links: Vec<(usize, Link)>,
 }
 
-/// Outcome of scanning a single file for links during parallel processing.
 /// Normalize and insert one file's links into the shared index.
 fn insert_file_links(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
@@ -736,6 +739,61 @@ mod tests {
         // The raw `/page.md` form must NOT appear in the index.
         let raw_bl = graph.backlinks("/page.md");
         assert!(raw_bl.is_empty(), "raw absolute path must not be indexed");
+    }
+
+    #[test]
+    fn from_file_links_parity_with_build() {
+        // Build via LinkGraph::build and via LinkGraph::from_file_links for the
+        // same vault, then assert backlinks() results are identical for every target.
+        let vault = create_vault(&[
+            ("a.md", "---\ntitle: A\n---\nSee [[b]] and [c](c.md)\n"),
+            ("b.md", "---\ntitle: B\n---\nSee [[a]]\n"),
+            ("c.md", "---\ntitle: C\n---\nNo links here\n"),
+        ]);
+
+        // Path 1: build via the standard scanner
+        let build1 = LinkGraph::build(vault.path(), None).unwrap();
+        let graph1 = build1.graph;
+
+        // Path 2: scan with LinkGraphVisitor, collect FileLinks, then from_file_links
+        let files = crate::discovery::discover_files(vault.path()).unwrap();
+        let file_links: Vec<FileLinks> = files
+            .iter()
+            .map(|full_path| {
+                let rel = full_path
+                    .strip_prefix(vault.path())
+                    .unwrap_or(full_path)
+                    .to_path_buf();
+                let mut visitor = LinkGraphVisitor::new(rel);
+                crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
+                visitor.into_file_links()
+            })
+            .collect();
+        let build2 = LinkGraph::from_file_links(file_links, None);
+        let graph2 = build2.graph;
+
+        // Verify warnings from from_file_links are always empty
+        assert!(build2.warnings.is_empty());
+
+        // Both graphs must produce identical backlinks for all targets
+        for target in &["a", "b", "c.md", "c"] {
+            let mut bl1: Vec<&str> = graph1
+                .backlinks(target)
+                .iter()
+                .map(|e| e.source.to_str().unwrap())
+                .collect();
+            let mut bl2: Vec<&str> = graph2
+                .backlinks(target)
+                .iter()
+                .map(|e| e.source.to_str().unwrap())
+                .collect();
+            bl1.sort();
+            bl2.sort();
+            assert_eq!(
+                bl1, bl2,
+                "backlinks mismatch for target '{target}': build={bl1:?} vs from_file_links={bl2:?}"
+            );
+        }
     }
 
     #[test]
