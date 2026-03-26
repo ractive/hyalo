@@ -245,9 +245,11 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
 
     let mut yaml = String::new();
     let mut line_count = 0;
+    let mut closed = false;
     for line in lines {
         let line = line.context("failed to read line")?;
         if line.trim() == "---" {
+            closed = true;
             break;
         }
         line_count += 1;
@@ -258,6 +260,12 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         }
         yaml.push_str(&line);
         yaml.push('\n');
+    }
+
+    if !closed {
+        anyhow::bail!(
+            "unclosed frontmatter: file starts with `---` but no closing `---` was found"
+        );
     }
 
     if yaml.trim().is_empty() {
@@ -730,8 +738,7 @@ Body.
 
     #[test]
     fn streaming_no_closing_delimiter() {
-        // No closing `---` means everything after the opening is read as YAML.
-        // If it's not valid YAML, we get an error — which is correct.
+        // No closing `---` must always error — even if the YAML content is valid.
         let input = md!("
 ---
 title: Broken
@@ -739,15 +746,29 @@ Not valid yaml line
 ");
         let result = read_frontmatter_from_reader(input.as_bytes());
         assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unclosed frontmatter"),
+            "expected unclosed frontmatter error"
+        );
 
-        // But if the content happens to be valid YAML, it parses fine
+        // Also errors even when the content happens to be valid YAML
         let input2 = md!("
 ---
 title: Works
 status: ok
 ");
-        let props = read_frontmatter_from_reader(input2.as_bytes()).unwrap();
-        assert_eq!(props.get("title"), Some(&Value::String("Works".into())));
+        let result2 = read_frontmatter_from_reader(input2.as_bytes());
+        assert!(result2.is_err());
+        assert!(
+            result2
+                .unwrap_err()
+                .to_string()
+                .contains("unclosed frontmatter"),
+            "expected unclosed frontmatter error for valid-YAML-but-unclosed file"
+        );
     }
 
     #[test]
