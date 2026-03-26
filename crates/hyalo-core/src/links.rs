@@ -1,11 +1,12 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::scanner::{self, ScanAction};
 
 /// A parsed link extracted from a markdown file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {
     /// Raw target: note name or relative path (without fragment)
     pub target: String,
@@ -16,7 +17,7 @@ pub struct Link {
 }
 
 /// The kind of link syntax used in the source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LinkKind {
     Wikilink,
     Markdown,

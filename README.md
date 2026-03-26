@@ -31,7 +31,7 @@ cargo build --release
 
 ## Usage
 
-All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--hints` (append executable drill-down command suggestions), and `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links).
+All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--hints` (append executable drill-down command suggestions), `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links), and `--index <PATH>` (use a pre-built snapshot index instead of scanning files from disk — read-only commands use it; mutation commands ignore it; falls back to disk scan if the index is incompatible).
 
 Most flags have short aliases for quick interactive use:
 
@@ -413,6 +413,31 @@ Orphans: 3
 ```
 
 In JSON mode, `--hints` wraps the output in `{"data": ..., "hints": [...]}`. Hints are concrete, copy-pasteable commands — no templates or placeholders. Suppressed when combined with `--jq`.
+
+## Snapshot Index
+
+The snapshot index is a MessagePack file that captures a point-in-time snapshot of the vault's metadata (frontmatter, tags, sections, tasks, links) for faster repeated queries. It is **short-lived and ephemeral** — it becomes stale as soon as any file in the vault is modified.
+
+**Usage:**
+
+```sh
+# Create the index (one disk scan)
+hyalo create-index
+
+# Run read-only queries against the index (no disk scan)
+hyalo find --property status=in-progress --index .hyalo-index
+hyalo summary --index .hyalo-index
+hyalo tags summary --index .hyalo-index
+
+# Drop the index when done
+hyalo drop-index
+```
+
+**When to use:** workflows that run many read-only queries in a short window — CI pipelines, automation scripts, LLM tool loops. Create the index at the start, query against it, then drop it.
+
+**Staleness:** the index is a frozen snapshot. Mutation commands (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) always scan from disk and ignore `--index`. If your workflow mixes reads and writes, do all reads first with the index, drop it, then execute mutations.
+
+Never commit `.hyalo-index` files to version control — they are throwaway artifacts.
 
 ## Benchmarking
 

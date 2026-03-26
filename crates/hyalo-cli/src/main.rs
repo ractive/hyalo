@@ -4,16 +4,18 @@ use std::process;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use hyalo_cli::commands::{
-    append as append_commands, backlinks as backlinks_commands, find as find_commands,
-    init as init_commands, mv as mv_commands, properties, read as read_commands,
-    remove as remove_commands, set as set_commands, summary as summary_commands,
-    tags as tag_commands, tasks as task_commands,
+    append as append_commands, backlinks as backlinks_commands,
+    create_index as create_index_commands, drop_index as drop_index_commands,
+    find as find_commands, init as init_commands, mv as mv_commands, properties,
+    read as read_commands, remove as remove_commands, set as set_commands,
+    summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use hyalo_cli::hints::{HintContext, HintSource, generate_hints};
 use hyalo_cli::output::{
     CommandOutcome, Format, apply_jq_filter_result, format_success, format_with_hints,
 };
 use hyalo_core::filter;
+use hyalo_core::index::{SnapshotIndex, VaultIndex};
 
 #[derive(Parser)]
 #[command(
@@ -236,6 +238,21 @@ struct Cli {
     /// Precedence: --site-prefix flag > .hyalo.toml > auto-derived from --dir.
     #[arg(long, global = true, value_name = "PREFIX")]
     site_prefix: Option<String>,
+
+    /// Use a pre-built snapshot index instead of scanning files from disk.
+    ///
+    /// The index is a frozen point-in-time snapshot — it becomes stale as
+    /// soon as any file in the vault is modified. Best used as a bracketed
+    /// session: create-index, run read-only queries, drop-index.
+    ///
+    /// Read-only commands (find, summary, tags summary, properties summary,
+    /// backlinks) use the index; mutation commands (set, remove, append, task,
+    /// mv, tags rename, properties rename) always scan from disk and ignore it.
+    ///
+    /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+    /// falls back to a full disk scan automatically.
+    #[arg(long, global = true, value_name = "PATH")]
+    index: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -508,6 +525,41 @@ Repeatable (AND).\n\
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
         #[arg(long)]
         claude: bool,
+    },
+    /// Build a snapshot index for faster repeated read-only queries
+    #[command(
+        name = "create-index",
+        long_about = "Scan the vault and write a binary snapshot index to disk.\n\n\
+            The index captures a point-in-time snapshot of all vault metadata.\n\
+            It is short-lived — it becomes stale when any vault file changes.\n\
+            Delete it after use via `hyalo drop-index`.\n\n\
+            The index file can then be passed to subsequent read-only commands via\n\
+            `--index <PATH>` to skip the disk scan entirely.  Mutation commands\n\
+            (set, remove, append, task, mv, tags rename, properties rename) always\n\
+            scan from disk and ignore --index.\n\n\
+            OUTPUT: JSON object with `path`, `files_indexed`, and `warnings`.\n\
+            SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir)."
+    )]
+    CreateIndex {
+        /// Output path for the index file (default: .hyalo-index in --dir)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Delete a snapshot index file created with create-index
+    #[command(
+        name = "drop-index",
+        long_about = "Delete a snapshot index file.\n\n\
+            Always drop the index before running mutation commands if you\n\
+            created one, since mutations need fresh disk data. The index is\n\
+            a frozen snapshot and should not outlive its session.\n\n\
+            If --path is omitted, deletes .hyalo-index in --dir.\n\n\
+            OUTPUT: JSON object with `deleted` path.\n\
+            SIDE EFFECTS: Deletes the index file from disk."
+    )]
+    DropIndex {
+        /// Path to the index file to delete (default: .hyalo-index in --dir)
+        #[arg(short, long)]
+        path: Option<PathBuf>,
     },
     /// Append values to list properties in file(s) frontmatter, promoting scalars to lists
     #[command(
@@ -905,6 +957,54 @@ fn main() {
         eprintln!("warning: --hints has no effect on mutation commands");
     }
 
+    // Load snapshot index if --index is provided, but only for read-only commands.
+    // Mutation commands (set, remove, append, task, mv, tags rename, properties rename)
+    // always scan from disk and never consult the index.
+    let uses_index = matches!(
+        &cli.command,
+        Commands::Find { .. }
+            | Commands::Summary { .. }
+            | Commands::Tags {
+                action: None | Some(TagsAction::Summary { .. })
+            }
+            | Commands::Properties {
+                action: None | Some(PropertiesAction::Summary { .. })
+            }
+            | Commands::Backlinks { .. }
+    );
+    let snapshot_index: Option<SnapshotIndex> = if uses_index {
+        if let Some(ref index_path) = cli.index {
+            match SnapshotIndex::load(index_path) {
+                Ok(Some(idx)) => {
+                    // Warn when the snapshot was built for a different vault or
+                    // site-prefix — the index data may not match the current run.
+                    let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+                    let vault_dir_str = canonical_dir.to_string_lossy();
+                    if !idx.validate(&vault_dir_str, site_prefix) {
+                        let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
+                        eprintln!(
+                            "warning: index was built for vault '{}' (prefix {:?}) but current \
+                             vault is '{}' (prefix {:?}); falling back to disk scan",
+                            hdr_vault, hdr_prefix, vault_dir_str, site_prefix,
+                        );
+                        None
+                    } else {
+                        Some(idx)
+                    }
+                }
+                Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
+                Err(e) => {
+                    eprintln!("warning: failed to load index: {e}; falling back to disk scan");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let result = match cli.command {
         Commands::Find {
             ref pattern,
@@ -970,22 +1070,42 @@ fn main() {
                 }
             };
 
-            find_commands::find(
-                &dir,
-                site_prefix,
-                pattern.as_deref(),
-                regexp.as_deref(),
-                &prop_filters,
-                tag,
-                task_filter.as_ref(),
-                &section_filters,
-                file,
-                glob,
-                &parsed_fields,
-                sort_field.as_ref(),
-                limit,
-                effective_format,
-            )
+            if let Some(ref idx) = snapshot_index {
+                find_commands::find_from_index(
+                    idx,
+                    &dir,
+                    site_prefix,
+                    pattern.as_deref(),
+                    regexp.as_deref(),
+                    &prop_filters,
+                    tag,
+                    task_filter.as_ref(),
+                    &section_filters,
+                    file,
+                    glob,
+                    &parsed_fields,
+                    sort_field.as_ref(),
+                    limit,
+                    effective_format,
+                )
+            } else {
+                find_commands::find(
+                    &dir,
+                    site_prefix,
+                    pattern.as_deref(),
+                    regexp.as_deref(),
+                    &prop_filters,
+                    tag,
+                    task_filter.as_ref(),
+                    &section_filters,
+                    file,
+                    glob,
+                    &parsed_fields,
+                    sort_field.as_ref(),
+                    limit,
+                    effective_format,
+                )
+            }
         }
         Commands::Read {
             ref file,
@@ -1004,7 +1124,29 @@ fn main() {
             let action = action.unwrap_or(PropertiesAction::Summary { glob: vec![] });
             match action {
                 PropertiesAction::Summary { ref glob } => {
-                    properties::properties_summary(&dir, None, glob, effective_format)
+                    if let Some(ref idx) = snapshot_index {
+                        let filtered =
+                            find_commands::filter_index_entries(idx.entries(), &[], glob);
+                        match filtered {
+                            Err(e) => Err(e),
+                            Ok(filtered) => {
+                                let paths: Vec<String> =
+                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
+                                let file_filter = if glob.is_empty() {
+                                    None
+                                } else {
+                                    Some(paths.as_slice())
+                                };
+                                properties::properties_summary_from_index(
+                                    idx,
+                                    file_filter,
+                                    effective_format,
+                                )
+                            }
+                        }
+                    } else {
+                        properties::properties_summary(&dir, None, glob, effective_format)
+                    }
                 }
                 PropertiesAction::Rename {
                     ref from,
@@ -1017,7 +1159,29 @@ fn main() {
             let action = action.unwrap_or(TagsAction::Summary { glob: vec![] });
             match action {
                 TagsAction::Summary { ref glob } => {
-                    tag_commands::tags_summary(&dir, None, glob, effective_format)
+                    if let Some(ref idx) = snapshot_index {
+                        let filtered =
+                            find_commands::filter_index_entries(idx.entries(), &[], glob);
+                        match filtered {
+                            Err(e) => Err(e),
+                            Ok(filtered) => {
+                                let paths: Vec<String> =
+                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
+                                let file_filter = if glob.is_empty() {
+                                    None
+                                } else {
+                                    Some(paths.as_slice())
+                                };
+                                tag_commands::tags_summary_from_index(
+                                    idx,
+                                    file_filter,
+                                    effective_format,
+                                )
+                            }
+                        }
+                    } else {
+                        tag_commands::tags_summary(&dir, None, glob, effective_format)
+                    }
                 }
                 TagsAction::Rename {
                     ref from,
@@ -1062,7 +1226,13 @@ fn main() {
             ref glob,
             recent,
             depth,
-        } => summary_commands::summary(&dir, glob, recent, depth, effective_format),
+        } => {
+            if let Some(ref idx) = snapshot_index {
+                summary_commands::summary_from_index(idx, glob, recent, depth, effective_format)
+            } else {
+                summary_commands::summary(&dir, glob, recent, depth, effective_format)
+            }
+        }
         Commands::Set {
             ref properties,
             ref tag,
@@ -1122,13 +1292,26 @@ fn main() {
             )
         }
         Commands::Backlinks { ref file } => {
-            backlinks_commands::backlinks(&dir, site_prefix, file, effective_format)
+            if let Some(ref idx) = snapshot_index {
+                backlinks_commands::backlinks_from_index(idx, file, &dir, effective_format)
+            } else {
+                backlinks_commands::backlinks(&dir, site_prefix, file, effective_format)
+            }
         }
         Commands::Mv {
             ref file,
             ref to,
             dry_run,
         } => mv_commands::mv(&dir, file, to, dry_run, effective_format, site_prefix),
+        Commands::CreateIndex { ref output } => create_index_commands::create_index(
+            &dir,
+            site_prefix,
+            output.as_deref(),
+            effective_format,
+        ),
+        Commands::DropIndex { ref path } => {
+            drop_index_commands::drop_index(&dir, path.as_deref(), effective_format)
+        }
         // `Init` is handled as an early return before this match is reached.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
     };

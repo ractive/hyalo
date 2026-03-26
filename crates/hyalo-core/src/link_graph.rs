@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
@@ -9,7 +10,7 @@ use crate::links::{Link, LinkKind, extract_links_from_text_with_original};
 use crate::scanner::{self, FileVisitor, ScanAction};
 
 /// A single backlink: a file that links to some target.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacklinkEntry {
     /// The file containing the link (relative to vault root).
     pub source: PathBuf,
@@ -32,6 +33,7 @@ pub struct LinkGraphBuild {
 /// Keys are normalized target strings (as they appear in `[[target]]` or
 /// `[text](target)`, without fragment). Values are all files that link to
 /// that target.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LinkGraph {
     index: HashMap<String, Vec<BacklinkEntry>>,
 }

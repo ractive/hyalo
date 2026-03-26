@@ -6,3 +6,4 @@
 .claude/worktrees
 hyalo-knowledgebase/MyNotes.md
 bench-results/
+*.hyalo-index

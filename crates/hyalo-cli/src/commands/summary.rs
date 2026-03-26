@@ -8,6 +8,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::{infer_type, yaml_to_json};
+use hyalo_core::index::VaultIndex;
 use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
@@ -254,6 +255,197 @@ pub fn summary(
 }
 
 use super::format_iso8601;
+
+/// Show a high-level vault summary using pre-scanned index data.
+///
+/// All aggregation (file counts, properties, tags, status groups, tasks, recent
+/// files, orphans) is derived from `IndexEntry` values rather than scanning
+/// files from disk.
+///
+/// `globs` optionally narrows which entries are included (same semantics as the
+/// `--glob` flag on the `summary` command).
+pub fn summary_from_index(
+    index: &dyn VaultIndex,
+    globs: &[String],
+    recent: usize,
+    depth: Option<usize>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    use crate::commands::find::filter_index_entries;
+    let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
+    // Work with a slice of &IndexEntry references.
+    let entries: Vec<_> = scoped;
+
+    let mut total_files: usize = 0;
+    let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
+    let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut total_tasks: usize = 0;
+    let mut done_tasks: usize = 0;
+    let mut recent_entries: Vec<(String, String)> = Vec::new();
+
+    for entry in &entries {
+        total_files += 1;
+
+        let dir_key = {
+            let rel = std::path::Path::new(&entry.rel_path);
+            match rel.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().replace('\\', "/"),
+                _ => ".".to_owned(),
+            }
+        };
+        *dir_counts.entry(dir_key).or_insert(0) += 1;
+
+        // Properties aggregation (skip "tags")
+        for (name, value) in entry
+            .properties
+            .iter()
+            .filter(|(n, _)| n.as_str() != "tags")
+        {
+            let prop_type = infer_type(value).to_owned();
+            *property_counts
+                .entry((name.clone(), prop_type))
+                .or_insert(0) += 1;
+        }
+
+        // Tags aggregation (case-insensitive, preserve first-seen casing)
+        for tag in &entry.tags {
+            let key = tag.to_ascii_lowercase();
+            tag_counts
+                .entry(key)
+                .and_modify(|e| e.1 += 1)
+                .or_insert_with(|| (tag.clone(), 1));
+        }
+
+        // Status grouping
+        if let Some(status_val) = entry.properties.get("status") {
+            let status_str = match yaml_to_json(status_val) {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            status_groups
+                .entry(status_str)
+                .or_default()
+                .push(entry.rel_path.clone());
+        }
+
+        // Task counts from pre-indexed tasks
+        for task in &entry.tasks {
+            total_tasks += 1;
+            if task.done {
+                done_tasks += 1;
+            }
+        }
+
+        // Recent files: use the pre-indexed ISO 8601 modified timestamp.
+        // Store as (modified_desc_sort_key, rel_path) for descending sort.
+        // Since the timestamp is ISO 8601, lexicographic desc == chronological desc.
+        recent_entries.push((entry.modified.clone(), entry.rel_path.clone()));
+    }
+
+    // Apply depth limit
+    if let Some(max_depth) = depth {
+        let original: Vec<(String, usize)> = dir_counts.into_iter().collect();
+        dir_counts = BTreeMap::new();
+        for (dir_key, count) in original {
+            let target = truncate_to_depth(&dir_key, max_depth);
+            *dir_counts.entry(target).or_insert(0) += count;
+        }
+    }
+
+    // Build FileCounts
+    let mut by_directory: Vec<DirectoryCount> = dir_counts
+        .into_iter()
+        .map(|(directory, count)| DirectoryCount { directory, count })
+        .collect();
+    by_directory.sort_by(|a, b| a.directory.cmp(&b.directory));
+
+    let file_counts = FileCounts {
+        total: total_files,
+        by_directory,
+    };
+
+    // Build properties summary
+    let mut properties: Vec<PropertySummaryEntry> = property_counts
+        .into_iter()
+        .map(|((name, prop_type), count)| PropertySummaryEntry {
+            name,
+            prop_type,
+            count,
+        })
+        .collect();
+    properties.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
+
+    // Build tag summary
+    let mut tags_vec: Vec<TagSummaryEntry> = tag_counts
+        .into_iter()
+        .map(|(_, (name, count))| TagSummaryEntry { name, count })
+        .collect();
+    tags_vec.sort_by(|a, b| b.count.cmp(&a.count).then(a.name.cmp(&b.name)));
+    let tags_total = tags_vec.len();
+    let tags = TagSummary {
+        tags: tags_vec,
+        total: tags_total,
+    };
+
+    // Build status groups
+    let status: Vec<StatusGroup> = status_groups
+        .into_iter()
+        .map(|(value, files)| StatusGroup { value, files })
+        .collect();
+
+    let tasks = TaskCount {
+        total: total_tasks,
+        done: done_tasks,
+    };
+
+    // Build recent files (sort most-recent first by ISO 8601 timestamp desc, take top N)
+    recent_entries.sort_by(|a, b| b.0.cmp(&a.0));
+    let recent_files: Vec<RecentFile> = recent_entries
+        .into_iter()
+        .take(recent)
+        .map(|(modified, path)| RecentFile { path, modified })
+        .collect();
+
+    // Build orphan list using the pre-built link graph from the index.
+    // The link graph is vault-wide so links from outside the scoped set still count.
+    let graph = index.link_graph();
+    let targets = graph.all_targets();
+    let sources = graph.all_sources();
+    let mut orphan_files: Vec<String> = entries
+        .iter()
+        .filter(|entry| {
+            let rel_str: &str = &entry.rel_path;
+            let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
+            let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+            let has_outbound = sources.contains(rel_str);
+            !has_inbound && !has_outbound
+        })
+        .map(|entry| entry.rel_path.clone())
+        .collect();
+    orphan_files.sort();
+    let orphans = OrphanSummary {
+        total: orphan_files.len(),
+        files: orphan_files,
+    };
+
+    let vault_summary = VaultSummary {
+        files: file_counts,
+        orphans,
+        properties,
+        tags,
+        status,
+        tasks,
+        recent_files,
+    };
+
+    let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format,
+        &json_value,
+    )))
+}
 
 /// Truncate a directory path to at most `max_depth` components.
 ///

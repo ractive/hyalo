@@ -34,29 +34,23 @@ doesn't exist, ask the user which directory to consolidate.
 
 ## Phase 1 — Orient and snapshot
 
-Get the lay of the land with two commands. The first gives you the overview, the second
-gives you the full dataset you'll query throughout the rest of the dream.
+Get the lay of the land and create a snapshot index for fast repeated queries.
 
 ```bash
 # 1. High-level overview (baseline for the final health dashboard)
 hyalo summary --format text
 
-# 2. Full snapshot — one scan that captures everything. Save to a temp file so you can
-#    run many jq filters without re-scanning the filesystem each time.
-HYALO_DREAM_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/hyalo-dream-snapshot.XXXXXX.json")"
-hyalo find --fields properties,tags,sections,tasks,links,backlinks > "${HYALO_DREAM_SNAPSHOT}"
+# 2. Create snapshot index (one scan, reused by all subsequent queries)
+hyalo create-index
 ```
 
-The snapshot contains every file's properties, tags, sections, tasks, links, and
-backlinks. All detection queries in Phase 3 should use `jq` on this file rather than
-running separate `hyalo find` calls. This turns ~15 disk scans into 1.
-
-**Important:** All subsequent `jq` commands in this skill reference `${HYALO_DREAM_SNAPSHOT}`
-instead of a hardcoded path.
+The snapshot index captures every file's metadata in a binary file (`.hyalo-index`).
+All read-only queries in Phase 2 and Phase 3 should use `--index .hyalo-index` to
+avoid repeated disk scans. For complex reshaping, combine hyalo filtering with `--jq`.
 
 Also grab the tag vocabulary for inconsistency detection:
 ```bash
-hyalo tags summary --format text
+hyalo tags summary --format text --index .hyalo-index
 ```
 
 ## Phase 2 — Gather recent signal
@@ -75,9 +69,9 @@ git log --oneline --merges --since="4 weeks ago"
 git log --oneline --since="4 weeks ago" -- "*.rs" | head -30
 ```
 
-Extract non-completed iterations and their branches from the snapshot:
+Extract non-completed iterations and their branches from the index:
 ```bash
-jq 'map(select(.properties.type == "iteration" and .properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property type=iteration --index .hyalo-index --jq 'map(select(.properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})'
 ```
 
 For each non-completed iteration that has a branch, check if that branch was merged:
@@ -95,7 +89,7 @@ if [ -n "$MEMORY_FILE" ]; then
 fi
 ```
 
-If found, query it with hyalo:
+If found, query it with hyalo (memory files are outside the vault, so no --index here):
 ```bash
 hyalo --dir "$MEMORY_DIR" find --property type=project --format text
 hyalo --dir "$MEMORY_DIR" find --property type=feedback --format text
@@ -115,11 +109,11 @@ git log --diff-filter=A --name-only --since="4 weeks ago" -- "hyalo-knowledgebas
 
 ## Phase 3 — Detect structural issues
 
-All queries below run on the cached snapshot — no additional disk scans needed.
+All queries below use `--index .hyalo-index` — no additional disk scans needed.
 
 ### Broken links
 ```bash
-jq '[.[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --fields links --index .hyalo-index --jq '[.[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]'
 ```
 For each broken link, try to find the intended target:
 - Search for the filename in `done/` subdirectories (common after archiving)
@@ -131,7 +125,7 @@ exist at all).
 
 ### Orphan files
 ```bash
-jq 'map(select(.backlinks | length == 0)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --fields backlinks --index .hyalo-index --jq 'map(select(.backlinks | length == 0)) | map(.file)'
 ```
 Not all orphans are problems. Expect these to be legitimately orphaned:
 - Top-level files (SEED.md, project-pitch.md, decision-log.md)
@@ -143,19 +137,19 @@ Focus on **actionable orphans**: active/planned items that should be cross-refer
 ### Stale statuses
 ```bash
 # In-progress items — should any be completed?
-jq 'map(select(.properties.status == "in-progress")) | map({file, date: .properties.date, branch: .properties.branch})' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property status=in-progress --index .hyalo-index --jq 'map({file, date: .properties.date, branch: .properties.branch})'
 
 # Planned items where all tasks are done
-jq 'map(select(.properties.status == "planned" and (.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property status=planned --index .hyalo-index --jq 'map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
 
 # In-progress items sorted by date (oldest first — possibly stale)
-jq 'map(select(.properties.status == "in-progress" and .properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property status=in-progress --index .hyalo-index --jq 'map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
 ```
 Cross-reference with git merges from Phase 2. If the branch was merged, update status.
 
 ### Stale backlog items
 ```bash
-jq 'map(select(.properties.status == "planned" and .properties.type == "backlog")) | map({file, title: .properties.title})' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property status=planned --property type=backlog --index .hyalo-index --jq 'map({file, title: .properties.title})'
 ```
 Compare each planned backlog item against merged iterations and recent git history.
 If the feature clearly shipped (in a different iteration or under a different name),
@@ -163,8 +157,8 @@ flag it.
 
 ### Missing metadata
 ```bash
-jq 'map(select(.properties.status == null)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
-jq 'map(select(.properties.type == null)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property '!status' --index .hyalo-index --jq 'map(.file)'
+hyalo find --property '!type' --index .hyalo-index --jq 'map(.file)'
 ```
 
 ### Tag inconsistencies
@@ -176,10 +170,19 @@ more files.
 ### Task completion vs status mismatch
 ```bash
 # Completed items with unchecked tasks — systemic or one-off?
-jq 'map(select(.properties.status == "completed" and (.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) > 0)) | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})' ${HYALO_DREAM_SNAPSHOT}
+hyalo find --property status=completed --task todo --index .hyalo-index --jq 'map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
 ```
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.
+
+## Drop the index before mutations
+
+Before executing any changes, drop the snapshot index. It is stale once files change,
+and mutation commands always scan from disk anyway.
+
+```bash
+hyalo drop-index
+```
 
 ## Phase 4 — Consolidate
 
@@ -240,8 +243,9 @@ Things you detected but couldn't (or shouldn't) fix unilaterally. Keep it concis
 one line per issue with enough context to act on.
 
 ### KB health dashboard
-Re-run `hyalo summary --format text` and compare with Phase 1 baseline. Report the
-delta: statuses changed, links fixed, tags normalized, files moved.
+Re-run `hyalo summary --format text` (fresh scan after mutations — no `--index`) and
+compare with Phase 1 baseline. Report the delta: statuses changed, links fixed, tags
+normalized, files moved.
 
 ## Ground rules
 
@@ -255,5 +259,5 @@ delta: statuses changed, links fixed, tags normalized, files moved.
   wikilink text in prose, adding cross-reference lines).
 - **Batch similar findings**: if 15 completed items have unchecked tasks, say that once
   with the count. The report should be scannable in 30 seconds.
-- **Minimize disk scans**: use the `${HYALO_DREAM_SNAPSHOT}` for all read queries.
-  Only call `hyalo find` again if you need data not in the snapshot.
+- **Minimize disk scans**: use `--index .hyalo-index` for all read-only queries.
+  Drop the index before Phase 4 mutations.

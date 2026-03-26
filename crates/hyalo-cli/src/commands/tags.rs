@@ -7,6 +7,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
+use hyalo_core::index::VaultIndex;
 use hyalo_core::types::{TagSummary, TagSummaryEntry};
 use serde::Serialize;
 use serde_yaml_ng::Value;
@@ -81,6 +82,48 @@ pub fn tags_summary(
                 .entry(key)
                 .and_modify(|entry| entry.1 += 1)
                 .or_insert((tag, 1));
+        }
+    }
+
+    let tags: Vec<TagSummaryEntry> = counts
+        .into_iter()
+        .map(|(_, (name, count))| TagSummaryEntry { name, count })
+        .collect();
+
+    let total = tags.len();
+    let result = TagSummary { tags, total };
+
+    Ok(CommandOutcome::Success(crate::output::format_output(
+        format, &result,
+    )))
+}
+
+/// Aggregate tag summary using pre-scanned index data.
+///
+/// `file_filter` is an optional list of vault-relative paths to include.
+/// When `None` (or an empty slice), all index entries are used.
+pub fn tags_summary_from_index(
+    index: &dyn VaultIndex,
+    file_filter: Option<&[String]>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    // Aggregate case-insensitively: use lowercase key, preserve first-seen casing for display
+    let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
+
+    for entry in index.entries() {
+        // Apply optional file-level filter
+        if let Some(filter) = file_filter
+            && !filter.is_empty()
+            && !filter.iter().any(|f| f == &entry.rel_path)
+        {
+            continue;
+        }
+        for tag in &entry.tags {
+            let key = tag.to_ascii_lowercase();
+            counts
+                .entry(key)
+                .and_modify(|e| e.1 += 1)
+                .or_insert_with(|| (tag.clone(), 1));
         }
     }
 

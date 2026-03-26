@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
+use globset::{GlobBuilder, GlobSetBuilder};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::SystemTime;
@@ -12,6 +13,7 @@ use hyalo_core::discovery;
 use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
+use hyalo_core::index::{IndexEntry, VaultIndex};
 use hyalo_core::link_graph::{LinkGraph, is_self_link};
 use hyalo_core::links::Link;
 use hyalo_core::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
@@ -353,6 +355,460 @@ pub fn find(
     // LLM (or script) cannot distinguish from a silent failure.  Emit an
     // explicit notice on stderr so the caller knows the query succeeded but
     // matched nothing.  JSON mode keeps the empty array on stdout unchanged.
+    if format == crate::output::Format::Text && json_array.is_empty() {
+        eprintln!("warning: No files matched.");
+    }
+
+    let json_output = serde_json::Value::Array(json_array);
+
+    Ok(CommandOutcome::Success(crate::output::format_success(
+        format,
+        &json_output,
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// find_from_index — index-backed variant
+// ---------------------------------------------------------------------------
+
+/// Filter index entries by optional `--file` and `--glob` scoping arguments.
+///
+/// - When both are empty, all entries are returned.
+/// - `files_arg` entries are matched by exact `rel_path` equality.
+/// - `globs` patterns use the same globset semantics as `discovery::match_globs`
+///   (positive patterns require a match; negative `!pat` patterns exclude matches).
+pub fn filter_index_entries<'a>(
+    entries: &'a [IndexEntry],
+    files_arg: &[String],
+    globs: &[String],
+) -> Result<Vec<&'a IndexEntry>> {
+    if files_arg.is_empty() && globs.is_empty() {
+        return Ok(entries.iter().collect());
+    }
+
+    if !files_arg.is_empty() && globs.is_empty() {
+        // Exact path matching (same order as `files_arg` for explicit file lists)
+        let filtered: Vec<&IndexEntry> = entries
+            .iter()
+            .filter(|e| files_arg.iter().any(|f| f == &e.rel_path))
+            .collect();
+        return Ok(filtered);
+    }
+
+    // Glob filtering — build positive/negative glob sets (same logic as discovery::match_globs)
+    let normalized: Vec<String> = globs
+        .iter()
+        .map(|p| {
+            if let Some(rest) = p.strip_prefix("\\!") {
+                format!("!{rest}")
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
+
+    let mut positive: Vec<&str> = Vec::new();
+    let mut negative: Vec<&str> = Vec::new();
+    for p in &normalized {
+        if let Some(neg) = p.strip_prefix('!') {
+            anyhow::ensure!(
+                !neg.is_empty(),
+                "negation glob pattern must not be empty (got '!')"
+            );
+            negative.push(neg);
+        } else {
+            positive.push(p.as_str());
+        }
+    }
+
+    let positive_set = if positive.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        for pat in &positive {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .context("invalid glob pattern")?,
+            );
+        }
+        Some(
+            builder
+                .build()
+                .context("failed to build positive globset")?,
+        )
+    };
+
+    let negative_set = if negative.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        for pat in &negative {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .context("invalid glob negation pattern")?,
+            );
+        }
+        Some(
+            builder
+                .build()
+                .context("failed to build negative globset")?,
+        )
+    };
+
+    let filtered: Vec<&IndexEntry> = entries
+        .iter()
+        .filter(|e| {
+            // When files_arg is non-empty, an entry also passes if it is listed
+            // explicitly — this handles the case where both files_arg and globs
+            // are present (OR semantics between the two inclusion criteria).
+            let passes_files = !files_arg.is_empty() && files_arg.iter().any(|f| f == &e.rel_path);
+            let passes_positive = positive_set
+                .as_ref()
+                .is_none_or(|gs| gs.is_match(&e.rel_path));
+            let passes_negative = negative_set
+                .as_ref()
+                .is_none_or(|gs| !gs.is_match(&e.rel_path));
+            // An entry is included if it matches files_arg OR (matches positive
+            // globs AND is not excluded by a negative glob).
+            passes_files || (passes_positive && passes_negative)
+        })
+        .collect();
+
+    Ok(filtered)
+}
+
+/// Find files using pre-scanned index data.
+///
+/// This is the index-backed variant of [`find`]. It accepts `&dyn VaultIndex`
+/// instead of a directory to scan, and uses `dir` only for:
+/// - Content search (disk I/O is still required to read file bodies when
+///   `pattern` or `regexp` is specified)
+/// - Link path resolution (`discovery::resolve_target`)
+///
+/// All other data (properties, tags, sections, tasks, outbound links) comes
+/// directly from `IndexEntry` values. Backlinks are resolved via
+/// `index.link_graph()` rather than a new `LinkGraph::build`.
+#[allow(clippy::too_many_arguments)]
+pub fn find_from_index(
+    index: &dyn VaultIndex,
+    dir: &Path,
+    site_prefix: Option<&str>,
+    pattern: Option<&str>,
+    regexp: Option<&str>,
+    property_filters: &[PropertyFilter],
+    tag_filters: &[String],
+    task_filter: Option<&FindTaskFilter>,
+    section_filters: &[SectionFilter],
+    files_arg: &[String],
+    globs: &[String],
+    fields: &Fields,
+    sort: Option<&SortField>,
+    limit: Option<usize>,
+    format: Format,
+) -> Result<CommandOutcome> {
+    // Treat --limit 0 as "no limit"
+    let limit = match limit {
+        Some(0) => None,
+        other => other,
+    };
+
+    // Normalize empty pattern
+    if pattern.is_some_and(|p| p.trim().is_empty()) {
+        eprintln!(
+            "warning: empty body pattern ignored (matches all files); omit the pattern to find all files"
+        );
+    }
+    let pattern = pattern.and_then(|p| if p.trim().is_empty() { None } else { Some(p) });
+
+    let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
+    let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
+
+    let has_content_search = pattern.is_some() || regexp.is_some();
+    let has_task_filter = task_filter.is_some();
+    let has_section_filter = !section_filters.is_empty();
+
+    // Compile regex once (if any)
+    let compiled_regex = match regexp {
+        Some(re) => {
+            let effective = format!("(?i){re}");
+            match regex::RegexBuilder::new(&effective)
+                .size_limit(1 << 20)
+                .build()
+            {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    return Ok(CommandOutcome::UserError(format!(
+                        "invalid regular expression: {re}\n{e}"
+                    )));
+                }
+            }
+        }
+        None => None,
+    };
+
+    // Canonicalize the vault directory for link resolution
+    let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
+
+    // Filter entries by --file / --glob scoping
+    let scoped_entries = filter_index_entries(index.entries(), files_arg, globs)?;
+
+    // Use the index's pre-built link graph for backlinks
+    let link_graph_ref = if fields.backlinks || sort_needs_backlinks {
+        Some(index.link_graph())
+    } else {
+        None
+    };
+
+    let can_short_circuit = limit.is_some()
+        && files_arg.is_empty()
+        && matches!(sort.unwrap_or(&SortField::File), SortField::File)
+        && !fields.backlinks
+        && !sort_needs_backlinks
+        && !sort_needs_links;
+
+    let mut results: Vec<FileObject> = Vec::new();
+
+    for entry in &scoped_entries {
+        // --- Metadata filters using pre-indexed data ---
+        if !filter::matches_filters_with_tags(
+            &entry.properties,
+            property_filters,
+            &entry.tags,
+            tag_filters,
+        ) {
+            continue;
+        }
+
+        // --- Build section scopes from pre-indexed sections ---
+        let scope_ranges: Vec<SectionRange> = if has_section_filter {
+            build_section_scope(&entry.sections, section_filters, usize::MAX)
+        } else {
+            Vec::new()
+        };
+
+        if has_section_filter && scope_ranges.is_empty() {
+            // No matching section in this file — skip entirely
+            continue;
+        }
+
+        // --- Task filter using pre-indexed tasks ---
+        let mut collected_tasks: Option<Vec<FindTaskInfo>> = if fields.tasks || has_task_filter {
+            let mut tasks = entry.tasks.clone();
+            if has_section_filter {
+                tasks.retain(|t| in_scope(&scope_ranges, t.line));
+            }
+            Some(tasks)
+        } else {
+            None
+        };
+
+        if let Some(filter) = task_filter {
+            let tasks_slice: &[FindTaskInfo] = collected_tasks.as_deref().unwrap_or(&[]);
+            if !matches_task_filter(tasks_slice, filter) {
+                continue;
+            }
+        }
+
+        // --- Content search: requires disk I/O ---
+        let content_matches: Option<Vec<ContentMatch>> = if has_content_search {
+            let full_path = dir.join(&entry.rel_path);
+            let mut content_visitor = if let Some(ref re) = compiled_regex {
+                ContentSearchVisitor::from_compiled(re.clone())
+            } else {
+                // pattern is Some at this point since has_content_search is true
+                ContentSearchVisitor::new(pattern.unwrap())
+            };
+            // Re-scan just this file for content (frontmatter already in index)
+            let scan_result =
+                hyalo_core::scanner::scan_file_multi(&full_path, &mut [&mut content_visitor]);
+            match scan_result {
+                Ok(()) => {}
+                Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
+                    eprintln!("warning: skipping {}: {e}", entry.rel_path);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+            let mut matches = content_visitor.into_matches();
+            if has_section_filter {
+                matches.retain(|m| in_scope(&scope_ranges, m.line));
+            }
+            Some(matches)
+        } else {
+            None
+        };
+
+        // Drop tasks from collected_tasks if not needed in output (filter already applied)
+        if !fields.tasks {
+            collected_tasks = None;
+        }
+
+        // Filter: content search must have at least one match
+        if has_content_search && content_matches.as_ref().is_some_and(|m| m.is_empty()) {
+            continue;
+        }
+
+        // --- Build sections field ---
+        let outline_sections: Option<Vec<OutlineSection>> = if fields.sections {
+            let mut secs = entry.sections.clone();
+            if !scope_ranges.is_empty() {
+                secs.retain(|s| in_scope(&scope_ranges, s.line));
+            }
+            Some(secs)
+        } else {
+            None
+        };
+
+        // --- Build links field from pre-indexed link data ---
+        let links = if fields.links || sort_needs_links {
+            Some(
+                entry
+                    .links
+                    .iter()
+                    .map(|(_, link)| {
+                        let path =
+                            discovery::resolve_target(&canonical_dir, &link.target, site_prefix);
+                        LinkInfo {
+                            target: link.target.clone(),
+                            path,
+                            label: link.label.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
+        // --- Build properties fields ---
+        let properties = if fields.properties {
+            let mut map = serde_json::Map::new();
+            for (name, value) in entry
+                .properties
+                .iter()
+                .filter(|(n, _)| n.as_str() != "tags")
+            {
+                map.insert(name.clone(), hyalo_core::frontmatter::yaml_to_json(value));
+            }
+            Some(map)
+        } else {
+            None
+        };
+
+        let properties_typed = if fields.properties_typed {
+            Some(
+                entry
+                    .properties
+                    .iter()
+                    .filter(|(name, _)| name.as_str() != "tags")
+                    .map(|(name, value)| PropertyInfo {
+                        name: name.clone(),
+                        prop_type: hyalo_core::frontmatter::infer_type(value).to_owned(),
+                        value: hyalo_core::frontmatter::yaml_to_json(value),
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+
+        let tags_field = if fields.tags {
+            Some(entry.tags.clone())
+        } else {
+            None
+        };
+
+        // --- Backlinks from pre-built link graph ---
+        let backlinks = if fields.backlinks {
+            let entries_bl = link_graph_ref
+                .map(|graph| graph.backlinks(&entry.rel_path))
+                .unwrap_or_default();
+            Some(
+                entries_bl
+                    .into_iter()
+                    .filter(|e| !is_self_link(e, &entry.rel_path))
+                    .map(|e| {
+                        let source = e.source.to_string_lossy().replace('\\', "/");
+                        BacklinkInfo {
+                            source,
+                            line: e.line,
+                            label: e.link.label.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
+        let obj = FileObject {
+            file: entry.rel_path.clone(),
+            modified: entry.modified.clone(),
+            properties,
+            properties_typed,
+            tags: tags_field,
+            sections: outline_sections,
+            tasks: collected_tasks,
+            links,
+            backlinks,
+            matches: content_matches,
+        };
+
+        results.push(obj);
+
+        if can_short_circuit && results.len() >= limit.unwrap() {
+            break;
+        }
+    }
+
+    // --- Sort ---
+    match sort.unwrap_or(&SortField::File) {
+        SortField::File => results.sort_by(|a, b| a.file.cmp(&b.file)),
+        SortField::Modified => results.sort_by(|a, b| a.modified.cmp(&b.modified)),
+        SortField::BacklinksCount => {
+            results.sort_by(|a, b| {
+                let a_count = a.backlinks.as_ref().map_or_else(
+                    || link_graph_ref.map_or(0, |g| g.backlinks(&a.file).len()),
+                    Vec::len,
+                );
+                let b_count = b.backlinks.as_ref().map_or_else(
+                    || link_graph_ref.map_or(0, |g| g.backlinks(&b.file).len()),
+                    Vec::len,
+                );
+                b_count.cmp(&a_count)
+            });
+        }
+        SortField::LinksCount => {
+            results.sort_by(|a, b| {
+                let a_count = a.links.as_ref().map_or(0, Vec::len);
+                let b_count = b.links.as_ref().map_or(0, Vec::len);
+                b_count.cmp(&a_count)
+            });
+        }
+    }
+
+    // Strip internally-computed links field if user didn't request it
+    if sort_needs_links && !fields.links {
+        for obj in &mut results {
+            obj.links = None;
+        }
+    }
+
+    // --- Limit ---
+    if let Some(n) = limit {
+        results.truncate(n);
+    }
+
+    // --- Serialize ---
+    let json_array: Vec<serde_json::Value> = results
+        .into_iter()
+        .map(|obj| serde_json::to_value(obj).context("failed to serialize find result"))
+        .collect::<Result<_>>()?;
+
     if format == crate::output::Format::Text && json_array.is_empty() {
         eprintln!("warning: No files matched.");
     }
