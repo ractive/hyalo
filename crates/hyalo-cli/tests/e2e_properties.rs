@@ -169,7 +169,10 @@ fn properties_glob_no_match() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "non-matching glob should exit 0, not error"
+    );
 }
 
 // ---------------------------------------------------------------------------
