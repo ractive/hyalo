@@ -253,7 +253,8 @@ fn try_parse_markdown_link_span_at(
     let close_bracket = rest.find(']')?;
     // Read label from `original` so backtick-wrapped content is not lost when
     // `text` has had inline code spans replaced with spaces.
-    let label_text = &original[start + 1..start + close_bracket];
+    // Use `.get()` to avoid panic if `original` has a different byte layout.
+    let label_text = original.get(start + 1..start + close_bracket)?;
 
     let after_bracket = start + close_bracket + 1;
     if text.as_bytes().get(after_bracket).copied() != Some(b'(') {
@@ -352,7 +353,8 @@ fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Optio
     let close_bracket = rest.find(']')?;
     // Read label from `original` so backtick-wrapped content is not lost when
     // `text` has had inline code spans replaced with spaces.
-    let label_text = &original[start + 1..start + close_bracket];
+    // Use `.get()` to avoid panic if `original` has a different byte layout.
+    let label_text = original.get(start + 1..start + close_bracket)?;
 
     // Must be immediately followed by (
     let after_bracket = start + close_bracket + 1;

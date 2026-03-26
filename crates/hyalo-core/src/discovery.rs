@@ -240,7 +240,12 @@ pub fn resolve_target(
     // Normalize absolute paths using site_prefix (same logic as LinkGraph).
     // `/docs/page.md` with site_prefix "docs" becomes `page.md`.
     let target = if target.starts_with('/') {
-        strip_site_prefix(&target, site_prefix)
+        let stripped = strip_site_prefix(&target, site_prefix);
+        // Reject traversal even after prefix stripping (e.g. `/docs/../../etc/passwd`)
+        if has_parent_traversal(&stripped) {
+            return None;
+        }
+        stripped
     } else {
         if has_parent_traversal(&target) || Path::new(&target).is_absolute() {
             return None;

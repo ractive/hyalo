@@ -103,8 +103,12 @@ fn validate_target(
     src_rel: &str,
     format: Format,
 ) -> Result<Result<String, CommandOutcome>> {
-    // Normalize forward slashes
+    // Normalize forward slashes and strip leading "./" for consistent comparison
     let normalized = to_arg.replace('\\', "/");
+    let normalized = normalized
+        .strip_prefix("./")
+        .unwrap_or(&normalized)
+        .to_owned();
 
     // Must end with .md
     if !normalized.ends_with(".md") {
