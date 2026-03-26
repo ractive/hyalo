@@ -721,6 +721,16 @@ fn main() {
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
     let dir = cli.dir.unwrap_or(config.dir);
+
+    // Validate that --dir is not a file path
+    if dir.is_file() {
+        eprintln!(
+            "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
+            dir.display()
+        );
+        process::exit(1);
+    }
+
     // Derive site_prefix for absolute link resolution: when dir != ".",
     // absolute links like `/docs/page.md` are resolved by stripping `/<dir>/`.
     let site_prefix_owned = {

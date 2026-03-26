@@ -341,3 +341,45 @@ fn error_text_format() {
     assert!(stderr.contains("Error:"));
     assert!(stderr.contains("file not found"));
 }
+
+#[test]
+fn error_dir_pointing_to_file() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Test
+---
+# Body
+"),
+    );
+    let file_path = tmp.path().join("note.md");
+
+    let output = hyalo()
+        .args(["--dir", file_path.to_str().unwrap()])
+        .args(["find"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("Error:"),
+        "expected 'Error:' in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("is a file, not a directory"),
+        "expected helpful message; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--file"),
+        "expected hint about --file; got: {stderr}"
+    );
+}
