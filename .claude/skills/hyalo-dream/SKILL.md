@@ -43,12 +43,16 @@ hyalo summary --format text
 
 # 2. Full snapshot — one scan that captures everything. Save to a temp file so you can
 #    run many jq filters without re-scanning the filesystem each time.
-hyalo find --fields properties,tags,sections,tasks,links,backlinks > /tmp/hyalo-dream-snapshot.json
+HYALO_DREAM_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/hyalo-dream-snapshot.XXXXXX.json")"
+hyalo find --fields properties,tags,sections,tasks,links,backlinks > "${HYALO_DREAM_SNAPSHOT}"
 ```
 
 The snapshot contains every file's properties, tags, sections, tasks, links, and
 backlinks. All detection queries in Phase 3 should use `jq` on this file rather than
 running separate `hyalo find` calls. This turns ~15 disk scans into 1.
+
+**Important:** All subsequent `jq` commands in this skill reference `${HYALO_DREAM_SNAPSHOT}`
+instead of a hardcoded path.
 
 Also grab the tag vocabulary for inconsistency detection:
 ```bash
@@ -73,7 +77,7 @@ git log --oneline --since="4 weeks ago" -- "*.rs" | head -30
 
 Extract non-completed iterations and their branches from the snapshot:
 ```bash
-jq 'map(select(.properties.type == "iteration" and .properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.type == "iteration" and .properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})' ${HYALO_DREAM_SNAPSHOT}
 ```
 
 For each non-completed iteration that has a branch, check if that branch was merged:
@@ -85,7 +89,10 @@ git log --oneline --merges --all | grep "<branch-name>"
 
 Check what was recently worked on from Claude's perspective:
 ```bash
-MEMORY_DIR=$(find ~/.claude/projects/ -path "*/memory/MEMORY.md" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+MEMORY_FILE=$(find ~/.claude/projects/ -path "*/memory/MEMORY.md" -print -quit 2>/dev/null)
+if [ -n "$MEMORY_FILE" ]; then
+  MEMORY_DIR=$(dirname "$MEMORY_FILE")
+fi
 ```
 
 If found, query it with hyalo:
@@ -112,7 +119,7 @@ All queries below run on the cached snapshot — no additional disk scans needed
 
 ### Broken links
 ```bash
-jq '[.[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]' /tmp/hyalo-dream-snapshot.json
+jq '[.[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]' ${HYALO_DREAM_SNAPSHOT}
 ```
 For each broken link, try to find the intended target:
 - Search for the filename in `done/` subdirectories (common after archiving)
@@ -124,7 +131,7 @@ exist at all).
 
 ### Orphan files
 ```bash
-jq 'map(select(.backlinks | length == 0)) | map(.file)' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.backlinks | length == 0)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
 ```
 Not all orphans are problems. Expect these to be legitimately orphaned:
 - Top-level files (SEED.md, project-pitch.md, decision-log.md)
@@ -136,19 +143,19 @@ Focus on **actionable orphans**: active/planned items that should be cross-refer
 ### Stale statuses
 ```bash
 # In-progress items — should any be completed?
-jq 'map(select(.properties.status == "in-progress")) | map({file, date: .properties.date, branch: .properties.branch})' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.status == "in-progress")) | map({file, date: .properties.date, branch: .properties.branch})' ${HYALO_DREAM_SNAPSHOT}
 
 # Planned items where all tasks are done
-jq 'map(select(.properties.status == "planned" and (.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.status == "planned" and (.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
 
 # In-progress items sorted by date (oldest first — possibly stale)
-jq 'map(select(.properties.status == "in-progress" and .properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.status == "in-progress" and .properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})' ${HYALO_DREAM_SNAPSHOT}
 ```
 Cross-reference with git merges from Phase 2. If the branch was merged, update status.
 
 ### Stale backlog items
 ```bash
-jq 'map(select(.properties.status == "planned" and .properties.type == "backlog")) | map({file, title: .properties.title})' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.status == "planned" and .properties.type == "backlog")) | map({file, title: .properties.title})' ${HYALO_DREAM_SNAPSHOT}
 ```
 Compare each planned backlog item against merged iterations and recent git history.
 If the feature clearly shipped (in a different iteration or under a different name),
@@ -156,8 +163,8 @@ flag it.
 
 ### Missing metadata
 ```bash
-jq 'map(select(.properties.status == null)) | map(.file)' /tmp/hyalo-dream-snapshot.json
-jq 'map(select(.properties.type == null)) | map(.file)' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.status == null)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
+jq 'map(select(.properties.type == null)) | map(.file)' ${HYALO_DREAM_SNAPSHOT}
 ```
 
 ### Tag inconsistencies
@@ -169,7 +176,7 @@ more files.
 ### Task completion vs status mismatch
 ```bash
 # Completed items with unchecked tasks — systemic or one-off?
-jq 'map(select(.properties.status == "completed" and (.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) > 0)) | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})' /tmp/hyalo-dream-snapshot.json
+jq 'map(select(.properties.status == "completed" and (.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) > 0)) | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})' ${HYALO_DREAM_SNAPSHOT}
 ```
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.
@@ -248,5 +255,5 @@ delta: statuses changed, links fixed, tags normalized, files moved.
   wikilink text in prose, adding cross-reference lines).
 - **Batch similar findings**: if 15 completed items have unchecked tasks, say that once
   with the count. The report should be scannable in 30 seconds.
-- **Minimize disk scans**: use the `/tmp/hyalo-dream-snapshot.json` for all read queries.
+- **Minimize disk scans**: use the `${HYALO_DREAM_SNAPSHOT}` for all read queries.
   Only call `hyalo find` again if you need data not in the snapshot.

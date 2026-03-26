@@ -26,8 +26,8 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 ///
 /// - `dir`: explicit value for the `dir` key in `.hyalo.toml`; when `None` the
 ///   function auto-detects a common doc directory.
-/// - `claude`: when `true`, also installs the hyalo skill and appends a hint
-///   line to `.claude/CLAUDE.md`.
+/// - `claude`: when `true`, also installs the hyalo and hyalo-dream skills and
+///   appends a hint line to `.claude/CLAUDE.md`.
 pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
     let mut summary = String::new();
