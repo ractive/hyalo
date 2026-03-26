@@ -1,5 +1,5 @@
 # Agents
-Delegate the work to agents whenever possible
+Delegate the work to agents whenever possible to avoid automatic context compaction.
 
 # Documentation
 
