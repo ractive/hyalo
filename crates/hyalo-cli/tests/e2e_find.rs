@@ -1621,6 +1621,34 @@ fn find_property_regex_invalid_pattern_returns_user_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Regex filter: =~ alias (Perl/Ruby-style)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_property_eq_tilde_bare_substring() {
+    let tmp = setup_vault();
+    // =~ bare pattern: status=~compl should behave identically to status~=compl
+    let (status, json, stderr) = find_json(&tmp, &["--property", "status=~compl"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
+    assert_eq!(arr[0]["file"], "beta.md");
+}
+
+#[test]
+fn find_property_eq_tilde_delimited_case_insensitive() {
+    let tmp = setup_vault();
+    // =~ delimited with /i flag: title=~/ALPHA/i should match alpha.md
+    let (status, json, stderr) = find_json(&tmp, &["--property", "title=~/ALPHA/i"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "expected alpha.md: {arr:?}");
+    assert_eq!(arr[0]["file"], "alpha.md");
+}
+
+// ---------------------------------------------------------------------------
 // Section substring matching
 // ---------------------------------------------------------------------------
 
