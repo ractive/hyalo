@@ -209,6 +209,12 @@ struct Cli {
     #[arg(long, global = true, conflicts_with = "hints")]
     no_hints: bool,
 
+    /// Override the site prefix used when resolving absolute links (e.g. `/docs/page.md`).
+    /// Auto-derived from --dir when not set (uses last path component of the resolved dir).
+    /// Override via .hyalo.toml
+    #[arg(long, global = true, value_name = "PREFIX")]
+    site_prefix: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -721,16 +727,35 @@ fn main() {
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
     let dir = cli.dir.unwrap_or(config.dir);
-    // Derive site_prefix for absolute link resolution: when dir != ".",
-    // absolute links like `/docs/page.md` are resolved by stripping `/<dir>/`.
-    let site_prefix_owned = {
-        let s = dir.to_string_lossy().replace('\\', "/");
-        let s = s.trim().trim_end_matches('/');
-        let s = s.strip_prefix("./").unwrap_or(s);
-        if s == "." || s.is_empty() {
-            None
-        } else {
-            Some(s.to_owned())
+    // Derive site_prefix with tri-state precedence:
+    //
+    //   1. CLI --site-prefix flag  (present → use it; empty string = explicit disable)
+    //   2. `site_prefix` in .hyalo.toml  (same: empty string = explicit disable)
+    //   3. Auto-derive from canonicalized dir's last path component
+    //      (only runs when neither 1 nor 2 is present)
+    //
+    // Empty strings in (1) and (2) short-circuit the chain and result in
+    // site_prefix = None, suppressing all absolute-link resolution.
+    let site_prefix_owned: Option<String> = if cli.site_prefix.is_some() {
+        // Explicit CLI flag wins — empty string intentionally disables prefix.
+        cli.site_prefix.filter(|s| !s.is_empty())
+    } else if config.site_prefix.is_some() {
+        // Config file override — empty string intentionally disables prefix.
+        config.site_prefix.filter(|s| !s.is_empty())
+    } else {
+        // Auto-derive from the last component of the resolved dir.
+        match std::fs::canonicalize(&dir) {
+            Ok(canonical) => canonical
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_owned()),
+            Err(_) => {
+                // Fallback for non-existent paths: use file_name() on the raw path.
+                dir.file_name()
+                    .and_then(|n| n.to_str())
+                    .filter(|s| *s != ".")
+                    .map(|s| s.to_owned())
+            }
         }
     };
     let site_prefix = site_prefix_owned.as_deref();

@@ -13,6 +13,10 @@ struct ConfigFile {
     dir: Option<String>,
     format: Option<String>,
     hints: Option<bool>,
+    /// Explicit override for the site prefix used when resolving absolute links
+    /// (e.g. `/docs/page.md`).  When set, this takes precedence over the
+    /// auto-derived value (last component of the resolved `dir`).
+    site_prefix: Option<String>,
 }
 
 /// Resolved configuration with all defaults applied.
@@ -21,6 +25,8 @@ pub struct ResolvedDefaults {
     pub dir: PathBuf,
     pub format: String,
     pub hints: bool,
+    /// Explicit site-prefix override from `.hyalo.toml`, if any.
+    pub site_prefix: Option<String>,
 }
 
 impl ResolvedDefaults {
@@ -29,6 +35,7 @@ impl ResolvedDefaults {
             dir: PathBuf::from("."),
             format: "json".to_owned(),
             hints: false,
+            site_prefix: None,
         }
     }
 }
@@ -80,6 +87,7 @@ pub fn load_config_from(dir: &Path) -> ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
         format: cfg.format.unwrap_or(defaults.format),
         hints: cfg.hints.unwrap_or(defaults.hints),
+        site_prefix: cfg.site_prefix,
     }
 }
 
@@ -119,6 +127,23 @@ hints = true
         assert_eq!(resolved.dir, PathBuf::from("notes"));
         assert_eq!(resolved.format, "text");
         assert!(resolved.hints);
+        assert_eq!(resolved.site_prefix, None);
+    }
+
+    #[test]
+    fn site_prefix_config() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            r#"dir = "docs"
+site_prefix = "docs"
+"#,
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.dir, PathBuf::from("docs"));
+        assert_eq!(resolved.site_prefix, Some("docs".to_owned()));
     }
 
     #[test]
