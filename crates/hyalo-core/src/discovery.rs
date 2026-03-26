@@ -132,7 +132,11 @@ fn normalize_path(path: &str) -> String {
 /// (negation glob).
 #[must_use]
 pub fn is_glob(path: &str) -> bool {
-    path.starts_with('!') || path.contains('*') || path.contains('?') || path.contains('[')
+    path.starts_with('!')
+        || path.starts_with("\\!")
+        || path.contains('*')
+        || path.contains('?')
+        || path.contains('[')
 }
 
 /// Match discovered files against a glob pattern.
@@ -145,6 +149,17 @@ pub fn is_glob(path: &str) -> bool {
 ///
 /// The glob is matched against paths relative to `dir`.
 pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(PathBuf, String)>> {
+    // Normalize `\!` → `!` so that shell-escaped negation globs work.
+    // Some shells (and Claude Code's Bash tool) escape `!` to `\!` even
+    // inside single quotes.
+    let normalized;
+    let pattern = if let Some(rest) = pattern.strip_prefix("\\!") {
+        normalized = format!("!{rest}");
+        normalized.as_str()
+    } else {
+        pattern
+    };
+
     if let Some(neg_pattern) = pattern.strip_prefix('!') {
         anyhow::ensure!(
             !neg_pattern.is_empty(),
@@ -421,6 +436,33 @@ mod tests {
     fn is_glob_detects_negation_prefix() {
         assert!(is_glob("!notes/draft.md"));
         assert!(is_glob("!**/index.md"));
+    }
+
+    #[test]
+    fn is_glob_detects_escaped_negation_prefix() {
+        assert!(is_glob("\\!notes/draft.md"));
+        assert!(is_glob("\\!**/index.md"));
+    }
+
+    #[test]
+    fn glob_negation_escaped_backslash_bang() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &["a.md", "b.md", "notes/draft.md", "notes/final.md"],
+        );
+        let files = discover_files(tmp.path()).unwrap();
+
+        // `\!` should be treated identically to `!` (shell escaping workaround)
+        let matched = match_glob(tmp.path(), &files, "\\!notes/draft.md").unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert!(
+            !rels.contains(&"notes/draft.md"),
+            "draft.md should be excluded via escaped negation"
+        );
+        assert!(rels.contains(&"notes/final.md"));
+        assert!(rels.contains(&"a.md"));
+        assert_eq!(matched.len(), 3);
     }
 
     #[test]

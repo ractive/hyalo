@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
+use crate::link_graph::{LinkGraph, normalize_target, relative_path_between, strip_site_prefix};
 use crate::links::{LinkKind, extract_link_spans_with_original};
 use crate::scanner::{FenceTracker, is_comment_fence, strip_inline_code, strip_inline_comments};
 
@@ -111,6 +111,7 @@ pub fn plan_mv(
             old_stem,
             new_rel,
             new_stem,
+            site_prefix,
         );
 
         if !replacements.is_empty() {
@@ -191,6 +192,7 @@ fn plan_inbound_rewrites(
     old_stem: &str,
     new_rel: &str,
     new_stem: &str,
+    site_prefix: Option<&str>,
 ) -> Vec<Replacement> {
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
@@ -249,8 +251,14 @@ fn plan_inbound_rewrites(
                     (t.contains('/') || t.contains('\\')) && (t == old_stem || t == old_rel)
                 }
                 LinkKind::Markdown => {
-                    // Normalize relative target against the source file's directory.
-                    let norm = normalize_target(Path::new(source_rel), &span.link.target);
+                    // Absolute links (starting with `/`) are stripped of the
+                    // site_prefix then compared; relative links are normalized
+                    // against the source file's directory.
+                    let norm = if span.link.target.starts_with('/') {
+                        strip_site_prefix(&span.link.target, site_prefix)
+                    } else {
+                        normalize_target(Path::new(source_rel), &span.link.target)
+                    };
                     norm == old_rel || norm == old_stem
                 }
             };
@@ -262,7 +270,24 @@ fn plan_inbound_rewrites(
             // Compute the new target text.
             let new_target = match span.kind {
                 LinkKind::Wikilink => new_stem.to_string(),
-                LinkKind::Markdown => relative_path_between(source_rel, new_rel),
+                LinkKind::Markdown => {
+                    // If the original link was absolute-path style, preserve that
+                    // style by re-prepending the site_prefix (or just `/`).
+                    if span.link.target.starts_with('/') {
+                        // Preserve whether the original used .md or stem style.
+                        let target = if span.link.target.ends_with(".md") {
+                            new_rel
+                        } else {
+                            new_stem
+                        };
+                        match site_prefix {
+                            Some(prefix) => format!("/{prefix}/{target}"),
+                            None => format!("/{target}"),
+                        }
+                    } else {
+                        relative_path_between(source_rel, new_rel)
+                    }
+                }
             };
 
             // Build old_text and new_text using the ORIGINAL line (not cleaned).
@@ -750,5 +775,110 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b.md]]");
         assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+    }
+
+    // ---- Absolute-path inbound link tests ----
+
+    #[test]
+    fn plan_mv_inbound_absolute_link_with_site_prefix() {
+        // a.md uses an absolute link /docs/configure/settings.md to reference
+        // configure/settings.md (with site_prefix = "docs").
+        // After moving configure/settings.md → config/settings.md, the link
+        // must be rewritten to /docs/config/settings.md (preserving absolute style).
+        let vault = create_vault(&[
+            (
+                "a.md",
+                "See [settings](/docs/configure/settings.md) for details\n",
+            ),
+            ("configure/settings.md", "# Settings\n"),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "configure/settings.md",
+            "config/settings.md",
+            Some("docs"),
+        )
+        .unwrap();
+        assert_eq!(plans.len(), 1, "should produce one rewrite plan");
+        assert_eq!(plans[0].rel_path, "a.md");
+        assert_eq!(plans[0].replacements.len(), 1);
+        assert_eq!(
+            plans[0].replacements[0].old_text,
+            "[settings](/docs/configure/settings.md)"
+        );
+        assert_eq!(
+            plans[0].replacements[0].new_text,
+            "[settings](/docs/config/settings.md)"
+        );
+    }
+
+    #[test]
+    fn plan_mv_inbound_absolute_link_without_site_prefix() {
+        // With no site_prefix, /page.md is an absolute link to page.md.
+        // Moving page.md → archive/page.md must rewrite to /archive/page.md.
+        let vault = create_vault(&[
+            ("index.md", "See [page](/page.md) here\n"),
+            ("page.md", "# Page\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "page.md", "archive/page.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].rel_path, "index.md");
+        assert_eq!(plans[0].replacements[0].old_text, "[page](/page.md)");
+        assert_eq!(
+            plans[0].replacements[0].new_text,
+            "[page](/archive/page.md)"
+        );
+    }
+
+    #[test]
+    fn plan_mv_inbound_absolute_link_no_false_positive_wrong_prefix() {
+        // /other/page.md does NOT match configure/settings.md even with
+        // site_prefix = "docs" — must not produce a spurious rewrite.
+        let vault = create_vault(&[
+            ("a.md", "See [other](/other/page.md) here\n"),
+            ("configure/settings.md", "# Settings\n"),
+            ("other/page.md", "# Other\n"),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "configure/settings.md",
+            "config/settings.md",
+            Some("docs"),
+        )
+        .unwrap();
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_none(),
+            "absolute link to a different file must not be rewritten: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_inbound_absolute_stem_match() {
+        // Absolute link without .md extension: /docs/configure/settings
+        // should still match configure/settings.md (stem comparison).
+        let vault = create_vault(&[
+            (
+                "a.md",
+                "See [settings](/docs/configure/settings) for details\n",
+            ),
+            ("configure/settings.md", "# Settings\n"),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "configure/settings.md",
+            "config/settings.md",
+            Some("docs"),
+        )
+        .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(
+            plans[0].replacements[0].old_text,
+            "[settings](/docs/configure/settings)"
+        );
+        assert_eq!(
+            plans[0].replacements[0].new_text,
+            "[settings](/docs/config/settings)"
+        );
     }
 }

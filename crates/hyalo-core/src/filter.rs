@@ -374,6 +374,15 @@ fn yaml_value_regex_match(yaml: &Value, pattern: &Regex) -> bool {
         Value::Number(n) => pattern.is_match(&n.to_string()),
         Value::Bool(b) => pattern.is_match(if *b { "true" } else { "false" }),
         Value::Sequence(seq) => seq.iter().any(|item| yaml_value_regex_match(item, pattern)),
+        // For mappings, match against keys and recurse into values.
+        // This allows `versions~=ghes` to match `{fpt: "*", ghes: "*"}`.
+        Value::Mapping(map) => map.iter().any(|(k, v)| {
+            let key_matches = match k {
+                Value::String(s) => pattern.is_match(s),
+                _ => false,
+            };
+            key_matches || yaml_value_regex_match(v, pattern)
+        }),
         _ => false,
     }
 }
@@ -865,6 +874,30 @@ mod tests {
         assert!(f_exact.matches(&p));
         let f_no = parse_property_filter(r"status~=/^drafts$/").unwrap();
         assert!(!f_no.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_mapping_key() {
+        // versions: {fpt: "*", ghes: "*", ghec: "*"}
+        let mut map = serde_yaml_ng::Mapping::new();
+        map.insert(Value::String("fpt".into()), Value::String("*".into()));
+        map.insert(Value::String("ghes".into()), Value::String("*".into()));
+        map.insert(Value::String("ghec".into()), Value::String("*".into()));
+        let p = props(&[("versions", Value::Mapping(map))]);
+        let f = parse_property_filter("versions~=ghes").unwrap();
+        assert!(f.matches(&p));
+        let f2 = parse_property_filter("versions~=nonexistent").unwrap();
+        assert!(!f2.matches(&p));
+    }
+
+    #[test]
+    fn match_regex_mapping_value() {
+        let mut map = serde_yaml_ng::Mapping::new();
+        map.insert(Value::String("ghes".into()), Value::String(">=3.10".into()));
+        let p = props(&[("versions", Value::Mapping(map))]);
+        // Match on the value, not the key
+        let f = parse_property_filter("versions~=3\\.10").unwrap();
+        assert!(f.matches(&p));
     }
 
     // -----------------------------------------------------------------------
