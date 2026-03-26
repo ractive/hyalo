@@ -99,14 +99,16 @@ pub fn find(
 
     // Build the link graph lazily — only when backlinks field is requested.
     // This requires scanning all files in the vault so it's opt-in.
-    // Collect warned paths so the per-file scan loop below can skip duplicate warnings.
-    let mut link_graph_warned: std::collections::HashSet<std::path::PathBuf> =
-        std::collections::HashSet::new();
+    // Collect warned paths (as forward-slash strings) so the per-file scan loop
+    // below can skip duplicate warnings.  PathBuf uses backslashes on Windows,
+    // but `rel_path` in the loop is always forward-slash-normalized
+    // (via `discovery::relative_path`), so we normalize here to match.
+    let mut link_graph_warned: std::collections::HashSet<String> = std::collections::HashSet::new();
     let link_graph = if fields.backlinks {
         let build = LinkGraph::build(dir, site_prefix)?;
         for (path, msg) in &build.warnings {
             eprintln!("warning: skipping {}: {msg}", path.display());
-            link_graph_warned.insert(path.clone());
+            link_graph_warned.insert(path.to_string_lossy().replace('\\', "/"));
         }
         Some(build.graph)
     } else {
@@ -162,8 +164,8 @@ pub fn find(
             Ok(()) => {}
             Err(e) if frontmatter::is_parse_error(&e) => {
                 // Only warn if the link graph build hasn't already warned for this path.
-                // The link graph uses relative paths; rel_path here is also relative.
-                if !link_graph_warned.contains(std::path::Path::new(rel_path)) {
+                // Both are forward-slash-normalized relative strings.
+                if !link_graph_warned.contains(rel_path.as_str()) {
                     eprintln!("warning: skipping {rel_path}: {e}");
                 }
                 continue;
