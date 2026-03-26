@@ -621,3 +621,211 @@ fn mv_same_source_and_destination_error() {
     // The file must remain untouched
     assert!(tmp.path().join("a.md").exists());
 }
+
+// ---------------------------------------------------------------------------
+// Absolute-link mv tests — site_prefix derivation across invocation styles
+// ---------------------------------------------------------------------------
+
+/// Build a vault with absolute-path links and return (vault_root, docs_dir).
+///
+/// Layout:
+///   <root>/
+///     docs/
+///       index.md     — links to `/docs/pages/about.md`
+///       pages/
+///         about.md
+///         contact.md — links to `/docs/pages/about.md`
+fn build_absolute_link_vault(root: &std::path::Path) -> std::path::PathBuf {
+    let docs = root.join("docs");
+    write_md(
+        root,
+        "docs/index.md",
+        "---\ntitle: Index\n---\nSee [About](/docs/pages/about.md).\n",
+    );
+    write_md(
+        root,
+        "docs/pages/about.md",
+        "---\ntitle: About\n---\nAbout page.\n",
+    );
+    write_md(
+        root,
+        "docs/pages/contact.md",
+        "---\ntitle: Contact\n---\nSee [About](/docs/pages/about.md).\n",
+    );
+    docs
+}
+
+#[test]
+fn mv_absolute_links_bare_subdir() {
+    // --dir docs (relative bare name, the common case)
+    let tmp = TempDir::new().unwrap();
+    let docs = build_absolute_link_vault(tmp.path());
+    let docs_str = docs.to_str().unwrap();
+
+    let output = hyalo()
+        .args(["--dir", docs_str])
+        .args([
+            "mv",
+            "--file",
+            "pages/about.md",
+            "--to",
+            "pages/about-us.md",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["total_links_updated"], 2,
+        "absolute path --dir: json={json}"
+    );
+}
+
+#[test]
+fn mv_absolute_links_absolute_subdir_path() {
+    // --dir <absolute>/docs — same as the bare test but constructed via format!
+    // rather than PathBuf.join(), confirming string-composed absolute paths work.
+    let tmp = TempDir::new().unwrap();
+    build_absolute_link_vault(tmp.path());
+
+    let dir_arg = format!("{}/docs", tmp.path().to_str().unwrap());
+    let output = hyalo()
+        .args(["--dir", &dir_arg])
+        .args([
+            "mv",
+            "--file",
+            "pages/about.md",
+            "--to",
+            "pages/about-us.md",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["total_links_updated"], 2,
+        "absolute subdir --dir: json={json}"
+    );
+}
+
+#[test]
+fn mv_absolute_links_no_leaked_dir_in_rewrites() {
+    // Verify the rewritten link text contains only the vault-relative path,
+    // not any leaked --dir value.
+    let tmp = TempDir::new().unwrap();
+    build_absolute_link_vault(tmp.path());
+    let docs = tmp.path().join("docs");
+
+    let output = hyalo()
+        .args(["--dir", docs.to_str().unwrap()])
+        .args([
+            "mv",
+            "--file",
+            "pages/about.md",
+            "--to",
+            "pages/about-us.md",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json_str = json.to_string();
+
+    // Rewritten link must not embed the absolute dir path
+    assert!(
+        !json_str.contains(tmp.path().to_str().unwrap()),
+        "leaked tmp root in output: {json_str}"
+    );
+    // New link text should reference vault-relative path only
+    assert!(
+        json_str.contains("pages/about-us.md"),
+        "expected pages/about-us.md in output: {json_str}"
+    );
+}
+
+#[test]
+fn mv_site_prefix_cli_flag_overrides_auto_derive() {
+    // --site-prefix explicitly set to "docs" when --dir is the absolute path.
+    // The result should be the same as auto-derivation.
+    let tmp = TempDir::new().unwrap();
+    build_absolute_link_vault(tmp.path());
+    let docs = tmp.path().join("docs");
+
+    let output = hyalo()
+        .args(["--dir", docs.to_str().unwrap()])
+        .args(["--site-prefix", "docs"])
+        .args([
+            "mv",
+            "--file",
+            "pages/about.md",
+            "--to",
+            "pages/about-us.md",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["total_links_updated"], 2,
+        "--site-prefix=docs: json={json}"
+    );
+}
+
+#[test]
+fn mv_site_prefix_cli_empty_disables_prefix() {
+    // --site-prefix "" disables prefix stripping: absolute links won't match.
+    let tmp = TempDir::new().unwrap();
+    build_absolute_link_vault(tmp.path());
+    let docs = tmp.path().join("docs");
+
+    let output = hyalo()
+        .args(["--dir", docs.to_str().unwrap()])
+        .args(["--site-prefix", ""])
+        .args([
+            "mv",
+            "--file",
+            "pages/about.md",
+            "--to",
+            "pages/about-us.md",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // With no prefix, `/docs/pages/about.md` is not resolved as `pages/about.md`
+    // so the inbound links from absolute paths won't match.
+    assert_eq!(
+        json["total_links_updated"], 0,
+        "--site-prefix='': expected 0 links updated, json={json}"
+    );
+}
