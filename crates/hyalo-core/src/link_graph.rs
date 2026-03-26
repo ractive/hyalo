@@ -214,7 +214,7 @@ impl FileVisitor for LinkGraphVisitor {
 ///
 /// With `site_prefix = None`:
 ///   `/page.md` → `page.md`
-fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> String {
+pub(crate) fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> String {
     let without_slash = target.strip_prefix('/').unwrap_or(target);
     if let Some(prefix) = site_prefix {
         // Try stripping "prefix/" from the front

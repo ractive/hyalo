@@ -242,6 +242,7 @@ pub fn find(
             content_matches,
             &canonical_dir,
             link_graph.as_ref(),
+            site_prefix,
         );
 
         results.push(obj);
@@ -344,6 +345,7 @@ fn build_file_object(
     content_matches: Option<Vec<ContentMatch>>,
     canonical_dir: &Path,
     link_graph: Option<&LinkGraph>,
+    site_prefix: Option<&str>,
 ) -> FileObject {
     let properties = if fields.properties {
         let mut map = serde_json::Map::new();
@@ -395,7 +397,7 @@ fn build_file_object(
             lc.into_links()
                 .into_iter()
                 .map(|link| {
-                    let path = discovery::resolve_target(canonical_dir, &link.target);
+                    let path = discovery::resolve_target(canonical_dir, &link.target, site_prefix);
                     LinkInfo {
                         target: link.target,
                         path,

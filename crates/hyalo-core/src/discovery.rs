@@ -4,6 +4,8 @@ use globset::GlobBuilder;
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
+use crate::link_graph::strip_site_prefix;
+
 /// Collect all `.md` files under the given directory, respecting `.gitignore` and skipping hidden dirs.
 pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -223,17 +225,28 @@ impl std::error::Error for FileResolveError {}
 /// `canonical_dir` must be a pre-canonicalized vault path (see `canonicalize_vault_dir`).
 /// Callers iterating over many links should canonicalize once and reuse the result.
 #[must_use]
-pub fn resolve_target(canonical_dir: &Path, target: &str) -> Option<String> {
+pub fn resolve_target(
+    canonical_dir: &Path,
+    target: &str,
+    site_prefix: Option<&str>,
+) -> Option<String> {
     if target.is_empty() {
         return None;
     }
 
-    // Reject path traversal attempts
+    // Normalize backslashes to forward slashes
     let target = target.replace('\\', "/");
-    if target.starts_with('/') || has_parent_traversal(&target) || Path::new(&target).is_absolute()
-    {
-        return None;
-    }
+
+    // Normalize absolute paths using site_prefix (same logic as LinkGraph).
+    // `/docs/page.md` with site_prefix "docs" becomes `page.md`.
+    let target = if target.starts_with('/') {
+        strip_site_prefix(&target, site_prefix)
+    } else {
+        if has_parent_traversal(&target) || Path::new(&target).is_absolute() {
+            return None;
+        }
+        target
+    };
 
     let full = canonical_dir.join(&target);
     if full.is_file() {
@@ -472,7 +485,7 @@ mod tests {
         make_files(tmp.path(), &["note.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "note"),
+            resolve_target(&canonical, "note", None),
             Some("note.md".to_owned())
         );
     }
@@ -483,7 +496,7 @@ mod tests {
         make_files(tmp.path(), &["note.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "note.md"),
+            resolve_target(&canonical, "note.md", None),
             Some("note.md".to_owned())
         );
     }
@@ -494,7 +507,7 @@ mod tests {
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "sub/other"),
+            resolve_target(&canonical, "sub/other", None),
             Some("sub/other.md".to_owned())
         );
     }
@@ -505,7 +518,7 @@ mod tests {
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "sub/other.md"),
+            resolve_target(&canonical, "sub/other.md", None),
             Some("sub/other.md".to_owned())
         );
     }
@@ -515,21 +528,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "other"), None);
+        assert_eq!(resolve_target(&canonical, "other", None), None);
     }
 
     #[test]
     fn resolve_target_nonexistent_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "nonexistent"), None);
+        assert_eq!(resolve_target(&canonical, "nonexistent", None), None);
     }
 
     #[test]
     fn resolve_target_empty_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, ""), None);
+        assert_eq!(resolve_target(&canonical, "", None), None);
     }
 
     #[test]
@@ -537,9 +550,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["note.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "../note"), None);
-        assert_eq!(resolve_target(&canonical, "sub/../../note"), None);
-        assert_eq!(resolve_target(&canonical, "/etc/passwd"), None);
+        assert_eq!(resolve_target(&canonical, "../note", None), None);
+        assert_eq!(resolve_target(&canonical, "sub/../../note", None), None);
+        // /etc/passwd normalizes to "etc/passwd" which doesn't exist in the vault
+        assert_eq!(resolve_target(&canonical, "/etc/passwd", None), None);
     }
 
     #[test]
@@ -548,7 +562,7 @@ mod tests {
         make_files(tmp.path(), &["image.png"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "image.png"),
+            resolve_target(&canonical, "image.png", None),
             Some("image.png".to_owned())
         );
     }
@@ -588,7 +602,7 @@ mod tests {
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
 
         assert_eq!(
-            resolve_target(&canonical, "etc..md"),
+            resolve_target(&canonical, "etc..md", None),
             Some("etc..md".to_owned())
         );
     }
@@ -598,7 +612,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
 
-        assert_eq!(resolve_target(&canonical, "../secret.md"), None);
+        assert_eq!(resolve_target(&canonical, "../secret.md", None), None);
     }
 
     // --- symlink escape tests ---
@@ -630,8 +644,55 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), vault.path().join("linked")).unwrap();
 
         let canonical = canonicalize_vault_dir(vault.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "linked/secret"), None);
-        assert_eq!(resolve_target(&canonical, "linked/secret.md"), None);
+        assert_eq!(resolve_target(&canonical, "linked/secret", None), None);
+        assert_eq!(resolve_target(&canonical, "linked/secret.md", None), None);
+    }
+
+    // --- site_prefix resolution ---
+
+    #[test]
+    fn resolve_target_absolute_with_site_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "/docs/page.md", Some("docs")),
+            Some("page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_absolute_no_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "/page.md", None),
+            Some("page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_absolute_nonmatching_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["other/b.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        // site_prefix "docs" doesn't match "/other/b.md", so strip just the "/"
+        assert_eq!(
+            resolve_target(&canonical, "/other/b.md", Some("docs")),
+            Some("other/b.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_absolute_stem_with_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "/docs/page", Some("docs")),
+            Some("page.md".to_owned())
+        );
     }
 
     #[cfg(unix)]
