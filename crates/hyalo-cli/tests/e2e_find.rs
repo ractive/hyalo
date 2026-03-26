@@ -704,8 +704,7 @@ fn find_limit_with_sort_modified_returns_correct_results() {
 
     // Limit=2 with sort modified must return the 2 most-recently-modified
     // files from the full sorted result, not the first 2 by file path.
-    let (status, limited_json, stderr) =
-        find_json(&tmp, &["--sort", "modified", "--limit", "2"]);
+    let (status, limited_json, stderr) = find_json(&tmp, &["--sort", "modified", "--limit", "2"]);
     assert!(status.success(), "limited stderr: {stderr}");
     let limited_arr = limited_json.as_array().unwrap();
 
@@ -722,6 +721,30 @@ fn find_limit_with_sort_modified_returns_correct_results() {
     assert_eq!(
         actual_files, expected_files,
         "--sort-by modified + --limit must sort first then truncate"
+    );
+}
+
+/// With --file args in reverse alphabetical order and --limit 1, the result
+/// must be the alphabetically-first file (matching --sort file behaviour),
+/// not the first file in CLI arg order.  Short-circuit is disabled for
+/// explicit --file lists because they preserve CLI order, not sort order.
+#[test]
+fn find_limit_with_explicit_files_uses_sort_order() {
+    let tmp = setup_vault();
+
+    // gamma.md comes before alpha.md in CLI order, but alpha.md is alphabetically first.
+    // With --limit 1 and default (file) sort, we must get alpha.md.
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &["--file", "gamma.md", "--file", "alpha.md", "--limit", "1"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(
+        arr[0]["file"].as_str().unwrap(),
+        "alpha.md",
+        "expected alphabetically-first file; --file order must not affect sort+limit result"
     );
 }
 

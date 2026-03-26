@@ -116,7 +116,11 @@ pub fn find(
     // (which would need a full-vault scan regardless), we can stop as soon
     // as we have accumulated `limit` matching results instead of scanning
     // every file and truncating afterwards.
+    //
+    // Disabled when `--file` args are given: explicit file lists preserve CLI
+    // order (not alphabetical), so stopping early could return the wrong N files.
     let can_short_circuit = limit.is_some()
+        && files_arg.is_empty()
         && matches!(sort.unwrap_or(&SortField::File), SortField::File)
         && !fields.backlinks;
 
@@ -257,7 +261,7 @@ pub fn find(
         results.push(obj);
 
         // Early exit when we have enough results and a full scan is not needed.
-        if can_short_circuit && results.len() >= limit.unwrap_or(usize::MAX) {
+        if can_short_circuit && results.len() >= limit.unwrap() {
             break;
         }
     }
