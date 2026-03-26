@@ -1,15 +1,15 @@
 ---
-title: "Dogfooding Report: v0.4.0 on External Documentation Repos"
-type: research
 date: 2026-03-26
-status: completed
+status: superseded
 tags:
-  - research
-  - cli
-  - dogfooding
-  - backlinks
-  - mv
-  - performance
+- research
+- cli
+- dogfooding
+- backlinks
+- mv
+- performance
+title: 'Dogfooding Report: v0.4.0 on External Documentation Repos'
+type: research
 ---
 
 # Dogfooding Report: v0.4.0 on External Documentation Repos

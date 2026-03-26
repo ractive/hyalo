@@ -17,6 +17,10 @@ tags:
 
 ---
 
+> **Update 2026-03-26**: All bugs listed below were fixed in iteration 45 (6 PRs: #48–#53, all merged to main). The only items NOT addressed are: case-only rename on macOS, `--glob` not repeatable, no reverse sort, no `--sort-by count`, empty body pattern matching all files, `--file /leading-slash` hint, and backlinks output format inconsistency.
+
+---
+
 ## Performance: 12-13% Faster Than v0.4.0
 
 | Command (GitHub Docs, 3520 files) | v0.4.1 | v0.4.0 | Change |
