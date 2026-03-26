@@ -49,7 +49,7 @@ pub fn mv(
     };
 
     // 2. Validate target path
-    let new_rel = validate_target(dir, to_arg, format)?;
+    let new_rel = validate_target(dir, to_arg, &old_rel, format)?;
     let new_rel = match new_rel {
         Ok(rel) => rel,
         Err(outcome) => return Ok(outcome),
@@ -100,6 +100,7 @@ pub fn mv(
 fn validate_target(
     dir: &Path,
     to_arg: &str,
+    src_rel: &str,
     format: Format,
 ) -> Result<Result<String, CommandOutcome>> {
     // Normalize forward slashes
@@ -130,6 +131,18 @@ fn validate_target(
             "target path must be relative and within the vault",
             Some(&normalized),
             None,
+            None,
+        );
+        return Ok(Err(CommandOutcome::UserError(out)));
+    }
+
+    // Source and destination must differ
+    if normalized == src_rel {
+        let out = crate::output::format_error(
+            format,
+            "source and destination are the same path",
+            Some(&normalized),
+            Some("choose a different destination path"),
             None,
         );
         return Ok(Err(CommandOutcome::UserError(out)));

@@ -145,7 +145,7 @@ pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result
 ///
 /// Returns `0` if the file has no frontmatter, which means the entire file is body.
 fn find_body_offset(file: &mut File) -> Result<u64> {
-    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_LINES: usize = 200;
     const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
     let mut reader = BufReader::new(&mut *file);
@@ -194,7 +194,7 @@ fn find_body_offset(file: &mut File) -> Result<u64> {
 /// (including the opening and closing `---` delimiters). Returns 0 if no frontmatter is present.
 /// The reader is left positioned at the first line after the closing `---`.
 pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<usize> {
-    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_LINES: usize = 200;
     const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
     if first_line.trim() != "---" {
@@ -229,10 +229,10 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 }
 
 /// Parse frontmatter from any buffered reader. Stops reading after the closing `---`.
-/// Bails out if the frontmatter exceeds a reasonable size (100 lines / 8 KB) to avoid
+/// Bails out if the frontmatter exceeds a reasonable size (200 lines / 8 KB) to avoid
 /// buffering an entire file when the closing delimiter is missing.
 fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String, Value>> {
-    const MAX_FRONTMATTER_LINES: usize = 100;
+    const MAX_FRONTMATTER_LINES: usize = 200;
     const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
     let mut lines = reader.lines();
@@ -784,8 +784,8 @@ Body.
 
     #[test]
     fn streaming_budget_boundary_lines_at_limit() {
-        // Exactly 100 content lines — must succeed
-        let input = make_frontmatter_with_n_lines(100);
+        // Exactly 200 content lines — must succeed
+        let input = make_frontmatter_with_n_lines(200);
         let mut reader = input.as_bytes();
         // Read and discard the opening "---\n" line, then call skip_frontmatter
         let mut first_line = String::new();
@@ -794,20 +794,20 @@ Body.
         let result = skip_frontmatter(&mut reader, first);
         assert!(
             result.is_ok(),
-            "100 content lines should succeed: {result:?}"
+            "200 content lines should succeed: {result:?}"
         );
     }
 
     #[test]
     fn streaming_budget_boundary_lines_over_limit() {
-        // 101 content lines — must error
-        let input = make_frontmatter_with_n_lines(101);
+        // 201 content lines — must error
+        let input = make_frontmatter_with_n_lines(201);
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
         let first = first_line.trim_end_matches(['\n', '\r']);
         let result = skip_frontmatter(&mut reader, first);
-        assert!(result.is_err(), "101 content lines should fail");
+        assert!(result.is_err(), "201 content lines should fail");
         assert!(
             result
                 .unwrap_err()

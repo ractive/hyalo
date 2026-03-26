@@ -60,8 +60,28 @@ pub fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
 /// [`strip_inline_code`](crate::scanner::strip_inline_code)), otherwise links
 /// inside code spans will be incorrectly parsed. Existing contents of `out` are
 /// preserved; new links are appended.
+///
+/// Link labels are read from `text`. If the caller has a raw (un-stripped)
+/// version of the same line with the same byte layout, use
+/// [`extract_links_from_text_with_original`] to preserve backtick-wrapped
+/// label content.
 pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
-    let bytes = text.as_bytes();
+    extract_links_from_text_with_original(text, text, out);
+}
+
+/// Like [`extract_links_from_text`] but reads link label text from `original`
+/// instead of `cleaned`.
+///
+/// Use this when `cleaned` has had inline code spans replaced with spaces (via
+/// [`strip_inline_code`](crate::scanner::strip_inline_code)) to avoid
+/// mistaking links inside code spans as real links, while still preserving the
+/// backtick-wrapped content in link labels such as `` [`file.ts`](path) ``.
+///
+/// `cleaned` and `original` must describe the same line with identical byte
+/// lengths and identical byte positions for all link syntax characters (`[`,
+/// `]`, `(`, `)`).
+pub fn extract_links_from_text_with_original(cleaned: &str, original: &str, out: &mut Vec<Link>) {
+    let bytes = cleaned.as_bytes();
     let len = bytes.len();
     let mut i = 0;
 
@@ -71,7 +91,7 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
             && i + 3 < len
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
-            && let Some((link, end)) = try_parse_wikilink_at(text, i + 1)
+            && let Some((link, end)) = try_parse_wikilink_at(cleaned, i + 1)
         {
             out.push(link);
             i = end;
@@ -80,7 +100,7 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
         if bytes[i] == b'['
             && i + 1 < len
             && bytes[i + 1] == b'['
-            && let Some((link, end)) = try_parse_wikilink_at(text, i)
+            && let Some((link, end)) = try_parse_wikilink_at(cleaned, i)
         {
             out.push(link);
             i = end;
@@ -91,7 +111,7 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
         // Skip if preceded by `!` — that's image syntax: ![alt](img.png)
         if bytes[i] == b'['
             && (i == 0 || bytes[i - 1] != b'!')
-            && let Some((link, end)) = try_parse_markdown_link_at(text, i)
+            && let Some((link, end)) = try_parse_markdown_link_at(cleaned, original, i)
         {
             out.push(link);
             i = end;
@@ -107,8 +127,28 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
 /// Works exactly like [`extract_links_from_text`] but returns [`LinkSpan`]
 /// values that carry byte positions for both the full link syntax and the
 /// target substring.  `text` must already be cleaned of inline code spans.
+///
+/// Link labels are read from `text`. If the caller has a raw (un-stripped)
+/// version of the same line with the same byte layout, use
+/// [`extract_link_spans_with_original`] to preserve backtick-wrapped label
+/// content.
 pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
-    let bytes = text.as_bytes();
+    extract_link_spans_with_original(text, text)
+}
+
+/// Like [`extract_link_spans`] but reads link label text from `original`
+/// instead of `cleaned`.
+///
+/// Use this when `cleaned` has had inline code spans replaced with spaces (via
+/// [`strip_inline_code`](crate::scanner::strip_inline_code)) to avoid
+/// mistaking links inside code spans as real links, while still preserving
+/// backtick-wrapped content in link labels such as `` [`file.ts`](path) ``.
+///
+/// `cleaned` and `original` must describe the same line with identical byte
+/// lengths and identical byte positions for all link syntax characters (`[`,
+/// `]`, `(`, `)`).
+pub fn extract_link_spans_with_original(cleaned: &str, original: &str) -> Vec<LinkSpan> {
+    let bytes = cleaned.as_bytes();
     let len = bytes.len();
     let mut i = 0;
     let mut out = Vec::new();
@@ -119,7 +159,7 @@ pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
             && i + 3 < len
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
-            && let Some((mut span, end)) = try_parse_wikilink_span_at(text, i + 1)
+            && let Some((mut span, end)) = try_parse_wikilink_span_at(cleaned, i + 1)
         {
             // Extend full_start back to the `!`
             span.full_start = i;
@@ -132,7 +172,7 @@ pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
         if bytes[i] == b'['
             && i + 1 < len
             && bytes[i + 1] == b'['
-            && let Some((span, end)) = try_parse_wikilink_span_at(text, i)
+            && let Some((span, end)) = try_parse_wikilink_span_at(cleaned, i)
         {
             out.push(span);
             i = end;
@@ -142,7 +182,7 @@ pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
         // [text](target) — skip if preceded by `!` (image)
         if bytes[i] == b'['
             && (i == 0 || bytes[i - 1] != b'!')
-            && let Some((span, end)) = try_parse_markdown_link_span_at(text, i)
+            && let Some((span, end)) = try_parse_markdown_link_span_at(cleaned, original, i)
         {
             out.push(span);
             i = end;
@@ -199,11 +239,21 @@ fn try_parse_wikilink_span_at(text: &str, start: usize) -> Option<(LinkSpan, usi
 
 /// Try to parse a markdown link span `[text](target)` at byte position `start`
 /// (the `[`).  Returns the [`LinkSpan`] and the byte position after `)`.
-fn try_parse_markdown_link_span_at(text: &str, start: usize) -> Option<(LinkSpan, usize)> {
+///
+/// `text` drives structural parsing; `original` provides the label text so
+/// that backtick-wrapped content is preserved when `text` has been
+/// inline-code-stripped.
+fn try_parse_markdown_link_span_at(
+    text: &str,
+    original: &str,
+    start: usize,
+) -> Option<(LinkSpan, usize)> {
     let rest = &text[start..];
 
     let close_bracket = rest.find(']')?;
-    let label_text = &rest[1..close_bracket];
+    // Read label from `original` so backtick-wrapped content is not lost when
+    // `text` has had inline code spans replaced with spaces.
+    let label_text = &original[start + 1..start + close_bracket];
 
     let after_bracket = start + close_bracket + 1;
     if text.as_bytes().get(after_bracket).copied() != Some(b'(') {
@@ -291,12 +341,18 @@ pub fn parse_wikilink(inner: &str) -> Option<Link> {
 }
 
 /// Try to parse a markdown-style link [text](target) at position `start`.
-fn try_parse_markdown_link_at(text: &str, start: usize) -> Option<(Link, usize)> {
+///
+/// `text` drives structural parsing; `original` provides the label text so
+/// that backtick-wrapped content is preserved when `text` has been
+/// inline-code-stripped.
+fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Option<(Link, usize)> {
     let rest = &text[start..];
 
     // Find the closing ]
     let close_bracket = rest.find(']')?;
-    let label_text = &rest[1..close_bracket];
+    // Read label from `original` so backtick-wrapped content is not lost when
+    // `text` has had inline code spans replaced with spaces.
+    let label_text = &original[start + 1..start + close_bracket];
 
     // Must be immediately followed by (
     let after_bracket = start + close_bracket + 1;
@@ -690,5 +746,79 @@ mod tests {
         let spans = extract_link_spans(text);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].link.target, "real");
+    }
+
+    // --- Backtick-wrapped label preservation ---
+
+    /// Regression: a label like [`lib/frontmatter.ts`](path) was producing
+    /// all-whitespace label text when the line had been run through
+    /// `strip_inline_code` (which replaces backtick span content with spaces).
+    /// `extract_links_from_text_with_original` fixes this by reading the label
+    /// from the original (un-stripped) line.
+    #[test]
+    fn markdown_link_backtick_label_preserved_with_original() {
+        use crate::scanner::strip_inline_code;
+
+        let original = "[`lib/frontmatter.ts`](/src/frame/lib/frontmatter.ts)";
+        let cleaned = strip_inline_code(original);
+
+        // Sanity-check: strip_inline_code should have replaced the backtick
+        // span content with spaces, so `cleaned` should not equal `original`.
+        assert_ne!(cleaned.as_ref(), original);
+
+        // Without original: label is whitespace (the bug).
+        let mut links_no_orig = Vec::new();
+        extract_links_from_text(cleaned.as_ref(), &mut links_no_orig);
+        assert_eq!(links_no_orig.len(), 1);
+        // The label is all spaces — document the broken behavior for contrast.
+        assert!(
+            links_no_orig[0]
+                .label
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty(),
+            "without original the label should be whitespace (confirming the bug)"
+        );
+
+        // With original: label is the backtick-wrapped text (the fix).
+        let mut links_with_orig = Vec::new();
+        extract_links_from_text_with_original(cleaned.as_ref(), original, &mut links_with_orig);
+        assert_eq!(links_with_orig.len(), 1);
+        assert_eq!(
+            links_with_orig[0].label.as_deref(),
+            Some("`lib/frontmatter.ts`"),
+            "label should preserve the backtick-wrapped content"
+        );
+        assert_eq!(links_with_orig[0].target, "/src/frame/lib/frontmatter.ts");
+    }
+
+    #[test]
+    fn markdown_link_backtick_label_span_preserved_with_original() {
+        use crate::scanner::strip_inline_code;
+
+        let original = "See [`file.ts`](src/file.ts) for details";
+        let cleaned = strip_inline_code(original);
+
+        let spans = extract_link_spans_with_original(cleaned.as_ref(), original);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "src/file.ts");
+        assert_eq!(
+            spans[0].link.label.as_deref(),
+            Some("`file.ts`"),
+            "span label should preserve backtick-wrapped content"
+        );
+    }
+
+    #[test]
+    fn extract_links_from_text_backtick_label_without_strip_preserved() {
+        // When the text has NOT been stripped (e.g. raw line from file),
+        // backtick labels should pass through correctly via the regular path.
+        let text = "[`mod.rs`](src/mod.rs)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].label.as_deref(), Some("`mod.rs`"));
+        assert_eq!(links[0].target, "src/mod.rs");
     }
 }

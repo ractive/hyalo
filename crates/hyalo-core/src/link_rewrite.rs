@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
-use crate::links::{LinkKind, extract_link_spans};
+use crate::links::{LinkKind, extract_link_spans_with_original};
 use crate::scanner::{FenceTracker, is_comment_fence, strip_inline_code, strip_inline_comments};
 
 // ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ fn plan_inbound_rewrites(
         // ---- Extract and compare link spans ----
         let stripped_code = strip_inline_code(line);
         let cleaned = strip_inline_comments(stripped_code.as_ref());
-        let spans = extract_link_spans(&cleaned);
+        let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
             let matches = match span.kind {
@@ -341,7 +341,7 @@ fn plan_outbound_rewrites(content: &str, old_rel: &str, new_rel: &str) -> Vec<Re
         // ---- Extract markdown link spans only ----
         let stripped_code = strip_inline_code(line);
         let cleaned = strip_inline_comments(stripped_code.as_ref());
-        let spans = extract_link_spans(&cleaned);
+        let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
             // Only rewrite markdown links — wikilinks are vault-relative.

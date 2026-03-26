@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::discovery;
 use crate::frontmatter;
-use crate::links::{Link, LinkKind, extract_links_from_text};
+use crate::links::{Link, LinkKind, extract_links_from_text_with_original};
 use crate::scanner::{self, FileVisitor, ScanAction};
 
 /// A single backlink: a file that links to some target.
@@ -188,11 +188,12 @@ impl LinkGraphVisitor {
 }
 
 impl FileVisitor for LinkGraphVisitor {
-    fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
         // Use `cleaned` (inline code and comments stripped) so that [[links]]
         // inside backtick spans are not indexed as real links.
+        // Pass `raw` as original so backtick-wrapped link labels are preserved.
         self.scratch.clear();
-        extract_links_from_text(cleaned, &mut self.scratch);
+        extract_links_from_text_with_original(cleaned, raw, &mut self.scratch);
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));
         }
@@ -508,10 +509,10 @@ mod tests {
 
     #[test]
     fn frontmatter_too_large_skipped() {
-        // A file with >100 frontmatter content lines (no closing ---) should be skipped.
-        // MAX_FRONTMATTER_LINES is 100; 101 content lines triggers the error.
+        // A file with >200 frontmatter content lines (no closing ---) should be skipped.
+        // MAX_FRONTMATTER_LINES is 200; 201 content lines triggers the error.
         let mut huge_fm = String::from("---\n");
-        for i in 0..101 {
+        for i in 0..201 {
             huge_fm.push_str(&format!("key{i}: value\n"));
         }
         // No closing ---, so scanner bails with "frontmatter too large"

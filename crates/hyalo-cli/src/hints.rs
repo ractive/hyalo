@@ -67,23 +67,23 @@ fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
 /// Build a command that intentionally omits `--glob` (for file-specific hints).
 fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
-    push_global_flags(&mut parts, ctx);
     for arg in args {
         parts.push(shell_quote(arg));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
 /// Build a command that propagates `--glob` when present.
 fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    for arg in args {
+        parts.push(shell_quote(arg));
+    }
     push_global_flags(&mut parts, ctx);
     if let Some(glob) = &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
-    }
-    for arg in args {
-        parts.push(shell_quote(arg));
     }
     parts.join(" ")
 }
@@ -342,7 +342,7 @@ mod tests {
         let c = ctx_with_dir(HintSource::Summary, "/my/vault");
         assert_eq!(
             build_command_no_glob(&c, &["tags"]),
-            "hyalo --dir /my/vault tags"
+            "hyalo tags --dir /my/vault"
         );
     }
 
@@ -351,7 +351,7 @@ mod tests {
         let c = ctx_with_glob(HintSource::PropertiesSummary, "**/*.md");
         assert_eq!(
             build_command_with_glob(&c, &["properties"]),
-            "hyalo --glob '**/*.md' properties"
+            "hyalo properties --glob '**/*.md'"
         );
     }
 
@@ -381,13 +381,13 @@ mod tests {
         let hints = generate_hints(&c, &data);
         assert!(hints.iter().any(|h| {
             h == "hyalo properties"
-                || (h.starts_with("hyalo --dir ") && h.ends_with(" properties"))
-                || (h.starts_with("hyalo --glob ") && h.ends_with(" properties"))
+                || (h.starts_with("hyalo properties ") && h.contains("--dir "))
+                || (h.starts_with("hyalo properties ") && h.contains("--glob "))
         }));
         assert!(hints.iter().any(|h| {
             h == "hyalo tags"
-                || (h.starts_with("hyalo --dir ") && h.ends_with(" tags"))
-                || (h.starts_with("hyalo --glob ") && h.ends_with(" tags"))
+                || (h.starts_with("hyalo tags ") && h.contains("--dir "))
+                || (h.starts_with("hyalo tags ") && h.contains("--glob "))
         }));
     }
 
