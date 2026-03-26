@@ -590,3 +590,65 @@ fn read_section_json_output() {
     assert!(content.contains("Solution text."));
     assert!(content.contains("Nested details."));
 }
+
+// ---------------------------------------------------------------------------
+// --frontmatter with broken frontmatter
+// ---------------------------------------------------------------------------
+
+/// `read --frontmatter` on a file with no closing `---` must error, not silently
+/// fabricate a result.
+#[test]
+fn read_frontmatter_broken_errors() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "broken.md",
+        "---\ntitle: Unclosed\nNo closing delimiter here\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "broken.md", "--frontmatter"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit 1 (user error) for broken frontmatter; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("unclosed frontmatter"),
+        "expected 'unclosed frontmatter' error; got: {stderr}"
+    );
+}
+
+/// `read --frontmatter` on a file with valid frontmatter must still work correctly.
+#[test]
+fn read_frontmatter_valid_works() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "valid.md",
+        "---\ntitle: Good File\nstatus: ok\n---\n# Body\n",
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "valid.md", "--frontmatter"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success for valid frontmatter; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("title: Good File"),
+        "expected frontmatter in output; got: {stdout}"
+    );
+}

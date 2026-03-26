@@ -245,9 +245,13 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
 
     let mut yaml = String::new();
     let mut line_count = 0;
+    let mut closed = false;
+    let mut has_content_lines = false;
     for line in lines {
+        has_content_lines = true;
         let line = line.context("failed to read line")?;
         if line.trim() == "---" {
+            closed = true;
             break;
         }
         line_count += 1;
@@ -258,6 +262,20 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         }
         yaml.push_str(&line);
         yaml.push('\n');
+    }
+
+    if !closed {
+        // A file whose entire content is exactly `---` (with or without a trailing
+        // newline) has no lines after the opening delimiter.  Both `"---"` and `"---\n"`
+        // produce zero iterations in the `lines()` loop because the line iterator
+        // consumes the terminator but yields nothing more.  This mirrors
+        // `extract_frontmatter`'s treatment of those inputs as "no frontmatter".
+        if !has_content_lines {
+            return Ok(BTreeMap::new());
+        }
+        anyhow::bail!(
+            "unclosed frontmatter: file starts with `---` but no closing `---` was found"
+        );
     }
 
     if yaml.trim().is_empty() {
@@ -278,10 +296,19 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
     }
 
     let after_opening = &content[3..];
-    // The opening `---` must be followed by a newline (or be exactly `---`)
+    // The opening `---` must be followed by a newline (or be exactly `---`).
+    // If after stripping the newline the rest is empty, the file is exactly
+    // `---` or `---\n` — no frontmatter content or closing delimiter follows,
+    // so treat as "no frontmatter" (consistent with the streaming reader path).
     let after_opening = if let Some(rest) = after_opening.strip_prefix('\n') {
+        if rest.is_empty() {
+            return Ok((None, content));
+        }
         rest
     } else if let Some(rest) = after_opening.strip_prefix("\r\n") {
+        if rest.is_empty() {
+            return Ok((None, content));
+        }
         rest
     } else if after_opening.is_empty() {
         // File is exactly `---` with nothing after
@@ -730,8 +757,7 @@ Body.
 
     #[test]
     fn streaming_no_closing_delimiter() {
-        // No closing `---` means everything after the opening is read as YAML.
-        // If it's not valid YAML, we get an error — which is correct.
+        // No closing `---` must always error — even if the YAML content is valid.
         let input = md!("
 ---
 title: Broken
@@ -739,15 +765,60 @@ Not valid yaml line
 ");
         let result = read_frontmatter_from_reader(input.as_bytes());
         assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unclosed frontmatter"),
+            "expected unclosed frontmatter error"
+        );
 
-        // But if the content happens to be valid YAML, it parses fine
+        // Also errors even when the content happens to be valid YAML
         let input2 = md!("
 ---
 title: Works
 status: ok
 ");
-        let props = read_frontmatter_from_reader(input2.as_bytes()).unwrap();
-        assert_eq!(props.get("title"), Some(&Value::String("Works".into())));
+        let result2 = read_frontmatter_from_reader(input2.as_bytes());
+        assert!(result2.is_err());
+        assert!(
+            result2
+                .unwrap_err()
+                .to_string()
+                .contains("unclosed frontmatter"),
+            "expected unclosed frontmatter error for valid-YAML-but-unclosed file"
+        );
+    }
+
+    #[test]
+    fn streaming_solo_dash_is_no_frontmatter() {
+        // A file whose entire content is exactly `---` (no trailing newline) must be
+        // treated as "no frontmatter" — consistent with `extract_frontmatter`.
+        let result = read_frontmatter_from_reader("---".as_bytes());
+        assert!(
+            result.is_ok(),
+            "expected Ok for bare `---`, got: {result:?}"
+        );
+        assert!(
+            result.unwrap().is_empty(),
+            "expected empty map for bare `---`"
+        );
+
+        // Same for `---\n` — indistinguishable from `---` in a line-based reader.
+        let result = read_frontmatter_from_reader("---\n".as_bytes());
+        assert!(result.is_ok(), "expected Ok for `---\\n`, got: {result:?}");
+        assert!(
+            result.unwrap().is_empty(),
+            "expected empty map for `---\\n`"
+        );
+
+        // A file with `---` followed by actual content but no closing delimiter
+        // must still error (not silently become "no frontmatter").
+        let result = read_frontmatter_from_reader("---\ntitle: X\n".as_bytes());
+        assert!(
+            result.is_err(),
+            "expected Err for unclosed frontmatter with content"
+        );
     }
 
     #[test]
