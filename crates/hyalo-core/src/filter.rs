@@ -140,6 +140,10 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
     // equality filter against the literal value `~/pattern/`.
     let regex_op_pos = input
         .find("=~")
+        .filter(|&p| {
+            // Reject if the '=' is actually the tail of !=, >=, or <=
+            p == 0 || !matches!(input.as_bytes()[p - 1], b'!' | b'>' | b'<')
+        })
         .map(|p| (p, "=~"))
         .or_else(|| input.find("~=").map(|p| (p, "~=")));
 
@@ -822,6 +826,24 @@ mod tests {
     #[test]
     fn parse_regex_eq_tilde_empty_key_errors() {
         assert!(parse_property_filter("=~foo").is_err());
+    }
+
+    #[test]
+    fn parse_not_eq_value_starting_with_tilde() {
+        let f = parse_property_filter("status!=~foo").unwrap();
+        assert_scalar(&f, "status", FilterOp::NotEq, Some("~foo"));
+    }
+
+    #[test]
+    fn parse_gte_value_starting_with_tilde() {
+        let f = parse_property_filter("count>=~3").unwrap();
+        assert_scalar(&f, "count", FilterOp::Gte, Some("~3"));
+    }
+
+    #[test]
+    fn parse_lte_value_starting_with_tilde() {
+        let f = parse_property_filter("count<=~3").unwrap();
+        assert_scalar(&f, "count", FilterOp::Lte, Some("~3"));
     }
 
     #[test]
