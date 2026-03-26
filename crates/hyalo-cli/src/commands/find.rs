@@ -12,7 +12,7 @@ use hyalo_core::discovery;
 use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
-use hyalo_core::link_graph::LinkGraph;
+use hyalo_core::link_graph::{LinkGraph, is_self_link};
 use hyalo_core::links::Link;
 use hyalo_core::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use hyalo_core::tasks::TaskExtractor;
@@ -419,6 +419,9 @@ fn build_file_object(
         Some(
             entries
                 .into_iter()
+                // Exclude self-links at the display boundary so the user
+                // doesn't see a file listed as its own backlink source.
+                .filter(|e| !is_self_link(e, rel_path))
                 .map(|e| {
                     let source = e.source.to_string_lossy().replace('\\', "/");
                     BacklinkInfo {
