@@ -73,7 +73,7 @@ pub enum FilterOp {
 /// Variants:
 /// - `Scalar`      — comparison filter: `K=V`, `K!=V`, `K>V`, `K>=V`, `K<V`, `K<=V`, or bare `K` (existence)
 /// - `Absent`      — matches files that do NOT have property K: `!K`
-/// - `RegexMatch`  — matches if property value matches pattern: `K~=pattern` or `K~=/pattern/flags`
+/// - `RegexMatch`  — matches if property value matches pattern: `K~=pattern`, `K=~pattern`, or delimited forms
 #[derive(Debug, Clone)]
 pub enum PropertyFilter {
     /// A scalar comparison filter (includes the Exists op).
@@ -103,6 +103,9 @@ pub enum PropertyFilter {
 /// - `name~=pattern`     → RegexMatch (bare pattern, unanchored)
 /// - `name~=/pattern/`   → RegexMatch (delimited, unanchored)
 /// - `name~=/pattern/i`  → RegexMatch (delimited, case-insensitive flag)
+/// - `name=~pattern`     → RegexMatch (Perl/Ruby-style alias for `~=`)
+/// - `name=~/pattern/`   → RegexMatch (Perl/Ruby-style alias, delimited)
+/// - `name=~/pattern/i`  → RegexMatch (Perl/Ruby-style alias, case-insensitive)
 pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
     // Normalize `\!K` → `!K` so that zsh-escaped absence filters work.
     // zsh escapes `!` to `\!` even in single quotes in some contexts.
@@ -130,10 +133,19 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         }
     }
 
-    // --- Regex filter: `key~=pattern` or `key~=/pattern/flags` ---
-    if let Some(tilde_eq_pos) = input.find("~=") {
-        let key = &input[..tilde_eq_pos];
-        let pattern_part = &input[tilde_eq_pos + 2..];
+    // --- Regex filter: `key~=pattern` or `key=~pattern` (and delimited forms) ---
+    //
+    // Both `~=` (hyalo-native) and `=~` (Perl/Ruby-style alias) are accepted.
+    // `=~` is checked first so that `key=~/pattern/` is not mistaken for an
+    // equality filter against the literal value `~/pattern/`.
+    let regex_op_pos = input
+        .find("=~")
+        .map(|p| (p, "=~"))
+        .or_else(|| input.find("~=").map(|p| (p, "~=")));
+
+    if let Some((op_pos, op)) = regex_op_pos {
+        let key = &input[..op_pos];
+        let pattern_part = &input[op_pos + op.len()..];
 
         if key.is_empty() {
             bail!("property filter name must not be empty");
@@ -763,6 +775,53 @@ mod tests {
             }
             other => panic!("expected RegexMatch, got {other:?}"),
         }
+    }
+
+    // --- =~ alias (Perl/Ruby-style) ---
+
+    #[test]
+    fn parse_regex_eq_tilde_bare() {
+        // `=~` bare pattern should behave identically to `~=`
+        let f = parse_property_filter("status=~compl").unwrap();
+        match &f {
+            PropertyFilter::RegexMatch { key, pattern } => {
+                assert_eq!(key, "status");
+                assert!(pattern.is_match("completed"));
+                assert!(!pattern.is_match("planned"));
+            }
+            other => panic!("expected RegexMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_eq_tilde_delimited() {
+        let f = parse_property_filter(r"status=~/^draft$/").unwrap();
+        match &f {
+            PropertyFilter::RegexMatch { key, pattern } => {
+                assert_eq!(key, "status");
+                assert!(pattern.is_match("draft"));
+                assert!(!pattern.is_match("drafts"));
+            }
+            other => panic!("expected RegexMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_eq_tilde_case_insensitive_flag() {
+        let f = parse_property_filter("title=~/foo/i").unwrap();
+        match &f {
+            PropertyFilter::RegexMatch { key, pattern } => {
+                assert_eq!(key, "title");
+                assert!(pattern.is_match("FOO bar"));
+                assert!(!pattern.is_match("bar baz"));
+            }
+            other => panic!("expected RegexMatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_eq_tilde_empty_key_errors() {
+        assert!(parse_property_filter("=~foo").is_err());
     }
 
     #[test]
