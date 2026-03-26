@@ -8,7 +8,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::{infer_type, yaml_to_json};
-use hyalo_core::link_graph::LinkGraph;
+use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
@@ -30,28 +30,28 @@ pub fn summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
+    // When no glob filter is active, we collect links alongside frontmatter+tasks
+    // in a single pass per file, then build the LinkGraph from collected data.
+    // This avoids a second full-vault scan for orphan detection.
+    // When a glob IS active, orphan detection needs a vault-wide link graph
+    // (links from outside the glob count), so we do a separate LinkGraph::build.
+    let collect_links = glob.is_none();
+
     // Aggregation state
     let mut total_files: usize = 0;
-    // directory -> count
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
-    // (name, type) -> count
     let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
-    // tag (lowercase) -> (display_name, count)
     let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    // status_value -> Vec<rel_path>
     let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // aggregate task counts
     let mut total_tasks: usize = 0;
     let mut done_tasks: usize = 0;
-    // (mtime_secs_as_i64_negated, rel_path) for sorting most-recent first
     let mut recent_entries: Vec<(i64, String)> = Vec::new();
-    // Track successfully processed files for orphan detection (excludes parse-error files)
     let mut good_files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut collected_links: Vec<FileLinks> = Vec::new();
 
     for (full_path, rel_path) in &files {
         total_files += 1;
 
-        // Count by parent directory (relative to vault root)
         let dir_key = {
             use std::path::Path as P;
             let rel = P::new(rel_path.as_str());
@@ -60,10 +60,21 @@ pub fn summary(
                 _ => ".".to_owned(),
             }
         };
-        // Single-pass scan: collect frontmatter + count tasks
+
+        // Single-pass scan: collect frontmatter + tasks + links (when applicable)
         let mut fm = FrontmatterCollector::new(true);
         let mut counter = TaskCounter::new();
-        match scan_file_multi(full_path, &mut [&mut fm, &mut counter]) {
+        let mut link_visitor = if collect_links {
+            Some(LinkGraphVisitor::new(PathBuf::from(rel_path)))
+        } else {
+            None
+        };
+
+        let scan_result = match link_visitor.as_mut() {
+            Some(lv) => scan_file_multi(full_path, &mut [&mut fm, &mut counter, lv]),
+            None => scan_file_multi(full_path, &mut [&mut fm, &mut counter]),
+        };
+        match scan_result {
             Ok(()) => {}
             Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
                 eprintln!("warning: skipping {rel_path}: {e}");
@@ -72,7 +83,11 @@ pub fn summary(
             }
             Err(e) => return Err(e),
         }
+
         good_files.push((full_path.clone(), PathBuf::from(rel_path)));
+        if let Some(lv) = link_visitor {
+            collected_links.push(lv.into_file_links());
+        }
         *dir_counts.entry(dir_key).or_insert(0) += 1;
         let props = fm.into_props();
         let TaskCount { total, done } = counter.into_count();
@@ -112,7 +127,6 @@ pub fn summary(
         if let Ok(meta) = std::fs::metadata(full_path)
             && let Ok(mtime) = meta.modified()
         {
-            // Negate so that sorting ascending gives most-recent first
             let secs = mtime
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -171,9 +185,7 @@ pub fn summary(
         .into_iter()
         .map(|(value, files)| StatusGroup { value, files })
         .collect();
-    // Already sorted because BTreeMap is ordered by key
 
-    // Build task count
     let tasks = TaskCount {
         total: total_tasks,
         done: done_tasks,
@@ -192,12 +204,15 @@ pub fn summary(
         .collect();
 
     // Build orphan list: files with no inbound AND no outbound links (fully isolated).
-    // The link graph is built vault-wide (not glob-filtered) so that links from files
-    // outside the glob still count — a file linked from anywhere is not an orphan.
-    // Orphan candidates are restricted to good_files (glob-scoped, parse-error-free).
+    // When no glob: use pre-collected link data (single pass, no re-read).
+    // When glob: build vault-wide link graph so links from outside the glob count.
     let orphans = {
-        let build = LinkGraph::build(dir, None)
-            .context("failed to build link graph for orphan detection")?;
+        let build = if collect_links {
+            LinkGraph::from_file_links(collected_links, None)
+        } else {
+            LinkGraph::build(dir, None)
+                .context("failed to build link graph for orphan detection")?
+        };
         let targets = build.graph.all_targets();
         let sources = build.graph.all_sources();
         let mut orphan_files: Vec<String> = good_files
@@ -514,6 +529,89 @@ No tasks here.
         assert_eq!(val_no_depth["tasks"], val_depth0["tasks"]);
         assert_eq!(val_no_depth["tags"], val_depth0["tags"]);
         assert_eq!(val_no_depth["properties"], val_depth0["properties"]);
+    }
+
+    /// Orphan detection: a.md links to b.md, orphan.md has no links in or out.
+    /// Both code paths (no glob = single-pass, glob = separate scan) must agree.
+    #[test]
+    fn summary_orphan_detection_no_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\n[[b]]\n").unwrap();
+        fs::write(tmp.path().join("b.md"), "---\ntitle: B\n---\nNo links.\n").unwrap();
+        fs::write(
+            tmp.path().join("orphan.md"),
+            "---\ntitle: Orphan\n---\nNo links.\n",
+        )
+        .unwrap();
+
+        // No glob: single-pass code path
+        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let orphan_files: Vec<&str> = val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        // orphan.md has no inbound and no outbound links
+        assert!(
+            orphan_files.iter().any(|f| f.contains("orphan")),
+            "orphan.md must appear in orphans: {orphan_files:?}"
+        );
+        // a.md links out, so it is not an orphan
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/a") || *f == "a.md"),
+            "a.md must NOT appear in orphans: {orphan_files:?}"
+        );
+        // b.md has an inbound link from a.md, so it is not an orphan
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/b") || *f == "b.md"),
+            "b.md must NOT appear in orphans: {orphan_files:?}"
+        );
+    }
+
+    /// Same assertion via the glob code path (separate vault-wide scan).
+    #[test]
+    fn summary_orphan_detection_with_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\n[[b]]\n").unwrap();
+        fs::write(tmp.path().join("b.md"), "---\ntitle: B\n---\nNo links.\n").unwrap();
+        fs::write(
+            tmp.path().join("orphan.md"),
+            "---\ntitle: Orphan\n---\nNo links.\n",
+        )
+        .unwrap();
+
+        // Passing "*.md" glob activates the separate LinkGraph::build code path.
+        let val =
+            unwrap_success(summary(tmp.path(), Some("*.md"), 10, None, Format::Json).unwrap());
+        let orphan_files: Vec<&str> = val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(
+            orphan_files.iter().any(|f| f.contains("orphan")),
+            "orphan.md must appear in orphans (glob path): {orphan_files:?}"
+        );
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/a") || *f == "a.md"),
+            "a.md must NOT appear in orphans (glob path): {orphan_files:?}"
+        );
+        assert!(
+            !orphan_files
+                .iter()
+                .any(|f| f.contains("/b") || *f == "b.md"),
+            "b.md must NOT appear in orphans (glob path): {orphan_files:?}"
+        );
     }
 
     #[test]
