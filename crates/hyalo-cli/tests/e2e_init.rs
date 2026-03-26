@@ -186,6 +186,79 @@ fn init_claude_skips_existing_skill() {
 }
 
 // ---------------------------------------------------------------------------
+// --claude flag: hyalo-dream skill creation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_claude_creates_dream_skill() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let dream_skill_path = tmp
+        .path()
+        .join(".claude")
+        .join("skills")
+        .join("hyalo-dream")
+        .join("SKILL.md");
+    assert!(
+        dream_skill_path.exists(),
+        "hyalo-dream SKILL.md should have been created"
+    );
+
+    let content = fs::read_to_string(&dream_skill_path).unwrap();
+    assert!(
+        content.contains("name: hyalo-dream"),
+        "SKILL.md should have frontmatter name field; got: {content}"
+    );
+    assert!(
+        content.contains("Knowledgebase Consolidation"),
+        "SKILL.md should contain dream skill content"
+    );
+}
+
+#[test]
+fn init_claude_skips_existing_dream_skill() {
+    let tmp = TempDir::new().unwrap();
+    let dream_skill_dir = tmp
+        .path()
+        .join(".claude")
+        .join("skills")
+        .join("hyalo-dream");
+    fs::create_dir_all(&dream_skill_dir).unwrap();
+    let dream_skill_path = dream_skill_dir.join("SKILL.md");
+    let original = "---\nname: custom-dream\n---\n";
+    fs::write(&dream_skill_path, original).unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("skipped"),
+        "expected 'skipped' for existing dream SKILL.md; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(&dream_skill_path).unwrap();
+    assert_eq!(
+        content, original,
+        "dream SKILL.md should not be overwritten"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // --claude flag: CLAUDE.md creation and update
 // ---------------------------------------------------------------------------
 
@@ -308,8 +381,12 @@ fn init_prints_summary_of_actions() {
         "summary should mention .hyalo.toml; got: {stdout}"
     );
     assert!(
-        stdout.contains("SKILL.md"),
-        "summary should mention SKILL.md; got: {stdout}"
+        stdout.contains("skills/hyalo/SKILL.md"),
+        "summary should mention hyalo SKILL.md; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("skills/hyalo-dream/SKILL.md"),
+        "summary should mention hyalo-dream SKILL.md; got: {stdout}"
     );
     assert!(
         stdout.contains("CLAUDE.md"),

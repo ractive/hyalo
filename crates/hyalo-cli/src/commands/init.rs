@@ -11,6 +11,7 @@ use crate::output::CommandOutcome;
 // ---------------------------------------------------------------------------
 
 const SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo/SKILL.md");
+const DREAM_SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo-dream/SKILL.md");
 
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
 
@@ -25,8 +26,8 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 ///
 /// - `dir`: explicit value for the `dir` key in `.hyalo.toml`; when `None` the
 ///   function auto-detects a common doc directory.
-/// - `claude`: when `true`, also installs the hyalo skill and appends a hint
-///   line to `.claude/CLAUDE.md`.
+/// - `claude`: when `true`, also installs the hyalo and hyalo-dream skills and
+///   appends a hint line to `.claude/CLAUDE.md`.
 pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
     let mut summary = String::new();
@@ -79,7 +80,32 @@ pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
     }
 
     // ------------------------------------------------------------------
-    // Step 3: append hyalo hint to .claude/CLAUDE.md (no duplicates)
+    // Step 3: create .claude/skills/hyalo-dream/SKILL.md
+    // ------------------------------------------------------------------
+    let dream_skill_path = cwd
+        .join(".claude")
+        .join("skills")
+        .join("hyalo-dream")
+        .join("SKILL.md");
+    if dream_skill_path.exists() {
+        writeln!(
+            summary,
+            "skipped  .claude/skills/hyalo-dream/SKILL.md (already exists)"
+        )
+        .unwrap();
+    } else {
+        let dream_skill_dir = dream_skill_path
+            .parent()
+            .context("dream skill path has no parent directory")?;
+        fs::create_dir_all(dream_skill_dir)
+            .with_context(|| format!("failed to create directory {}", dream_skill_dir.display()))?;
+        fs::write(&dream_skill_path, DREAM_SKILL_CONTENT)
+            .with_context(|| format!("failed to write {}", dream_skill_path.display()))?;
+        writeln!(summary, "created  .claude/skills/hyalo-dream/SKILL.md").unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // Step 4: append hyalo hint to .claude/CLAUDE.md (no duplicates)
     // ------------------------------------------------------------------
     let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
     if claude_md_path.exists() {
