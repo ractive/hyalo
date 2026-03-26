@@ -106,6 +106,29 @@ hyalo mv --file backlog/my-item.md --to backlog/done/my-item.md
 hyalo mv --file old-path.md --to new-path.md --dry-run
 ```
 
+## Absolute link resolution (site prefix)
+
+Documentation sites often use root-absolute links like `/docs/guides/setup.md`. Hyalo resolves
+these by stripping a **site prefix** — e.g., with prefix `docs`, the link `/docs/guides/setup.md`
+becomes the vault-relative path `guides/setup.md`.
+
+**Auto-derived by default** from the last path component of `--dir`:
+- `--dir ../vscode-docs/docs` → prefix = `docs`
+- `--dir /home/me/wiki` → prefix = `wiki`
+- `--dir .` → no prefix (absolute links stay unresolved)
+
+**Override when the directory name doesn't match the URL prefix:**
+```bash
+# Directory is "content/" but links use "/docs/..." prefix
+hyalo --site-prefix docs --dir ./content find --fields links
+
+# Disable absolute-link resolution entirely
+hyalo --site-prefix "" find --fields links
+```
+
+Also settable in `.hyalo.toml` as `site_prefix = "docs"`.
+Precedence: `--site-prefix` flag > `.hyalo.toml` > auto-derived from `--dir`.
+
 ## When to use hyalo vs. built-in tools
 
 - **hyalo:** queries, frontmatter reads/mutations, tag management, task toggling, bulk updates, **moving/renaming files**

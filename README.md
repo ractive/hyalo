@@ -31,7 +31,7 @@ cargo build --release
 
 ## Usage
 
-All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), and `--hints` (append executable drill-down command suggestions).
+All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--hints` (append executable drill-down command suggestions), and `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links).
 
 Most flags have short aliases for quick interactive use:
 
@@ -61,11 +61,36 @@ Place a `.hyalo.toml` file in your working directory to set defaults for global 
 dir = "./my-vault"   # default: "."
 format = "text"      # default: "json"
 hints = true         # default: false
+site_prefix = "docs" # override auto-derived prefix for absolute link resolution
 ```
 
 All fields are optional. CLI flags always take precedence over config values. If `.hyalo.toml` is missing, hyalo silently uses built-in defaults; if the file is present but cannot be read or is malformed/invalid, hyalo warns on stderr and falls back to the built-in defaults.
 
 Use `--no-hints` to explicitly disable hints when the config file enables them.
+
+### Absolute link resolution (site prefix)
+
+Documentation sites often use root-absolute links like `/docs/guides/setup.md`. Hyalo resolves these by stripping a site prefix — turning `/docs/guides/setup.md` into the vault-relative path `guides/setup.md`.
+
+By default, hyalo auto-derives the prefix from the last component of `--dir`:
+
+```
+--dir ../vscode-docs/docs  →  prefix = "docs"   (/docs/foo.md → foo.md)
+--dir /home/me/wiki        →  prefix = "wiki"    (/wiki/foo.md → foo.md)
+--dir .                    →  no prefix           (absolute links stay unresolved)
+```
+
+Override when the directory name doesn't match the URL prefix:
+
+```sh
+# Directory is "content/" but links use "/docs/..." prefix
+hyalo --site-prefix docs --dir ./content find --fields links
+
+# Disable absolute-link resolution entirely
+hyalo --site-prefix "" find --fields links
+```
+
+Precedence: `--site-prefix` flag > `site_prefix` in `.hyalo.toml` > auto-derived from `--dir`.
 
 ### init
 
@@ -358,6 +383,8 @@ Updated 1 link in 1 file:
 ```
 
 Use `--dry-run` to preview which files and links would change without modifying anything.
+
+Root-absolute links (e.g. `/docs/guides/setup.md`) are also rewritten during a move. Hyalo uses the site prefix to map these to vault-relative paths. If `mv` reports 0 links updated but you expect absolute links to be rewritten, check your `--site-prefix` setting (see [Absolute link resolution](#absolute-link-resolution-site-prefix)).
 
 ### Hints
 
