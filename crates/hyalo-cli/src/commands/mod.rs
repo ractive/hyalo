@@ -31,7 +31,8 @@ pub enum FilesOrOutcome {
 }
 
 /// Resolve the set of files to operate on based on `--file` / `--glob` / all files.
-/// Returns a user-error outcome for invalid inputs (file not found, no glob matches).
+/// Returns a user-error outcome for invalid inputs (e.g. file not found).
+/// A glob that matches no files returns an empty file list with exit 0, not an error.
 pub fn collect_files(
     dir: &Path,
     files: &[String],

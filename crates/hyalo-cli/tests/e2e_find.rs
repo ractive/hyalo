@@ -1013,6 +1013,10 @@ fn find_glob_no_match_returns_empty_array() {
         0,
         "non-matching glob should return empty array"
     );
+    assert!(
+        stderr.is_empty(),
+        "non-matching glob should produce no stderr output; got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
