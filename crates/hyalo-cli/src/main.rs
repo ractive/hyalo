@@ -29,10 +29,14 @@ use hyalo_core::filter;
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
+        ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
+        By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
+        Override with --site-prefix <PREFIX>, or --site-prefix \"\" to disable. Also settable in .hyalo.toml.\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
-        \u{00a0} format = \"text\"       # example: override --format (CLI default is json)\n\
-        \u{00a0} hints = true           # example: override --hints on (CLI default is off)\n\
+        \u{00a0} format = \"text\"       # default --format (CLI default is json)\n\
+        \u{00a0} hints = true           # default --hints on (CLI default is off)\n\
+        \u{00a0} site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
         CLI flags always take precedence.\n\n\
         See COMMAND REFERENCE below for full syntax of each command.",
     after_help = "EXAMPLES:\n  \
@@ -91,11 +95,12 @@ COMMAND REFERENCE:\n  \
   Init (configuration, one-time setup):\n  \
     hyalo init [--claude] [-d/--dir DIR]\n\n  \
   Global flags (apply to all commands):\n  \
-    -d/--dir <DIR>      Root directory (default: ., override via .hyalo.toml)\n  \
-    --format json|text  Output format (default: json, override via .hyalo.toml)\n  \
-    --jq <FILTER>       Apply a jq expression to JSON output\n  \
-    --hints             Append drill-down hints (default: off, override via .hyalo.toml)\n  \
-    --no-hints          Disable hints (overrides .hyalo.toml)\n\n\
+    -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)\n  \
+    --format json|text      Output format (default: json, override via .hyalo.toml)\n  \
+    --jq <FILTER>           Apply a jq expression to JSON output\n  \
+    --hints                 Append drill-down hints (default: off, override via .hyalo.toml)\n  \
+    --no-hints              Disable hints (overrides .hyalo.toml)\n  \
+    --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)\n\n\
 COOKBOOK:\n  \
   # Discover what metadata exists in a vault\n  \
   hyalo properties summary\n  \
@@ -149,7 +154,11 @@ COOKBOOK:\n  \
   # Move a file and update all links\n  \
   hyalo mv --file backlog/old.md --to backlog/done/old.md\n\n  \
   # Preview a move without writing\n  \
-  hyalo mv --file note.md --to archive/note.md --dry-run\n\n\
+  hyalo mv --file note.md --to archive/note.md --dry-run\n\n  \
+  # Override site prefix for absolute link resolution\n  \
+  hyalo --site-prefix docs mv --file old.md --to new.md --dry-run\n\n  \
+  # Disable absolute-link resolution entirely\n  \
+  hyalo --site-prefix '' find --fields links\n\n\
 OUTPUT SHAPES (JSON, default):\n  \
   # find\n  \
   [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
@@ -209,9 +218,22 @@ struct Cli {
     #[arg(long, global = true, conflicts_with = "hints")]
     no_hints: bool,
 
-    /// Override the site prefix used when resolving absolute links (e.g. `/docs/page.md`).
-    /// Auto-derived from --dir when not set (uses last path component of the resolved dir).
-    /// Override via .hyalo.toml
+    /// Site prefix for resolving root-absolute links like `/docs/page.md`.
+    ///
+    /// When a markdown file contains a link like `/docs/guides/setup.md`, hyalo strips the
+    /// leading `/<prefix>/` to get the vault-relative path `guides/setup.md`. This is how
+    /// documentation sites (GitHub Pages, VuePress, Docusaurus) map URL paths to file paths.
+    ///
+    /// By default, hyalo auto-derives the prefix from --dir's last path component:
+    ///   --dir ../vscode-docs/docs  →  prefix = "docs"
+    ///   --dir /home/me/wiki        →  prefix = "wiki"
+    ///   --dir .                    →  prefix = name of the current directory
+    ///
+    /// Use --site-prefix to override when the directory name doesn't match the URL prefix,
+    /// or pass --site-prefix "" to disable absolute-link resolution entirely.
+    ///
+    /// Also settable via `site_prefix = "docs"` in .hyalo.toml.
+    /// Precedence: --site-prefix flag > .hyalo.toml > auto-derived from --dir.
     #[arg(long, global = true, value_name = "PREFIX")]
     site_prefix: Option<String>,
 
@@ -263,13 +285,13 @@ enum Commands {
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern to select files; prefix '!' to negate (e.g. '!**/draft-*' excludes matching files)
+        /// Glob pattern(s) to select files (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long, conflicts_with = "file")]
-        glob: Option<String>,
+        glob: Vec<String>,
         /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links, backlinks (default: all except properties-typed and backlinks). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files. Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
-        /// Sort order: 'file' (default) or 'modified'
+        /// Sort order: 'file' (default), 'modified', 'backlinks_count', or 'links_count'
         #[arg(long)]
         sort: Option<String>,
         /// Maximum number of results to return
@@ -308,7 +330,7 @@ enum Commands {
         - rename: Rename a property key across files (mutates files).")]
     Properties {
         #[command(subcommand)]
-        action: PropertiesAction,
+        action: Option<PropertiesAction>,
     },
     /// Tag operations: summary or bulk rename
     #[command(long_about = "Tag operations across matched files.\n\n\
@@ -317,7 +339,7 @@ enum Commands {
         - rename: Rename a tag across files (mutates files).")]
     Tags {
         #[command(subcommand)]
-        action: TagsAction,
+        action: Option<TagsAction>,
     },
     /// Read, toggle, or set status on a single task checkbox
     #[command(
@@ -344,9 +366,9 @@ enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
     Summary {
-        /// Glob pattern to filter which files to include; prefix '!' to negate (e.g. '!**/draft-*')
+        /// Glob pattern(s) to filter which files to include (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]
-        glob: Option<String>,
+        glob: Vec<String>,
         /// Number of recent files to show (default: 10)
         #[arg(short = 'n', long, default_value = "10")]
         recent: usize,
@@ -423,9 +445,9 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern for multiple files
+        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
-        glob: Option<String>,
+        glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
         where_properties: Vec<String>,
@@ -465,9 +487,9 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern for multiple files
+        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
-        glob: Option<String>,
+        glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
         where_properties: Vec<String>,
@@ -517,9 +539,9 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern for multiple files
+        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
-        glob: Option<String>,
+        glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
         where_properties: Vec<String>,
@@ -594,9 +616,9 @@ enum PropertiesAction {
         USE WHEN: You need to discover what properties exist or audit frontmatter across a vault."
     )]
     Summary {
-        /// Glob pattern to select files; prefix '!' to negate
+        /// Glob pattern(s) to select files (repeatable); prefix '!' to negate
         #[arg(short, long)]
-        glob: Option<String>,
+        glob: Vec<String>,
     },
     /// Rename a property key across all matched files
     #[command(
@@ -611,9 +633,9 @@ enum PropertiesAction {
         /// Property key to rename to
         #[arg(long)]
         to: String,
-        /// Glob pattern to scope which files to scan; prefix '!' to negate
+        /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
-        glob: Option<String>,
+        glob: Vec<String>,
     },
 }
 
@@ -626,9 +648,9 @@ enum TagsAction {
         SIDE EFFECTS: None (read-only).\n\
         USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
     Summary {
-        /// Glob pattern to filter which files to scan; prefix '!' to negate
+        /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
-        glob: Option<String>,
+        glob: Vec<String>,
     },
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
@@ -641,9 +663,9 @@ enum TagsAction {
         /// Tag to rename to
         #[arg(long)]
         to: String,
-        /// Glob pattern to scope which files to scan; prefix '!' to negate
+        /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
-        glob: Option<String>,
+        glob: Vec<String>,
     },
 }
 
@@ -843,7 +865,7 @@ fn main() {
                 hints: hints_from_cli,
             }),
             Commands::Properties {
-                action: PropertiesAction::Summary { glob },
+                action: Some(PropertiesAction::Summary { glob }),
             } => Some(HintContext {
                 source: HintSource::PropertiesSummary,
                 dir: dir_hint,
@@ -852,7 +874,7 @@ fn main() {
                 hints: hints_from_cli,
             }),
             Commands::Tags {
-                action: TagsAction::Summary { glob },
+                action: Some(TagsAction::Summary { glob }),
             } => Some(HintContext {
                 source: HintSource::TagsSummary,
                 dir: dir_hint,
@@ -958,7 +980,7 @@ fn main() {
                 task_filter.as_ref(),
                 &section_filters,
                 file,
-                glob.as_deref(),
+                glob,
                 &parsed_fields,
                 sort_field.as_ref(),
                 limit,
@@ -978,26 +1000,32 @@ fn main() {
             frontmatter,
             effective_format,
         ),
-        Commands::Properties { action } => match action {
-            PropertiesAction::Summary { ref glob } => {
-                properties::properties_summary(&dir, None, glob.as_deref(), effective_format)
+        Commands::Properties { action } => {
+            let action = action.unwrap_or(PropertiesAction::Summary { glob: vec![] });
+            match action {
+                PropertiesAction::Summary { ref glob } => {
+                    properties::properties_summary(&dir, None, glob, effective_format)
+                }
+                PropertiesAction::Rename {
+                    ref from,
+                    ref to,
+                    ref glob,
+                } => properties::properties_rename(&dir, from, to, glob, effective_format),
             }
-            PropertiesAction::Rename {
-                ref from,
-                ref to,
-                ref glob,
-            } => properties::properties_rename(&dir, from, to, glob.as_deref(), effective_format),
-        },
-        Commands::Tags { action } => match action {
-            TagsAction::Summary { ref glob } => {
-                tag_commands::tags_summary(&dir, None, glob.as_deref(), effective_format)
+        }
+        Commands::Tags { action } => {
+            let action = action.unwrap_or(TagsAction::Summary { glob: vec![] });
+            match action {
+                TagsAction::Summary { ref glob } => {
+                    tag_commands::tags_summary(&dir, None, glob, effective_format)
+                }
+                TagsAction::Rename {
+                    ref from,
+                    ref to,
+                    ref glob,
+                } => tag_commands::tags_rename(&dir, from, to, glob, effective_format),
             }
-            TagsAction::Rename {
-                ref from,
-                ref to,
-                ref glob,
-            } => tag_commands::tags_rename(&dir, from, to, glob.as_deref(), effective_format),
-        },
+        }
         Commands::Task { action } => match action {
             TaskAction::Read { ref file, line } => {
                 task_commands::task_read(&dir, file, line, effective_format)
@@ -1034,7 +1062,7 @@ fn main() {
             ref glob,
             recent,
             depth,
-        } => summary_commands::summary(&dir, glob.as_deref(), recent, depth, effective_format),
+        } => summary_commands::summary(&dir, glob, recent, depth, effective_format),
         Commands::Set {
             ref properties,
             ref tag,
@@ -1049,7 +1077,7 @@ fn main() {
                 properties,
                 tag,
                 file,
-                glob.as_deref(),
+                glob,
                 &where_prop_filters,
                 where_tags,
                 effective_format,
@@ -1069,7 +1097,7 @@ fn main() {
                 properties,
                 tag,
                 file,
-                glob.as_deref(),
+                glob,
                 &where_prop_filters,
                 where_tags,
                 effective_format,
@@ -1087,7 +1115,7 @@ fn main() {
                 &dir,
                 properties,
                 file,
-                glob.as_deref(),
+                glob,
                 &where_prop_filters,
                 where_tags,
                 effective_format,

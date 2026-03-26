@@ -13,11 +13,11 @@ use serde::Serialize;
 pub fn properties_summary(
     dir: &Path,
     file: Option<&str>,
-    glob: Option<&str>,
+    globs: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     let file_vec: Vec<String> = file.map(|f| vec![f.to_owned()]).unwrap_or_default();
-    let files = collect_files(dir, &file_vec, glob, format)?;
+    let files = collect_files(dir, &file_vec, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -76,7 +76,7 @@ pub fn properties_rename(
     dir: &Path,
     from: &str,
     to: &str,
-    glob: Option<&str>,
+    globs: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     if from == to {
@@ -90,7 +90,7 @@ pub fn properties_rename(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    let files = collect_files(dir, &[], glob, format)?;
+    let files = collect_files(dir, &[], globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -189,7 +189,7 @@ tags:
     fn properties_summary_aggregates() {
         let tmp = setup_dir();
         let (out, ok) =
-            unwrap_output(properties_summary(tmp.path(), None, None, Format::Json).unwrap());
+            unwrap_output(properties_summary(tmp.path(), None, &[], Format::Json).unwrap());
         assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         assert!(!parsed.is_empty());
@@ -213,7 +213,7 @@ keywords: test
         .unwrap();
 
         let outcome =
-            properties_rename(tmp.path(), "keywords", "Keywords", None, Format::Json).unwrap();
+            properties_rename(tmp.path(), "keywords", "Keywords", &[], Format::Json).unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -241,7 +241,7 @@ title: Note
         .unwrap();
 
         let outcome =
-            properties_rename(tmp.path(), "keywords", "Keywords", None, Format::Json).unwrap();
+            properties_rename(tmp.path(), "keywords", "Keywords", &[], Format::Json).unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -266,7 +266,7 @@ Keywords: other
         .unwrap();
 
         let outcome =
-            properties_rename(tmp.path(), "keywords", "Keywords", None, Format::Json).unwrap();
+            properties_rename(tmp.path(), "keywords", "Keywords", &[], Format::Json).unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -278,7 +278,7 @@ Keywords: other
     #[test]
     fn properties_rename_same_name_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = properties_rename(tmp.path(), "foo", "foo", None, Format::Json).unwrap();
+        let outcome = properties_rename(tmp.path(), "foo", "foo", &[], Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -291,7 +291,7 @@ Keywords: other
         fs::write(tmp.path().join("number.md"), "---\npriority: 3\n---\n").unwrap();
 
         let (out, ok) =
-            unwrap_output(properties_summary(tmp.path(), None, None, Format::Json).unwrap());
+            unwrap_output(properties_summary(tmp.path(), None, &[], Format::Json).unwrap());
         assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         let priority_entries: Vec<&serde_json::Value> =
@@ -327,7 +327,7 @@ title: Good Note
         )
         .unwrap();
 
-        let outcome = properties_summary(tmp.path(), None, None, Format::Json).unwrap();
+        let outcome = properties_summary(tmp.path(), None, &[], Format::Json).unwrap();
         let (out, ok) = unwrap_output(outcome);
         assert!(ok, "expected Success, got UserError: {out}");
 

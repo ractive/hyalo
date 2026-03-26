@@ -47,13 +47,19 @@ pub fn find(
     task_filter: Option<&FindTaskFilter>,
     section_filters: &[SectionFilter],
     files_arg: &[String],
-    glob: Option<&str>,
+    globs: &[String],
     fields: &Fields,
     sort: Option<&SortField>,
     limit: Option<usize>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let files = collect_files(dir, files_arg, glob, format)?;
+    // Treat --limit 0 as "no limit" (more intuitive than returning zero results).
+    let limit = match limit {
+        Some(0) => None,
+        other => other,
+    };
+
+    let files = collect_files(dir, files_arg, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -61,7 +67,15 @@ pub fn find(
 
     // Normalize empty / whitespace-only pattern to None so that
     // `hyalo find ""` behaves the same as `hyalo find` (no filter).
+    if pattern.is_some_and(|p| p.trim().is_empty()) {
+        eprintln!(
+            "warning: empty body pattern ignored (matches all files); omit the pattern to find all files"
+        );
+    }
     let pattern = pattern.and_then(|p| if p.trim().is_empty() { None } else { Some(p) });
+
+    let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
+    let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
 
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
@@ -71,7 +85,7 @@ pub fn find(
         has_content_search,
         has_task_filter,
         has_section_filter,
-    );
+    ) || sort_needs_links;
 
     // Compile the regex once (if any), then clone cheaply per file.
     // Invalid regex is a user error (exit 1), not an internal error (exit 2).
@@ -104,7 +118,7 @@ pub fn find(
     // but `rel_path` in the loop is always forward-slash-normalized
     // (via `discovery::relative_path`), so we normalize here to match.
     let mut link_graph_warned: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let link_graph = if fields.backlinks {
+    let link_graph = if fields.backlinks || sort_needs_backlinks {
         let build = LinkGraph::build(dir, site_prefix)?;
         for (path, msg) in &build.warnings {
             eprintln!("warning: skipping {}: {msg}", path.display());
@@ -126,25 +140,28 @@ pub fn find(
     let can_short_circuit = limit.is_some()
         && files_arg.is_empty()
         && matches!(sort.unwrap_or(&SortField::File), SortField::File)
-        && !fields.backlinks;
+        && !fields.backlinks
+        && !sort_needs_backlinks
+        && !sort_needs_links;
 
     let mut results: Vec<FileObject> = Vec::new();
 
     for (full_path, rel_path) in &files {
         // --- Single-pass scan ---
         let mut fm = FrontmatterCollector::new(body_needed);
-        let mut section_scanner =
-            if body_needed && (fields.sections || fields.links || has_section_filter) {
-                Some(SectionScanner::new())
-            } else {
-                None
-            };
+        let mut section_scanner = if body_needed
+            && (fields.sections || fields.links || sort_needs_links || has_section_filter)
+        {
+            Some(SectionScanner::new())
+        } else {
+            None
+        };
         let mut task_extractor = if body_needed && (fields.tasks || has_task_filter) {
             Some(TaskExtractor::new())
         } else {
             None
         };
-        let mut link_collector = if body_needed && fields.links {
+        let mut link_collector = if body_needed && (fields.links || sort_needs_links) {
             Some(LinkCollector::new())
         } else {
             None
@@ -278,7 +295,48 @@ pub fn find(
     match sort.unwrap_or(&SortField::File) {
         SortField::File => results.sort_by(|a, b| a.file.cmp(&b.file)),
         SortField::Modified => results.sort_by(|a, b| a.modified.cmp(&b.modified)),
+        SortField::BacklinksCount => {
+            // Sort descending by backlink count (most-linked first).
+            results.sort_by(|a, b| {
+                let a_count = a.backlinks.as_ref().map_or_else(
+                    || {
+                        link_graph
+                            .as_ref()
+                            .map_or(0, |g| g.backlinks(&a.file).len())
+                    },
+                    Vec::len,
+                );
+                let b_count = b.backlinks.as_ref().map_or_else(
+                    || {
+                        link_graph
+                            .as_ref()
+                            .map_or(0, |g| g.backlinks(&b.file).len())
+                    },
+                    Vec::len,
+                );
+                b_count.cmp(&a_count)
+            });
+        }
+        SortField::LinksCount => {
+            // Sort descending by outbound link count.
+            results.sort_by(|a, b| {
+                let a_count = a.links.as_ref().map_or(0, Vec::len);
+                let b_count = b.links.as_ref().map_or(0, Vec::len);
+                b_count.cmp(&a_count)
+            });
+        }
     }
+
+    // Strip internally-computed fields that the user didn't request in --fields.
+    // These were populated only to support sorting by count.
+    if sort_needs_links && !fields.links {
+        for obj in &mut results {
+            obj.links = None;
+        }
+    }
+    // Note: no strip needed for BacklinksCount — build_file_object only populates
+    // obj.backlinks when fields.backlinks is true. The sort closure queries
+    // link_graph directly when obj.backlinks is None.
 
     // --- Limit ---
     if let Some(n) = limit {
@@ -418,7 +476,7 @@ fn build_file_object(
 
     let tasks = if fields.tasks { collected_tasks } else { None };
 
-    let links = if fields.links {
+    let links = if fields.links || link_collector.is_some() {
         link_collector.map(|lc| {
             lc.into_links()
                 .into_iter()
@@ -598,7 +656,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -626,7 +684,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -657,7 +715,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -694,7 +752,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -724,7 +782,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -755,7 +813,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -784,7 +842,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -814,7 +872,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -843,7 +901,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -875,7 +933,7 @@ Just some text here.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -941,7 +999,7 @@ title: Empty Body
                     None,
                     &[],
                     &[],
-                    None,
+                    &[],
                     &fields,
                     None,
                     None,
@@ -965,7 +1023,7 @@ title: Empty Body
                     None,
                     &[],
                     &[],
-                    None,
+                    &[],
                     &fields,
                     None,
                     None,
@@ -1001,7 +1059,7 @@ title: Empty Body
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1035,7 +1093,7 @@ title: Empty Body
                 Some(&FindTaskFilter::Todo),
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1065,7 +1123,7 @@ title: Empty Body
                 Some(&FindTaskFilter::Any),
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1096,7 +1154,7 @@ title: Empty Body
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1130,7 +1188,7 @@ title: Empty Body
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1168,7 +1226,7 @@ title: Empty Body
                 None,
                 &[],
                 &["alpha.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1203,7 +1261,7 @@ title: Empty Body
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 Some(1),
@@ -1233,7 +1291,7 @@ title: Empty Body
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 Some(&SortField::Modified),
                 None,
@@ -1270,7 +1328,7 @@ title: Empty Body
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1298,7 +1356,7 @@ title: Empty Body
             None,
             &[],
             &["does-not-exist.md".to_owned()],
-            None,
+            &[],
             &fields,
             None,
             None,
@@ -1462,7 +1520,7 @@ Just intro, no tasks section.
                 None,
                 &section_filters,
                 &["notes.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1494,7 +1552,7 @@ Just intro, no tasks section.
                 None,
                 &section_filters,
                 &["notes.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1528,7 +1586,7 @@ Just intro, no tasks section.
                 None,
                 &section_filters,
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1561,7 +1619,7 @@ Just intro, no tasks section.
                 None,
                 &section_filters,
                 &["notes.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1600,7 +1658,7 @@ Just intro, no tasks section.
                 None,
                 &section_filters,
                 &["empty.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1652,7 +1710,7 @@ Just intro, no tasks section.
             None,
             &[],
             &[],
-            None,
+            &[],
             &fields,
             None,
             None,
@@ -1687,7 +1745,7 @@ Just intro, no tasks section.
                 None,
                 &[],
                 &["alpha.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1745,7 +1803,7 @@ Just intro, no tasks section.
                 None,
                 &[],
                 &["alpha.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1783,7 +1841,7 @@ Just intro, no tasks section.
                 None,
                 &[],
                 &["alpha.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1822,7 +1880,7 @@ Just intro, no tasks section.
                 None,
                 &[],
                 &["beta.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1854,7 +1912,7 @@ Just intro, no tasks section.
                 None,
                 &[],
                 &[],
-                None,
+                &[],
                 &fields,
                 None,
                 None,
@@ -1888,7 +1946,7 @@ Just intro, no tasks section.
                 None,
                 &[],
                 &["gamma.md".to_owned()],
-                None,
+                &[],
                 &fields,
                 None,
                 None,

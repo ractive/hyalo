@@ -489,3 +489,35 @@ fn properties_glob_negation_excludes_files() {
         "exclusive_prop should be excluded via negation glob"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bare `hyalo properties` defaults to summary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn properties_bare_defaults_to_summary() {
+    let tmp = tempfile::tempdir().unwrap();
+    common::write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\nstatus: draft\n---\n# A\n",
+    );
+
+    let output = common::hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("properties")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "bare `properties` should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // properties summary returns a JSON array of {name, type, count}
+    let arr = json
+        .as_array()
+        .expect("should produce summary array output");
+    assert!(!arr.is_empty(), "should have properties in summary");
+}

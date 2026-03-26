@@ -53,11 +53,11 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
 pub fn tags_summary(
     dir: &Path,
     file: Option<&str>,
-    glob: Option<&str>,
+    globs: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     let file_vec: Vec<String> = file.map(|f| vec![f.to_owned()]).unwrap_or_default();
-    let files = collect_files(dir, &file_vec, glob, format)?;
+    let files = collect_files(dir, &file_vec, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -120,7 +120,7 @@ pub fn tags_rename(
     dir: &Path,
     from: &str,
     to: &str,
-    glob: Option<&str>,
+    globs: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     // Validate both tag names
@@ -144,7 +144,7 @@ pub fn tags_rename(
     }
 
     let file_vec: Vec<String> = Vec::new();
-    let files = collect_files(dir, &file_vec, glob, format)?;
+    let files = collect_files(dir, &file_vec, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -390,7 +390,7 @@ tags:
     #[test]
     fn tags_summary_all_files() {
         let tmp = setup_vault();
-        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
+        let outcome = tags_summary(tmp.path(), None, &[], Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
@@ -405,7 +405,7 @@ tags:
     #[test]
     fn tags_summary_single_file() {
         let tmp = setup_vault();
-        let outcome = tags_summary(tmp.path(), Some("a.md"), None, Format::Json).unwrap();
+        let outcome = tags_summary(tmp.path(), Some("a.md"), &[], Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
@@ -420,7 +420,7 @@ tags:
     fn tags_summary_no_file_or_glob_reads_all() {
         let tmp = setup_vault();
         // tags_summary (read-only) still accepts no --file/--glob
-        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
+        let outcome = tags_summary(tmp.path(), None, &[], Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success(_)));
     }
 
@@ -439,7 +439,7 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_rename(tmp.path(), "filtering", "filters", None, Format::Json).unwrap();
+        let outcome = tags_rename(tmp.path(), "filtering", "filters", &[], Format::Json).unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -468,7 +468,7 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_rename(tmp.path(), "filtering", "filters", None, Format::Json).unwrap();
+        let outcome = tags_rename(tmp.path(), "filtering", "filters", &[], Format::Json).unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -497,7 +497,7 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_rename(tmp.path(), "filtering", "filters", None, Format::Json).unwrap();
+        let outcome = tags_rename(tmp.path(), "filtering", "filters", &[], Format::Json).unwrap();
         let CommandOutcome::Success(out) = outcome else {
             panic!("expected success")
         };
@@ -509,15 +509,14 @@ tags:
     #[test]
     fn tags_rename_same_name_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome = tags_rename(tmp.path(), "foo", "foo", None, Format::Json).unwrap();
+        let outcome = tags_rename(tmp.path(), "foo", "foo", &[], Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
     #[test]
     fn tags_rename_invalid_tag_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome =
-            tags_rename(tmp.path(), "valid-tag", "invalid tag!", None, Format::Json).unwrap();
+        let outcome = tags_rename(tmp.path(), "1984", "filters", &[], Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -543,7 +542,7 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_summary(tmp.path(), None, None, Format::Json).unwrap();
+        let outcome = tags_summary(tmp.path(), None, &[], Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected UserError: {s}"),

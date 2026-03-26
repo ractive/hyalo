@@ -19,12 +19,12 @@ use hyalo_core::types::{
 /// Show a high-level vault summary.
 pub fn summary(
     dir: &Path,
-    glob: Option<&str>,
+    globs: &[String],
     recent: usize,
     depth: Option<usize>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let files = collect_files(dir, &[], glob, format)?;
+    let files = collect_files(dir, &[], globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -35,7 +35,7 @@ pub fn summary(
     // This avoids a second full-vault scan for orphan detection.
     // When a glob IS active, orphan detection needs a vault-wide link graph
     // (links from outside the glob count), so we do a separate LinkGraph::build.
-    let collect_links = glob.is_none();
+    let collect_links = globs.is_empty();
 
     // Aggregation state
     let mut total_files: usize = 0;
@@ -351,14 +351,14 @@ No tasks here.
     #[test]
     fn summary_file_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         assert_eq!(val["files"]["total"], 3);
     }
 
     #[test]
     fn summary_directory_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         // Should have "." and "notes"
         assert!(
@@ -376,7 +376,7 @@ No tasks here.
     #[test]
     fn summary_task_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         // a.md: 2 tasks (1 done), b.md: 1 task (0 done), c.md: 0 tasks
         assert_eq!(val["tasks"]["total"], 3);
         assert_eq!(val["tasks"]["done"], 1);
@@ -385,7 +385,7 @@ No tasks here.
     #[test]
     fn summary_property_aggregation() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let props = val["properties"].as_array().unwrap();
         // title appears in all 3 files, status in all 3 files, tags in 2 files
         let title = props.iter().find(|p| p["name"] == "title").unwrap();
@@ -397,7 +397,7 @@ No tasks here.
     #[test]
     fn summary_tag_aggregation() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let total_tags = val["tags"]["total"].as_u64().unwrap();
         // rust and cli are unique tag names
         assert_eq!(total_tags, 2);
@@ -411,7 +411,7 @@ No tasks here.
     #[test]
     fn summary_status_grouping() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let status_groups = val["status"].as_array().unwrap();
         let draft = status_groups
             .iter()
@@ -426,7 +426,7 @@ No tasks here.
     #[test]
     fn summary_recent_files_respects_limit() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 2, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 2, None, Format::Json).unwrap());
         let recent = val["recent_files"].as_array().unwrap();
         // With limit=2, at most 2 recent files
         assert!(recent.len() <= 2);
@@ -435,7 +435,7 @@ No tasks here.
     #[test]
     fn summary_recent_files_have_iso8601_timestamps() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let recent = val["recent_files"].as_array().unwrap();
         for entry in recent {
             let modified = entry["modified"].as_str().unwrap();
@@ -451,15 +451,16 @@ No tasks here.
     fn summary_glob_filter() {
         let tmp = setup_vault();
         // Only scan root files, not notes/
-        let val =
-            unwrap_success(summary(tmp.path(), Some("*.md"), 10, None, Format::Json).unwrap());
+        let val = unwrap_success(
+            summary(tmp.path(), &["*.md".to_owned()], 10, None, Format::Json).unwrap(),
+        );
         assert_eq!(val["files"]["total"], 2);
     }
 
     #[test]
     fn summary_text_format() {
         let tmp = setup_vault();
-        let outcome = summary(tmp.path(), None, 10, None, Format::Text).unwrap();
+        let outcome = summary(tmp.path(), &[], 10, None, Format::Text).unwrap();
         match outcome {
             CommandOutcome::Success(s) => {
                 assert!(s.contains("Files:"), "expected 'Files:' in: {s}");
@@ -486,7 +487,7 @@ No tasks here.
     #[test]
     fn summary_depth_zero_collapses_all() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), None, 10, Some(0), Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, Some(0), Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         assert_eq!(by_dir.len(), 1);
         assert_eq!(by_dir[0]["directory"], ".");
@@ -496,7 +497,7 @@ No tasks here.
     #[test]
     fn summary_depth_one_shows_top_level() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), None, 10, Some(1), Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, Some(1), Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         // "." (1 file) and "notes" (2 files collapsed from notes/ and notes/sub/)
         assert_eq!(by_dir.len(), 2);
@@ -509,7 +510,7 @@ No tasks here.
     #[test]
     fn summary_depth_none_shows_all() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         assert_eq!(by_dir.len(), 3);
         assert!(by_dir.iter().any(|d| d["directory"] == "."));
@@ -522,9 +523,9 @@ No tasks here.
         // Stats (tasks, tags, properties) must be computed from all files regardless of depth
         let tmp = setup_vault_nested();
         let val_no_depth =
-            unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+            unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let val_depth0 =
-            unwrap_success(summary(tmp.path(), None, 10, Some(0), Format::Json).unwrap());
+            unwrap_success(summary(tmp.path(), &[], 10, Some(0), Format::Json).unwrap());
         assert_eq!(val_no_depth["files"]["total"], val_depth0["files"]["total"]);
         assert_eq!(val_no_depth["tasks"], val_depth0["tasks"]);
         assert_eq!(val_no_depth["tags"], val_depth0["tags"]);
@@ -545,7 +546,7 @@ No tasks here.
         .unwrap();
 
         // No glob: single-pass code path
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         let orphan_files: Vec<&str> = val["orphans"]["files"]
             .as_array()
             .unwrap()
@@ -587,8 +588,9 @@ No tasks here.
         .unwrap();
 
         // Passing "*.md" glob activates the separate LinkGraph::build code path.
-        let val =
-            unwrap_success(summary(tmp.path(), Some("*.md"), 10, None, Format::Json).unwrap());
+        let val = unwrap_success(
+            summary(tmp.path(), &["*.md".to_owned()], 10, None, Format::Json).unwrap(),
+        );
         let orphan_files: Vec<&str> = val["orphans"]["files"]
             .as_array()
             .unwrap()
@@ -623,7 +625,7 @@ No tasks here.
             "---\ntitle: Broken\nNo closing delimiter.\n",
         )
         .unwrap();
-        let val = unwrap_success(summary(tmp.path(), None, 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
         // Only the 3 good files should be counted
         assert_eq!(val["files"]["total"], 3);
     }

@@ -116,7 +116,7 @@ pub fn append(
     dir: &Path,
     property_args: &[String],
     files: &[String],
-    glob: Option<&str>,
+    globs: &[String],
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
@@ -132,7 +132,7 @@ pub fn append(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    if let Some(outcome) = require_file_or_glob(files, glob, "append", format) {
+    if let Some(outcome) = require_file_or_glob(files, globs, "append", format) {
         return Ok(outcome);
     }
 
@@ -156,7 +156,7 @@ pub fn append(
         v
     };
 
-    let files = collect_files(dir, files, glob, format)?;
+    let files = collect_files(dir, files, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -266,7 +266,7 @@ title: Note
             tmp.path(),
             &["aliases=my-note".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -304,7 +304,7 @@ aliases:
             tmp.path(),
             &["aliases=new-name".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -334,7 +334,7 @@ aliases:
             tmp.path(),
             &["aliases=my-note".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -367,7 +367,7 @@ author: Alice
             tmp.path(),
             &["author=Bob".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -398,7 +398,7 @@ author: Alice
             tmp.path(),
             &["author=Alice".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -430,7 +430,7 @@ title: Note
             tmp.path(),
             &["aliases=a".to_owned(), "tags=rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -453,7 +453,7 @@ title: Note
             tmp.path(),
             &["aliases=x".to_owned()],
             &[],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -469,7 +469,7 @@ title: Note
             tmp.path(),
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -486,7 +486,7 @@ title: Note
             tmp.path(),
             &["no-equals-sign".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -503,7 +503,7 @@ title: Note
             tmp.path(),
             &["=value".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -526,7 +526,7 @@ title: Note
             tmp.path(),
             &["aliases=my-note".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -555,7 +555,7 @@ title: Note
             tmp.path(),
             &["aliases=a".to_owned(), "aliases=b".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -589,7 +589,7 @@ title: Note
             tmp.path(),
             &["aliases=draft-copy".to_owned()],
             &[],
-            Some("*.md"),
+            &["*.md".to_owned()],
             &[filter],
             &[],
             Format::Json,
@@ -621,7 +621,7 @@ title: Note
             tmp.path(),
             &["aliases=rust-note".to_owned()],
             &[],
-            Some("*.md"),
+            &["*.md".to_owned()],
             &[],
             &["rust".to_owned()],
             Format::Json,

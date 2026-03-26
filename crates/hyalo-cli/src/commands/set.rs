@@ -141,7 +141,7 @@ pub fn set(
     property_args: &[String],
     tag_args: &[String],
     files: &[String],
-    glob: Option<&str>,
+    globs: &[String],
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
@@ -159,7 +159,7 @@ pub fn set(
     }
 
     // Mutation commands require --file or --glob
-    if let Some(outcome) = require_file_or_glob(files, glob, "set", format) {
+    if let Some(outcome) = require_file_or_glob(files, globs, "set", format) {
         return Ok(outcome);
     }
 
@@ -211,7 +211,7 @@ pub fn set(
         v
     };
 
-    let files = collect_files(dir, files, glob, format)?;
+    let files = collect_files(dir, files, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
@@ -384,7 +384,7 @@ title: Note
             &["status=done".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -423,7 +423,7 @@ status: draft
             &["status=published".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -453,7 +453,7 @@ status: done
             &["status=done".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -486,7 +486,7 @@ title: Note
             &[],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -522,7 +522,7 @@ tags:
             &[],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -553,7 +553,7 @@ title: Note
             &["status=done".to_owned()],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -575,7 +575,7 @@ title: Note
             &["status=done".to_owned()],
             &[],
             &[],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -592,7 +592,7 @@ title: Note
             &[],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -610,7 +610,7 @@ title: Note
             &["no-equals-sign".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -628,7 +628,7 @@ title: Note
             &[],
             &["1984".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -652,7 +652,7 @@ title: Note
             &["status=done".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -683,7 +683,7 @@ title: Note
             &["status=done".to_owned(), "priority=high".to_owned()],
             &[],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -724,7 +724,7 @@ title: Note
             &["status=done".to_owned()],
             &["rust".to_owned()],
             &["note.md".to_owned()],
-            None,
+            &[],
             &[],
             &[],
             Format::Json,
@@ -759,7 +759,7 @@ title: Note
             &["priority=high".to_owned()],
             &[],
             &[],
-            Some("*.md"),
+            &["*.md".to_owned()],
             &[filter],
             &[],
             Format::Json,
@@ -793,7 +793,7 @@ title: Note
             &["status=reviewed".to_owned()],
             &[],
             &[],
-            Some("*.md"),
+            &["*.md".to_owned()],
             &[],
             &["rust".to_owned()],
             Format::Json,

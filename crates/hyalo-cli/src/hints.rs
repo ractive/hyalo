@@ -24,7 +24,7 @@ pub struct HintContext {
     pub source: HintSource,
     /// `None` means "." (default) or came from config — omit from hints.
     pub dir: Option<String>,
-    pub glob: Option<String>,
+    pub glob: Vec<String>,
     /// Explicit `--format` from CLI (not from config).
     pub format: Option<String>,
     /// Explicit `--hints` from CLI (not from config).
@@ -81,7 +81,7 @@ fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
         parts.push(shell_quote(arg));
     }
     push_global_flags(&mut parts, ctx);
-    if let Some(glob) = &ctx.glob {
+    for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
     }
@@ -268,7 +268,7 @@ mod tests {
         HintContext {
             source,
             dir: None,
-            glob: None,
+            glob: vec![],
             format: None,
             hints: false,
         }
@@ -278,7 +278,7 @@ mod tests {
         HintContext {
             source,
             dir: Some(dir.to_owned()),
-            glob: None,
+            glob: vec![],
             format: None,
             hints: false,
         }
@@ -288,7 +288,7 @@ mod tests {
         HintContext {
             source,
             dir: None,
-            glob: Some(glob.to_owned()),
+            glob: vec![glob.to_owned()],
             format: None,
             hints: false,
         }

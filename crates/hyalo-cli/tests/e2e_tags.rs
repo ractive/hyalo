@@ -767,3 +767,23 @@ fn tags_glob_negation_excludes_files() {
         "exclusive-tag should be excluded via negation glob"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bare `hyalo tags` defaults to summary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_bare_defaults_to_summary() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "a.md", &["rust", "cli"]);
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("tags")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "bare `tags` should succeed");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 2, "should produce summary output");
+}

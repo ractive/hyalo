@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
-use globset::GlobBuilder;
+use globset::{GlobBuilder, GlobSetBuilder};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
@@ -198,6 +198,98 @@ pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(P
     Ok(matched)
 }
 
+/// Match discovered files against multiple glob patterns.
+///
+/// Patterns prefixed with `!` (or `\!`) are treated as negations.
+/// - If there are any positive patterns, a file must match at least one.
+/// - If there are no positive patterns, all files start as candidates.
+/// - A file is excluded if it matches any negative pattern.
+///
+/// The glob is matched against paths relative to `dir`.
+pub fn match_globs(
+    dir: &Path,
+    files: &[PathBuf],
+    patterns: &[String],
+) -> Result<Vec<(PathBuf, String)>> {
+    // Normalize `\!` → `!` for each pattern
+    let normalized: Vec<String> = patterns
+        .iter()
+        .map(|p| {
+            if let Some(rest) = p.strip_prefix("\\!") {
+                format!("!{rest}")
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
+
+    // Separate into positive and negative patterns
+    let mut positive: Vec<&str> = Vec::new();
+    let mut negative: Vec<&str> = Vec::new();
+    for p in &normalized {
+        if let Some(neg) = p.strip_prefix('!') {
+            anyhow::ensure!(
+                !neg.is_empty(),
+                "negation glob pattern must not be empty (got '!')"
+            );
+            negative.push(neg);
+        } else {
+            positive.push(p.as_str());
+        }
+    }
+
+    // Build the positive GlobSet (empty means "match all")
+    let positive_set = if positive.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        for pat in &positive {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .context("invalid glob pattern")?,
+            );
+        }
+        Some(
+            builder
+                .build()
+                .context("failed to build positive globset")?,
+        )
+    };
+
+    // Build the negative GlobSet
+    let negative_set = if negative.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        for pat in &negative {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .context("invalid glob negation pattern")?,
+            );
+        }
+        Some(
+            builder
+                .build()
+                .context("failed to build negative globset")?,
+        )
+    };
+
+    let mut matched = Vec::new();
+    for file in files {
+        let rel = relative_path(dir, file);
+        let passes_positive = positive_set.as_ref().is_none_or(|gs| gs.is_match(&rel));
+        let passes_negative = negative_set.as_ref().is_none_or(|gs| !gs.is_match(&rel));
+        if passes_positive && passes_negative {
+            matched.push((file.clone(), rel));
+        }
+    }
+    Ok(matched)
+}
+
 /// Get the relative path of a file from a directory, using forward slashes on all platforms.
 #[must_use]
 pub fn relative_path(dir: &Path, file: &Path) -> String {
@@ -250,7 +342,23 @@ pub fn resolve_target(
     }
 
     // Normalize backslashes to forward slashes
-    let target = target.replace('\\', "/");
+    let mut target = target.replace('\\', "/");
+
+    // Strip fragment (#...) and query string (?...) before resolution.
+    // These are URL components that don't correspond to filesystem paths.
+    if let Some(pos) = target.find('#') {
+        target.truncate(pos);
+    }
+    if let Some(pos) = target.find('?') {
+        target.truncate(pos);
+    }
+    // Strip trailing slash (e.g. "docs/page/" → "docs/page")
+    while target.ends_with('/') && target.len() > 1 {
+        target.pop();
+    }
+    if target.is_empty() {
+        return None;
+    }
 
     // Normalize absolute paths using site_prefix (same logic as LinkGraph).
     // `/docs/page.md` with site_prefix "docs" becomes `page.md`.
@@ -516,6 +624,75 @@ mod tests {
         assert_eq!(matched.len(), 1);
     }
 
+    #[test]
+    fn match_globs_multiple_positive_patterns_union() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &["root.md", "sub1/a.md", "sub1/b.md", "sub2/c.md"],
+        );
+        let files = discover_files(tmp.path()).unwrap();
+
+        let patterns: Vec<String> = vec!["sub1/**".to_owned(), "sub2/**".to_owned()];
+        let matched = match_globs(tmp.path(), &files, &patterns).unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert_eq!(matched.len(), 3);
+        assert!(rels.contains(&"sub1/a.md"));
+        assert!(rels.contains(&"sub1/b.md"));
+        assert!(rels.contains(&"sub2/c.md"));
+        assert!(!rels.contains(&"root.md"));
+    }
+
+    #[test]
+    fn match_globs_positive_and_negative() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/keep.md", "sub/draft.md", "root.md"]);
+        let files = discover_files(tmp.path()).unwrap();
+
+        let patterns: Vec<String> = vec!["sub/**".to_owned(), "!sub/draft.md".to_owned()];
+        let matched = match_globs(tmp.path(), &files, &patterns).unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert_eq!(matched.len(), 1);
+        assert!(rels.contains(&"sub/keep.md"));
+        assert!(!rels.contains(&"sub/draft.md"));
+    }
+
+    #[test]
+    fn match_globs_no_positive_means_all_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a.md", "b.md", "draft.md"]);
+        let files = discover_files(tmp.path()).unwrap();
+
+        // Only a negation pattern — should return all files except matching ones
+        let patterns: Vec<String> = vec!["!draft.md".to_owned()];
+        let matched = match_globs(tmp.path(), &files, &patterns).unwrap();
+        let rels: Vec<_> = matched.iter().map(|(_, r)| r.as_str()).collect();
+        assert_eq!(matched.len(), 2);
+        assert!(rels.contains(&"a.md"));
+        assert!(rels.contains(&"b.md"));
+        assert!(!rels.contains(&"draft.md"));
+    }
+
+    #[test]
+    fn match_globs_single_pattern_same_as_match_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a.md", "notes/b.md", "notes/c.md"]);
+        let files = discover_files(tmp.path()).unwrap();
+
+        let single: Vec<String> = vec!["notes/*.md".to_owned()];
+        let matched = match_globs(tmp.path(), &files, &single).unwrap();
+        assert_eq!(matched.len(), 2);
+    }
+
+    #[test]
+    fn match_globs_empty_negation_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a.md"]);
+        let files = discover_files(tmp.path()).unwrap();
+        let patterns: Vec<String> = vec!["!".to_owned()];
+        assert!(match_globs(tmp.path(), &files, &patterns).is_err());
+    }
+
     fn make_files(dir: &Path, paths: &[&str]) {
         for path in paths {
             let full = dir.join(path);
@@ -740,6 +917,76 @@ mod tests {
             resolve_target(&canonical, "/docs/page", Some("docs")),
             Some("page.md".to_owned())
         );
+    }
+
+    #[test]
+    fn resolve_target_strips_trailing_slash() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "page.md/", None),
+            Some("page.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "page/", None),
+            Some("page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_strips_query_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "page?foo=bar", None),
+            Some("page.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "page.md?dv=winzip", None),
+            Some("page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_strips_fragment() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "page#section", None),
+            Some("page.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "page.md#heading", None),
+            Some("page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_strips_query_and_fragment_combined() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "page?foo=bar#section", None),
+            Some("page.md".to_owned())
+        );
+        // Trailing slash + query + fragment
+        assert_eq!(
+            resolve_target(&canonical, "page/?q=1#top", None),
+            Some("page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_fragment_only_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        // "#section" → empty target after stripping → None
+        assert_eq!(resolve_target(&canonical, "#section", None), None);
     }
 
     #[cfg(unix)]
