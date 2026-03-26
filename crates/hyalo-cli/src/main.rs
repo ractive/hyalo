@@ -15,7 +15,7 @@ use hyalo_cli::output::{
     CommandOutcome, Format, apply_jq_filter_result, format_success, format_with_hints,
 };
 use hyalo_core::filter;
-use hyalo_core::index::SnapshotIndex;
+use hyalo_core::index::{SnapshotIndex, VaultIndex};
 
 #[derive(Parser)]
 #[command(
@@ -957,16 +957,49 @@ fn main() {
         eprintln!("warning: --hints has no effect on mutation commands");
     }
 
-    // Load snapshot index if --index is provided (read-only commands only).
-    // Mutation commands never use the index; they always scan from disk.
-    let snapshot_index: Option<SnapshotIndex> = if let Some(ref index_path) = cli.index {
-        match SnapshotIndex::load(index_path) {
-            Ok(Some(idx)) => Some(idx),
-            Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
-            Err(e) => {
-                eprintln!("warning: failed to load index: {e}; falling back to disk scan");
-                None
+    // Load snapshot index if --index is provided, but only for read-only commands.
+    // Mutation commands (set, remove, append, task, mv, tags rename, properties rename)
+    // always scan from disk and never consult the index.
+    let uses_index = matches!(
+        &cli.command,
+        Commands::Find { .. }
+            | Commands::Summary { .. }
+            | Commands::Tags {
+                action: None | Some(TagsAction::Summary { .. })
             }
+            | Commands::Properties {
+                action: None | Some(PropertiesAction::Summary { .. })
+            }
+            | Commands::Backlinks { .. }
+    );
+    let snapshot_index: Option<SnapshotIndex> = if uses_index {
+        if let Some(ref index_path) = cli.index {
+            match SnapshotIndex::load(index_path) {
+                Ok(Some(idx)) => {
+                    // Warn when the snapshot was built for a different vault or
+                    // site-prefix — the index data may not match the current run.
+                    let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+                    let vault_dir_str = canonical_dir.to_string_lossy();
+                    if !idx.validate(&vault_dir_str, site_prefix) {
+                        let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
+                        eprintln!(
+                            "warning: index was built for vault '{}' (prefix {:?}) but current \
+                             vault is '{}' (prefix {:?}); falling back to disk scan",
+                            hdr_vault, hdr_prefix, vault_dir_str, site_prefix,
+                        );
+                        None
+                    } else {
+                        Some(idx)
+                    }
+                }
+                Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
+                Err(e) => {
+                    eprintln!("warning: failed to load index: {e}; falling back to disk scan");
+                    None
+                }
+            }
+        } else {
+            None
         }
     } else {
         None
@@ -1092,7 +1125,25 @@ fn main() {
             match action {
                 PropertiesAction::Summary { ref glob } => {
                     if let Some(ref idx) = snapshot_index {
-                        properties::properties_summary_from_index(idx, None, effective_format)
+                        let filtered =
+                            find_commands::filter_index_entries(idx.entries(), &[], glob);
+                        match filtered {
+                            Err(e) => Err(e),
+                            Ok(filtered) => {
+                                let paths: Vec<String> =
+                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
+                                let file_filter = if glob.is_empty() {
+                                    None
+                                } else {
+                                    Some(paths.as_slice())
+                                };
+                                properties::properties_summary_from_index(
+                                    idx,
+                                    file_filter,
+                                    effective_format,
+                                )
+                            }
+                        }
                     } else {
                         properties::properties_summary(&dir, None, glob, effective_format)
                     }
@@ -1109,7 +1160,25 @@ fn main() {
             match action {
                 TagsAction::Summary { ref glob } => {
                     if let Some(ref idx) = snapshot_index {
-                        tag_commands::tags_summary_from_index(idx, None, effective_format)
+                        let filtered =
+                            find_commands::filter_index_entries(idx.entries(), &[], glob);
+                        match filtered {
+                            Err(e) => Err(e),
+                            Ok(filtered) => {
+                                let paths: Vec<String> =
+                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
+                                let file_filter = if glob.is_empty() {
+                                    None
+                                } else {
+                                    Some(paths.as_slice())
+                                };
+                                tag_commands::tags_summary_from_index(
+                                    idx,
+                                    file_filter,
+                                    effective_format,
+                                )
+                            }
+                        }
                     } else {
                         tag_commands::tags_summary(&dir, None, glob, effective_format)
                     }
@@ -1159,7 +1228,7 @@ fn main() {
             depth,
         } => {
             if let Some(ref idx) = snapshot_index {
-                summary_commands::summary_from_index(idx, recent, depth, effective_format)
+                summary_commands::summary_from_index(idx, glob, recent, depth, effective_format)
             } else {
                 summary_commands::summary(&dir, glob, recent, depth, effective_format)
             }

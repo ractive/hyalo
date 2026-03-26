@@ -261,13 +261,20 @@ use super::format_iso8601;
 /// All aggregation (file counts, properties, tags, status groups, tasks, recent
 /// files, orphans) is derived from `IndexEntry` values rather than scanning
 /// files from disk.
+///
+/// `globs` optionally narrows which entries are included (same semantics as the
+/// `--glob` flag on the `summary` command).
 pub fn summary_from_index(
     index: &dyn VaultIndex,
+    globs: &[String],
     recent: usize,
     depth: Option<usize>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let entries = index.entries();
+    use crate::commands::find::filter_index_entries;
+    let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
+    // Work with a slice of &IndexEntry references.
+    let entries: Vec<_> = scoped;
 
     let mut total_files: usize = 0;
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -278,7 +285,7 @@ pub fn summary_from_index(
     let mut done_tasks: usize = 0;
     let mut recent_entries: Vec<(String, String)> = Vec::new();
 
-    for entry in entries {
+    for entry in &entries {
         total_files += 1;
 
         let dir_key = {
@@ -402,11 +409,11 @@ pub fn summary_from_index(
         .collect();
 
     // Build orphan list using the pre-built link graph from the index.
+    // The link graph is vault-wide so links from outside the scoped set still count.
     let graph = index.link_graph();
     let targets = graph.all_targets();
     let sources = graph.all_sources();
-    let mut orphan_files: Vec<String> = index
-        .entries()
+    let mut orphan_files: Vec<String> = entries
         .iter()
         .filter(|entry| {
             let rel_str: &str = &entry.rel_path;

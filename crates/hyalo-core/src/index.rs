@@ -124,10 +124,15 @@ impl ScannedIndex {
             }
         }
 
+        // Sort entries by vault-relative path so VaultIndex::entries() guarantees
+        // a stable, deterministic order (as documented on the trait).
+        entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
         let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix);
         // from_file_links never produces warnings (callers handle parse errors
         // before collecting FileLinks), but we could extend this if needed.
 
+        // Build path_index AFTER sorting so indices remain valid.
         let path_index: HashMap<String, usize> = entries
             .iter()
             .enumerate()
@@ -197,40 +202,72 @@ pub struct SnapshotIndex {
 }
 
 impl SnapshotIndex {
+    /// Deserialize snapshot bytes into a `SnapshotIndex`, optionally printing a
+    /// warning when the schema is incompatible.
+    ///
+    /// Returns `Ok(Some(index))` on success, `Ok(None)` on schema mismatch.
+    fn load_inner(bytes: &[u8], warn: bool) -> Option<Self> {
+        match rmp_serde::from_slice::<SnapshotData>(bytes) {
+            Ok(data) => {
+                // Entries are stored in sorted order (ScannedIndex::build sorts
+                // before saving).  Re-sort here to guarantee the invariant even
+                // if an older snapshot was created without sorting.
+                let mut entries = data.entries;
+                entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+                let path_index: HashMap<String, usize> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| (e.rel_path.clone(), i))
+                    .collect();
+                Some(Self {
+                    entries,
+                    path_index,
+                    graph: data.graph,
+                    header: data.header,
+                })
+            }
+            Err(e) => {
+                if warn {
+                    eprintln!(
+                        "warning: index file is incompatible ({}); falling back to disk scan",
+                        e
+                    );
+                }
+                None
+            }
+        }
+    }
+
     /// Load a snapshot from a MessagePack file.
     ///
     /// Returns `Ok(Some(index))` on success.
     /// Returns `Ok(None)` when the file is present but cannot be deserialized
     /// (e.g. after a hyalo upgrade that changed the schema) — callers should
-    /// fall back to a disk scan.
+    /// fall back to a disk scan. A warning is printed to stderr in this case.
     /// Returns `Err` only for hard I/O failures.
     pub fn load(path: &Path) -> Result<Option<Self>> {
         let bytes = std::fs::read(path)
             .with_context(|| format!("failed to read index file: {}", path.display()))?;
+        Ok(Self::load_inner(&bytes, true))
+    }
 
-        match rmp_serde::from_slice::<SnapshotData>(&bytes) {
-            Ok(data) => {
-                let path_index: HashMap<String, usize> = data
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, e)| (e.rel_path.clone(), i))
-                    .collect();
-                Ok(Some(Self {
-                    entries: data.entries,
-                    path_index,
-                    graph: data.graph,
-                    header: data.header,
-                }))
-            }
-            Err(e) => {
-                eprintln!(
-                    "warning: index file is incompatible ({}); falling back to disk scan",
-                    e
-                );
-                Ok(None)
-            }
-        }
+    /// Load a snapshot silently — identical to [`load`] but suppresses the
+    /// incompatibility warning.  Used by `find_stale_indexes` which expects to
+    /// silently skip files that cannot be deserialized.
+    fn load_silent(path: &Path) -> Result<Option<Self>> {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("failed to read index file: {}", path.display()))?;
+        Ok(Self::load_inner(&bytes, false))
+    }
+
+    /// Check whether this snapshot's header matches the expected vault settings.
+    ///
+    /// Returns `true` when both `vault_dir` and `site_prefix` match the stored
+    /// header values.  Callers can use this to detect stale snapshots that were
+    /// built for a different vault or with a different site prefix.
+    pub fn validate(&self, vault_dir: &str, site_prefix: Option<&str>) -> bool {
+        self.header.vault_dir == vault_dir && self.header.site_prefix.as_deref() == site_prefix
     }
 
     /// Save a snapshot of `index` to a MessagePack file at `path`.
@@ -299,9 +336,19 @@ impl VaultIndex for SnapshotIndex {
 fn is_pid_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        // SAFETY: kill(pid, 0) is a pure existence check — no signal is sent.
-        // Returns 0 if the process exists (and we have permission), -1 otherwise.
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+        // SAFETY: kill(pid, 0) sends signal 0, which is a pure existence check —
+        // no signal is actually delivered. The only side effect is updating errno.
+        let res = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if res == 0 {
+            // Process exists and we have permission to signal it.
+            true
+        } else {
+            // ESRCH means "no such process" — definitively dead.
+            // EPERM means "process exists but we lack permission" — still alive.
+            // Any other errno is treated as alive (conservative default).
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            errno != libc::ESRCH
+        }
     }
     #[cfg(not(unix))]
     {
@@ -331,7 +378,7 @@ pub fn find_stale_indexes(dir: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
         if !name.ends_with(".hyalo-index") {
             continue;
         }
-        if let Ok(Some(idx)) = SnapshotIndex::load(&path) {
+        if let Ok(Some(idx)) = SnapshotIndex::load_silent(&path) {
             let (vault_dir, _, created_at, pid) = idx.header_info();
             if !is_pid_alive(pid) {
                 stale.push((path, vault_dir.to_owned(), created_at));

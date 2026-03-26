@@ -377,7 +377,7 @@ pub fn find(
 /// - `files_arg` entries are matched by exact `rel_path` equality.
 /// - `globs` patterns use the same globset semantics as `discovery::match_globs`
 ///   (positive patterns require a match; negative `!pat` patterns exclude matches).
-fn filter_index_entries<'a>(
+pub fn filter_index_entries<'a>(
     entries: &'a [IndexEntry],
     files_arg: &[String],
     globs: &[String],
