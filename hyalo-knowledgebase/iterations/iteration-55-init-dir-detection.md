@@ -1,13 +1,15 @@
 ---
-title: "Replace hardcoded hyalo-knowledgebase in init --claude and add fuzzy dir detection"
-type: iteration
-date: 2026-03-27
-tags:
-  - init
-  - cli
-  - developer-experience
-status: in-progress
 branch: iter-55/init-dir-detection
+date: 2026-03-27
+status: completed
+tags:
+- init
+- cli
+- developer-experience
+title: >-
+  Replace hardcoded hyalo-knowledgebase in init --claude and add fuzzy dir
+  detection
+type: iteration
 ---
 
 ## Problem
