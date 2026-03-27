@@ -52,7 +52,7 @@ impl Document {
             let yaml =
                 serde_saphyr::to_string(&self.properties).context("failed to serialize YAML")?;
             out.push_str(&yaml);
-            // serde_yaml adds a trailing newline, but let's ensure
+            // The YAML serializer adds a trailing newline, but let's ensure
             if !yaml.ends_with('\n') {
                 out.push('\n');
             }
@@ -431,7 +431,8 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
                 let f: f64 = raw.parse().context("value is not a valid number")?;
                 anyhow::ensure!(f.is_finite(), "value is not a finite number");
                 Ok(Value::Number(
-                    serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0)),
+                    serde_json::Number::from_f64(f)
+                        .expect("finite f64 must produce a valid JSON number"),
                 ))
             }
         }
@@ -478,7 +479,7 @@ fn infer_value(raw: &str) -> Value {
         && f.is_finite()
     {
         return Value::Number(
-            serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0)),
+            serde_json::Number::from_f64(f).expect("finite f64 must produce a valid JSON number"),
         );
     }
     // Try bool
@@ -502,14 +503,6 @@ fn infer_value(raw: &str) -> Value {
         return Value::Array(items);
     }
     Value::String(raw.to_owned())
-}
-
-/// Convert a YAML value to a `serde_json::Value` for output.
-///
-/// Since `Value` is already `serde_json::Value`, this is an identity clone.
-/// Kept as a public API for callers that previously needed type conversion.
-pub fn yaml_to_json(value: &Value) -> serde_json::Value {
-    value.clone()
 }
 
 #[cfg(test)]
