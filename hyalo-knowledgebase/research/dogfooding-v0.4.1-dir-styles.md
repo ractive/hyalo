@@ -24,7 +24,7 @@ Tested hyalo v0.4.1 with four different ways of specifying the target directory,
 |-------|-----|-------------|
 | 1 | `~/devel/hyalo` | `../vscode-docs/docs` (relative) |
 | 2 | `~/devel/vscode-docs/docs` | (none, uses CWD) |
-| 3 | `/tmp` | `~/devel/vscode-docs/docs` (absolute) |
+| 3 | `/tmp` | `~/devel/vscode-docs/docs` (tilde path; expands to absolute in shell) |
 | 4 | `~/devel/vscode-docs` | `docs` (subfolder name) |
 
 ## Results Summary

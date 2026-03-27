@@ -477,10 +477,12 @@ pub fn scan_reader_multi<R: BufRead>(
         }
         line_num += 1;
         if truncated {
-            // Line exceeded the per-line byte limit — skip it entirely to
-            // prevent OOM on files with no newlines (e.g. minified HTML/JSON
-            // accidentally placed in the vault). The line counter still
-            // advances so that downstream line numbers remain correct.
+            // Line either exceeded the per-line byte limit or contained
+            // invalid UTF-8 — skip it entirely to prevent OOM on files with
+            // no newlines (e.g. minified HTML/JSON accidentally placed in the
+            // vault) and to avoid propagating malformed encoding. The line
+            // counter still advances so that downstream line numbers remain
+            // correct.
             continue;
         }
         let line = buf.trim_end_matches(['\n', '\r']);
