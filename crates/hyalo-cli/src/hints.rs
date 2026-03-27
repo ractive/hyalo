@@ -92,7 +92,7 @@ fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
 ///
 /// Uses an allowlist of safe characters — anything not in the list triggers quoting.
 /// Single-quoting avoids variable expansion and is safer than double-quoting.
-fn shell_quote(s: &str) -> String {
+pub fn shell_quote(s: &str) -> String {
     if s.is_empty()
         || s.chars().any(|c| {
             !matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '/' | ':' | '@' | '=' | ',' | '+')

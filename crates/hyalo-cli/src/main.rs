@@ -204,7 +204,8 @@ struct Cli {
 
     /// Apply a jq filter expression to the JSON output of any command.
     /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
-    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'
+    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'.
+    /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
     jq: Option<String>,
 
@@ -773,7 +774,24 @@ fn main() {
     // We can't use mut_subcommand to hide them from `init --help` because
     // they don't exist on the subcommand Command node yet.  This is a known
     // clap limitation with `global = true` derive args.
-    let matches = cmd.get_matches();
+    let raw_args: Vec<String> = std::env::args().collect();
+    let matches = match cmd.try_get_matches_from(raw_args.iter().map(String::as_str)) {
+        Ok(m) => m,
+        Err(e) => {
+            // Only attempt subcommand suggestions when clap couldn't recognise a
+            // flag or subcommand — this avoids misleading tips for other error kinds.
+            if matches!(
+                e.kind(),
+                clap::error::ErrorKind::InvalidSubcommand | clap::error::ErrorKind::UnknownArgument
+            ) && let Some(suggestion) =
+                hyalo_cli::suggest::suggest_subcommand_correction(&raw_args, &Cli::command())
+            {
+                eprintln!("{e}\n  tip: did you mean:\n\n    {suggestion}\n");
+                process::exit(2);
+            }
+            e.exit();
+        }
+    };
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
         Err(e) => e.exit(),

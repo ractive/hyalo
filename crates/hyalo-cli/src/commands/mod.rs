@@ -69,6 +69,9 @@ pub fn collect_files(
                     FileResolveError::OutsideVault { .. } => {
                         format!("file resolves outside vault: {path}")
                     }
+                    FileResolveError::InvalidPath { reason, .. } => {
+                        format!("invalid path ({reason}): {path}")
+                    }
                 };
                 eprintln!("warning: {msg}");
             }
@@ -179,6 +182,9 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
                 None,
             ))
         }
+        FileResolveError::InvalidPath { path, reason } => CommandOutcome::UserError(
+            crate::output::format_error(format, "invalid path", Some(&path), Some(reason), None),
+        ),
     }
 }
 

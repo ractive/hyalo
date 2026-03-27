@@ -346,3 +346,25 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 - All existing `hyalo properties` / `hyalo tags` calls (e2e tests, SKILL.md, CLAUDE.md examples, hint generation) updated to `properties summary` / `tags summary`
 - `PropertiesAction` and `TagsAction` subcommand enums added to the CLI
 - Rename results include `modified`, `skipped`, and (for properties) `conflicts` arrays
+
+## DEC-035: No LLM Prompt Injection Mitigation in CLI Output (2026-03-27)
+
+**Context:** During the security hardening phase (iter-50), we evaluated whether hyalo's CLI output could be exploited for LLM prompt injection — e.g., an attacker embedding malicious instructions in YAML frontmatter values, markdown body content, filenames, or section headings that Claude would then follow when consuming hyalo's output.
+
+**Decision:** No action taken. This is not a hyalo-specific problem and no hyalo-specific mitigation is warranted.
+
+**Why:**
+
+1. **Not tool-specific.** Every tool that feeds file content into an LLM context has the identical attack surface — `cat`, `grep`, `git diff`, the built-in `Read` tool, etc. Hyalo is no different.
+
+2. **Sanitization would be counterproductive.** Stripping patterns like "ignore previous instructions" from legitimate documentation would degrade the tool's core purpose (making vault content available to the user and their LLM).
+
+3. **Sanitization would be fragile.** Any blocklist approach is an arms race against creative prompt formulations. It provides a false sense of security while breaking valid content.
+
+4. **Hyalo's JSON output is a partial natural defense.** Structured JSON with named fields makes it harder for an LLM to confuse data with instructions compared to raw freeform text output.
+
+5. **The problem belongs to the LLM layer.** Distinguishing instructions from data is the LLM's responsibility, not the tool's. Claude already has system-level instructions and tool-result tagging to help with this.
+
+**Consequences:**
+- No output sanitization, escaping, or filtering added to hyalo
+- If hyalo ever adds a server mode (MCP server, HTTP API) serving vault content to remote/untrusted clients, this decision should be revisited — trust boundaries change in that scenario
