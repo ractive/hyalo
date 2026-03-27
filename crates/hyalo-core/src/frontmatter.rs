@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -32,7 +32,7 @@ impl Document {
 
         let properties: BTreeMap<String, Value> = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
-                serde_yaml_ng::from_str(yaml).context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str(yaml).context("failed to parse YAML frontmatter")?
             }
             _ => BTreeMap::new(),
         };
@@ -50,7 +50,7 @@ impl Document {
         if !self.properties.is_empty() {
             out.push_str("---\n");
             let yaml =
-                serde_yaml_ng::to_string(&self.properties).context("failed to serialize YAML")?;
+                serde_saphyr::to_string(&self.properties).context("failed to serialize YAML")?;
             out.push_str(&yaml);
             // serde_yaml adds a trailing newline, but let's ensure
             if !yaml.ends_with('\n') {
@@ -124,7 +124,7 @@ pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result
     let mut out: Vec<u8> = Vec::new();
     if !props.is_empty() {
         out.extend_from_slice(b"---\n");
-        let yaml = serde_yaml_ng::to_string(props).context("failed to serialize YAML")?;
+        let yaml = serde_saphyr::to_string(props).context("failed to serialize YAML")?;
         out.extend_from_slice(yaml.as_bytes());
         if !yaml.ends_with('\n') {
             out.push(b'\n');
@@ -282,7 +282,7 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         return Ok(BTreeMap::new());
     }
 
-    serde_yaml_ng::from_str(&yaml).context("failed to parse YAML frontmatter")
+    serde_saphyr::from_str(&yaml).context("failed to parse YAML frontmatter")
 }
 
 /// Extract frontmatter YAML string and the body from a markdown document.
@@ -371,9 +371,9 @@ pub fn infer_type(value: &Value) -> &'static str {
     match value {
         Value::Bool(_) => "checkbox",
         Value::Number(_) => "number",
-        Value::Sequence(_) => "list",
+        Value::Array(_) => "list",
         Value::String(s) => infer_string_type(s),
-        Value::Null | Value::Mapping(_) | Value::Tagged(_) => "text",
+        Value::Null | Value::Object(_) => "text",
     }
 }
 
@@ -430,7 +430,9 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
             } else {
                 let f: f64 = raw.parse().context("value is not a valid number")?;
                 anyhow::ensure!(f.is_finite(), "value is not a finite number");
-                Ok(Value::Number(serde_yaml_ng::Number::from(f)))
+                Ok(Value::Number(
+                    serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0)),
+                ))
             }
         }
         Some("checkbox") => {
@@ -458,7 +460,7 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
                 .split(',')
                 .map(|s| Value::String(s.trim().to_owned()))
                 .collect();
-            Ok(Value::Sequence(items))
+            Ok(Value::Array(items))
         }
         Some(other) => anyhow::bail!("unknown type: {other}"),
         None => Ok(infer_value(raw)),
@@ -475,7 +477,9 @@ fn infer_value(raw: &str) -> Value {
     if let Ok(f) = raw.parse::<f64>()
         && f.is_finite()
     {
-        return Value::Number(serde_yaml_ng::Number::from(f));
+        return Value::Number(
+            serde_json::Number::from_f64(f).unwrap_or_else(|| serde_json::Number::from(0)),
+        );
     }
     // Try bool
     match raw {
@@ -488,49 +492,24 @@ fn infer_value(raw: &str) -> Value {
         let inner = &raw[1..raw.len() - 1];
         // Empty brackets = empty list
         if inner.trim().is_empty() {
-            return Value::Sequence(Vec::new());
+            return Value::Array(Vec::new());
         }
         // Split by comma, trim each item, keep as strings
         let items: Vec<Value> = inner
             .split(',')
             .map(|s| Value::String(s.trim().to_owned()))
             .collect();
-        return Value::Sequence(items);
+        return Value::Array(items);
     }
     Value::String(raw.to_owned())
 }
 
 /// Convert a YAML value to a `serde_json::Value` for output.
+///
+/// Since `Value` is already `serde_json::Value`, this is an identity clone.
+/// Kept as a public API for callers that previously needed type conversion.
 pub fn yaml_to_json(value: &Value) -> serde_json::Value {
-    match value {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                serde_json::Value::Number(i.into())
-            } else if let Some(f) = n.as_f64() {
-                serde_json::json!(f)
-            } else {
-                serde_json::Value::Null
-            }
-        }
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Sequence(seq) => serde_json::Value::Array(seq.iter().map(yaml_to_json).collect()),
-        Value::Mapping(map) => {
-            let obj: serde_json::Map<String, serde_json::Value> = map
-                .iter()
-                .map(|(k, v)| {
-                    let key = match k {
-                        Value::String(s) => s.clone(),
-                        _ => format!("{k:?}"),
-                    };
-                    (key, yaml_to_json(v))
-                })
-                .collect();
-            serde_json::Value::Object(obj)
-        }
-        Value::Tagged(tagged) => yaml_to_json(&tagged.value),
-    }
+    value.clone()
 }
 
 #[cfg(test)]
@@ -624,7 +603,7 @@ No closing delimiter.
     #[test]
     fn infer_type_list() {
         assert_eq!(
-            infer_type(&Value::Sequence(vec![Value::String("a".into())])),
+            infer_type(&Value::Array(vec![Value::String("a".into())])),
             "list"
         );
     }
@@ -699,8 +678,8 @@ Body
         }
         // Force list
         match parse_value("a, b, c", Some("list")).unwrap() {
-            Value::Sequence(items) => assert_eq!(items.len(), 3),
-            other => panic!("expected sequence, got {other:?}"),
+            Value::Array(items) => assert_eq!(items.len(), 3),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -941,20 +920,20 @@ Body.
     #[test]
     fn infer_value_list_basic() {
         match parse_value("[a, b, c]", None).unwrap() {
-            Value::Sequence(items) => {
+            Value::Array(items) => {
                 assert_eq!(items.len(), 3);
                 assert_eq!(items[0], Value::String("a".to_owned()));
                 assert_eq!(items[1], Value::String("b".to_owned()));
                 assert_eq!(items[2], Value::String("c".to_owned()));
             }
-            other => panic!("expected sequence, got {other:?}"),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
     #[test]
     fn infer_value_list_empty() {
         match parse_value("[]", None).unwrap() {
-            Value::Sequence(items) => assert!(items.is_empty()),
+            Value::Array(items) => assert!(items.is_empty()),
             other => panic!("expected empty sequence, got {other:?}"),
         }
     }
@@ -962,11 +941,11 @@ Body.
     #[test]
     fn infer_value_list_single_item() {
         match parse_value("[single]", None).unwrap() {
-            Value::Sequence(items) => {
+            Value::Array(items) => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0], Value::String("single".to_owned()));
             }
-            other => panic!("expected sequence, got {other:?}"),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -982,12 +961,12 @@ Body.
     #[test]
     fn infer_value_list_whitespace_trimmed() {
         match parse_value("[  a , b ,  c  ]", None).unwrap() {
-            Value::Sequence(items) => {
+            Value::Array(items) => {
                 assert_eq!(items[0], Value::String("a".to_owned()));
                 assert_eq!(items[1], Value::String("b".to_owned()));
                 assert_eq!(items[2], Value::String("c".to_owned()));
             }
-            other => panic!("expected sequence, got {other:?}"),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 }

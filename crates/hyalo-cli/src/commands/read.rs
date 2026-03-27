@@ -310,7 +310,7 @@ pub fn run(
                 // Render frontmatter as YAML
                 out.push_str("---\n");
                 if !props.is_empty() {
-                    let yaml = serde_yaml_ng::to_string(props)
+                    let yaml = serde_saphyr::to_string(props)
                         .context("failed to serialize frontmatter as YAML")?;
                     out.push_str(&yaml);
                 }

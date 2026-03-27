@@ -31,7 +31,7 @@ pub struct IndexEntry {
     /// ISO 8601 mtime string.
     pub modified: String,
     /// Raw frontmatter properties.
-    pub properties: BTreeMap<String, serde_yaml_ng::Value>,
+    pub properties: BTreeMap<String, serde_json::Value>,
     /// Extracted tags (from properties).
     pub tags: Vec<String>,
     /// Document outline sections.

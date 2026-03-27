@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -316,7 +316,7 @@ pub trait FileVisitor {
 
     /// Whether this visitor needs parsed frontmatter properties.
     /// If **no** visitor needs frontmatter, the scanner skips YAML accumulation
-    /// and `serde_yaml_ng` parsing (but still reads past the `---` delimiters).
+    /// and `serde_saphyr` parsing (but still reads past the `---` delimiters).
     /// Default: `true`.
     fn needs_frontmatter(&self) -> bool {
         true
@@ -424,7 +424,7 @@ pub fn scan_reader_multi<R: BufRead>(
         }
         let props: BTreeMap<String, Value> = match yaml {
             Some(ref y) if !y.trim().is_empty() => {
-                serde_yaml_ng::from_str(y).context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str(y).context("failed to parse YAML frontmatter")?
             }
             _ => BTreeMap::new(),
         };
@@ -1246,7 +1246,7 @@ Line 2
 
     #[test]
     fn needs_frontmatter_false_skips_yaml_parse() {
-        // Malformed YAML that would fail serde_yaml_ng if parsed,
+        // Malformed YAML that would fail serde_saphyr if parsed,
         // but a body-only visitor with needs_frontmatter=false should succeed.
         struct BodyOnly {
             lines: Vec<(String, usize)>,

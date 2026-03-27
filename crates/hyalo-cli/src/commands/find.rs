@@ -875,7 +875,7 @@ use super::format_iso8601;
 fn build_file_object(
     rel_path: &str,
     modified: &str,
-    props: &BTreeMap<String, serde_yaml_ng::Value>,
+    props: &BTreeMap<String, serde_json::Value>,
     tags: &[String],
     fields: &Fields,
     outline_sections: Option<Vec<OutlineSection>>,
