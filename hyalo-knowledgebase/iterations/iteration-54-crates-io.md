@@ -1,13 +1,13 @@
 ---
-title: "Iteration 54 — Publish to crates.io"
-type: iteration
-date: 2026-03-27
-tags:
-  - iteration
-  - distribution
-  - crates-io
-status: in-progress
 branch: iter-54/crates-io
+date: 2026-03-27
+status: completed
+tags:
+- iteration
+- distribution
+- crates-io
+title: Iteration 54 — Publish to crates.io
+type: iteration
 ---
 
 # Iteration 54 — Publish to crates.io
