@@ -373,7 +373,12 @@ const DIR_SENTINEL: &str = "hyalo-knowledgebase";
 /// YAML double-quoted scalars and shell strings.
 fn parameterize_template(template: &str, dir: &str) -> String {
     let normalised = dir.replace('\\', "/");
-    let escaped = normalised.replace('"', "\\\"");
+    // Strip trailing slashes to avoid double-slash artifacts like `vault//**`
+    // when the sentinel appears before `/` in templates.
+    let trimmed = normalised.trim_end_matches('/');
+    // Preserve "." for root-dir configs; an empty string would break paths.
+    let clean = if trimmed.is_empty() { "." } else { trimmed };
+    let escaped = clean.replace('"', "\\\"");
     template.replace(DIR_SENTINEL, &escaped)
 }
 
@@ -645,6 +650,23 @@ mod tests {
         let template = "path: hyalo-knowledgebase\n";
         let result = parameterize_template(template, "my\"notes");
         assert!(result.contains("my\\\"notes"));
+    }
+
+    #[test]
+    fn parameterize_template_strips_trailing_slash() {
+        let template = "git log -- \"hyalo-knowledgebase/\" | head\n";
+        let result = parameterize_template(template, "vault/");
+        // Should produce "vault/" not "vault//"
+        assert!(result.contains("\"vault/\""));
+        assert!(!result.contains("//"));
+    }
+
+    #[test]
+    fn parameterize_template_trailing_slash_only_becomes_dot() {
+        let template = "hyalo-knowledgebase/**";
+        let result = parameterize_template(template, "/");
+        // "/" trimmed to "" → falls back to "."
+        assert_eq!(result, "./**");
     }
 
     #[test]
