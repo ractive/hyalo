@@ -129,8 +129,11 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
         .context("skill path has no parent directory")?;
     fs::create_dir_all(skill_dir)
         .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
-    fs::write(&skill_path, SKILL_CONTENT)
-        .with_context(|| format!("failed to write {}", skill_path.display()))?;
+    fs::write(
+        &skill_path,
+        parameterize_template(SKILL_CONTENT, &dir_value),
+    )
+    .with_context(|| format!("failed to write {}", skill_path.display()))?;
     if skill_existed {
         writeln!(summary, "updated  .claude/skills/hyalo/SKILL.md").unwrap();
     } else {
@@ -151,8 +154,11 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
         .context("dream skill path has no parent directory")?;
     fs::create_dir_all(dream_skill_dir)
         .with_context(|| format!("failed to create directory {}", dream_skill_dir.display()))?;
-    fs::write(&dream_skill_path, DREAM_SKILL_CONTENT)
-        .with_context(|| format!("failed to write {}", dream_skill_path.display()))?;
+    fs::write(
+        &dream_skill_path,
+        parameterize_template(DREAM_SKILL_CONTENT, &dir_value),
+    )
+    .with_context(|| format!("failed to write {}", dream_skill_path.display()))?;
     if dream_skill_existed {
         writeln!(summary, "updated  .claude/skills/hyalo-dream/SKILL.md").unwrap();
     } else {
@@ -254,40 +260,79 @@ fn count_md_files_recursive(dir: &Path) -> usize {
     count
 }
 
+/// Returns `true` if the directory name is an exact candidate match or
+/// contains a candidate substring (case-insensitive).
+fn is_fuzzy_candidate(dir_name: &str) -> bool {
+    let lower = dir_name.to_ascii_lowercase();
+    CANDIDATE_DIRS.iter().any(|c| lower.contains(*c))
+}
+
 /// Scan CWD for the candidate or root dir that has the most `.md` files (recursive).
 /// Falls back to `"."` if none found.
+///
+/// Exact candidate names (e.g. `docs`) are tried first. Then all non-hidden
+/// subdirectories whose names *contain* a candidate substring (e.g.
+/// `my-knowledgebase`) are also considered, so common naming variants are
+/// auto-detected without an explicit `--dir` flag.
 fn auto_detect_dir(cwd: &Path) -> String {
-    let mut best_dir: Option<&str> = None;
+    let mut best_dir: Option<String> = None;
     let mut best_count = 0usize;
 
+    // 1. Exact candidate matches.
     for candidate in CANDIDATE_DIRS {
         let candidate_path = cwd.join(candidate);
         if candidate_path.is_dir() {
             let count = count_md_files_recursive(&candidate_path);
             if count > best_count {
                 best_count = count;
-                best_dir = Some(candidate);
+                best_dir = Some((*candidate).to_owned());
             }
         }
     }
 
-    // Also consider root "." — but only count .md files that are NOT inside a
-    // candidate directory, so we compare apples to apples.
+    // 2. Fuzzy matches: non-hidden subdirectories whose names contain a
+    //    candidate substring but are not themselves exact candidates.
+    if let Ok(entries) = fs::read_dir(cwd) {
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if !ft.is_dir() || ft.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // Skip hidden dirs and exact candidates (already handled above).
+            if dir_name.starts_with('.') || CANDIDATE_DIRS.contains(&dir_name) {
+                continue;
+            }
+            if is_fuzzy_candidate(dir_name) {
+                let count = count_md_files_recursive(&path);
+                if count > best_count {
+                    best_count = count;
+                    best_dir = Some(dir_name.to_owned());
+                }
+            }
+        }
+    }
+
+    // 3. Also consider root "." — but only count .md files that are NOT inside
+    //    a candidate directory, so we compare apples to apples.
     let root_count = count_md_root_only(cwd);
     if root_count > best_count {
         return ".".to_owned();
     }
 
-    best_dir
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| ".".to_owned())
+    best_dir.unwrap_or_else(|| ".".to_owned())
 }
 
 /// Count `.md` files directly in `dir` and in non-candidate subdirectories (recursive).
-/// Excludes candidate directories so root doesn't double-count their contents.
-/// Also excludes hidden directories (names starting with `.`) such as `.claude/`
-/// and `.git/` so that files installed there by `init --claude` don't skew
-/// the auto-detection heuristic toward `"."`.
+///
+/// Excludes:
+/// - Exact candidate directories (e.g. `docs`, `wiki`) — counted separately.
+/// - Fuzzy-matched directories (e.g. `my-knowledgebase`) — also counted separately.
+/// - Hidden directories (names starting with `.`, e.g. `.git`, `.claude`).
+///
+/// This keeps root-level `.md` count independent so the comparison in
+/// `auto_detect_dir` is apples-to-apples.
 fn count_md_root_only(dir: &Path) -> usize {
     let Ok(entries) = fs::read_dir(dir) else {
         return 0;
@@ -300,11 +345,9 @@ fn count_md_root_only(dir: &Path) -> usize {
         if is_real_dir {
             let path = entry.path();
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            // Skip hidden directories (e.g. .git, .claude) and candidate
-            // directories (counted separately in auto_detect_dir).
-            let is_hidden = dir_name.starts_with('.');
-            let is_candidate = CANDIDATE_DIRS.contains(&dir_name);
-            if !is_hidden && !is_candidate {
+            // Skip hidden directories and any directory that auto_detect_dir
+            // would consider as a candidate (exact or fuzzy).
+            if !dir_name.starts_with('.') && !is_fuzzy_candidate(dir_name) {
                 count += count_md_files_recursive(&path);
             }
         } else if entry
@@ -319,30 +362,36 @@ fn count_md_root_only(dir: &Path) -> usize {
     count
 }
 
-/// The sentinel path glob in the rule template that gets replaced with the
-/// user's actual vault directory.
-const RULE_SENTINEL: &str = "hyalo-knowledgebase/**";
+/// The sentinel string used in all templates to represent the docs directory.
+/// Occurrences are replaced at install time with the user's actual vault directory.
+const DIR_SENTINEL: &str = "hyalo-knowledgebase";
+
+/// Replace all occurrences of `hyalo-knowledgebase` in `template` with `dir`.
+///
+/// Path separators in `dir` are normalised to `/` (Windows compatibility).
+/// Double-quotes in `dir` are escaped so substituted values remain valid inside
+/// YAML double-quoted scalars and shell strings.
+fn parameterize_template(template: &str, dir: &str) -> String {
+    let normalised = dir.replace('\\', "/");
+    let escaped = normalised.replace('"', "\\\"");
+    template.replace(DIR_SENTINEL, &escaped)
+}
 
 /// Replace the `hyalo-knowledgebase/**` path glob in the rule template with
 /// `{dir}/**` so the rule targets the actual vault directory.
 ///
-/// `dir` is YAML-escaped so that backslashes (Windows paths) and double-quotes
-/// do not corrupt the generated YAML. Path separators are normalised to `/`.
+/// Asserts that the sentinel glob is present so template drift is caught early.
 fn parameterize_rule(template: &str, dir: &str) -> String {
+    let sentinel_glob = format!("{DIR_SENTINEL}/**");
     // The sentinel must be present; its absence means the template was changed
     // without updating this function — a programming error.
     assert!(
-        template.contains(RULE_SENTINEL),
-        "rule template does not contain the expected sentinel {RULE_SENTINEL:?}"
+        template.contains(&sentinel_glob),
+        "rule template does not contain the expected sentinel {sentinel_glob:?}"
     );
-
-    // Normalise Windows backslash separators and escape YAML double-quote
-    // special characters so the substituted value is valid inside a YAML
-    // double-quoted scalar (e.g. `"docs/**"`).
-    let normalised = dir.replace('\\', "/");
-    let yaml_escaped = normalised.replace('"', "\\\"");
-
-    template.replace(RULE_SENTINEL, &format!("{yaml_escaped}/**"))
+    // parameterize_template replaces `hyalo-knowledgebase` with `dir`, leaving
+    // the `/**` suffix intact — so the glob path is correctly rewritten.
+    parameterize_template(template, dir)
 }
 
 /// Append `line` to `content`, separated by a blank line. Strips trailing newlines from
@@ -525,11 +574,85 @@ mod tests {
     }
 
     #[test]
+    fn auto_detect_dir_fuzzy_matches_containing_candidate_substring() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // "my-knowledgebase" contains "knowledgebase" → should be auto-detected
+        fs::create_dir_all(tmp.path().join("my-knowledgebase")).unwrap();
+        fs::write(tmp.path().join("my-knowledgebase").join("a.md"), "# A").unwrap();
+        let result = auto_detect_dir(tmp.path());
+        assert_eq!(result, "my-knowledgebase");
+    }
+
+    #[test]
+    fn auto_detect_dir_fuzzy_matches_project_wiki() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("project-wiki")).unwrap();
+        fs::write(
+            tmp.path().join("project-wiki").join("readme.md"),
+            "# Readme",
+        )
+        .unwrap();
+        let result = auto_detect_dir(tmp.path());
+        assert_eq!(result, "project-wiki");
+    }
+
+    #[test]
+    fn auto_detect_dir_fuzzy_does_not_double_count_in_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // "my-knowledgebase" contains "knowledgebase" — 2 md files
+        fs::create_dir_all(tmp.path().join("my-knowledgebase")).unwrap();
+        fs::write(tmp.path().join("my-knowledgebase").join("a.md"), "# A").unwrap();
+        fs::write(tmp.path().join("my-knowledgebase").join("b.md"), "# B").unwrap();
+        // root-level md files (should NOT include the fuzzy dir's files)
+        fs::write(tmp.path().join("readme.md"), "# Root").unwrap();
+        let result = auto_detect_dir(tmp.path());
+        // fuzzy dir has 2, root-only has 1 → fuzzy dir wins
+        assert_eq!(result, "my-knowledgebase");
+    }
+
+    #[test]
+    fn auto_detect_dir_exact_candidate_beats_fuzzy_with_fewer_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // exact "docs" with 2 md files
+        fs::create_dir_all(tmp.path().join("docs")).unwrap();
+        fs::write(tmp.path().join("docs").join("a.md"), "# A").unwrap();
+        fs::write(tmp.path().join("docs").join("b.md"), "# B").unwrap();
+        // fuzzy "my-docs" with 1 md file
+        fs::create_dir_all(tmp.path().join("my-docs")).unwrap();
+        fs::write(tmp.path().join("my-docs").join("c.md"), "# C").unwrap();
+        let result = auto_detect_dir(tmp.path());
+        assert_eq!(result, "docs");
+    }
+
+    #[test]
+    fn parameterize_template_replaces_sentinel() {
+        let template = "Use hyalo-knowledgebase for all docs in hyalo-knowledgebase/\n";
+        let result = parameterize_template(template, "my-docs");
+        assert_eq!(result, "Use my-docs for all docs in my-docs/\n");
+        assert!(!result.contains("hyalo-knowledgebase"));
+    }
+
+    #[test]
+    fn parameterize_template_normalises_windows_backslashes() {
+        let template = "git log -- \"hyalo-knowledgebase/\"\n";
+        let result = parameterize_template(template, "my\\notes");
+        assert!(result.contains("my/notes"));
+        assert!(!result.contains('\\'));
+    }
+
+    #[test]
+    fn parameterize_template_escapes_double_quotes() {
+        let template = "path: hyalo-knowledgebase\n";
+        let result = parameterize_template(template, "my\"notes");
+        assert!(result.contains("my\\\"notes"));
+    }
+
+    #[test]
     fn parameterize_rule_replaces_path() {
         let template = "---\npaths:\n  - \"hyalo-knowledgebase/**\"\n---\nContent here.\n";
         let result = parameterize_rule(template, "docs");
         assert!(result.contains("\"docs/**\""));
-        assert!(!result.contains("hyalo-knowledgebase/**"));
+        assert!(!result.contains("hyalo-knowledgebase"));
     }
 
     #[test]
