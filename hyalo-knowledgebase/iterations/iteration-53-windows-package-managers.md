@@ -1,13 +1,13 @@
 ---
-title: "Windows Package Managers (Scoop & winget)"
-type: iteration
-date: 2026-03-27
-tags:
-  - distribution
-  - windows
-  - ci
-status: in-progress
 branch: iter-53/windows-package-managers
+date: 2026-03-27
+status: completed
+tags:
+- distribution
+- windows
+- ci
+title: Windows Package Managers (Scoop & winget)
+type: iteration
 ---
 
 # Iteration 53 — Windows Package Managers (Scoop & winget)

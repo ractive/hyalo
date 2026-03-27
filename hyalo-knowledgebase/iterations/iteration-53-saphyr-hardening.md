@@ -1,7 +1,7 @@
 ---
 branch: iter-53/saphyr-hardening
 date: 2026-03-27
-status: in-progress
+status: completed
 tags:
 - security
 - parser
