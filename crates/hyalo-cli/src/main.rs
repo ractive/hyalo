@@ -774,7 +774,23 @@ fn main() {
     // We can't use mut_subcommand to hide them from `init --help` because
     // they don't exist on the subcommand Command node yet.  This is a known
     // clap limitation with `global = true` derive args.
-    let matches = cmd.get_matches();
+    let raw_args: Vec<String> = std::env::args().collect();
+    let matches = match cmd.try_get_matches_from(raw_args.clone()) {
+        Ok(m) => m,
+        Err(e) => {
+            // Before letting clap print its default error, check whether the
+            // user passed a subcommand name as a `--flag` (e.g. `--toggle`
+            // instead of `toggle`).  Use a fresh Cli::command() because `cmd`
+            // was consumed by try_get_matches_from.
+            if let Some(suggestion) =
+                hyalo_cli::suggest::suggest_subcommand_correction(&raw_args, &Cli::command())
+            {
+                eprintln!("{e}\n  tip: did you mean:\n\n    {suggestion}\n");
+                process::exit(2);
+            }
+            e.exit();
+        }
+    };
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
         Err(e) => e.exit(),
