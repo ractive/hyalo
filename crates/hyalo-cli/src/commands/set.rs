@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde::Serialize;
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
@@ -78,12 +78,12 @@ fn add_tag_in_memory(
 
     // Guard: reject non-list scalar types that are neither string nor sequence.
     match props.get(KEY) {
-        None | Some(Value::Null | Value::String(_) | Value::Sequence(_)) => {}
+        None | Some(Value::Null | Value::String(_) | Value::Array(_)) => {}
         Some(existing) => {
             let kind = match existing {
                 Value::Bool(_) => "boolean",
                 Value::Number(_) => "number",
-                Value::Mapping(_) => "mapping",
+                Value::Object(_) => "mapping",
                 _ => "unknown",
             };
             anyhow::bail!(
@@ -93,7 +93,7 @@ fn add_tag_in_memory(
         }
     }
 
-    if let Some(Value::Sequence(seq)) = props.get_mut(KEY) {
+    if let Some(Value::Array(seq)) = props.get_mut(KEY) {
         let already = seq.iter().any(|v| match v {
             Value::String(s) => s.eq_ignore_ascii_case(tag),
             Value::Number(n) => n.to_string().eq_ignore_ascii_case(tag),
@@ -121,7 +121,7 @@ fn add_tag_in_memory(
 
         let mut list: Vec<Value> = existing_str.map(Value::String).into_iter().collect();
         list.push(Value::String(tag.to_owned()));
-        props.insert(KEY.to_owned(), Value::Sequence(list));
+        props.insert(KEY.to_owned(), Value::Array(list));
         Ok(true)
     }
 }

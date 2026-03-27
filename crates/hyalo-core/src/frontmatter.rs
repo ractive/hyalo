@@ -1,10 +1,35 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
-use serde_yaml_ng::Value;
+use serde_json::Value;
+use serde_saphyr::{Budget, DuplicateKeyPolicy, Options};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+
+/// Shared parser options for all YAML frontmatter parsing in hyalo.
+///
+/// Enforces tight limits via a `Budget` to harden the parser against
+/// pathological inputs (deep nesting, alias bombs, huge scalars).
+/// Also enables strict YAML 1.2 booleans (`true`/`false` only) and
+/// rejects duplicate keys.
+pub fn hyalo_options() -> Options {
+    Options {
+        budget: Some(Budget {
+            max_events: 10_000,
+            max_depth: 20,
+            max_aliases: 0,
+            max_anchors: 0,
+            max_nodes: 5_000,
+            max_total_scalar_bytes: 8192,
+            max_documents: 1,
+            ..Budget::default()
+        }),
+        duplicate_keys: DuplicateKeyPolicy::Error,
+        strict_booleans: true,
+        ..Options::default()
+    }
+}
 
 /// Represents parsed frontmatter and the remaining body content.
 #[derive(Debug, Clone)]
@@ -32,7 +57,8 @@ impl Document {
 
         let properties: BTreeMap<String, Value> = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
-                serde_yaml_ng::from_str(yaml).context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str_with_options(yaml, hyalo_options())
+                    .context("failed to parse YAML frontmatter")?
             }
             _ => BTreeMap::new(),
         };
@@ -50,9 +76,9 @@ impl Document {
         if !self.properties.is_empty() {
             out.push_str("---\n");
             let yaml =
-                serde_yaml_ng::to_string(&self.properties).context("failed to serialize YAML")?;
+                serde_saphyr::to_string(&self.properties).context("failed to serialize YAML")?;
             out.push_str(&yaml);
-            // serde_yaml adds a trailing newline, but let's ensure
+            // The YAML serializer adds a trailing newline, but let's ensure
             if !yaml.ends_with('\n') {
                 out.push('\n');
             }
@@ -124,7 +150,7 @@ pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result
     let mut out: Vec<u8> = Vec::new();
     if !props.is_empty() {
         out.extend_from_slice(b"---\n");
-        let yaml = serde_yaml_ng::to_string(props).context("failed to serialize YAML")?;
+        let yaml = serde_saphyr::to_string(props).context("failed to serialize YAML")?;
         out.extend_from_slice(yaml.as_bytes());
         if !yaml.ends_with('\n') {
             out.push(b'\n');
@@ -231,6 +257,11 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 /// Parse frontmatter from any buffered reader. Stops reading after the closing `---`.
 /// Bails out if the frontmatter exceeds a reasonable size (200 lines / 8 KB) to avoid
 /// buffering an entire file when the closing delimiter is missing.
+///
+/// Defense-in-depth: the pre-read line/byte cap is kept even though the parser's
+/// `Budget` now enforces its own limits. The pre-read cap stops reading early for
+/// files with a missing closing `---`, which the parser budget cannot detect (it
+/// only sees the YAML string that was already read).
 fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String, Value>> {
     const MAX_FRONTMATTER_LINES: usize = 200;
     const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
@@ -282,7 +313,8 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         return Ok(BTreeMap::new());
     }
 
-    serde_yaml_ng::from_str(&yaml).context("failed to parse YAML frontmatter")
+    serde_saphyr::from_str_with_options(&yaml, hyalo_options())
+        .context("failed to parse YAML frontmatter")
 }
 
 /// Extract frontmatter YAML string and the body from a markdown document.
@@ -371,9 +403,9 @@ pub fn infer_type(value: &Value) -> &'static str {
     match value {
         Value::Bool(_) => "checkbox",
         Value::Number(_) => "number",
-        Value::Sequence(_) => "list",
+        Value::Array(_) => "list",
         Value::String(s) => infer_string_type(s),
-        Value::Null | Value::Mapping(_) | Value::Tagged(_) => "text",
+        Value::Null | Value::Object(_) => "text",
     }
 }
 
@@ -430,7 +462,9 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
             } else {
                 let f: f64 = raw.parse().context("value is not a valid number")?;
                 anyhow::ensure!(f.is_finite(), "value is not a finite number");
-                Ok(Value::Number(serde_yaml_ng::Number::from(f)))
+                serde_json::Number::from_f64(f)
+                    .map(Value::Number)
+                    .ok_or_else(|| anyhow::anyhow!("value is not a finite number"))
             }
         }
         Some("checkbox") => {
@@ -458,7 +492,7 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
                 .split(',')
                 .map(|s| Value::String(s.trim().to_owned()))
                 .collect();
-            Ok(Value::Sequence(items))
+            Ok(Value::Array(items))
         }
         Some(other) => anyhow::bail!("unknown type: {other}"),
         None => Ok(infer_value(raw)),
@@ -475,7 +509,8 @@ fn infer_value(raw: &str) -> Value {
     if let Ok(f) = raw.parse::<f64>()
         && f.is_finite()
     {
-        return Value::Number(serde_yaml_ng::Number::from(f));
+        return serde_json::Number::from_f64(f)
+            .map_or_else(|| Value::String(raw.to_owned()), Value::Number);
     }
     // Try bool
     match raw {
@@ -488,49 +523,16 @@ fn infer_value(raw: &str) -> Value {
         let inner = &raw[1..raw.len() - 1];
         // Empty brackets = empty list
         if inner.trim().is_empty() {
-            return Value::Sequence(Vec::new());
+            return Value::Array(Vec::new());
         }
         // Split by comma, trim each item, keep as strings
         let items: Vec<Value> = inner
             .split(',')
             .map(|s| Value::String(s.trim().to_owned()))
             .collect();
-        return Value::Sequence(items);
+        return Value::Array(items);
     }
     Value::String(raw.to_owned())
-}
-
-/// Convert a YAML value to a `serde_json::Value` for output.
-pub fn yaml_to_json(value: &Value) -> serde_json::Value {
-    match value {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                serde_json::Value::Number(i.into())
-            } else if let Some(f) = n.as_f64() {
-                serde_json::json!(f)
-            } else {
-                serde_json::Value::Null
-            }
-        }
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Sequence(seq) => serde_json::Value::Array(seq.iter().map(yaml_to_json).collect()),
-        Value::Mapping(map) => {
-            let obj: serde_json::Map<String, serde_json::Value> = map
-                .iter()
-                .map(|(k, v)| {
-                    let key = match k {
-                        Value::String(s) => s.clone(),
-                        _ => format!("{k:?}"),
-                    };
-                    (key, yaml_to_json(v))
-                })
-                .collect();
-            serde_json::Value::Object(obj)
-        }
-        Value::Tagged(tagged) => yaml_to_json(&tagged.value),
-    }
 }
 
 #[cfg(test)]
@@ -624,7 +626,7 @@ No closing delimiter.
     #[test]
     fn infer_type_list() {
         assert_eq!(
-            infer_type(&Value::Sequence(vec![Value::String("a".into())])),
+            infer_type(&Value::Array(vec![Value::String("a".into())])),
             "list"
         );
     }
@@ -699,8 +701,8 @@ Body
         }
         // Force list
         match parse_value("a, b, c", Some("list")).unwrap() {
-            Value::Sequence(items) => assert_eq!(items.len(), 3),
-            other => panic!("expected sequence, got {other:?}"),
+            Value::Array(items) => assert_eq!(items.len(), 3),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -941,20 +943,20 @@ Body.
     #[test]
     fn infer_value_list_basic() {
         match parse_value("[a, b, c]", None).unwrap() {
-            Value::Sequence(items) => {
+            Value::Array(items) => {
                 assert_eq!(items.len(), 3);
                 assert_eq!(items[0], Value::String("a".to_owned()));
                 assert_eq!(items[1], Value::String("b".to_owned()));
                 assert_eq!(items[2], Value::String("c".to_owned()));
             }
-            other => panic!("expected sequence, got {other:?}"),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
     #[test]
     fn infer_value_list_empty() {
         match parse_value("[]", None).unwrap() {
-            Value::Sequence(items) => assert!(items.is_empty()),
+            Value::Array(items) => assert!(items.is_empty()),
             other => panic!("expected empty sequence, got {other:?}"),
         }
     }
@@ -962,11 +964,11 @@ Body.
     #[test]
     fn infer_value_list_single_item() {
         match parse_value("[single]", None).unwrap() {
-            Value::Sequence(items) => {
+            Value::Array(items) => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0], Value::String("single".to_owned()));
             }
-            other => panic!("expected sequence, got {other:?}"),
+            other => panic!("expected array, got {other:?}"),
         }
     }
 
@@ -982,12 +984,109 @@ Body.
     #[test]
     fn infer_value_list_whitespace_trimmed() {
         match parse_value("[  a , b ,  c  ]", None).unwrap() {
-            Value::Sequence(items) => {
+            Value::Array(items) => {
                 assert_eq!(items[0], Value::String("a".to_owned()));
                 assert_eq!(items[1], Value::String("b".to_owned()));
                 assert_eq!(items[2], Value::String("c".to_owned()));
             }
-            other => panic!("expected sequence, got {other:?}"),
+            other => panic!("expected array, got {other:?}"),
         }
+    }
+
+    // --- Hardened parser option tests ---
+
+    #[test]
+    fn rejects_deeply_nested_yaml() {
+        // Depth > 20 must be rejected by the budget
+        let mut yaml = String::from("---\n");
+        for i in 0..25 {
+            yaml.push_str(&"  ".repeat(i));
+            yaml.push_str(&format!("l{i}:\n"));
+        }
+        yaml.push_str(&"  ".repeat(25));
+        yaml.push_str("val: 1\n");
+        yaml.push_str("---\nBody\n");
+
+        let err = Document::parse(&yaml);
+        assert!(err.is_err(), "deeply nested YAML should be rejected");
+    }
+
+    #[test]
+    fn rejects_yaml_with_aliases() {
+        // Aliases (max_aliases: 0) must be rejected
+        let content = "---\nanchor: &a value\nalias: *a\n---\nBody\n";
+        let err = Document::parse(content);
+        assert!(err.is_err(), "YAML with aliases should be rejected");
+    }
+
+    #[test]
+    fn rejects_duplicate_keys() {
+        let content = "---\ntitle: First\ntitle: Second\n---\nBody\n";
+        let err = Document::parse(content).unwrap_err();
+        let chain = format!("{err:?}").to_lowercase();
+        assert!(
+            chain.contains("duplicate"),
+            "error chain should mention duplicate, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn strict_booleans_yes_is_string() {
+        // With strict_booleans, `yes` must parse as a string, not a boolean
+        let content = "---\nflag: yes\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(
+            doc.get_property("flag"),
+            Some(&Value::String("yes".into())),
+            "`yes` should be parsed as string with strict booleans"
+        );
+    }
+
+    #[test]
+    fn strict_booleans_no_is_string() {
+        let content = "---\nflag: no\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(
+            doc.get_property("flag"),
+            Some(&Value::String("no".into())),
+            "`no` should be parsed as string with strict booleans"
+        );
+    }
+
+    #[test]
+    fn strict_booleans_on_off_are_strings() {
+        let content = "---\na: on\nb: off\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(doc.get_property("a"), Some(&Value::String("on".into())));
+        assert_eq!(doc.get_property("b"), Some(&Value::String("off".into())));
+    }
+
+    #[test]
+    fn strict_booleans_true_false_still_booleans() {
+        let content = "---\na: true\nb: false\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(doc.get_property("a"), Some(&Value::Bool(true)));
+        assert_eq!(doc.get_property("b"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn streaming_rejects_duplicate_keys() {
+        let input = "---\ntitle: First\ntitle: Second\n---\nBody\n";
+        let result = read_frontmatter_from_reader(input.as_bytes());
+        assert!(
+            result.is_err(),
+            "streaming parser should reject duplicate keys"
+        );
+    }
+
+    #[test]
+    fn streaming_strict_booleans() {
+        let input = "---\nflag: yes\n---\nBody\n";
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
+        assert_eq!(
+            props.get("flag"),
+            Some(&Value::String("yes".into())),
+            "streaming parser should treat `yes` as string"
+        );
     }
 }

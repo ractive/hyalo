@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde::Serialize;
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use std::path::Path;
 
 use crate::commands::tags::validate_tag;
@@ -87,11 +87,11 @@ fn remove_value_in_memory(
     target: &str,
 ) -> bool {
     // Check what kind of value we have without cloning.
-    let is_sequence = matches!(props.get(name), Some(Value::Sequence(_)));
+    let is_sequence = matches!(props.get(name), Some(Value::Array(_)));
 
     if is_sequence {
         // Sequence arm: mutate in place, no clone needed.
-        let Some(Value::Sequence(seq)) = props.get_mut(name) else {
+        let Some(Value::Array(seq)) = props.get_mut(name) else {
             unreachable!()
         };
         let before = seq.len();

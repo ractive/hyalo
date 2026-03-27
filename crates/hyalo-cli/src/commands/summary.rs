@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
-use hyalo_core::frontmatter::{infer_type, yaml_to_json};
+use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
@@ -114,7 +114,7 @@ pub fn summary(
 
         // Status grouping
         if let Some(status_val) = props.get("status") {
-            let status_str = match yaml_to_json(status_val) {
+            let status_str = match status_val.clone() {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
             };
@@ -320,7 +320,7 @@ pub fn summary_from_index(
 
         // Status grouping
         if let Some(status_val) = entry.properties.get("status") {
-            let status_str = match yaml_to_json(status_val) {
+            let status_str = match status_val.clone() {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
             };

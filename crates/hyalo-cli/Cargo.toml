@@ -19,8 +19,8 @@ jaq-std = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]

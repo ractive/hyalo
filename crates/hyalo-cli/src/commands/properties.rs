@@ -406,7 +406,7 @@ title: Good Note
 "),
         )
         .unwrap();
-        // Malformed YAML: a bare colon key is rejected by serde_yaml_ng.
+        // Malformed YAML: a bare colon key is rejected by serde_saphyr.
         fs::write(
             tmp.path().join("bad.md"),
             "---\n: invalid yaml [[[{\n---\n# Bad\n",

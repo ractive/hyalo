@@ -10,7 +10,7 @@ use hyalo_core::frontmatter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
 use hyalo_core::types::{TagSummary, TagSummaryEntry};
 use serde::Serialize;
-use serde_yaml_ng::Value;
+use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Tag format validation
@@ -222,7 +222,7 @@ pub fn tags_rename(
         // Remove old tag and add new tag, handling both sequence and scalar forms
         let mut remove_tags_key = false;
         match props.get_mut("tags") {
-            Some(Value::Sequence(seq)) => {
+            Some(Value::Array(seq)) => {
                 seq.retain(|v| match v {
                     Value::String(s) => !s.eq_ignore_ascii_case(from),
                     _ => true,
@@ -286,7 +286,7 @@ pub fn tags_rename(
 mod tests {
     use super::*;
     use hyalo_core::filter::tag_matches;
-    use serde_yaml_ng::Value;
+    use serde_json::Value;
     use std::fs;
 
     macro_rules! md {
@@ -371,7 +371,7 @@ mod tests {
     // --- Tag extraction ---
 
     fn make_props(yaml: &str) -> BTreeMap<String, Value> {
-        serde_yaml_ng::from_str(yaml).unwrap()
+        serde_saphyr::from_str_with_options(yaml, hyalo_core::frontmatter::hyalo_options()).unwrap()
     }
 
     #[test]
@@ -630,7 +630,7 @@ tags:
 "),
         )
         .unwrap();
-        // Malformed YAML: a bare colon key is rejected by serde_yaml_ng.
+        // Malformed YAML: a bare colon key is rejected by serde_saphyr.
         fs::write(
             tmp.path().join("bad.md"),
             "---\n: invalid yaml [[[{\n---\n# Bad\n",

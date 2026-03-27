@@ -692,7 +692,7 @@ pub fn find_from_index(
                 .iter()
                 .filter(|(n, _)| n.as_str() != "tags")
             {
-                map.insert(name.clone(), hyalo_core::frontmatter::yaml_to_json(value));
+                map.insert(name.clone(), value.clone());
             }
             Some(map)
         } else {
@@ -708,7 +708,7 @@ pub fn find_from_index(
                     .map(|(name, value)| PropertyInfo {
                         name: name.clone(),
                         prop_type: hyalo_core::frontmatter::infer_type(value).to_owned(),
-                        value: hyalo_core::frontmatter::yaml_to_json(value),
+                        value: value.clone(),
                     })
                     .collect(),
             )
@@ -875,7 +875,7 @@ use super::format_iso8601;
 fn build_file_object(
     rel_path: &str,
     modified: &str,
-    props: &BTreeMap<String, serde_yaml_ng::Value>,
+    props: &BTreeMap<String, serde_json::Value>,
     tags: &[String],
     fields: &Fields,
     outline_sections: Option<Vec<OutlineSection>>,
@@ -890,7 +890,7 @@ fn build_file_object(
     let properties = if fields.properties {
         let mut map = serde_json::Map::new();
         for (name, value) in props.iter().filter(|(n, _)| n.as_str() != "tags") {
-            map.insert(name.clone(), frontmatter::yaml_to_json(value));
+            map.insert(name.clone(), value.clone());
         }
         Some(map)
     } else {
@@ -905,7 +905,7 @@ fn build_file_object(
                 .map(|(name, value)| PropertyInfo {
                     name: name.clone(),
                     prop_type: frontmatter::infer_type(value).to_owned(),
-                    value: frontmatter::yaml_to_json(value),
+                    value: value.clone(),
                 })
                 .collect(),
         )

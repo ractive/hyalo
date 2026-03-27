@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use regex::Regex;
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 #[must_use]
 pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
     match props.get("tags") {
-        Some(Value::Sequence(seq)) => seq
+        Some(Value::Array(seq)) => seq
             .iter()
             .filter_map(|v| match v {
                 Value::String(s) => Some(s.clone()),
@@ -389,17 +389,13 @@ fn yaml_value_regex_match(yaml: &Value, pattern: &Regex) -> bool {
         Value::String(s) => pattern.is_match(s),
         Value::Number(n) => pattern.is_match(&n.to_string()),
         Value::Bool(b) => pattern.is_match(if *b { "true" } else { "false" }),
-        Value::Sequence(seq) => seq.iter().any(|item| yaml_value_regex_match(item, pattern)),
+        Value::Array(seq) => seq.iter().any(|item| yaml_value_regex_match(item, pattern)),
         // For mappings, match against keys and recurse into values.
         // This allows `versions~=ghes` to match `{fpt: "*", ghes: "*"}`.
-        Value::Mapping(map) => map.iter().any(|(k, v)| {
-            let key_matches = match k {
-                Value::String(s) => pattern.is_match(s),
-                _ => false,
-            };
-            key_matches || yaml_value_regex_match(v, pattern)
-        }),
-        _ => false,
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| pattern.is_match(k) || yaml_value_regex_match(v, pattern)),
+        Value::Null => false,
     }
 }
 
@@ -425,7 +421,7 @@ fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
         Value::Bool(b) => parse_bool_filter(filter)
             .map(|fv| fv == *b)
             .unwrap_or(false),
-        Value::Sequence(seq) => seq.iter().any(|item| yaml_value_eq(item, filter)),
+        Value::Array(seq) => seq.iter().any(|item| yaml_value_eq(item, filter)),
         _ => yaml
             .as_str()
             .map(|s| str_eq_ignore_case(s, filter))
@@ -617,7 +613,7 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_yaml_ng::Value;
+    use serde_json::{Value, json};
     use std::collections::BTreeMap;
 
     // -----------------------------------------------------------------------
@@ -924,7 +920,7 @@ mod tests {
     fn match_regex_list_any_element() {
         let p = props(&[(
             "tags",
-            Value::Sequence(vec![
+            Value::Array(vec![
                 Value::String("rust".into()),
                 Value::String("cli-tool".into()),
             ]),
@@ -964,11 +960,7 @@ mod tests {
     #[test]
     fn match_regex_mapping_key() {
         // versions: {fpt: "*", ghes: "*", ghec: "*"}
-        let mut map = serde_yaml_ng::Mapping::new();
-        map.insert(Value::String("fpt".into()), Value::String("*".into()));
-        map.insert(Value::String("ghes".into()), Value::String("*".into()));
-        map.insert(Value::String("ghec".into()), Value::String("*".into()));
-        let p = props(&[("versions", Value::Mapping(map))]);
+        let p = props(&[("versions", json!({"fpt": "*", "ghes": "*", "ghec": "*"}))]);
         let f = parse_property_filter("versions~=ghes").unwrap();
         assert!(f.matches(&p));
         let f2 = parse_property_filter("versions~=nonexistent").unwrap();
@@ -977,9 +969,7 @@ mod tests {
 
     #[test]
     fn match_regex_mapping_value() {
-        let mut map = serde_yaml_ng::Mapping::new();
-        map.insert(Value::String("ghes".into()), Value::String(">=3.10".into()));
-        let p = props(&[("versions", Value::Mapping(map))]);
+        let p = props(&[("versions", json!({"ghes": ">=3.10"}))]);
         // Match on the value, not the key
         let f = parse_property_filter("versions~=3\\.10").unwrap();
         assert!(f.matches(&p));
@@ -1046,7 +1036,7 @@ mod tests {
     fn match_list_eq_any_element() {
         let p = props(&[(
             "tags",
-            Value::Sequence(vec![
+            Value::Array(vec![
                 Value::String("rust".into()),
                 Value::String("cli".into()),
             ]),
@@ -1060,7 +1050,7 @@ mod tests {
     fn match_list_neq_none_match() {
         let p = props(&[(
             "tags",
-            Value::Sequence(vec![
+            Value::Array(vec![
                 Value::String("rust".into()),
                 Value::String("cli".into()),
             ]),
@@ -1220,10 +1210,10 @@ mod tests {
 
     #[test]
     fn matches_frontmatter_filters_list_property() {
-        // Value is a YAML sequence — filter matches any element.
+        // Value is a YAML array — filter matches any element.
         let p = props(&[(
             "tags",
-            Value::Sequence(vec![
+            Value::Array(vec![
                 Value::String("rust".into()),
                 Value::String("cli".into()),
             ]),
@@ -1243,7 +1233,7 @@ mod tests {
         // Nested tag: query "inbox" matches tag "inbox/processing".
         let p = props(&[(
             "tags",
-            Value::Sequence(vec![Value::String("inbox/processing".into())]),
+            Value::Array(vec![Value::String("inbox/processing".into())]),
         )]);
         let tag_filters = vec!["inbox".to_owned()];
         assert!(matches_frontmatter_filters(&p, &[], &tag_filters));
@@ -1262,7 +1252,7 @@ mod tests {
         // Both property and tag filters must pass.
         let p = props(&[
             ("status", Value::String("done".into())),
-            ("tags", Value::Sequence(vec![Value::String("rust".into())])),
+            ("tags", Value::Array(vec![Value::String("rust".into())])),
         ]);
         let prop_filters = [parse_property_filter("status=done").unwrap()];
         let tag_filters = vec!["rust".to_owned()];

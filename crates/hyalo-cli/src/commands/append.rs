@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use serde::Serialize;
-use serde_yaml_ng::Value;
+use serde_json::Value;
 use std::path::Path;
 
 use crate::commands::set::parse_kv;
@@ -48,10 +48,10 @@ fn append_value_in_memory(
 ) -> Result<bool> {
     match props.get(name).cloned() {
         None | Some(Value::Null) => {
-            props.insert(name.to_owned(), Value::Sequence(vec![new_val.clone()]));
+            props.insert(name.to_owned(), Value::Array(vec![new_val.clone()]));
             Ok(true)
         }
-        Some(Value::Sequence(mut seq)) => {
+        Some(Value::Array(mut seq)) => {
             let already_present = seq.iter().any(|v| match v {
                 Value::String(s) => s.eq_ignore_ascii_case(raw_value),
                 Value::Number(n) => n.to_string().eq_ignore_ascii_case(raw_value),
@@ -62,7 +62,7 @@ fn append_value_in_memory(
                 Ok(false)
             } else {
                 seq.push(new_val.clone());
-                props.insert(name.to_owned(), Value::Sequence(seq));
+                props.insert(name.to_owned(), Value::Array(seq));
                 Ok(true)
             }
         }
@@ -70,7 +70,7 @@ fn append_value_in_memory(
             if existing.eq_ignore_ascii_case(raw_value) {
                 Ok(false)
             } else {
-                let list = Value::Sequence(vec![Value::String(existing), new_val.clone()]);
+                let list = Value::Array(vec![Value::String(existing), new_val.clone()]);
                 props.insert(name.to_owned(), list);
                 Ok(true)
             }
@@ -79,7 +79,7 @@ fn append_value_in_memory(
             if n.to_string().eq_ignore_ascii_case(raw_value) {
                 Ok(false)
             } else {
-                let list = Value::Sequence(vec![Value::Number(n), new_val.clone()]);
+                let list = Value::Array(vec![Value::Number(n), new_val.clone()]);
                 props.insert(name.to_owned(), list);
                 Ok(true)
             }
@@ -88,15 +88,14 @@ fn append_value_in_memory(
             if b.to_string().eq_ignore_ascii_case(raw_value) {
                 Ok(false)
             } else {
-                let list = Value::Sequence(vec![Value::Bool(b), new_val.clone()]);
+                let list = Value::Array(vec![Value::Bool(b), new_val.clone()]);
                 props.insert(name.to_owned(), list);
                 Ok(true)
             }
         }
         Some(other) => {
             let kind = match &other {
-                Value::Mapping(_) => "mapping",
-                Value::Tagged(_) => "tagged",
+                Value::Object(_) => "mapping",
                 _ => "unknown",
             };
             anyhow::bail!("property '{name}' is a {kind} value — cannot append to it");
