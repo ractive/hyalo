@@ -17,6 +17,9 @@ const RULE_TEMPLATE: &str = include_str!("../../../../.claude/rules/knowledgebas
 
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
 
+const SECTION_START: &str = "<!-- hyalo:start -->";
+const SECTION_END: &str = "<!-- hyalo:end -->";
+
 /// Common documentation directory names to scan for when no `--dir` is given.
 const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "content", "pages"];
 
@@ -161,20 +164,17 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
     }
 
     // ------------------------------------------------------------------
-    // Step 5: append hyalo hint to .claude/CLAUDE.md (no duplicates)
+    // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md
     // ------------------------------------------------------------------
     let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
+    let managed_section = format!("{SECTION_START}\n{CLAUDE_MD_HINT}\n{SECTION_END}");
     if claude_md_path.exists() {
         let existing = fs::read_to_string(&claude_md_path)
             .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
-        if existing.contains(CLAUDE_MD_HINT) {
-            writeln!(summary, "skipped  .claude/CLAUDE.md (hint already present)").unwrap();
-        } else {
-            let appended = append_line_to_file_content(&existing, CLAUDE_MD_HINT);
-            fs::write(&claude_md_path, appended)
-                .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            writeln!(summary, "updated  .claude/CLAUDE.md (appended hyalo hint)").unwrap();
-        }
+        let (new_content, action) = upsert_managed_section(&existing, &managed_section);
+        fs::write(&claude_md_path, &new_content)
+            .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
+        writeln!(summary, "updated  .claude/CLAUDE.md ({action})").unwrap();
     } else {
         // Create the file and any parent directories.
         let claude_dir = claude_md_path
@@ -182,10 +182,10 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
             .context("CLAUDE.md path has no parent directory")?;
         fs::create_dir_all(claude_dir)
             .with_context(|| format!("failed to create directory {}", claude_dir.display()))?;
-        let content = format!("{CLAUDE_MD_HINT}\n");
+        let content = format!("{managed_section}\n");
         fs::write(&claude_md_path, content)
             .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-        writeln!(summary, "created  .claude/CLAUDE.md (with hyalo hint)").unwrap();
+        writeln!(summary, "created  .claude/CLAUDE.md (with managed section)").unwrap();
     }
 
     Ok(CommandOutcome::Success(summary.trim_end().to_owned()))
@@ -312,6 +312,63 @@ fn append_line_to_file_content(content: &str, line: &str) -> String {
     result.push_str(line);
     result.push('\n');
     result
+}
+
+/// Replace the hyalo managed section in `content`, or append it if absent.
+///
+/// Returns `(updated_content, action_description)` where `action_description` is a
+/// short human-readable string describing what was done.
+///
+/// The replacement logic (in priority order):
+/// 1. If both `<!-- hyalo:start -->` and `<!-- hyalo:end -->` markers are present,
+///    replace everything between them (inclusive) with `section`.
+/// 2. If only the start marker is present (no matching end marker), treat as absent.
+/// 3. If the bare `CLAUDE_MD_HINT` text appears without markers, replace that line
+///    with `section` (migration path from old format).
+/// 4. Otherwise, append `section` separated by a blank line.
+fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str) {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find line indices of the start and end markers.
+    let start_idx = lines.iter().position(|l| l.contains(SECTION_START));
+    let end_idx = lines.iter().position(|l| l.contains(SECTION_END));
+
+    if let (Some(s), Some(e)) = (start_idx, end_idx) {
+        // Both markers present — replace from start to end (inclusive).
+        let mut result = String::new();
+        for line in &lines[..s] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        result.push_str(section);
+        result.push('\n');
+        for line in &lines[e + 1..] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        return (result, "replaced managed section");
+    }
+
+    // Only start marker without end: treat as absent (fall through).
+    // Check for old bare hint line and migrate it.
+    if let Some(hint_idx) = lines.iter().position(|l| *l == CLAUDE_MD_HINT) {
+        let mut result = String::new();
+        for line in &lines[..hint_idx] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        result.push_str(section);
+        result.push('\n');
+        for line in &lines[hint_idx + 1..] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        return (result, "migrated to managed section");
+    }
+
+    // No markers and no old hint — append.
+    let appended = append_line_to_file_content(content, section);
+    (appended, "appended managed section")
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +533,107 @@ mod tests {
         let count = count_md_root_only(tmp.path());
         // readme.md (1) + other/note.md (1) = 2; .claude/*.md are excluded
         assert_eq!(count, 2);
+    }
+
+    // ---------------------------------------------------------------------------
+    // upsert_managed_section tests
+    // ---------------------------------------------------------------------------
+
+    fn make_section() -> String {
+        format!("{SECTION_START}\n{CLAUDE_MD_HINT}\n{SECTION_END}")
+    }
+
+    #[test]
+    fn upsert_managed_section_appends_when_absent() {
+        let content = "# Existing\n\nSome content.\n";
+        let section = make_section();
+        let (result, action) = upsert_managed_section(content, &section);
+        assert_eq!(action, "appended managed section");
+        assert!(
+            result.contains("Some content."),
+            "original content preserved"
+        );
+        assert!(result.contains(SECTION_START), "start marker present");
+        assert!(result.contains(SECTION_END), "end marker present");
+        assert!(result.contains(CLAUDE_MD_HINT), "hint content present");
+        // Verify the section appears after the original content.
+        let orig_pos = result.find("Some content.").unwrap();
+        let section_pos = result.find(SECTION_START).unwrap();
+        assert!(
+            section_pos > orig_pos,
+            "section appended after original content"
+        );
+    }
+
+    #[test]
+    fn upsert_managed_section_replaces_existing_markers() {
+        let section = make_section();
+        let old_content =
+            format!("# Before\n\n{SECTION_START}\nold hint text\n{SECTION_END}\n\n# After\n");
+        let (result, action) = upsert_managed_section(&old_content, &section);
+        assert_eq!(action, "replaced managed section");
+        assert!(
+            result.contains("# Before"),
+            "content before markers preserved"
+        );
+        assert!(
+            result.contains("# After"),
+            "content after markers preserved"
+        );
+        assert!(result.contains(CLAUDE_MD_HINT), "new hint content present");
+        assert!(!result.contains("old hint text"), "old hint text replaced");
+        // Verify only one copy of start/end markers.
+        assert_eq!(result.matches(SECTION_START).count(), 1);
+        assert_eq!(result.matches(SECTION_END).count(), 1);
+    }
+
+    #[test]
+    fn upsert_managed_section_migrates_old_hint() {
+        let section = make_section();
+        let old_content = format!("# Header\n\n{CLAUDE_MD_HINT}\n\n# Footer\n");
+        let (result, action) = upsert_managed_section(&old_content, &section);
+        assert_eq!(action, "migrated to managed section");
+        assert!(result.contains("# Header"), "header preserved");
+        assert!(result.contains("# Footer"), "footer preserved");
+        assert!(result.contains(SECTION_START), "start marker added");
+        assert!(result.contains(SECTION_END), "end marker added");
+        assert!(result.contains(CLAUDE_MD_HINT), "hint content present");
+        // Should still appear exactly once.
+        assert_eq!(result.matches(CLAUDE_MD_HINT).count(), 1);
+    }
+
+    #[test]
+    fn upsert_managed_section_preserves_surrounding_content() {
+        let section = make_section();
+        let before = "# Top\n\nFirst paragraph.\n\n";
+        let after = "\n\n# Bottom\n\nLast paragraph.\n";
+        let old_content = format!("{before}{SECTION_START}\nstale\n{SECTION_END}{after}");
+        let (result, _action) = upsert_managed_section(&old_content, &section);
+        assert!(
+            result.starts_with("# Top\n"),
+            "leading content preserved exactly"
+        );
+        assert!(
+            result.contains("First paragraph."),
+            "first paragraph preserved"
+        );
+        assert!(
+            result.contains("Last paragraph."),
+            "last paragraph preserved"
+        );
+        assert!(!result.contains("stale"), "stale content replaced");
+    }
+
+    #[test]
+    fn upsert_managed_section_handles_missing_end_marker() {
+        // Only the start marker, no end — treat as absent and append.
+        let section = make_section();
+        let content = format!("# Existing\n\n{SECTION_START}\norphaned start\n");
+        let (result, action) = upsert_managed_section(&content, &section);
+        assert_eq!(action, "appended managed section");
+        // The fresh section is appended at the end.
+        assert!(result.contains(SECTION_END), "end marker now present");
+        assert!(result.contains(CLAUDE_MD_HINT), "hint content present");
     }
 
     #[test]

@@ -497,6 +497,14 @@ fn init_claude_creates_claude_md() {
         content.contains("hyalo"),
         ".claude/CLAUDE.md should contain hyalo hint; got: {content}"
     );
+    assert!(
+        content.contains("<!-- hyalo:start -->"),
+        ".claude/CLAUDE.md should contain start marker; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:end -->"),
+        ".claude/CLAUDE.md should contain end marker; got: {content}"
+    );
 }
 
 #[test]
@@ -528,10 +536,18 @@ fn init_claude_appends_to_existing_claude_md() {
         content.contains("Some existing content."),
         "original content should be preserved; got: {content}"
     );
-    // Hint must have been appended
+    // Hint must have been appended with markers
     assert!(
         content.contains("hyalo"),
         "hyalo hint should have been appended; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:start -->"),
+        "start marker should be present; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:end -->"),
+        "end marker should be present; got: {content}"
     );
 }
 
@@ -541,9 +557,10 @@ fn init_claude_no_duplicate_in_claude_md() {
     let claude_dir = tmp.path().join(".claude");
     fs::create_dir_all(&claude_dir).unwrap();
     let claude_md_path = claude_dir.join("CLAUDE.md");
-    // Pre-populate with the exact hint line
-    let original = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.\n";
-    fs::write(&claude_md_path, original).unwrap();
+    // Pre-populate with the marker-wrapped section (as a prior run would have written).
+    let hint = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
+    let original = format!("<!-- hyalo:start -->\n{hint}\n<!-- hyalo:end -->\n");
+    fs::write(&claude_md_path, &original).unwrap();
 
     let output = hyalo()
         .current_dir(tmp.path())
@@ -555,16 +572,135 @@ fn init_claude_no_duplicate_in_claude_md() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        stdout.contains("skipped"),
-        "expected 'skipped' when hint already present; got: {stdout}"
+        stdout.contains("updated"),
+        "expected 'updated' (replaced managed section) in stdout; got: {stdout}"
     );
 
-    // The file should still contain exactly one copy of the hint
+    // The file should contain exactly one copy of the hint and one pair of markers.
     let content = fs::read_to_string(&claude_md_path).unwrap();
     let occurrences = content.matches("hyalo --help").count();
     assert_eq!(
         occurrences, 1,
         "hint should appear exactly once; got {occurrences} times in: {content}"
+    );
+    assert_eq!(
+        content.matches("<!-- hyalo:start -->").count(),
+        1,
+        "start marker should appear exactly once; got: {content}"
+    );
+    assert_eq!(
+        content.matches("<!-- hyalo:end -->").count(),
+        1,
+        "end marker should appear exactly once; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_updates_managed_section_on_rerun() {
+    // Run init twice; verify the section is replaced (not duplicated) and
+    // surrounding content is preserved.
+    let tmp = TempDir::new().unwrap();
+    let claude_dir = tmp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let claude_md_path = claude_dir.join("CLAUDE.md");
+    let surrounding = "# Project Rules\n\nKeep these instructions.\n";
+    fs::write(&claude_md_path, surrounding).unwrap();
+
+    // First run — appends section.
+    let out1 = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+    let stderr1 = String::from_utf8_lossy(&out1.stderr);
+    assert!(out1.status.success(), "first run stderr: {stderr1}");
+
+    // Second run — should replace, not duplicate.
+    let out2 = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(out2.status.success(), "second run stderr: {stderr2}");
+    assert!(
+        stdout2.contains("updated"),
+        "second run should report 'updated'; got: {stdout2}"
+    );
+
+    let content = fs::read_to_string(&claude_md_path).unwrap();
+    // Surrounding content preserved.
+    assert!(
+        content.contains("Keep these instructions."),
+        "surrounding content should be preserved; got: {content}"
+    );
+    // Exactly one copy of the managed section.
+    assert_eq!(
+        content.matches("<!-- hyalo:start -->").count(),
+        1,
+        "start marker should appear exactly once; got: {content}"
+    );
+    assert_eq!(
+        content.matches("<!-- hyalo:end -->").count(),
+        1,
+        "end marker should appear exactly once; got: {content}"
+    );
+    assert_eq!(
+        content.matches("hyalo --help").count(),
+        1,
+        "hint should appear exactly once; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_migrates_old_hint_to_managed_section() {
+    // Pre-populate with just the old bare hint line (no markers), then run init.
+    // The hint should be wrapped in markers afterwards.
+    let tmp = TempDir::new().unwrap();
+    let claude_dir = tmp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let claude_md_path = claude_dir.join("CLAUDE.md");
+    let old_hint = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
+    let original = format!("# Header\n\n{old_hint}\n\n# Footer\n");
+    fs::write(&claude_md_path, &original).unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("updated"),
+        "expected 'updated' in stdout; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(&claude_md_path).unwrap();
+    assert!(
+        content.contains("# Header"),
+        "header preserved; got: {content}"
+    );
+    assert!(
+        content.contains("# Footer"),
+        "footer preserved; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:start -->"),
+        "start marker added; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:end -->"),
+        "end marker added; got: {content}"
+    );
+    // Hint should appear exactly once (now inside the managed section).
+    assert_eq!(
+        content.matches("hyalo --help").count(),
+        1,
+        "hint should appear exactly once; got: {content}"
     );
 }
 
