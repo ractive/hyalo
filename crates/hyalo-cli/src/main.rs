@@ -775,14 +775,15 @@ fn main() {
     // they don't exist on the subcommand Command node yet.  This is a known
     // clap limitation with `global = true` derive args.
     let raw_args: Vec<String> = std::env::args().collect();
-    let matches = match cmd.try_get_matches_from(raw_args.clone()) {
+    let matches = match cmd.try_get_matches_from(raw_args.iter().map(String::as_str)) {
         Ok(m) => m,
         Err(e) => {
-            // Before letting clap print its default error, check whether the
-            // user passed a subcommand name as a `--flag` (e.g. `--toggle`
-            // instead of `toggle`).  Use a fresh Cli::command() because `cmd`
-            // was consumed by try_get_matches_from.
-            if let Some(suggestion) =
+            // Only attempt subcommand suggestions when clap couldn't recognise a
+            // flag or subcommand — this avoids misleading tips for other error kinds.
+            if matches!(
+                e.kind(),
+                clap::error::ErrorKind::InvalidSubcommand | clap::error::ErrorKind::UnknownArgument
+            ) && let Some(suggestion) =
                 hyalo_cli::suggest::suggest_subcommand_correction(&raw_args, &Cli::command())
             {
                 eprintln!("{e}\n  tip: did you mean:\n\n    {suggestion}\n");
