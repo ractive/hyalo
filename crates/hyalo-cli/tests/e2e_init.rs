@@ -33,6 +33,7 @@ fn init_creates_hyalo_toml() {
 
 #[test]
 fn init_does_not_overwrite_existing_toml() {
+    // Without an explicit --dir flag, .hyalo.toml is skipped if it already exists.
     let tmp = TempDir::new().unwrap();
     let original = "dir = \"my-vault\"\n";
     fs::write(tmp.path().join(".hyalo.toml"), original).unwrap();
@@ -54,7 +55,34 @@ fn init_does_not_overwrite_existing_toml() {
     let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
     assert_eq!(
         content, original,
-        ".hyalo.toml should not have been modified"
+        ".hyalo.toml should not have been modified when no --dir given"
+    );
+}
+
+#[test]
+fn init_dir_flag_updates_existing_toml() {
+    // When --dir is explicitly given, .hyalo.toml is updated even if it already exists.
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--dir", "new-dir"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("updated"),
+        "expected 'updated' in stdout; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert_eq!(
+        content, "dir = \"new-dir\"\n",
+        ".hyalo.toml should have been updated to new-dir"
     );
 }
 
@@ -121,6 +149,44 @@ fn init_falls_back_to_dot_when_no_doc_dir() {
     );
 }
 
+#[test]
+fn init_smart_detection_picks_dir_with_most_md() {
+    let tmp = TempDir::new().unwrap();
+
+    // docs: 1 md file
+    fs::create_dir_all(tmp.path().join("docs")).unwrap();
+    fs::write(tmp.path().join("docs").join("a.md"), "# A").unwrap();
+
+    // knowledgebase: 3 md files (including nested)
+    fs::create_dir_all(tmp.path().join("knowledgebase").join("sub")).unwrap();
+    fs::write(tmp.path().join("knowledgebase").join("b.md"), "# B").unwrap();
+    fs::write(
+        tmp.path().join("knowledgebase").join("sub").join("c.md"),
+        "# C",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("knowledgebase").join("sub").join("d.md"),
+        "# D",
+    )
+    .unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        content.contains("dir = \"knowledgebase\""),
+        "should have picked knowledgebase (most .md files); got: {content}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // --claude flag: skill creation
 // ---------------------------------------------------------------------------
@@ -158,12 +224,13 @@ fn init_claude_creates_skill() {
 }
 
 #[test]
-fn init_claude_skips_existing_skill() {
+fn init_claude_overwrites_existing_skill() {
+    // Skills are always overwritten on re-run; summary says "updated".
     let tmp = TempDir::new().unwrap();
     let skill_dir = tmp.path().join(".claude").join("skills").join("hyalo");
     fs::create_dir_all(&skill_dir).unwrap();
     let skill_path = skill_dir.join("SKILL.md");
-    let original = "---\nname: custom\n---\n";
+    let original = "---\nname: custom\n---\nstale content\n";
     fs::write(&skill_path, original).unwrap();
 
     let output = hyalo()
@@ -176,13 +243,20 @@ fn init_claude_skips_existing_skill() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        stdout.contains("skipped"),
-        "expected 'skipped' in stdout for existing SKILL.md; got: {stdout}"
+        stdout.contains("updated"),
+        "expected 'updated' in stdout for overwritten SKILL.md; got: {stdout}"
     );
 
-    // Content should not have been overwritten
+    // Content should have been replaced with the canonical skill content
     let content = fs::read_to_string(&skill_path).unwrap();
-    assert_eq!(content, original);
+    assert_ne!(
+        content, original,
+        "SKILL.md should have been overwritten, not preserved"
+    );
+    assert!(
+        content.contains("name: hyalo"),
+        "overwritten SKILL.md should contain canonical name field; got: {content}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +299,8 @@ fn init_claude_creates_dream_skill() {
 }
 
 #[test]
-fn init_claude_skips_existing_dream_skill() {
+fn init_claude_overwrites_existing_dream_skill() {
+    // Dream skill is always overwritten on re-run; summary says "updated".
     let tmp = TempDir::new().unwrap();
     let dream_skill_dir = tmp
         .path()
@@ -234,7 +309,7 @@ fn init_claude_skips_existing_dream_skill() {
         .join("hyalo-dream");
     fs::create_dir_all(&dream_skill_dir).unwrap();
     let dream_skill_path = dream_skill_dir.join("SKILL.md");
-    let original = "---\nname: custom-dream\n---\n";
+    let original = "---\nname: custom-dream\n---\nstale content\n";
     fs::write(&dream_skill_path, original).unwrap();
 
     let output = hyalo()
@@ -247,14 +322,150 @@ fn init_claude_skips_existing_dream_skill() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        stdout.contains("skipped"),
-        "expected 'skipped' for existing dream SKILL.md; got: {stdout}"
+        stdout.contains("updated"),
+        "expected 'updated' for overwritten dream SKILL.md; got: {stdout}"
     );
 
     let content = fs::read_to_string(&dream_skill_path).unwrap();
-    assert_eq!(
+    assert_ne!(
         content, original,
-        "dream SKILL.md should not be overwritten"
+        "dream SKILL.md should have been overwritten, not preserved"
+    );
+    assert!(
+        content.contains("name: hyalo-dream"),
+        "overwritten dream SKILL.md should contain canonical name field; got: {content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --claude flag: knowledgebase rule creation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_claude_creates_rule() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let rule_path = tmp
+        .path()
+        .join(".claude")
+        .join("rules")
+        .join("knowledgebase.md");
+    assert!(
+        rule_path.exists(),
+        ".claude/rules/knowledgebase.md should have been created"
+    );
+
+    let content = fs::read_to_string(&rule_path).unwrap();
+    assert!(
+        content.contains("paths:"),
+        "rule should contain a paths: key; got: {content}"
+    );
+    // Should not contain the template placeholder
+    assert!(
+        !content.contains("hyalo-knowledgebase/**"),
+        "rule should have the placeholder replaced; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_overwrites_existing_rule() {
+    // Rule is always overwritten on re-run; summary says "updated".
+    let tmp = TempDir::new().unwrap();
+    let rules_dir = tmp.path().join(".claude").join("rules");
+    fs::create_dir_all(&rules_dir).unwrap();
+    let rule_path = rules_dir.join("knowledgebase.md");
+    let original = "---\npaths:\n  - \"old-vault/**\"\n---\nold content\n";
+    fs::write(&rule_path, original).unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("updated"),
+        "expected 'updated' for overwritten rule; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(&rule_path).unwrap();
+    assert_ne!(
+        content, original,
+        "rule should have been overwritten, not preserved"
+    );
+}
+
+#[test]
+fn init_claude_rule_uses_detected_dir() {
+    // When a docs/ dir has .md files, the rule paths should reference docs/**.
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir_all(tmp.path().join("docs")).unwrap();
+    fs::write(tmp.path().join("docs").join("note.md"), "# Hello").unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let rule_path = tmp
+        .path()
+        .join(".claude")
+        .join("rules")
+        .join("knowledgebase.md");
+    let content = fs::read_to_string(&rule_path).unwrap();
+    assert!(
+        content.contains("docs/**"),
+        "rule paths should reference docs/**; got: {content}"
+    );
+    assert!(
+        !content.contains("hyalo-knowledgebase/**"),
+        "rule should not contain the placeholder; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_rule_uses_explicit_dir() {
+    // --dir my-vault should be reflected in the rule paths.
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude", "--dir", "my-vault"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let rule_path = tmp
+        .path()
+        .join(".claude")
+        .join("rules")
+        .join("knowledgebase.md");
+    let content = fs::read_to_string(&rule_path).unwrap();
+    assert!(
+        content.contains("my-vault/**"),
+        "rule paths should reference my-vault/**; got: {content}"
+    );
+    assert!(
+        !content.contains("hyalo-knowledgebase/**"),
+        "rule should not contain the placeholder; got: {content}"
     );
 }
 
@@ -285,6 +496,14 @@ fn init_claude_creates_claude_md() {
     assert!(
         content.contains("hyalo"),
         ".claude/CLAUDE.md should contain hyalo hint; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:start -->"),
+        ".claude/CLAUDE.md should contain start marker; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:end -->"),
+        ".claude/CLAUDE.md should contain end marker; got: {content}"
     );
 }
 
@@ -317,10 +536,18 @@ fn init_claude_appends_to_existing_claude_md() {
         content.contains("Some existing content."),
         "original content should be preserved; got: {content}"
     );
-    // Hint must have been appended
+    // Hint must have been appended with markers
     assert!(
         content.contains("hyalo"),
         "hyalo hint should have been appended; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:start -->"),
+        "start marker should be present; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:end -->"),
+        "end marker should be present; got: {content}"
     );
 }
 
@@ -330,9 +557,10 @@ fn init_claude_no_duplicate_in_claude_md() {
     let claude_dir = tmp.path().join(".claude");
     fs::create_dir_all(&claude_dir).unwrap();
     let claude_md_path = claude_dir.join("CLAUDE.md");
-    // Pre-populate with the exact hint line
-    let original = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.\n";
-    fs::write(&claude_md_path, original).unwrap();
+    // Pre-populate with the marker-wrapped section (as a prior run would have written).
+    let hint = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
+    let original = format!("<!-- hyalo:start -->\n{hint}\n<!-- hyalo:end -->\n");
+    fs::write(&claude_md_path, &original).unwrap();
 
     let output = hyalo()
         .current_dir(tmp.path())
@@ -344,16 +572,135 @@ fn init_claude_no_duplicate_in_claude_md() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        stdout.contains("skipped"),
-        "expected 'skipped' when hint already present; got: {stdout}"
+        stdout.contains("updated"),
+        "expected 'updated' (replaced managed section) in stdout; got: {stdout}"
     );
 
-    // The file should still contain exactly one copy of the hint
+    // The file should contain exactly one copy of the hint and one pair of markers.
     let content = fs::read_to_string(&claude_md_path).unwrap();
     let occurrences = content.matches("hyalo --help").count();
     assert_eq!(
         occurrences, 1,
         "hint should appear exactly once; got {occurrences} times in: {content}"
+    );
+    assert_eq!(
+        content.matches("<!-- hyalo:start -->").count(),
+        1,
+        "start marker should appear exactly once; got: {content}"
+    );
+    assert_eq!(
+        content.matches("<!-- hyalo:end -->").count(),
+        1,
+        "end marker should appear exactly once; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_updates_managed_section_on_rerun() {
+    // Run init twice; verify the section is replaced (not duplicated) and
+    // surrounding content is preserved.
+    let tmp = TempDir::new().unwrap();
+    let claude_dir = tmp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let claude_md_path = claude_dir.join("CLAUDE.md");
+    let surrounding = "# Project Rules\n\nKeep these instructions.\n";
+    fs::write(&claude_md_path, surrounding).unwrap();
+
+    // First run — appends section.
+    let out1 = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+    let stderr1 = String::from_utf8_lossy(&out1.stderr);
+    assert!(out1.status.success(), "first run stderr: {stderr1}");
+
+    // Second run — should replace, not duplicate.
+    let out2 = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+    let stdout2 = String::from_utf8_lossy(&out2.stdout);
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(out2.status.success(), "second run stderr: {stderr2}");
+    assert!(
+        stdout2.contains("updated"),
+        "second run should report 'updated'; got: {stdout2}"
+    );
+
+    let content = fs::read_to_string(&claude_md_path).unwrap();
+    // Surrounding content preserved.
+    assert!(
+        content.contains("Keep these instructions."),
+        "surrounding content should be preserved; got: {content}"
+    );
+    // Exactly one copy of the managed section.
+    assert_eq!(
+        content.matches("<!-- hyalo:start -->").count(),
+        1,
+        "start marker should appear exactly once; got: {content}"
+    );
+    assert_eq!(
+        content.matches("<!-- hyalo:end -->").count(),
+        1,
+        "end marker should appear exactly once; got: {content}"
+    );
+    assert_eq!(
+        content.matches("hyalo --help").count(),
+        1,
+        "hint should appear exactly once; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_migrates_old_hint_to_managed_section() {
+    // Pre-populate with just the old bare hint line (no markers), then run init.
+    // The hint should be wrapped in markers afterwards.
+    let tmp = TempDir::new().unwrap();
+    let claude_dir = tmp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let claude_md_path = claude_dir.join("CLAUDE.md");
+    let old_hint = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
+    let original = format!("# Header\n\n{old_hint}\n\n# Footer\n");
+    fs::write(&claude_md_path, &original).unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("updated"),
+        "expected 'updated' in stdout; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(&claude_md_path).unwrap();
+    assert!(
+        content.contains("# Header"),
+        "header preserved; got: {content}"
+    );
+    assert!(
+        content.contains("# Footer"),
+        "footer preserved; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:start -->"),
+        "start marker added; got: {content}"
+    );
+    assert!(
+        content.contains("<!-- hyalo:end -->"),
+        "end marker added; got: {content}"
+    );
+    // Hint should appear exactly once (now inside the managed section).
+    assert_eq!(
+        content.matches("hyalo --help").count(),
+        1,
+        "hint should appear exactly once; got: {content}"
     );
 }
 
@@ -375,7 +722,7 @@ fn init_prints_summary_of_actions() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(!stdout.is_empty(), "stdout should contain a summary");
-    // Should mention the toml and the skill at minimum
+    // Should mention the toml and the skills at minimum
     assert!(
         stdout.contains(".hyalo.toml"),
         "summary should mention .hyalo.toml; got: {stdout}"
@@ -391,5 +738,24 @@ fn init_prints_summary_of_actions() {
     assert!(
         stdout.contains("CLAUDE.md"),
         "summary should mention CLAUDE.md; got: {stdout}"
+    );
+}
+
+#[test]
+fn init_summary_mentions_rule() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("rules/knowledgebase.md"),
+        "summary should mention .claude/rules/knowledgebase.md; got: {stdout}"
     );
 }
