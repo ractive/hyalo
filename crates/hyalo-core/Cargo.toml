@@ -1,9 +1,13 @@
 [package]
 name = "hyalo-core"
+description = "Core library for hyalo — frontmatter parsing, querying, and mutation for Markdown files"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["yaml", "frontmatter", "markdown", "parsing"]
+categories = ["parser-implementations"]
 
 [dependencies]
 anyhow = { workspace = true }

@@ -24,10 +24,10 @@ scoop install hyalo
 winget install ractive.hyalo
 ```
 
-### Cargo (Intel Mac & other platforms)
+### Cargo (from crates.io)
 
 ```sh
-cargo install --git https://github.com/ractive/hyalo.git --locked
+cargo install hyalo-cli
 ```
 
 > **Intel Mac users:** Homebrew bottles and pre-built binaries are only provided for Apple Silicon. If you're on an Intel Mac, use `cargo install` above.
