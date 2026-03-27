@@ -5,8 +5,9 @@
 //! from a live filesystem scan ([`ScannedIndex`]) or a serialized snapshot.
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -31,7 +32,7 @@ pub struct IndexEntry {
     /// ISO 8601 mtime string.
     pub modified: String,
     /// Raw frontmatter properties.
-    pub properties: BTreeMap<String, serde_json::Value>,
+    pub properties: IndexMap<String, serde_json::Value>,
     /// Extracted tags (from properties).
     pub tags: Vec<String>,
     /// Document outline sections.

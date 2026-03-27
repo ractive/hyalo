@@ -68,8 +68,8 @@ pub fn parse_kv_optional(s: &str) -> Result<(&str, Option<&str>), String> {
 /// Remove scalar property `name` from `props` (in memory, no I/O).
 ///
 /// Returns `true` if the key was present and removed, `false` if absent.
-fn remove_key_in_memory(props: &mut std::collections::BTreeMap<String, Value>, name: &str) -> bool {
-    props.remove(name).is_some()
+fn remove_key_in_memory(props: &mut indexmap::IndexMap<String, Value>, name: &str) -> bool {
+    props.shift_remove(name).is_some()
 }
 
 /// Remove value `target` from property `name` in `props` (in memory, no I/O).
@@ -82,7 +82,7 @@ fn remove_key_in_memory(props: &mut std::collections::BTreeMap<String, Value>, n
 ///
 /// Returns `true` if a mutation occurred, `false` otherwise.
 fn remove_value_in_memory(
-    props: &mut std::collections::BTreeMap<String, Value>,
+    props: &mut indexmap::IndexMap<String, Value>,
     name: &str,
     target: &str,
 ) -> bool {
@@ -104,7 +104,7 @@ fn remove_value_in_memory(
         let after = seq.len();
         if after < before {
             if after == 0 {
-                props.remove(name);
+                props.shift_remove(name);
             }
             return true;
         }
@@ -116,7 +116,7 @@ fn remove_value_in_memory(
         None => false,
         Some(Value::String(s)) => {
             if s.eq_ignore_ascii_case(target) {
-                props.remove(name);
+                props.shift_remove(name);
                 true
             } else {
                 false
@@ -124,7 +124,7 @@ fn remove_value_in_memory(
         }
         Some(Value::Number(n)) => {
             if n.to_string().eq_ignore_ascii_case(target) {
-                props.remove(name);
+                props.shift_remove(name);
                 true
             } else {
                 false
@@ -132,7 +132,7 @@ fn remove_value_in_memory(
         }
         Some(Value::Bool(b)) => {
             if b.to_string().eq_ignore_ascii_case(target) {
-                props.remove(name);
+                props.shift_remove(name);
                 true
             } else {
                 false
@@ -148,7 +148,7 @@ fn remove_value_in_memory(
 /// Remove `tag` from the `tags` list in `props` (in memory, no I/O).
 ///
 /// Returns `true` if the tag was present and removed.
-fn remove_tag_in_memory(props: &mut std::collections::BTreeMap<String, Value>, tag: &str) -> bool {
+fn remove_tag_in_memory(props: &mut indexmap::IndexMap<String, Value>, tag: &str) -> bool {
     remove_value_in_memory(props, "tags", tag)
 }
 

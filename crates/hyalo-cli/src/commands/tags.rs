@@ -244,7 +244,7 @@ pub fn tags_rename(
             _ => {}
         }
         if remove_tags_key {
-            props.remove("tags");
+            props.shift_remove("tags");
         }
 
         frontmatter::write_frontmatter(full_path, &props)?;
@@ -286,6 +286,7 @@ pub fn tags_rename(
 mod tests {
     use super::*;
     use hyalo_core::filter::tag_matches;
+    use indexmap::IndexMap;
     use serde_json::Value;
     use std::fs;
 
@@ -370,7 +371,7 @@ mod tests {
 
     // --- Tag extraction ---
 
-    fn make_props(yaml: &str) -> BTreeMap<String, Value> {
+    fn make_props(yaml: &str) -> IndexMap<String, Value> {
         serde_saphyr::from_str_with_options(yaml, hyalo_core::frontmatter::hyalo_options()).unwrap()
     }
 

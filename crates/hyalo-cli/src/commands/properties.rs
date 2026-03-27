@@ -160,7 +160,7 @@ pub fn properties_rename(
         };
 
         // Source key not present -- skip
-        let Some(value) = props.remove(from) else {
+        let Some(value) = props.shift_remove(from) else {
             skipped.push(rel_path.clone());
             continue;
         };
