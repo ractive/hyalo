@@ -1,13 +1,13 @@
 ---
-title: "Improve `hyalo init` — overwrite, rules, smart dir detection"
-type: iteration
-date: 2026-03-26
-tags:
-  - cli
-  - init
-  - claude-code
-status: in-progress
 branch: iter-49/init-improvements
+date: 2026-03-26
+status: completed
+tags:
+- cli
+- init
+- claude-code
+title: Improve `hyalo init` — overwrite, rules, smart dir detection
+type: iteration
 ---
 
 ## Goal
