@@ -110,7 +110,7 @@ Persist:
 - common pitfalls and patterns
 
 Keep memory concise and practical.
-Use ./hyalo-knowledgebase for long-term memory.
+Use the knowledgebase directory configured in `.hyalo.toml` (`dir`) for long-term memory.
 
 # Persistent Agent Memory
 

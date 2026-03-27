@@ -759,3 +759,124 @@ fn init_summary_mentions_rule() {
         "summary should mention .claude/rules/knowledgebase.md; got: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Skill parameterization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_claude_dream_skill_parameterized_with_dir() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude", "--dir", "my-kb"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let dream_skill_path = tmp
+        .path()
+        .join(".claude")
+        .join("skills")
+        .join("hyalo-dream")
+        .join("SKILL.md");
+    let content = fs::read_to_string(&dream_skill_path).unwrap();
+
+    // Sentinel must have been replaced
+    assert!(
+        !content.contains("hyalo-knowledgebase"),
+        "dream SKILL.md should not contain sentinel after parameterization; got: {content}"
+    );
+    // Actual dir name must be present
+    assert!(
+        content.contains("my-kb"),
+        "dream SKILL.md should contain the configured dir 'my-kb'; got: {content}"
+    );
+}
+
+#[test]
+fn init_claude_hyalo_skill_has_no_sentinel() {
+    // The hyalo SKILL.md template doesn't currently use the sentinel — verify
+    // that parameterization is a safe no-op (no hyalo-knowledgebase leaks).
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init", "--claude", "--dir", "custom-docs"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let skill_path = tmp
+        .path()
+        .join(".claude")
+        .join("skills")
+        .join("hyalo")
+        .join("SKILL.md");
+    let content = fs::read_to_string(&skill_path).unwrap();
+    assert!(
+        !content.contains("hyalo-knowledgebase"),
+        "hyalo SKILL.md should not contain sentinel; got: {content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fuzzy directory auto-detection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_auto_detects_fuzzy_knowledgebase_dir() {
+    let tmp = TempDir::new().unwrap();
+
+    // "my-knowledgebase" contains "knowledgebase" → should be auto-detected
+    fs::create_dir_all(tmp.path().join("my-knowledgebase")).unwrap();
+    fs::write(
+        tmp.path().join("my-knowledgebase").join("index.md"),
+        "# Index",
+    )
+    .unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        content.contains("my-knowledgebase"),
+        "should auto-detect 'my-knowledgebase'; stdout: {stdout}, toml: {content}"
+    );
+}
+
+#[test]
+fn init_auto_detects_fuzzy_wiki_dir() {
+    let tmp = TempDir::new().unwrap();
+
+    fs::create_dir_all(tmp.path().join("project-wiki")).unwrap();
+    fs::write(tmp.path().join("project-wiki").join("home.md"), "# Home").unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["init"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        content.contains("project-wiki"),
+        "should auto-detect 'project-wiki'; toml: {content}"
+    );
+}
