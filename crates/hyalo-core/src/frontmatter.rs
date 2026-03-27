@@ -53,6 +53,12 @@ fn detect_list_indent_style(yaml: &str) -> bool {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
 
+        // Skip blank lines and comment-only lines — they don't reset the
+        // preceding-key state (e.g. `tags:\n  # note\n  - a`).
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
         // Check if this line is a sequence indicator
         if trimmed.starts_with("- ") || trimmed == "-" {
             if let Some(key_indent) = prev_key_indent {
@@ -72,9 +78,9 @@ fn detect_list_indent_style(yaml: &str) -> bool {
                 && !before_colon.starts_with('-')
                 && (trimmed.len() == colon_pos + 1 || trimmed.as_bytes()[colon_pos + 1] == b' ')
             {
-                // If the value after `:` is empty, next line might be a sequence
+                // If the value after `:` is empty or only a comment, next line might be a sequence
                 let after_colon = trimmed[colon_pos + 1..].trim();
-                if after_colon.is_empty() {
+                if after_colon.is_empty() || after_colon.starts_with('#') {
                     prev_key_indent = Some(indent);
                     continue;
                 }
@@ -1245,6 +1251,33 @@ Body.
         assert!(
             !detect_list_indent_style(yaml),
             "indented `  - item` should be detected as non-compact"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_with_comment_after_key() {
+        let yaml = "tags: # my tags\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "comment after key colon should still detect indented style"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_with_blank_line_between() {
+        let yaml = "tags:\n\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "blank line between key and sequence should not break detection"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_with_comment_line_between() {
+        let yaml = "tags:\n  # note\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "comment line between key and sequence should not break detection"
         );
     }
 

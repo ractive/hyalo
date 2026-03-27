@@ -114,7 +114,7 @@ pub struct RenamePropertyResult {
 
 /// Rename a property key across all matched files.
 ///
-/// - Preserves value and type (moves the `Value` in the BTreeMap)
+/// - Preserves value and type (moves the `Value` in the IndexMap)
 /// - Skips files where the source key is absent (reported in `skipped`)
 /// - Skips files where the target key already exists (reported in `conflicts`)
 pub fn properties_rename(
