@@ -462,10 +462,9 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
             } else {
                 let f: f64 = raw.parse().context("value is not a valid number")?;
                 anyhow::ensure!(f.is_finite(), "value is not a finite number");
-                Ok(Value::Number(
-                    serde_json::Number::from_f64(f)
-                        .expect("finite f64 must produce a valid JSON number"),
-                ))
+                serde_json::Number::from_f64(f)
+                    .map(Value::Number)
+                    .ok_or_else(|| anyhow::anyhow!("value is not a finite number"))
             }
         }
         Some("checkbox") => {
@@ -510,9 +509,8 @@ fn infer_value(raw: &str) -> Value {
     if let Ok(f) = raw.parse::<f64>()
         && f.is_finite()
     {
-        return Value::Number(
-            serde_json::Number::from_f64(f).expect("finite f64 must produce a valid JSON number"),
-        );
+        return serde_json::Number::from_f64(f)
+            .map_or_else(|| Value::String(raw.to_owned()), Value::Number);
     }
     // Try bool
     match raw {
@@ -1024,13 +1022,11 @@ Body.
     #[test]
     fn rejects_duplicate_keys() {
         let content = "---\ntitle: First\ntitle: Second\n---\nBody\n";
-        let err = Document::parse(content);
-        assert!(err.is_err(), "duplicate keys should be rejected");
+        let err = Document::parse(content).unwrap_err();
+        let chain = format!("{err:?}").to_lowercase();
         assert!(
-            format!("{:?}", err.unwrap_err())
-                .to_lowercase()
-                .contains("duplicate"),
-            "error should mention duplicate"
+            chain.contains("duplicate"),
+            "error chain should mention duplicate, got: {err:?}"
         );
     }
 
