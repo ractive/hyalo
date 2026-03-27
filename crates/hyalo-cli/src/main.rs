@@ -204,7 +204,8 @@ struct Cli {
 
     /// Apply a jq filter expression to the JSON output of any command.
     /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
-    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'
+    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'.
+    /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
     jq: Option<String>,
 

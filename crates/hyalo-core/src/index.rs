@@ -7,6 +7,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -374,10 +375,20 @@ fn write_snapshot(
         graph: index.link_graph().clone(),
     };
     let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-    let tmp_path = path.with_extension("hyalo-index.tmp");
-    std::fs::write(&tmp_path, &bytes)
-        .with_context(|| format!("failed to write temp index: {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, path)
+    // Use a kernel-assigned temp-file name in the same directory as the
+    // target to avoid a predictable path that could be exploited via a
+    // pre-created symlink (symlink-substitution attack).  Placing the temp
+    // file in the same directory as `path` ensures the subsequent atomic
+    // rename stays on the same filesystem.
+    let parent = path
+        .parent()
+        .context("index path has no parent directory")?;
+    let mut tmp =
+        tempfile::NamedTempFile::new_in(parent).context("failed to create temp file for index")?;
+    tmp.write_all(&bytes)
+        .context("failed to write temp index")?;
+    tmp.persist(path)
+        .map_err(|e| e.error)
         .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
     Ok(())
 }
@@ -404,6 +415,14 @@ impl VaultIndex for SnapshotIndex {
 fn is_pid_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
+        // A tampered snapshot could carry a PID that exceeds `i32::MAX`.  On
+        // platforms where `pid_t` is `i32` the cast would wrap, potentially
+        // targeting a real process and blocking stale-index cleanup.  Treat
+        // any out-of-range PID as "not alive" so the stale index is removed.
+        if pid > i32::MAX as u32 {
+            return false;
+        }
+
         // SAFETY: kill(pid, 0) sends signal 0, which is a pure existence check —
         // no signal is actually delivered. The only side effect is updating errno.
         let res = unsafe { libc::kill(pid as libc::pid_t, 0) };

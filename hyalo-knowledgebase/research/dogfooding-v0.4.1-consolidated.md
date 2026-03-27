@@ -42,7 +42,7 @@ VS Code Docs (339 files): summary 0.046s, find 0.082s, backlinks 0.041s.
 ### CRITICAL
 
 **BUG: `mv` leaks `--dir` value into absolute-path link rewrites**
-When links use root-absolute paths (`/graphql/reference/objects`) and `--dir` is relative (`../docs/content`), the rewriter produces `/../docs/content/graphql/reference/all-objects`. With absolute `--dir`: `//Users/james/devel/docs/content/...`. Only `--dir docs` from the parent works. **This corrupts files.** Root cause: site_prefix derivation from raw `--dir` string.
+When links use root-absolute paths (`/graphql/reference/objects`) and `--dir` is relative (`../docs/content`), the rewriter produces `/../docs/content/graphql/reference/all-objects`. With absolute `--dir`: `/~/devel/docs/content/...`. Only `--dir docs` from the parent works. **This corrupts files.** Root cause: site_prefix derivation from raw `--dir` string.
 
 ### HIGH
 

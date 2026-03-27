@@ -34,6 +34,15 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
 /// Returns the full path under `dir` and the normalized relative path (for display).
 /// Rejects absolute paths and `..` segments to prevent escaping the base directory.
 pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), FileResolveError> {
+    // Reject null bytes before any further processing.  A null byte in the
+    // path could bypass the `.md` extension check on some platforms because
+    // the OS treats the string as ending at the first `\0`.
+    if path_arg.contains('\0') {
+        return Err(FileResolveError::NotFound {
+            path: path_arg.to_owned(),
+        });
+    }
+
     let normalized = normalize_path(path_arg);
 
     // Reject path traversal attempts
@@ -111,7 +120,7 @@ pub fn canonicalize_vault_dir(dir: &Path) -> Result<PathBuf> {
 /// - `Ok(true)`  — `full` is within the vault
 /// - `Ok(false)` — `full` resolves outside the vault boundary
 /// - `Err(_)`    — `full` could not be canonicalized (permission error, symlink loop, etc.)
-fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
+pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
     let canonical_full = dunce::canonicalize(full)
         .with_context(|| format!("failed to canonicalize path: {}", full.display()))?;
     Ok(canonical_full.starts_with(canonical_dir))
@@ -1003,5 +1012,21 @@ mod tests {
         let (path, rel) = resolve_file(vault.path(), "alias/real.md").unwrap();
         assert!(path.is_file());
         assert_eq!(rel, "alias/real.md");
+    }
+
+    #[test]
+    fn resolve_file_rejects_null_byte_in_path() {
+        let vault = tempfile::tempdir().unwrap();
+        // A null byte must be rejected before the `.md` check so that it
+        // cannot be used to bypass the extension validation on any platform.
+        let err = resolve_file(vault.path(), "notes/file\0.md").unwrap_err();
+        assert!(matches!(err, FileResolveError::NotFound { .. }));
+    }
+
+    #[test]
+    fn resolve_file_rejects_null_byte_only_path() {
+        let vault = tempfile::tempdir().unwrap();
+        let err = resolve_file(vault.path(), "\0").unwrap_err();
+        assert!(matches!(err, FileResolveError::NotFound { .. }));
     }
 }

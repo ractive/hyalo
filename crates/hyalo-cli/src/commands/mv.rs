@@ -205,7 +205,7 @@ fn execute_mv(dir: &Path, old_rel: &str, new_rel: &str, plans: &[RewritePlan]) -
         .with_context(|| format!("failed to move {} to {}", src.display(), dst.display()))?;
 
     // Apply link rewrites
-    link_rewrite::execute_plans(plans)?;
+    link_rewrite::execute_plans(dir, plans)?;
 
     Ok(())
 }

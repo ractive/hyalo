@@ -15,17 +15,17 @@ Tested hyalo v0.4.1 with four different ways of specifying the target directory,
 
 ## Test Repos
 
-- **GitHub Docs** (`/Users/james/devel/docs/content`): 3520 files, absolute links like `/organizations/...`
-- **VS Code Docs** (`/Users/james/devel/vscode-docs/docs`): 339 files, absolute links like `/docs/azure/...`
+- **GitHub Docs** (`~/devel/docs/content`): 3520 files, absolute links like `/organizations/...`
+- **VS Code Docs** (`~/devel/vscode-docs/docs`): 339 files, absolute links like `/docs/azure/...`
 
 ## Four Invocation Styles
 
 | Style | CWD | --dir value |
 |-------|-----|-------------|
-| 1 | `/Users/james/devel/hyalo` | `../vscode-docs/docs` (relative) |
-| 2 | `/Users/james/devel/vscode-docs/docs` | (none, uses CWD) |
-| 3 | `/tmp` | `/Users/james/devel/vscode-docs/docs` (absolute) |
-| 4 | `/Users/james/devel/vscode-docs` | `docs` (subfolder name) |
+| 1 | `~/devel/hyalo` | `../vscode-docs/docs` (relative) |
+| 2 | `~/devel/vscode-docs/docs` | (none, uses CWD) |
+| 3 | `/tmp` | `~/devel/vscode-docs/docs` (absolute) |
+| 4 | `~/devel/vscode-docs` | `docs` (subfolder name) |
 
 ## Results Summary
 
@@ -95,7 +95,7 @@ let site_prefix_owned = {
 
 - `--dir docs` yields `site_prefix = Some("docs")` -- strips `/docs/` from links, resolution works
 - `--dir ../vscode-docs/docs` yields `site_prefix = Some("../vscode-docs/docs")` -- can never match `/docs/`, fails
-- `--dir /Users/james/.../docs` yields `site_prefix = Some("/Users/james/.../docs")` -- same problem
+- `--dir ~/.../docs` yields `site_prefix = Some("~/.../docs")` -- same problem
 - No `--dir` (CWD is the dir) yields `site_prefix = None` -- no stripping attempted
 
 The site_prefix derivation only works when `--dir` is a bare subfolder name that happens to match the prefix in the links. Any path with separators (relative or absolute) breaks it.

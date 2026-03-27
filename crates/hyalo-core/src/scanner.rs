@@ -470,11 +470,19 @@ pub fn scan_reader_multi<R: BufRead>(
 
     loop {
         buf.clear();
-        let n = reader.read_line(&mut buf).context("failed to read line")?;
+        let (n, truncated) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)
+            .context("failed to read line")?;
         if n == 0 {
             break;
         }
         line_num += 1;
+        if truncated {
+            // Line exceeded the per-line byte limit — skip it entirely to
+            // prevent OOM on files with no newlines (e.g. minified HTML/JSON
+            // accidentally placed in the vault). The line counter still
+            // advances so that downstream line numbers remain correct.
+            continue;
+        }
         let line = buf.trim_end_matches(['\n', '\r']);
 
         dispatch_body_line(
@@ -491,6 +499,125 @@ pub fn scan_reader_multi<R: BufRead>(
     }
 
     Ok(())
+}
+
+/// Per-line byte ceiling for body scanning.
+///
+/// Lines longer than this are skipped (the line counter still advances).
+/// 1 MiB is ample for any real Markdown line; files with no newlines (e.g.
+/// accidentally-added minified blobs) would otherwise exhaust memory.
+const MAX_BODY_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
+
+/// Read one newline-terminated line into `buf`, but stop after `limit` bytes.
+///
+/// Returns `(bytes_consumed, truncated)`.  When `truncated` is `true` the
+/// reader is positioned just after where the logical line ended (i.e. excess
+/// bytes are drained until the next `\n` or EOF), and the caller should treat
+/// the line as skipped.
+fn read_line_capped<R: BufRead>(
+    reader: &mut R,
+    buf: &mut String,
+    limit: usize,
+) -> std::io::Result<(usize, bool)> {
+    let mut total = 0usize;
+    loop {
+        // Inspect the internal buffer to find a newline and measure how many
+        // bytes are available.  We extract the indices we need *before*
+        // releasing the borrow so that we can then call `consume`.
+        let (newline_pos, chunk_len) = loop {
+            match reader.fill_buf() {
+                Ok([]) => return Ok((total, false)),
+                Ok(b) => {
+                    let nl = b.iter().position(|&byte| byte == b'\n');
+                    let len = b.len();
+                    break (nl, len);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        };
+
+        // How many bytes we will consume from the reader this iteration.
+        let consume = match newline_pos {
+            Some(pos) => pos + 1, // include the '\n'
+            None => chunk_len,
+        };
+
+        if buf.len() >= limit {
+            // Already over quota — just drain.
+            reader.consume(consume);
+            total += consume;
+            if newline_pos.is_some() {
+                return Ok((total, true));
+            }
+            drain_until_newline(reader)?;
+            return Ok((total, true));
+        }
+
+        // Within quota: copy up to `to_copy` bytes into a temporary Vec so we
+        // can release the `fill_buf` borrow before calling `consume`.
+        let remaining_quota = limit - buf.len();
+        let to_copy = consume.min(remaining_quota);
+
+        // Copy the bytes out while the immutable borrow is still live.
+        let chunk: Vec<u8> = {
+            let available = reader
+                .fill_buf()
+                .expect("fill_buf already succeeded above; cannot fail here");
+            available[..to_copy].to_vec()
+        };
+        // Now release the borrow and advance the reader.
+        reader.consume(consume);
+        total += consume;
+
+        // Validate UTF-8; treat invalid bytes as a truncated/skipped line.
+        match std::str::from_utf8(&chunk) {
+            Ok(s) => buf.push_str(s),
+            Err(_) => {
+                if newline_pos.is_none() {
+                    drain_until_newline(reader)?;
+                }
+                return Ok((total, true));
+            }
+        }
+
+        let truncated = to_copy < consume;
+        if newline_pos.is_some() {
+            // The newline was within the consumed range — line is complete.
+            // If quota was hit before the newline, we already consumed past it,
+            // so no further draining is needed.
+            return Ok((total, truncated));
+        }
+        if truncated {
+            // Quota hit on a chunk with no newline — drain the rest of the line.
+            drain_until_newline(reader)?;
+            return Ok((total, true));
+        }
+    }
+}
+
+/// Consume bytes from `reader` until (and including) a `\n`, or until EOF.
+fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            return Ok(());
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                reader.consume(pos + 1);
+                return Ok(());
+            }
+            None => {
+                let n = available.len();
+                reader.consume(n);
+            }
+        }
+    }
 }
 
 /// Dispatch a single body line to active visitors, handling code fence state.
@@ -1535,5 +1662,42 @@ code only
         // `%%%` = opening `%%` + lone `%` — no matching close, treated as literal.
         let result = strip_inline_comments("a %%% b");
         assert_eq!(result.as_ref(), "a %%% b");
+    }
+
+    // --- per-line byte limit tests ---
+
+    #[test]
+    fn body_line_limit_skips_oversized_line() {
+        // Build an input where the second line is oversized (no newline) and
+        // normal lines surround it.
+        let normal_before = "before oversized line\n";
+        let huge: String = "x".repeat(MAX_BODY_LINE_BYTES + 1);
+        let normal_after = "\nafter oversized line\n";
+        let input = format!("{normal_before}{huge}{normal_after}");
+
+        let lines = collect_lines(&input);
+        // Only the normal lines should be visible; the huge line is skipped.
+        assert!(
+            lines.iter().all(|(t, _)| t != &huge),
+            "oversized line must be dropped"
+        );
+        assert!(
+            lines.iter().any(|(t, _)| t == "before oversized line"),
+            "normal line before must survive"
+        );
+        assert!(
+            lines.iter().any(|(t, _)| t == "after oversized line"),
+            "normal line after must survive"
+        );
+    }
+
+    #[test]
+    fn body_line_limit_exact_boundary_passes() {
+        // A line exactly at the limit (without newline) should be accepted.
+        let exactly: String = "y".repeat(MAX_BODY_LINE_BYTES);
+        let input = format!("{exactly}\nnext\n");
+        let lines = collect_lines(&input);
+        assert_eq!(lines[0].0, exactly, "line at limit must pass through");
+        assert_eq!(lines[1].0, "next");
     }
 }

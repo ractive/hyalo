@@ -13,7 +13,7 @@ type: research
 
 - **GitHub Docs** (`../docs/content`): 3520 markdown files
 - **VS Code Docs** (`cd ../vscode-docs && hyalo --dir docs ...`): ~600 markdown files
-- hyalo v0.4.1 installed at `/Users/james/.cargo/bin/hyalo`
+- hyalo v0.4.1 installed at `~/.cargo/bin/hyalo`
 
 ## Backlinks Command
 
@@ -83,7 +83,7 @@ hyalo --dir ../docs/content mv --file graphql/reference/objects.md \
 **Expected**: `[text](/graphql/reference/all-objects#section)`
 **Actual**: `[text](/../docs/content/graphql/reference/all-objects#section)`
 
-The `--dir` value (`../docs/content`) leaks into the rewritten link path. With an absolute `--dir` path it's even worse: `[text](//Users/james/devel/docs/content/graphql/reference/all-objects#section)`.
+The `--dir` value (`../docs/content`) leaks into the rewritten link path. With an absolute `--dir` path it's even worse: `[text](/~/devel/docs/content/graphql/reference/all-objects#section)`.
 
 This bug does NOT manifest when the `--dir` value appears as a prefix in the links. VS Code Docs links use `/docs/configure/settings.md` with `--dir docs`, so the `/docs/` prefix matches and rewrites correctly.
 
