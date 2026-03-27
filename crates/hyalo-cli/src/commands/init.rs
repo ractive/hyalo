@@ -32,7 +32,7 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 /// - `dir`: explicit value for the `dir` key in `.hyalo.toml`; when `None` the
 ///   function auto-detects a common doc directory.
 /// - `claude`: when `true`, also installs the hyalo and hyalo-dream skills and
-///   appends a hint line to `.claude/CLAUDE.md`.
+///   writes a managed section to `.claude/CLAUDE.md`.
 pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
     run_init_in(dir, claude, &cwd)
@@ -67,11 +67,26 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
                 Ok(mut table) => {
                     if let Some(map) = table.as_table_mut() {
                         map.insert("dir".to_owned(), TomlValue::String(dir_value.clone()));
-                    }
-                    // Serialise back; toml::to_string always produces valid TOML.
-                    match toml::to_string(&table) {
-                        Ok(s) => s,
-                        Err(_) => format!("dir = {:?}\n", dir_value),
+                        // Serialise back; toml::to_string always produces valid TOML.
+                        match toml::to_string(&table) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                writeln!(
+                                    summary,
+                                    "warning  .hyalo.toml was malformed; existing content replaced"
+                                )
+                                .unwrap();
+                                minimal_toml_dir(&dir_value)
+                            }
+                        }
+                    } else {
+                        // Valid TOML but not a table (e.g. bare string) — overwrite.
+                        writeln!(
+                            summary,
+                            "warning  .hyalo.toml was malformed; existing content replaced"
+                        )
+                        .unwrap();
+                        minimal_toml_dir(&dir_value)
                     }
                 }
                 Err(_) => {
@@ -81,11 +96,11 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
                         "warning  .hyalo.toml was malformed; existing content replaced"
                     )
                     .unwrap();
-                    format!("dir = {:?}\n", dir_value)
+                    minimal_toml_dir(&dir_value)
                 }
             }
         } else {
-            format!("dir = {:?}\n", dir_value)
+            minimal_toml_dir(&dir_value)
         };
         fs::write(&toml_path, &toml_content)
             .with_context(|| format!("failed to write {}", toml_path.display()))?;
@@ -195,17 +210,40 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Produce a minimal valid TOML string containing only `dir = "<value>"`.
+///
+/// Uses the `toml` crate to correctly escape the value (handles Unicode,
+/// backslashes, double-quotes) rather than relying on Rust's `{:?}` debug
+/// format which produces `\u{NNNN}` — invalid TOML escape sequences.
+fn minimal_toml_dir(dir_value: &str) -> String {
+    let table =
+        toml::map::Map::from_iter([("dir".to_owned(), TomlValue::String(dir_value.to_owned()))]);
+    toml::to_string(&table).unwrap_or_else(|_| {
+        // Fallback: manual escaping of backslash and double-quote only.
+        format!(
+            "dir = \"{}\"\n",
+            dir_value.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    })
+}
+
 /// Recursively count `.md` files under `dir`.
+///
+/// Uses `DirEntry::file_type()` instead of `Path::is_dir()` to avoid following
+/// symlinks, which could cause infinite loops on circular symlink structures.
 fn count_md_files_recursive(dir: &Path) -> usize {
     let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };
     let mut count = 0;
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            count += count_md_files_recursive(&path);
-        } else if path
+        let is_real_dir = entry
+            .file_type()
+            .is_ok_and(|ft| ft.is_dir() && !ft.is_symlink());
+        if is_real_dir {
+            count += count_md_files_recursive(&entry.path());
+        } else if entry
+            .path()
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("md"))
@@ -256,8 +294,11 @@ fn count_md_root_only(dir: &Path) -> usize {
     };
     let mut count = 0;
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
+        let is_real_dir = entry
+            .file_type()
+            .is_ok_and(|ft| ft.is_dir() && !ft.is_symlink());
+        if is_real_dir {
+            let path = entry.path();
             let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Skip hidden directories (e.g. .git, .claude) and candidate
             // directories (counted separately in auto_detect_dir).
@@ -266,7 +307,8 @@ fn count_md_root_only(dir: &Path) -> usize {
             if !is_hidden && !is_candidate {
                 count += count_md_files_recursive(&path);
             }
-        } else if path
+        } else if entry
+            .path()
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("md"))
@@ -289,7 +331,7 @@ const RULE_SENTINEL: &str = "hyalo-knowledgebase/**";
 fn parameterize_rule(template: &str, dir: &str) -> String {
     // The sentinel must be present; its absence means the template was changed
     // without updating this function — a programming error.
-    debug_assert!(
+    assert!(
         template.contains(RULE_SENTINEL),
         "rule template does not contain the expected sentinel {RULE_SENTINEL:?}"
     );
@@ -333,8 +375,10 @@ fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str
     let start_idx = lines.iter().position(|l| l.contains(SECTION_START));
     let end_idx = lines.iter().position(|l| l.contains(SECTION_END));
 
-    if let (Some(s), Some(e)) = (start_idx, end_idx) {
-        // Both markers present — replace from start to end (inclusive).
+    if let (Some(s), Some(e)) = (start_idx, end_idx)
+        && s < e
+    {
+        // Both markers present in correct order — replace from start to end (inclusive).
         let mut result = String::new();
         for line in &lines[..s] {
             result.push_str(line);
@@ -752,5 +796,101 @@ mod tests {
         .unwrap();
         assert!(rule_content.contains("my-notes/**"));
         assert!(!rule_content.contains("hyalo-knowledgebase/**"));
+    }
+
+    #[test]
+    fn upsert_managed_section_inverted_markers_treated_as_absent() {
+        // End marker appears before start marker (malformed file) — must not
+        // produce garbled output; instead treat as absent and append.
+        let section = make_section();
+        let content = format!("# File\n\n{SECTION_END}\nsome text\n{SECTION_START}\n# After\n");
+        let (result, action) = upsert_managed_section(&content, &section);
+        assert_eq!(
+            action, "appended managed section",
+            "inverted markers fall through to append"
+        );
+        // Original content preserved and new section appended at the end.
+        assert!(result.contains("# File"), "leading content preserved");
+        assert!(result.contains("# After"), "trailing content preserved");
+        assert!(result.contains(CLAUDE_MD_HINT), "hint content present");
+        // The section must appear after the original content.
+        let orig_pos = result.find("# After").unwrap();
+        let section_pos = result.find(CLAUDE_MD_HINT).unwrap();
+        assert!(
+            section_pos > orig_pos,
+            "appended section follows original content"
+        );
+    }
+
+    #[test]
+    fn minimal_toml_dir_produces_valid_toml_for_unicode() {
+        // A directory name with a non-ASCII character.
+        let output = minimal_toml_dir("my\u{1F4C1}notes");
+        // Must parse back as valid TOML with the correct value.
+        let parsed: toml::Value = output.parse().expect("must be valid TOML");
+        assert_eq!(
+            parsed.get("dir").and_then(|v| v.as_str()),
+            Some("my\u{1F4C1}notes"),
+            "unicode round-trips correctly"
+        );
+    }
+
+    #[test]
+    fn minimal_toml_dir_produces_valid_toml_for_backslash() {
+        // Windows-style path — backslashes must be escaped in TOML strings.
+        let output = minimal_toml_dir("C:\\Users\\me\\notes");
+        let parsed: toml::Value = output.parse().expect("must be valid TOML");
+        assert_eq!(
+            parsed.get("dir").and_then(|v| v.as_str()),
+            Some("C:\\Users\\me\\notes"),
+            "backslashes round-trip correctly"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn count_md_files_recursive_does_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real_dir = tmp.path().join("real");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::write(real_dir.join("a.md"), "# A").unwrap();
+
+        // Create a symlink that points back to the parent — a cycle.
+        let link = real_dir.join("loop");
+        symlink(tmp.path(), &link).unwrap();
+
+        // Without the fix this would overflow the stack. With the fix it
+        // completes and counts only the one real file.
+        let count = count_md_files_recursive(tmp.path());
+        assert_eq!(count, 1, "only the real file counted, symlink loop ignored");
+    }
+
+    #[test]
+    fn run_init_overwrites_malformed_toml_non_table() {
+        // .hyalo.toml contains valid TOML that is not a table (bare string).
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
+
+        let outcome = run_init_in(Some("docs"), false, tmp.path()).unwrap();
+        let CommandOutcome::Success(out) = outcome else {
+            panic!("expected success");
+        };
+        // Warning emitted.
+        assert!(
+            out.contains("warning  .hyalo.toml was malformed"),
+            "malformed warning present"
+        );
+        // File overwritten with a valid table.
+        let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+        let parsed: toml::Value = content
+            .parse()
+            .expect("overwritten content must be valid TOML");
+        assert_eq!(
+            parsed.get("dir").and_then(|v| v.as_str()),
+            Some("docs"),
+            "dir key written correctly"
+        );
     }
 }
