@@ -1,4 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
+use crate::frontmatter::hyalo_options;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -424,7 +425,8 @@ pub fn scan_reader_multi<R: BufRead>(
         }
         let props: BTreeMap<String, Value> = match yaml {
             Some(ref y) if !y.trim().is_empty() => {
-                serde_saphyr::from_str(y).context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str_with_options(y, hyalo_options())
+                    .context("failed to parse YAML frontmatter")?
             }
             _ => BTreeMap::new(),
         };

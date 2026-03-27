@@ -1,10 +1,35 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use serde_json::Value;
+use serde_saphyr::{Budget, DuplicateKeyPolicy, Options};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+
+/// Shared parser options for all YAML frontmatter parsing in hyalo.
+///
+/// Enforces tight limits via a `Budget` to harden the parser against
+/// pathological inputs (deep nesting, alias bombs, huge scalars).
+/// Also enables strict YAML 1.2 booleans (`true`/`false` only) and
+/// rejects duplicate keys.
+pub fn hyalo_options() -> Options {
+    Options {
+        budget: Some(Budget {
+            max_events: 10_000,
+            max_depth: 20,
+            max_aliases: 0,
+            max_anchors: 0,
+            max_nodes: 5_000,
+            max_total_scalar_bytes: 8192,
+            max_documents: 1,
+            ..Budget::default()
+        }),
+        duplicate_keys: DuplicateKeyPolicy::Error,
+        strict_booleans: true,
+        ..Options::default()
+    }
+}
 
 /// Represents parsed frontmatter and the remaining body content.
 #[derive(Debug, Clone)]
@@ -32,7 +57,8 @@ impl Document {
 
         let properties: BTreeMap<String, Value> = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
-                serde_saphyr::from_str(yaml).context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str_with_options(yaml, hyalo_options())
+                    .context("failed to parse YAML frontmatter")?
             }
             _ => BTreeMap::new(),
         };
@@ -231,6 +257,11 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 /// Parse frontmatter from any buffered reader. Stops reading after the closing `---`.
 /// Bails out if the frontmatter exceeds a reasonable size (200 lines / 8 KB) to avoid
 /// buffering an entire file when the closing delimiter is missing.
+///
+/// Defense-in-depth: the pre-read line/byte cap is kept even though the parser's
+/// `Budget` now enforces its own limits. The pre-read cap stops reading early for
+/// files with a missing closing `---`, which the parser budget cannot detect (it
+/// only sees the YAML string that was already read).
 fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String, Value>> {
     const MAX_FRONTMATTER_LINES: usize = 200;
     const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
@@ -282,7 +313,8 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         return Ok(BTreeMap::new());
     }
 
-    serde_saphyr::from_str(&yaml).context("failed to parse YAML frontmatter")
+    serde_saphyr::from_str_with_options(&yaml, hyalo_options())
+        .context("failed to parse YAML frontmatter")
 }
 
 /// Extract frontmatter YAML string and the body from a markdown document.
@@ -961,5 +993,104 @@ Body.
             }
             other => panic!("expected array, got {other:?}"),
         }
+    }
+
+    // --- Hardened parser option tests ---
+
+    #[test]
+    fn rejects_deeply_nested_yaml() {
+        // Depth > 20 must be rejected by the budget
+        let mut yaml = String::from("---\n");
+        for i in 0..25 {
+            yaml.push_str(&"  ".repeat(i));
+            yaml.push_str(&format!("l{i}:\n"));
+        }
+        yaml.push_str(&"  ".repeat(25));
+        yaml.push_str("val: 1\n");
+        yaml.push_str("---\nBody\n");
+
+        let err = Document::parse(&yaml);
+        assert!(err.is_err(), "deeply nested YAML should be rejected");
+    }
+
+    #[test]
+    fn rejects_yaml_with_aliases() {
+        // Aliases (max_aliases: 0) must be rejected
+        let content = "---\nanchor: &a value\nalias: *a\n---\nBody\n";
+        let err = Document::parse(content);
+        assert!(err.is_err(), "YAML with aliases should be rejected");
+    }
+
+    #[test]
+    fn rejects_duplicate_keys() {
+        let content = "---\ntitle: First\ntitle: Second\n---\nBody\n";
+        let err = Document::parse(content);
+        assert!(err.is_err(), "duplicate keys should be rejected");
+        assert!(
+            format!("{:?}", err.unwrap_err())
+                .to_lowercase()
+                .contains("duplicate"),
+            "error should mention duplicate"
+        );
+    }
+
+    #[test]
+    fn strict_booleans_yes_is_string() {
+        // With strict_booleans, `yes` must parse as a string, not a boolean
+        let content = "---\nflag: yes\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(
+            doc.get_property("flag"),
+            Some(&Value::String("yes".into())),
+            "`yes` should be parsed as string with strict booleans"
+        );
+    }
+
+    #[test]
+    fn strict_booleans_no_is_string() {
+        let content = "---\nflag: no\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(
+            doc.get_property("flag"),
+            Some(&Value::String("no".into())),
+            "`no` should be parsed as string with strict booleans"
+        );
+    }
+
+    #[test]
+    fn strict_booleans_on_off_are_strings() {
+        let content = "---\na: on\nb: off\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(doc.get_property("a"), Some(&Value::String("on".into())));
+        assert_eq!(doc.get_property("b"), Some(&Value::String("off".into())));
+    }
+
+    #[test]
+    fn strict_booleans_true_false_still_booleans() {
+        let content = "---\na: true\nb: false\n---\nBody\n";
+        let doc = Document::parse(content).unwrap();
+        assert_eq!(doc.get_property("a"), Some(&Value::Bool(true)));
+        assert_eq!(doc.get_property("b"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn streaming_rejects_duplicate_keys() {
+        let input = "---\ntitle: First\ntitle: Second\n---\nBody\n";
+        let result = read_frontmatter_from_reader(input.as_bytes());
+        assert!(
+            result.is_err(),
+            "streaming parser should reject duplicate keys"
+        );
+    }
+
+    #[test]
+    fn streaming_strict_booleans() {
+        let input = "---\nflag: yes\n---\nBody\n";
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
+        assert_eq!(
+            props.get("flag"),
+            Some(&Value::String("yes".into())),
+            "streaming parser should treat `yes` as string"
+        );
     }
 }
