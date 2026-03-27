@@ -1,9 +1,13 @@
 [package]
 name = "hyalo-cli"
+description = "CLI for exploring and managing Markdown knowledge bases with YAML frontmatter"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["cli", "yaml", "frontmatter", "markdown", "obsidian"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "hyalo"
