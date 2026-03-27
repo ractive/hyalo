@@ -387,6 +387,7 @@ fn write_snapshot(
         tempfile::NamedTempFile::new_in(parent).context("failed to create temp file for index")?;
     tmp.write_all(&bytes)
         .context("failed to write temp index")?;
+    // On persist failure, dropping `e.file` removes the temp file automatically.
     tmp.persist(path)
         .map_err(|e| e.error)
         .with_context(|| format!("failed to rename index into place: {}", path.display()))?;

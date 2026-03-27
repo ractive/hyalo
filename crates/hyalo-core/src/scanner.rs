@@ -561,9 +561,7 @@ fn read_line_capped<R: BufRead>(
 
         // Copy the bytes out while the immutable borrow is still live.
         let chunk: Vec<u8> = {
-            let available = reader
-                .fill_buf()
-                .expect("fill_buf already succeeded above; cannot fail here");
+            let available = reader.fill_buf()?;
             available[..to_copy].to_vec()
         };
         // Now release the borrow and advance the reader.

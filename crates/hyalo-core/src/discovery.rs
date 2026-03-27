@@ -38,8 +38,9 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
     // path could bypass the `.md` extension check on some platforms because
     // the OS treats the string as ending at the first `\0`.
     if path_arg.contains('\0') {
-        return Err(FileResolveError::NotFound {
+        return Err(FileResolveError::InvalidPath {
             path: path_arg.to_owned(),
+            reason: "contains null byte",
         });
     }
 
@@ -316,6 +317,7 @@ pub enum FileResolveError {
     NotFound { path: String },
     MissingExtension { path: String, hint: String },
     OutsideVault { path: String },
+    InvalidPath { path: String, reason: &'static str },
 }
 
 impl std::fmt::Display for FileResolveError {
@@ -327,6 +329,9 @@ impl std::fmt::Display for FileResolveError {
             }
             Self::OutsideVault { path } => {
                 write!(f, "file resolves outside vault boundary: {path}")
+            }
+            Self::InvalidPath { path, reason } => {
+                write!(f, "invalid path ({reason}): {path}")
             }
         }
     }
@@ -1020,13 +1025,27 @@ mod tests {
         // A null byte must be rejected before the `.md` check so that it
         // cannot be used to bypass the extension validation on any platform.
         let err = resolve_file(vault.path(), "notes/file\0.md").unwrap_err();
-        assert!(matches!(err, FileResolveError::NotFound { .. }));
+        assert!(matches!(
+            err,
+            FileResolveError::InvalidPath {
+                reason: "contains null byte",
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("contains null byte"));
     }
 
     #[test]
     fn resolve_file_rejects_null_byte_only_path() {
         let vault = tempfile::tempdir().unwrap();
         let err = resolve_file(vault.path(), "\0").unwrap_err();
-        assert!(matches!(err, FileResolveError::NotFound { .. }));
+        assert!(matches!(
+            err,
+            FileResolveError::InvalidPath {
+                reason: "contains null byte",
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("contains null byte"));
     }
 }
