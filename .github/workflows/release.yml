@@ -257,6 +257,7 @@ jobs:
             --pattern "SHA256SUMS" --dir .
 
       - name: Update Scoop manifest
+        shell: bash
         env:
           SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
         run: |
@@ -284,39 +285,51 @@ jobs:
             fi
           done
 
-          cat > hyalo.json <<MANIFEST
-          {
-              "version": "${VERSION}",
-              "description": "CLI for exploring and managing Markdown knowledge bases",
-              "homepage": "https://github.com/ractive/hyalo",
-              "license": "MIT",
-              "architecture": {
-                  "64bit": {
-                      "url": "https://github.com/ractive/hyalo/releases/download/v${VERSION}/hyalo-x86_64-pc-windows-msvc.zip",
-                      "hash": "${SHA_WIN_X64}"
-                  },
-                  "arm64": {
-                      "url": "https://github.com/ractive/hyalo/releases/download/v${VERSION}/hyalo-aarch64-pc-windows-msvc.zip",
-                      "hash": "${SHA_WIN_ARM64}"
-                  }
-              },
-              "bin": "hyalo.exe",
-              "checkver": "github",
-              "autoupdate": {
-                  "architecture": {
-                      "64bit": {
-                          "url": "https://github.com/ractive/hyalo/releases/download/v\$version/hyalo-x86_64-pc-windows-msvc.zip"
-                      },
-                      "arm64": {
-                          "url": "https://github.com/ractive/hyalo/releases/download/v\$version/hyalo-aarch64-pc-windows-msvc.zip"
-                      }
-                  }
-              }
-          }
-          MANIFEST
+          RELEASE_URL="https://github.com/ractive/hyalo/releases/download"
 
-          # Remove leading whitespace from heredoc
-          sed -i 's/^          //' hyalo.json
+          jq -n \
+            --arg version "$VERSION" \
+            --arg sha_x64 "$SHA_WIN_X64" \
+            --arg sha_arm64 "$SHA_WIN_ARM64" \
+            --arg release_url "$RELEASE_URL" \
+            '{
+              version: $version,
+              description: "CLI for exploring and managing Markdown knowledge bases",
+              homepage: "https://github.com/ractive/hyalo",
+              license: "MIT",
+              architecture: {
+                "64bit": {
+                  url: "\($release_url)/v\($version)/hyalo-x86_64-pc-windows-msvc.zip",
+                  hash: $sha_x64
+                },
+                arm64: {
+                  url: "\($release_url)/v\($version)/hyalo-aarch64-pc-windows-msvc.zip",
+                  hash: $sha_arm64
+                }
+              },
+              bin: "hyalo.exe",
+              checkver: "github",
+              autoupdate: {
+                architecture: {
+                  "64bit": {
+                    url: "\($release_url)/v$version/hyalo-x86_64-pc-windows-msvc.zip",
+                    hash: {
+                      url: "\($release_url)/v$version/SHA256SUMS",
+                      regex: "([a-fA-F0-9]+)\\s+hyalo-x86_64-pc-windows-msvc.zip"
+                    }
+                  },
+                  arm64: {
+                    url: "\($release_url)/v$version/hyalo-aarch64-pc-windows-msvc.zip",
+                    hash: {
+                      url: "\($release_url)/v$version/SHA256SUMS",
+                      regex: "([a-fA-F0-9]+)\\s+hyalo-aarch64-pc-windows-msvc.zip"
+                    }
+                  }
+                }
+              }
+            }' > hyalo.json
+
+          cat hyalo.json
 
           git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/ractive/scoop-hyalo.git" bucket
           cp hyalo.json bucket/bucket/hyalo.json
@@ -335,6 +348,16 @@ jobs:
     needs: release
     runs-on: windows-latest
     steps:
+      - name: Verify WINGET_TOKEN is set
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "${WINGET_TOKEN}" ]; then
+            echo "ERROR: WINGET_TOKEN secret is not set"
+            exit 1
+          fi
+
       - name: Submit to winget-pkgs
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:

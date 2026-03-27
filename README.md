@@ -11,6 +11,19 @@ brew tap ractive/tap
 brew install ractive/tap/hyalo
 ```
 
+### Scoop (Windows)
+
+```powershell
+scoop bucket add hyalo https://github.com/ractive/scoop-hyalo
+scoop install hyalo
+```
+
+### winget (Windows)
+
+```powershell
+winget install ractive.hyalo
+```
+
 ### Cargo (Intel Mac & other platforms)
 
 ```sh
@@ -21,7 +34,7 @@ cargo install --git https://github.com/ractive/hyalo.git --locked
 
 ### Manual download
 
-Download pre-built binaries from the [GitHub Releases](https://github.com/ractive/hyalo/releases) page.
+Download pre-built binaries from the [GitHub Releases](https://github.com/ractive/hyalo/releases) page. Binaries are available for Linux (x86_64, ARM64, glibc and musl), macOS (Apple Silicon), and Windows (x86_64, ARM64).
 
 ## Build
 
