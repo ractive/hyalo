@@ -69,6 +69,9 @@ jobs:
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            cross_compile: true
 
     runs-on: ${{ matrix.os }}
 
@@ -91,10 +94,11 @@ jobs:
         run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --target ${{ matrix.target }}
 
       - name: Run tests
+        if: "!matrix.cross_compile"
         run: ${{ matrix.cross && 'cross' || 'cargo' }} test --workspace --target ${{ matrix.target }}
 
       - name: Verify CLI runs
-        if: "!matrix.cross"
+        if: "!matrix.cross && !matrix.cross_compile"
         run: cargo run --release --target ${{ matrix.target }} -p hyalo-cli -- --help
 
       - name: Package (Unix)
@@ -238,3 +242,102 @@ jobs:
             git commit -m "Update hyalo to ${VERSION}"
             git push
           fi
+
+  scoop:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download SHA256SUMS from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.event.release.tag_name }}" \
+            --pattern "SHA256SUMS" --dir .
+
+      - name: Update Scoop manifest
+        env:
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SCOOP_BUCKET_TOKEN}" ]; then
+            echo "ERROR: SCOOP_BUCKET_TOKEN secret is not set"
+            exit 1
+          fi
+
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+
+          get_sha() {
+            awk -v file="$1" '$2 == file {print $1}' SHA256SUMS
+          }
+
+          SHA_WIN_X64=$(get_sha "hyalo-x86_64-pc-windows-msvc.zip")
+          SHA_WIN_ARM64=$(get_sha "hyalo-aarch64-pc-windows-msvc.zip")
+
+          for var in SHA_WIN_X64 SHA_WIN_ARM64; do
+            if [ -z "${!var}" ]; then
+              echo "ERROR: missing SHA256 checksum for $var"
+              exit 1
+            fi
+          done
+
+          cat > hyalo.json <<MANIFEST
+          {
+              "version": "${VERSION}",
+              "description": "CLI for exploring and managing Markdown knowledge bases",
+              "homepage": "https://github.com/ractive/hyalo",
+              "license": "MIT",
+              "architecture": {
+                  "64bit": {
+                      "url": "https://github.com/ractive/hyalo/releases/download/v${VERSION}/hyalo-x86_64-pc-windows-msvc.zip",
+                      "hash": "${SHA_WIN_X64}"
+                  },
+                  "arm64": {
+                      "url": "https://github.com/ractive/hyalo/releases/download/v${VERSION}/hyalo-aarch64-pc-windows-msvc.zip",
+                      "hash": "${SHA_WIN_ARM64}"
+                  }
+              },
+              "bin": "hyalo.exe",
+              "checkver": "github",
+              "autoupdate": {
+                  "architecture": {
+                      "64bit": {
+                          "url": "https://github.com/ractive/hyalo/releases/download/v\$version/hyalo-x86_64-pc-windows-msvc.zip"
+                      },
+                      "arm64": {
+                          "url": "https://github.com/ractive/hyalo/releases/download/v\$version/hyalo-aarch64-pc-windows-msvc.zip"
+                      }
+                  }
+              }
+          }
+          MANIFEST
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' hyalo.json
+
+          git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/ractive/scoop-hyalo.git" bucket
+          cp hyalo.json bucket/bucket/hyalo.json
+          cd bucket
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bucket/hyalo.json
+          if git diff --cached --quiet; then
+            echo "Manifest unchanged, skipping commit"
+          else
+            git commit -m "Update hyalo to ${VERSION}"
+            git push
+          fi
+
+  winget:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Submit to winget-pkgs
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: ractive.hyalo
+          installers-regex: 'hyalo-.*-pc-windows-msvc\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
