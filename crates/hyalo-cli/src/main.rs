@@ -319,7 +319,7 @@ enum Commands {
         /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: all standard fields except properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
-        /// Sort order: 'file' (default), 'modified', 'backlinks_count', or 'links_count'
+        /// Sort order: 'file' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
         #[arg(long)]
         sort: Option<String>,
         /// Maximum number of results to return (must be at least 1)

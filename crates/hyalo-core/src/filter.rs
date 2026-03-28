@@ -607,19 +607,72 @@ pub enum SortField {
     Modified,
     BacklinksCount,
     LinksCount,
+    /// Sort by a frontmatter property value (e.g. `title`, `date`, or any key).
+    Property(String),
 }
 
 /// Parse a sort field from a string.
+///
+/// Accepts built-in fields (`file`, `modified`, `backlinks_count`, `links_count`)
+/// and frontmatter property names via the `property:<KEY>` syntax.
+/// `title` and `date` are convenient aliases for `property:title` and `property:date`.
 pub fn parse_sort(input: &str) -> Result<SortField> {
     match input {
         "file" => Ok(SortField::File),
         "modified" => Ok(SortField::Modified),
         "backlinks_count" => Ok(SortField::BacklinksCount),
         "links_count" => Ok(SortField::LinksCount),
-        other => bail!(
-            "unknown sort field {:?}: valid values are 'file', 'modified', 'backlinks_count', 'links_count'",
-            other
-        ),
+        "title" => Ok(SortField::Property("title".to_owned())),
+        "date" => Ok(SortField::Property("date".to_owned())),
+        other => {
+            if let Some(key) = other.strip_prefix("property:") {
+                if key.is_empty() {
+                    bail!("property sort key must not be empty: use 'property:<KEY>'");
+                }
+                Ok(SortField::Property(key.to_owned()))
+            } else {
+                bail!(
+                    "unknown sort field {:?}: valid values are 'file', 'modified', \
+                     'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>'",
+                    other
+                )
+            }
+        }
+    }
+}
+
+/// Compare two `serde_json::Value`s for sorting purposes.
+///
+/// Ordering rules:
+/// - `Null` / missing sorts **last** (greater than any non-null value).
+/// - Strings are compared lexicographically (case-sensitive).
+/// - Numbers are compared as f64.
+/// - Booleans: `false` < `true`.
+/// - Arrays/objects are compared by their JSON string representation (fallback).
+pub fn compare_property_values(
+    a: Option<&serde_json::Value>,
+    b: Option<&serde_json::Value>,
+) -> std::cmp::Ordering {
+    use serde_json::Value;
+    use std::cmp::Ordering;
+
+    match (a, b) {
+        (None | Some(Value::Null), None | Some(Value::Null)) => Ordering::Equal,
+        (None | Some(Value::Null), _) => Ordering::Greater, // missing sorts last
+        (_, None | Some(Value::Null)) => Ordering::Less,
+        (Some(Value::String(sa)), Some(Value::String(sb))) => sa.cmp(sb),
+        (Some(Value::Number(na)), Some(Value::Number(nb))) => {
+            let fa = na.as_f64().unwrap_or(f64::NAN);
+            let fb = nb.as_f64().unwrap_or(f64::NAN);
+            fa.partial_cmp(&fb).unwrap_or(Ordering::Equal)
+        }
+        (Some(Value::Bool(ba)), Some(Value::Bool(bb))) => ba.cmp(bb),
+        (Some(va), Some(vb)) => {
+            // Fallback: compare JSON representations.
+            let sa = va.to_string();
+            let sb = vb.to_string();
+            sa.cmp(&sb)
+        }
     }
 }
 
@@ -1220,9 +1273,85 @@ mod tests {
     }
 
     #[test]
+    fn sort_title_alias() {
+        assert_eq!(
+            parse_sort("title").unwrap(),
+            SortField::Property("title".to_owned())
+        );
+    }
+
+    #[test]
+    fn sort_date_alias() {
+        assert_eq!(
+            parse_sort("date").unwrap(),
+            SortField::Property("date".to_owned())
+        );
+    }
+
+    #[test]
+    fn sort_property_generic() {
+        assert_eq!(
+            parse_sort("property:priority").unwrap(),
+            SortField::Property("priority".to_owned())
+        );
+    }
+
+    #[test]
+    fn sort_property_empty_key_errors() {
+        assert!(parse_sort("property:").is_err());
+    }
+
+    #[test]
     fn sort_unknown_errors() {
         assert!(parse_sort("name").is_err());
         assert!(parse_sort("").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // compare_property_values
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compare_null_sorts_last() {
+        use std::cmp::Ordering;
+        let s = Value::String("alpha".into());
+        // non-null < null (null sorts last)
+        assert_eq!(compare_property_values(Some(&s), None), Ordering::Less);
+        assert_eq!(compare_property_values(None, Some(&s)), Ordering::Greater);
+        assert_eq!(compare_property_values(None, None), Ordering::Equal);
+        assert_eq!(
+            compare_property_values(Some(&Value::Null), None),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn compare_strings() {
+        use std::cmp::Ordering;
+        let a = Value::String("alpha".into());
+        let b = Value::String("beta".into());
+        assert_eq!(compare_property_values(Some(&a), Some(&b)), Ordering::Less);
+        assert_eq!(
+            compare_property_values(Some(&b), Some(&a)),
+            Ordering::Greater
+        );
+        assert_eq!(compare_property_values(Some(&a), Some(&a)), Ordering::Equal);
+    }
+
+    #[test]
+    fn compare_numbers() {
+        use std::cmp::Ordering;
+        let a = json!(1);
+        let b = json!(2);
+        assert_eq!(compare_property_values(Some(&a), Some(&b)), Ordering::Less);
+    }
+
+    #[test]
+    fn compare_booleans() {
+        use std::cmp::Ordering;
+        let f = json!(false);
+        let t = json!(true);
+        assert_eq!(compare_property_values(Some(&f), Some(&t)), Ordering::Less);
     }
 
     // -----------------------------------------------------------------------

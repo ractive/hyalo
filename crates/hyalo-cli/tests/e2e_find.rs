@@ -2468,6 +2468,111 @@ fn find_sort_links_count_without_fields_links() {
 }
 
 // ---------------------------------------------------------------------------
+// Sort by frontmatter property
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_sort_title() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "title"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    // Alpha, Beta, Nested sort first (alphabetically), gamma.md (no title) sorts last
+    assert_eq!(files[0], "alpha.md");
+    assert_eq!(files[1], "beta.md");
+    assert_eq!(files[2], "sub/nested.md");
+    assert_eq!(files[3], "gamma.md", "file without title should sort last");
+}
+
+#[test]
+fn find_sort_property_generic() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "property:status"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    // completed < planned (alphabetically), gamma.md (no status) sorts last
+    assert_eq!(files[0], "beta.md", "completed should sort first");
+    assert_eq!(
+        files.last().unwrap(),
+        &"gamma.md",
+        "missing status sorts last"
+    );
+}
+
+#[test]
+fn find_sort_property_without_fields_properties() {
+    // Sort by property should work even when --fields excludes properties
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "title", "--fields", "tags"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files[0], "alpha.md");
+    // Verify properties field is NOT in output (user excluded it via --fields)
+    assert!(
+        arr[0].get("properties").is_none(),
+        "properties should not appear in output when not in --fields"
+    );
+}
+
+#[test]
+fn find_sort_date() {
+    // Create a vault with dates to test --sort date
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "newer.md",
+        md!(r"
+---
+title: Newer
+date: 2026-03-28
+---
+Content.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "older.md",
+        md!(r"
+---
+title: Older
+date: 2024-01-15
+---
+Content.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "no-date.md",
+        md!(r"
+---
+title: No Date
+---
+Content.
+"),
+    );
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "date"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files[0], "older.md", "2024 should sort before 2026");
+    assert_eq!(files[1], "newer.md");
+    assert_eq!(files[2], "no-date.md", "missing date should sort last");
+}
+
+#[test]
+fn find_sort_property_empty_key_errors() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--sort", "property:"]);
+    let output = cmd.output().unwrap();
+    assert!(!output.status.success(), "empty property key should fail");
+}
+
+// ---------------------------------------------------------------------------
 // Empty body pattern error
 // ---------------------------------------------------------------------------
 
