@@ -183,7 +183,7 @@ Supports `--format text` (default, compact) and `--format json`. Useful for impa
 
 ## Snapshot index for batch queries
 
-When running many queries (e.g., during a dream/consolidation pass or any multi-step
+When running many queries (e.g., during a tidy/consolidation pass or any multi-step
 analysis), create a snapshot index first to avoid repeated disk scans:
 
 ```bash
