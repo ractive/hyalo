@@ -17,6 +17,358 @@ use hyalo_cli::output::{
 use hyalo_core::filter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex};
 
+// ---------------------------------------------------------------------------
+// Static help text — extracted from derive attributes so they can be filtered
+// at runtime based on loaded .hyalo.toml config.
+// ---------------------------------------------------------------------------
+
+/// Short help (shown by `-h`): one example per feature.
+const HELP_EXAMPLES: &str = "EXAMPLES:
+  Search for files:             hyalo find --property status=draft
+  Filter by tag:                hyalo find --tag project
+  Filter by task status:        hyalo find --task todo
+  Full-text search:             hyalo find 'meeting notes'
+  Filter by section:            hyalo find --section 'Tasks' --task todo
+  Read file content:            hyalo read --file notes/todo.md
+  Read a section:               hyalo read --file notes/todo.md --section Proposal
+  Set a property:               hyalo set --property status=completed --file notes/todo.md
+  Bulk-set with filter:         hyalo set --property status=completed --where-property status=draft --glob '**/*.md'
+  Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'
+  Remove a property:            hyalo remove --property status --file notes/todo.md
+  Remove a tag from files:      hyalo remove --tag draft --glob '**/*.md'
+  Append to a list property:    hyalo append --property aliases='My Note' --file note.md
+  Aggregate property summary:   hyalo properties summary
+  Rename a property key:        hyalo properties rename --from old-key --to new-key
+  Aggregate tag summary:        hyalo tags summary
+  Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag
+  Vault overview:               hyalo summary --format text
+  Overview with drill-down:     hyalo summary --format text --hints
+  Toggle a task:                hyalo task toggle --file todo.md --line 5
+  Find backlinks:               hyalo backlinks --file decision-log.md
+  Move a file (update links):   hyalo mv --file old.md --to new.md
+  Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run
+  Build a snapshot index:       hyalo create-index
+  Query using the index:        hyalo find --property status=draft --index .hyalo-index
+  Delete the snapshot index:    hyalo drop-index";
+
+/// Long help (shown by `--help`): command reference, cookbook, and output shapes.
+const HELP_LONG: &str = "COMMAND REFERENCE:
+  Find (search and filter, read-only):
+    hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
+               [-s/--section HEADING ...] [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [-n/--limit N]
+
+  Read (display file body content, read-only):
+    hyalo read -f/--file F [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]
+
+  Set (create or overwrite, mutates files):
+    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
+
+  Remove (delete properties/tags, mutates files):
+    hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
+
+  Append (add to list properties, mutates files):
+    hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
+
+  Properties (subcommand group):
+    hyalo properties summary [-g/--glob G]                        Unique property names, types, and file counts (read-only)
+    hyalo properties rename --from OLD --to NEW [-g/--glob G]     Rename a property key across files (mutates files)
+
+  Tags (subcommand group):
+    hyalo tags summary [-g/--glob G]                              Unique tags with file counts (read-only)
+    hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)
+
+  Summary (vault overview, read-only):
+    hyalo summary [-g/--glob G] [-n/--recent N]
+
+  Task (single-task operations):
+    hyalo task read       -f/--file F -l/--line N           Read task at a line
+    hyalo task toggle     -f/--file F -l/--line N           Toggle completion
+    hyalo task set-status -f/--file F -l/--line N -s/--status C
+
+  Backlinks (reverse link lookup, read-only):
+    hyalo backlinks -f/--file F
+
+  Mv (move/rename file, updates links, mutates files):
+    hyalo mv -f/--file F --to NEW [--dry-run]
+
+  Init (configuration, one-time setup):
+    hyalo init [--claude] [-d/--dir DIR]
+
+  Create-index (build snapshot for faster queries):
+    hyalo create-index [-o/--output PATH]
+
+  Drop-index (delete snapshot index):
+    hyalo drop-index [-p/--path PATH]
+
+  Global flags (apply to all commands):
+    -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)
+    --format json|text      Output format (default: json, override via .hyalo.toml)
+    --jq <FILTER>           Apply a jq expression to JSON output
+    --hints                 Append drill-down hints (default: off, override via .hyalo.toml)
+    --no-hints              Disable hints (overrides .hyalo.toml)
+    --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
+
+COOKBOOK:
+  # Discover what metadata exists in a vault
+  hyalo properties summary
+  hyalo tags summary
+
+  # Rename a property key across all files
+  hyalo properties rename --from old-key --to new-key
+
+  # Rename a tag across all files
+  hyalo tags rename --from old-tag --to new-tag
+
+  # Get a vault overview with drill-down hints
+  hyalo summary --format text --hints
+
+  # Find all files with status=draft
+  hyalo find --property status=draft
+
+  # Find files missing the 'status' property (absence filter)
+  hyalo find --property '!status'
+
+  # Find files where title contains 'draft' (property value regex)
+  hyalo find --property 'title~=draft'
+
+  # Case-insensitive regex on a property value
+  hyalo find --property 'title~=/^Draft/i'
+
+  # Find files tagged 'project' (matches project/backend, project/frontend, etc.)
+  hyalo find --tag project
+
+  # Find files with open tasks
+  hyalo find --task todo
+
+  # Find files with a specific section heading (substring match: 'Tasks' matches 'Tasks [4/4]')
+  hyalo find --section 'Tasks'
+
+  # Find open tasks within a specific section
+  hyalo find --section '## Sprint' --task todo
+
+  # Find broken [[wikilinks]] (fields=links, then filter in jq)
+  hyalo find --fields links --jq '[.[] | select(.links | map(select(.path == null)) | length > 0)]'
+
+  # Exclude draft files with glob negation
+  hyalo find --glob '!**/draft-*'
+
+  # Tag all research notes in a folder
+  hyalo set --tag reviewed --glob 'research/**/*.md'
+
+  # Bulk-update a property across matching files
+  hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'
+
+  # Add a tag to files matching a tag filter
+  hyalo set --tag reviewed --where-tag research --glob '**/*.md'
+
+  # Append to a list property
+  hyalo append --property aliases='My Note' --file note.md
+
+  # Quick vault overview
+  hyalo summary --format text
+
+  # Count tasks across all files
+  hyalo summary --jq '.tasks.total'
+
+  # List all property names as a flat list
+  hyalo properties summary --jq '[.[].name] | join(\", \")'
+
+  # Get just file paths (no metadata)
+  hyalo find --property status=draft --jq '[.[].file]'
+
+  # Pipe file paths for scripting (Unix)
+  hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}
+
+  # Find all files that link to a given note
+  hyalo backlinks --file decision-log.md
+
+  # Move a file and update all links
+  hyalo mv --file backlog/old.md --to backlog/done/old.md
+
+  # Preview a move without writing
+  hyalo mv --file note.md --to archive/note.md --dry-run
+
+  # Override site prefix for absolute link resolution
+  hyalo --site-prefix docs mv --file old.md --to new.md --dry-run
+
+  # Disable absolute-link resolution entirely
+  hyalo --site-prefix '' find --fields links
+
+  # Read file body content
+  hyalo read --file notes/todo.md
+
+  # Read a specific section
+  hyalo read --file notes/todo.md --section Tasks
+
+  # Read a line range
+  hyalo read --file notes/todo.md --lines 1:10
+
+  # Read a task's current status
+  hyalo task read --file todo.md --line 5
+
+  # Toggle a task checkbox
+  hyalo task toggle --file todo.md --line 5
+
+  # Set a custom task status (e.g. cancelled)
+  hyalo task set-status --file todo.md --line 5 --status -
+
+  # Build a snapshot index for faster repeated queries
+  hyalo create-index
+
+  # Use the index for a find query
+  hyalo find --property status=draft --index .hyalo-index
+
+  # Clean up the index after use
+  hyalo drop-index
+
+OUTPUT SHAPES (JSON, default):
+  # find
+  [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
+   \"properties\": {\"status\": \"draft\", \"title\": \"My Note\"},
+   \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]
+
+  # read
+  {\"file\": \"notes/todo.md\", \"content\": \"...body text...\"}
+
+  # set / remove / append (mutation result)
+  {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}
+  {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}
+
+  # properties summary
+  [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...]
+
+  # properties rename
+  {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"conflicts\": [...], \"total\": N}
+
+  # tags summary
+  {\"tags\": [{\"name\": \"backlog\", \"count\": 10}, ...], \"total\": 31}
+
+  # tags rename
+  {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"total\": N}
+
+  # task read / toggle / set-status
+  {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}
+
+  # summary
+  {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},
+  \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},
+  \"orphans\": [\"orphan.md\", ...],
+  \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}
+
+  # backlinks
+  {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}], \"total\": 1}
+
+  # mv
+  {\"from\": \"old.md\", \"to\": \"new.md\", \"dry_run\": false,
+  \"updated_files\": [{\"file\": \"a.md\", \"replacements\": [{\"line\": 5, \"old_text\": \"[[old]]\", \"new_text\": \"[[new]]\"}]}],
+  \"total_files_updated\": 1, \"total_links_updated\": 1}
+
+  # create-index
+  {\"path\": \".hyalo-index\", \"files_indexed\": 142, \"warnings\": 0}
+
+  # drop-index
+  {\"deleted\": \".hyalo-index\"}
+
+  # --hints wraps JSON output in an envelope with drill-down commands
+  {\"data\": { ... original output ... }, \"hints\": [\"hyalo properties\", ...]}
+
+  # errors (stderr, exit code 1 for user errors, 2 for internal)
+  {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}
+
+  # --format text produces human-readable output on all commands";
+
+/// Build a filtered version of `HELP_EXAMPLES` (the `-h` EXAMPLES block).
+///
+/// Each example is a single line.  Drop any line that references a flag whose
+/// value is already provided by `.hyalo.toml` so it does not clutter the output.
+///
+/// Rules:
+/// - `hide_dir`    → drop lines that contain `-d/--dir` or ` --dir `
+/// - `hide_format` → drop lines that contain `--format`
+fn filter_examples(hide_dir: bool, hide_format: bool) -> String {
+    if !hide_dir && !hide_format {
+        return HELP_EXAMPLES.to_owned();
+    }
+    let filtered: Vec<&str> = HELP_EXAMPLES
+        .lines()
+        .filter(|line| {
+            if hide_format && line.contains(" --format") {
+                return false;
+            }
+            if hide_dir && (line.contains("-d/--dir") || line.contains(" --dir ")) {
+                return false;
+            }
+            true
+        })
+        .collect();
+    filtered.join("\n")
+}
+
+/// Build a filtered version of `HELP_LONG` (the `--help` long help block).
+///
+/// The long help contains three sections: COMMAND REFERENCE, COOKBOOK, and
+/// OUTPUT SHAPES.  The filtering strategy differs per section:
+///
+/// - **COMMAND REFERENCE / Global flags**: line-level — drop the specific flag
+///   rows (`-d/--dir` and/or `--format json|text`) when they are config-defaulted.
+/// - **COOKBOOK**: paragraph-level — each recipe is separated by a blank line.
+///   Drop an entire recipe (comment + command) when the command contains a
+///   config-defaulted flag.
+/// - **OUTPUT SHAPES**: line-level — drop the trailing `--format text` comment
+///   when format is config-defaulted.
+///
+/// This keeps the help focused on flags the user actually needs to type.
+fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
+    if !hide_dir && !hide_format {
+        return HELP_LONG.to_owned();
+    }
+
+    // Split into paragraphs separated by blank lines.  Process each paragraph
+    // individually, then rejoin.
+    let paragraphs: Vec<&str> = HELP_LONG.split("\n\n").collect();
+    let mut out: Vec<String> = Vec::with_capacity(paragraphs.len());
+
+    for para in &paragraphs {
+        // The Global flags paragraph needs line-level filtering (we want to keep
+        // the paragraph but drop individual flag rows).
+        if para.contains("  Global flags (apply to all commands):") {
+            let filtered: String = para
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim_start();
+                    if hide_dir && trimmed.starts_with("-d/--dir") {
+                        return false;
+                    }
+                    if hide_format && trimmed.starts_with("--format ") {
+                        return false;
+                    }
+                    true
+                })
+                .collect::<Vec<&str>>()
+                .join("\n");
+            out.push(filtered);
+            continue;
+        }
+
+        // For cookbook / output-shapes paragraphs: drop the entire paragraph
+        // if any hyalo command line in it uses a config-defaulted flag.
+        let should_drop = para.lines().any(|line| {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("hyalo ") {
+                return false;
+            }
+            (hide_format && trimmed.contains(" --format"))
+                || (hide_dir && (trimmed.contains(" --dir ") || trimmed.contains(" -d ")))
+        });
+
+        if !should_drop {
+            out.push((*para).to_owned());
+        }
+    }
+
+    out.join("\n\n")
+}
+
 #[derive(Parser)]
 #[command(
     name = "hyalo",
@@ -40,156 +392,7 @@ use hyalo_core::index::{SnapshotIndex, VaultIndex};
         \u{00a0} hints = true           # default --hints on (CLI default is off)\n\
         \u{00a0} site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
         CLI flags always take precedence.\n\n\
-        See COMMAND REFERENCE below for full syntax of each command.",
-    after_help = "EXAMPLES:\n  \
-        Search for files:             hyalo find --property status=draft\n  \
-        Filter by tag:                hyalo find --tag project\n  \
-        Filter by task status:        hyalo find --task todo\n  \
-        Full-text search:             hyalo find 'meeting notes'\n  \
-        Filter by section:            hyalo find --section 'Tasks' --task todo\n  \
-        Read file content:            hyalo read --file notes/todo.md\n  \
-        Read a section:               hyalo read --file notes/todo.md --section Proposal\n  \
-        Set a property:               hyalo set --property status=completed --file notes/todo.md\n  \
-        Bulk-set with filter:         hyalo set --property status=completed --where-property status=draft --glob '**/*.md'\n  \
-        Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'\n  \
-        Remove a property:            hyalo remove --property status --file notes/todo.md\n  \
-        Remove a tag from files:      hyalo remove --tag draft --glob '**/*.md'\n  \
-        Append to a list property:    hyalo append --property aliases='My Note' --file note.md\n  \
-        Aggregate property summary:   hyalo properties summary\n  \
-        Rename a property key:        hyalo properties rename --from old-key --to new-key\n  \
-        Aggregate tag summary:        hyalo tags summary\n  \
-        Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag\n  \
-        Vault overview:               hyalo summary --format text\n  \
-        Overview with drill-down:     hyalo summary --format text --hints\n  \
-        Toggle a task:                hyalo task toggle --file todo.md --line 5\n  \
-        Find backlinks:               hyalo backlinks --file decision-log.md\n  \
-        Move a file (update links):   hyalo mv --file old.md --to new.md\n  \
-        Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run",
-    after_long_help = "\
-COMMAND REFERENCE:\n  \
-  Find (search and filter, read-only):\n  \
-    hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]\n  \
-               [-s/--section HEADING ...] [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [-n/--limit N]\n\n  \
-  Read (display file body content, read-only):\n  \
-    hyalo read -f/--file F [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]\n\n  \
-  Set (create or overwrite, mutates files):\n  \
-    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
-  Remove (delete properties/tags, mutates files):\n  \
-    hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
-  Append (add to list properties, mutates files):\n  \
-    hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]\n\n  \
-  Properties (subcommand group):\n  \
-    hyalo properties summary [-g/--glob G]                        Unique property names, types, and file counts (read-only)\n  \
-    hyalo properties rename --from OLD --to NEW [-g/--glob G]     Rename a property key across files (mutates files)\n\n  \
-  Tags (subcommand group):\n  \
-    hyalo tags summary [-g/--glob G]                              Unique tags with file counts (read-only)\n  \
-    hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)\n\n  \
-  Summary (vault overview, read-only):\n  \
-    hyalo summary [-g/--glob G] [-n/--recent N]\n\n  \
-  Task (single-task operations):\n  \
-    hyalo task read       -f/--file F -l/--line N           Read task at a line\n  \
-    hyalo task toggle     -f/--file F -l/--line N           Toggle completion\n  \
-    hyalo task set-status -f/--file F -l/--line N -s/--status C\n\n  \
-  Backlinks (reverse link lookup, read-only):\n  \
-    hyalo backlinks -f/--file F\n\n  \
-  Mv (move/rename file, updates links, mutates files):\n  \
-    hyalo mv -f/--file F --to NEW [--dry-run]\n\n  \
-  Init (configuration, one-time setup):\n  \
-    hyalo init [--claude] [-d/--dir DIR]\n\n  \
-  Global flags (apply to all commands):\n  \
-    -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)\n  \
-    --format json|text      Output format (default: json, override via .hyalo.toml)\n  \
-    --jq <FILTER>           Apply a jq expression to JSON output\n  \
-    --hints                 Append drill-down hints (default: off, override via .hyalo.toml)\n  \
-    --no-hints              Disable hints (overrides .hyalo.toml)\n  \
-    --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)\n\n\
-COOKBOOK:\n  \
-  # Discover what metadata exists in a vault\n  \
-  hyalo properties summary\n  \
-  hyalo tags summary\n\n  \
-  # Rename a property key across all files\n  \
-  hyalo properties rename --from old-key --to new-key\n\n  \
-  # Rename a tag across all files\n  \
-  hyalo tags rename --from old-tag --to new-tag\n\n  \
-  # Get a vault overview with drill-down hints\n  \
-  hyalo summary --format text --hints\n\n  \
-  # Find all files with status=draft\n  \
-  hyalo find --property status=draft\n\n  \
-  # Find files missing the 'status' property (absence filter)\n  \
-  hyalo find --property '!status'\n\n  \
-  # Find files where title contains 'draft' (property value regex)\n  \
-  hyalo find --property 'title~=draft'\n\n  \
-  # Case-insensitive regex on a property value\n  \
-  hyalo find --property 'title~=/^Draft/i'\n\n  \
-  # Find files tagged 'project' (matches project/backend, project/frontend, etc.)\n  \
-  hyalo find --tag project\n\n  \
-  # Find files with open tasks\n  \
-  hyalo find --task todo\n\n  \
-  # Find files with a specific section heading (substring match: 'Tasks' matches 'Tasks [4/4]')\n  \
-  hyalo find --section 'Tasks'\n\n  \
-  # Find open tasks within a specific section\n  \
-  hyalo find --section '## Sprint' --task todo\n\n  \
-  # Find broken [[wikilinks]] (fields=links, then filter in jq)\n  \
-  hyalo find --fields links --jq '[.[] | select(.links | map(select(.path == null)) | length > 0)]'\n\n  \
-  # Exclude draft files with glob negation\n  \
-  hyalo find --glob '!**/draft-*'\n\n  \
-  # Tag all research notes in a folder\n  \
-  hyalo set --tag reviewed --glob 'research/**/*.md'\n\n  \
-  # Bulk-update a property across matching files\n  \
-  hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\n  \
-  # Add a tag to files matching a tag filter\n  \
-  hyalo set --tag reviewed --where-tag research --glob '**/*.md'\n\n  \
-  # Append to a list property\n  \
-  hyalo append --property aliases='My Note' --file note.md\n\n  \
-  # Quick vault overview\n  \
-  hyalo summary --format text\n\n  \
-  # Count tasks across all files\n  \
-  hyalo summary --jq '.tasks.total'\n\n  \
-  # List all property names as a flat list\n  \
-  hyalo properties summary --jq '[.[].name] | join(\", \")'\n\n  \
-  # Get just file paths (no metadata)\n  \
-  hyalo find --property status=draft --jq '[.[].file]'\n\n  \
-  # Pipe file paths for scripting (Unix)\n  \
-  hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}\n\n  \
-  # Find all files that link to a given note\n  \
-  hyalo backlinks --file decision-log.md\n\n  \
-  # Move a file and update all links\n  \
-  hyalo mv --file backlog/old.md --to backlog/done/old.md\n\n  \
-  # Preview a move without writing\n  \
-  hyalo mv --file note.md --to archive/note.md --dry-run\n\n  \
-  # Override site prefix for absolute link resolution\n  \
-  hyalo --site-prefix docs mv --file old.md --to new.md --dry-run\n\n  \
-  # Disable absolute-link resolution entirely\n  \
-  hyalo --site-prefix '' find --fields links\n\n\
-OUTPUT SHAPES (JSON, default):\n  \
-  # find\n  \
-  [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",\n   \
-    \"properties\": {\"status\": \"draft\", \"title\": \"My Note\"},\n   \
-    \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]\n\n  \
-  # set / remove / append (mutation result)\n  \
-  {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n  \
-  {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}\n\n  \
-  # properties\n  \
-  [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...]\n\n  \
-  # tags\n  \
-  {\"tags\": [{\"name\": \"backlog\", \"count\": 10}, ...], \"total\": 31}\n\n  \
-  # task read / toggle / set-status\n  \
-  {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}\n\n  \
-  # summary\n  \
-  {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},\n   \
-  \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},\n   \
-  \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}\n\n  \
-  # backlinks\n  \
-  {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}], \"total\": 1}\n\n  \
-  # mv\n  \
-  {\"from\": \"old.md\", \"to\": \"new.md\", \"dry_run\": false,\n   \
-  \"updated_files\": [{\"file\": \"a.md\", \"replacements\": [{\"line\": 5, \"old_text\": \"[[old]]\", \"new_text\": \"[[new]]\"}]}],\n   \
-  \"total_files_updated\": 1, \"total_links_updated\": 1}\n\n  \
-  # --hints wraps JSON output in an envelope with drill-down commands\n  \
-  {\"data\": { ... original output ... }, \"hints\": [\"hyalo properties\", ...]}\n\n  \
-  # errors (stderr, exit code 1 for user errors, 2 for internal)\n  \
-  {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}\n\n  \
-  # --format text produces human-readable output on all commands"
+        See COMMAND REFERENCE below for full syntax of each command."
 )]
 struct Cli {
     /// Root directory for resolving all --file and --glob paths.
@@ -332,10 +535,13 @@ enum Commands {
             specific section by heading (case-insensitive whole-string match; use leading '#' to \
             pin heading level, e.g. '## Tasks'; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
-            OUTPUT: Defaults to plain text (overrides the global json default). \
+            OUTPUT: Defaults to plain text (note: this overrides the global --format json default). \
             Pass --format json explicitly to get \
             {\"file\": \"...\", \"content\": \"...\"}.\n\
-            SIDE EFFECTS: None (read-only).")]
+            SIDE EFFECTS: None (read-only).\n\
+            FORMAT DEFAULT: Unlike other commands, `read` outputs plain text by default \
+            — the --format flag shown below says 'Default: json' because it is a global flag, \
+            but `read` overrides this to text.")]
     Read {
         /// Target file (relative to --dir)
         #[arg(short, long)]
@@ -782,13 +988,23 @@ fn main() {
     // the project config.  `mut_arg` is scoped to the root command, but because
     // both `--dir` and `--format` are declared `global = true`, hiding them on
     // the root is sufficient for --help at every level.
+    let hide_dir = config.dir.as_os_str() != ".";
+    let hide_format = config.format != "json";
+
     let mut cmd = Cli::command();
-    if config.dir.as_os_str() != "." {
+    if hide_dir {
         cmd = cmd.mut_arg("dir", |a| a.hide(true));
     }
-    if config.format != "json" {
+    if hide_format {
         cmd = cmd.mut_arg("format", |a| a.hide(true));
     }
+
+    // Apply runtime-filtered help text so that examples and cookbook entries
+    // that reference config-defaulted flags are stripped from help output.
+    // `after_help` is shown by `-h`; `after_long_help` is shown by `--help`.
+    cmd = cmd
+        .after_help(filter_examples(hide_dir, hide_format))
+        .after_long_help(filter_long_help(hide_dir, hide_format));
 
     // Global args (--format, --jq, etc.) are only defined on the root Command
     // in clap derive — they aren't propagated to subcommands until parse time.

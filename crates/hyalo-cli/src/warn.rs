@@ -105,6 +105,18 @@ pub fn suppressed_count_for(msg: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Return whether the given message was emitted (printed) at least once.
+///
+/// **For use in tests only.**
+#[cfg(test)]
+pub fn was_emitted(msg: &str) -> bool {
+    SUPPRESSED
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|m| m.contains_key(msg)))
+        .unwrap_or(false)
+}
+
 /// Return the total number of suppressed (duplicate) warning occurrences.
 ///
 /// **For use in tests only.**

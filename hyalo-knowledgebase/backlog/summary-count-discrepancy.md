@@ -1,11 +1,15 @@
 ---
-title: "Off-by-one between summary and properties summary counts"
+title: Off-by-one between summary and properties summary counts
 type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1 against docs/content and vscode-docs/docs
 priority: low
-status: planned
-tags: [backlog, bug, summary, properties]
+status: completed
+tags:
+  - backlog
+  - bug
+  - summary
+  - properties
 ---
 
 # Off-by-one between summary and properties summary counts

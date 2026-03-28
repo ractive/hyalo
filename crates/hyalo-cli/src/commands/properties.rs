@@ -7,6 +7,7 @@ use crate::output::{CommandOutcome, Format, format_output};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
+use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::types::PropertySummaryEntry;
 use serde::Serialize;
 
@@ -25,19 +26,25 @@ pub fn properties_summary(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    // Aggregate: (name, type) -> count -- same key as summary command so both agree.
+    // Aggregate: (name, type) -> count — same key and same scanner path as `summary`
+    // so both commands always agree.  Using scan_file_multi + FrontmatterCollector
+    // (rather than read_frontmatter) ensures identical parse-error semantics: the
+    // scanner treats a bare `---` with no closing delimiter as an error and skips
+    // it, while read_frontmatter silently returns empty props for that case.
     let mut agg: std::collections::BTreeMap<(String, String), usize> =
         std::collections::BTreeMap::new();
 
     for (fp, rel) in &files {
-        let props = match frontmatter::read_frontmatter(fp) {
-            Ok(p) => p,
+        let mut fm = FrontmatterCollector::new(false);
+        match scan_file_multi(fp, &mut [&mut fm]) {
+            Ok(()) => {}
             Err(e) if frontmatter::is_parse_error(&e) => {
                 crate::warn::warn(format!("skipping {rel}: {e}"));
                 continue;
             }
             Err(e) => return Err(e),
-        };
+        }
+        let props = fm.into_props();
         for (key, value) in props.iter().filter(|(k, _)| k.as_str() != "tags") {
             let prop_type = frontmatter::infer_type(value).to_owned();
             *agg.entry((key.clone(), prop_type)).or_insert(0) += 1;
@@ -421,5 +428,34 @@ title: Good Note
         let names: Vec<&str> = parsed.iter().map(|v| v["name"].as_str().unwrap()).collect();
         // The valid file's property must appear.
         assert!(names.contains(&"title"), "missing 'title' in {names:?}");
+    }
+
+    /// A file whose entire content is a bare `---` (no closing delimiter) must be
+    /// skipped by `properties_summary`, matching the behaviour of `summary`.
+    ///
+    /// Before the fix, `read_frontmatter` returned `Ok(empty)` for this edge case
+    /// while `scan_file_multi` correctly returned an "unclosed frontmatter" error,
+    /// causing the two commands to diverge on total file counts.
+    #[test]
+    fn properties_summary_skips_bare_opening_delimiter() {
+        let tmp = tempfile::tempdir().unwrap();
+        // File with a valid title — must be counted.
+        fs::write(tmp.path().join("good.md"), "---\ntitle: Present\n---\n").unwrap();
+        // File that is just `---` — no closing delimiter, no content.
+        // scan_file_multi treats this as an unclosed-frontmatter parse error;
+        // properties_summary must do the same (not silently count it as empty).
+        fs::write(tmp.path().join("bare.md"), "---\n").unwrap();
+
+        let outcome = properties_summary(tmp.path(), None, &[], Format::Json).unwrap();
+        let (out, ok) = unwrap_output(outcome);
+        assert!(ok, "expected Success: {out}");
+
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        let title_entry = parsed.iter().find(|p| p["name"] == "title").unwrap();
+        // Only the good file contributes — count must be 1.
+        assert_eq!(
+            title_entry["count"], 1,
+            "bare `---` file must not inflate the count: {parsed:?}"
+        );
     }
 }

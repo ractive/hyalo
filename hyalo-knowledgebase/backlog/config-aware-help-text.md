@@ -4,8 +4,12 @@ type: backlog
 date: 2026-03-25
 origin: iteration-39 scope split
 priority: medium
-status: planned
-tags: [backlog, cli, ux, help]
+status: completed
+tags:
+  - backlog
+  - cli
+  - ux
+  - help
 ---
 
 # Config-aware help text

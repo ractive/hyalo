@@ -1,11 +1,15 @@
 ---
-title: "properties-typed flag uses hyphen but JSON key uses underscore"
+title: properties-typed flag uses hyphen but JSON key uses underscore
 type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1
 priority: low
-status: planned
-tags: [backlog, ux, consistency, output]
+status: completed
+tags:
+  - backlog
+  - ux
+  - consistency
+  - output
 ---
 
 # properties-typed flag uses hyphen but JSON key uses underscore
