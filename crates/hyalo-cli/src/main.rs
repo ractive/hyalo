@@ -806,7 +806,7 @@ fn main() {
                      tip: did you mean '--property'?\n\n\
                      Example: hyalo find --property status=planned\n"
                 );
-                process::exit(2);
+                die(2);
             }
 
             // Only attempt subcommand suggestions when clap couldn't recognise a
@@ -818,7 +818,7 @@ fn main() {
                 hyalo_cli::suggest::suggest_subcommand_correction(&raw_args, &Cli::command())
             {
                 eprintln!("{e}\n  tip: did you mean:\n\n    {suggestion}\n");
-                process::exit(2);
+                die(2);
             }
             e.exit();
         }

@@ -143,7 +143,7 @@ pub fn flush_summary() {
         Err(_) => return,
     };
 
-    if total_suppressed > 0 {
+    if !QUIET.load(Ordering::Relaxed) && total_suppressed > 0 {
         eprintln!("warning: {total_suppressed} additional identical warning(s) suppressed");
     }
 }

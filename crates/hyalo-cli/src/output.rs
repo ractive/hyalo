@@ -447,7 +447,7 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
 
     // Title: "  title: <value>" or "  title: (none)"
     if map.contains_key("title") {
-        parts.push(r#""  title: \(if .title then .title else "(none)" end)""#.to_owned());
+        parts.push(r#""  title: \(if .title != null then .title else "(none)" end)""#.to_owned());
     }
 
     // Properties: header then each as "    key: value"

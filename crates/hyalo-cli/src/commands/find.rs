@@ -846,7 +846,7 @@ fn needs_body(
 /// 3. `serde_json::Value::Null` if neither found
 fn extract_title(
     props: &indexmap::IndexMap<String, serde_json::Value>,
-    outline_sections: Option<&Vec<OutlineSection>>,
+    outline_sections: Option<&[OutlineSection]>,
 ) -> serde_json::Value {
     // 1. Frontmatter title property
     if let Some(serde_json::Value::String(s)) = props.get("title") {
@@ -946,7 +946,7 @@ fn build_file_object(
 
     // Extract title before outline_sections is consumed into sections.
     let title = if fields.title {
-        Some(extract_title(props, outline_sections.as_ref()))
+        Some(extract_title(props, outline_sections.as_deref()))
     } else {
         None
     };
