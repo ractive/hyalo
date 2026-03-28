@@ -18,13 +18,13 @@ Address all UX issues and minor bugs found during v0.4.1 dogfooding on GitHub Do
 
 ## Backlog items
 
-- [[backlog/repeatable-glob-flag]]
-- [[backlog/sort-by-backlinks-count]]
-- [[backlog/trailing-slash-link-resolution]]
-- [[backlog/query-string-link-resolution]]
-- [[backlog/limit-zero-means-unlimited]]
+- [[backlog/done/repeatable-glob-flag]]
+- [[backlog/done/sort-by-backlinks-count]]
+- [[backlog/done/trailing-slash-link-resolution]]
+- [[backlog/done/query-string-link-resolution]]
+- [[backlog/done/limit-zero-means-unlimited]]
 - [[backlog/bare-subcommand-defaults]]
-- [[backlog/empty-body-pattern-matches-all]]
+- [[backlog/done/empty-body-pattern-matches-all]]
 
 ## Tasks
 

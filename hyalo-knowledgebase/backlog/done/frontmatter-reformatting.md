@@ -2,7 +2,7 @@
 title: Frontmatter reformatting on write (key order, list indentation, quotes)
 type: backlog
 date: 2026-03-23
-status: done
+status: completed
 priority: low
 origin: dogfooding iteration-20
 tags:

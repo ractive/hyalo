@@ -106,4 +106,4 @@ Bare `hyalo properties` / `hyalo tags` (no subcommand) shows help. No backward-c
 
 ## Deferred
 
-- **Frontmatter reformatting (IndexMap swap)** — Replace `BTreeMap` with `IndexMap` to preserve key insertion order on write. See [[backlog/frontmatter-reformatting]] for full analysis. Deferred because it's a serialization internals change unrelated to the mutation features in this iteration.
+- **Frontmatter reformatting (IndexMap swap)** — Replace `BTreeMap` with `IndexMap` to preserve key insertion order on write. See [[backlog/done/frontmatter-reformatting]] for full analysis. Deferred because it's a serialization internals change unrelated to the mutation features in this iteration.

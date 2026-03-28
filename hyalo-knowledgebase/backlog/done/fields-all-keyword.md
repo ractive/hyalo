@@ -1,8 +1,8 @@
 ---
-title: "Support --fields all as a keyword"
+title: Support --fields all as a keyword
 type: backlog
 date: 2026-03-28
-status: planned
+status: completed
 priority: low
 origin: dogfooding v0.4.2 on docs/content
 ---

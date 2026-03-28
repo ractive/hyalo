@@ -15,10 +15,10 @@ These items all touch the link resolution pipeline and can be tested together. F
 
 ## Tasks
 
-- [x] Strip query strings and fragments from link targets before resolution ([[backlog/query-string-link-resolution.md]])
+- [x] Strip query strings and fragments from link targets before resolution ([[backlog/done/query-string-link-resolution]])
   - `/docs/?dv=winzip` → `/docs/`; `file.md#section` → `file.md`
-- [x] Strip trailing slash from link targets before resolution ([[backlog/trailing-slash-link-resolution.md]])
+- [x] Strip trailing slash from link targets before resolution ([[backlog/done/trailing-slash-link-resolution]])
   - `/docs/debugtest/debugging.md/` → `/docs/debugtest/debugging.md`
-- [x] Fix heading text inside code spans parsed as empty string ([[backlog/heading-code-spans-parsed-empty.md]])
-- [x] Fix regex case sensitivity flags `(?i)`/`(?-i)` having no effect ([[backlog/regex-case-sensitivity-flags-inert.md]])
+- [x] Fix heading text inside code spans parsed as empty string ([[backlog/done/heading-code-spans-parsed-empty]])
+- [x] Fix regex case sensitivity flags `(?i)`/`(?-i)` having no effect ([[backlog/done/regex-case-sensitivity-flags-inert]])
 - [x] Dogfood backlinks accuracy on vscode-docs/docs after fixes

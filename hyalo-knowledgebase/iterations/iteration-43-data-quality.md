@@ -19,7 +19,7 @@ Improve data quality tooling and write fidelity: orphan detection in summary, in
 ## Backlog items
 
 - [[backlog/status-inconsistency-detection]] (low)
-- [[backlog/frontmatter-reformatting]] (low)
+- [[backlog/done/frontmatter-reformatting]] (low)
 
 ## Tasks
 

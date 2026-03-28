@@ -20,7 +20,7 @@ Make the backlinks/link-graph code path as robust as the rest of the scanner. Cu
 ## Backlog items
 
 - [[backlog/done/backlinks-fatal-on-malformed-frontmatter]] (critical)
-- ~~[[backlog/glob-negation-escaping-bug]]~~ — not a bug; glob negation works fine, the `!` was being shell-escaped by zsh history expansion
+- ~~[[backlog/done/glob-negation-escaping-bug]]~~ — not a bug; glob negation works fine, the `!` was being shell-escaped by zsh history expansion
 
 ## Tasks
 

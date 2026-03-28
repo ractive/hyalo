@@ -1,11 +1,12 @@
 ---
-title: "RAII index server with file watcher"
+title: RAII index server with file watcher
 type: backlog
 date: 2026-03-26
 tags:
   - performance
   - index
   - daemon
+status: planned
 ---
 
 # RAII Index Server with File Watcher

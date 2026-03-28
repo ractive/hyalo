@@ -5,8 +5,8 @@ status: completed
 tags:
 - iteration
 - performance
-- filters
-title: 'Iteration 26: Hot-Path Performance Fixes'
+- filtering
+title: "Iteration 26: Hot-Path Performance Fixes"
 type: iteration
 ---
 

@@ -1,11 +1,15 @@
 ---
-title: "--hints flag silently accepted but does nothing for find/properties/tags"
+title: --hints flag silently accepted but does nothing for find/properties/tags
 type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1
 priority: low
-status: planned
-tags: [backlog, ux, cli, hints]
+status: completed
+tags:
+  - backlog
+  - ux
+  - cli
+  - hints
 ---
 
 # --hints flag silently accepted but does nothing for most commands

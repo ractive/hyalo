@@ -6,7 +6,7 @@ tags:
 - output
 - ux
 - structured-data
-- filters
+- filtering
 title: CLI Structured Output & Filtering Patterns
 type: research
 ---

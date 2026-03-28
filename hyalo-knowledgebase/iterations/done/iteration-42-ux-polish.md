@@ -22,7 +22,7 @@ Address UX friction found during dogfooding: config-aware help text, properties-
 - [[backlog/config-aware-help-text]] (medium)
 - [[backlog/done/backlinks-absolute-path-resolution]] (medium)
 - [[backlog/properties-typed-naming-inconsistency]] (low)
-- [[backlog/hints-flag-no-op-for-most-commands]] (low)
+- [[backlog/done/hints-flag-no-op-for-most-commands]] (low)
 
 ## Tasks
 

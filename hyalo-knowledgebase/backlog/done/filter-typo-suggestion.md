@@ -1,8 +1,8 @@
 ---
-title: "Improve --filter typo suggestion to include --property"
+title: Improve --filter typo suggestion to include --property
 type: backlog
 date: 2026-03-28
-status: planned
+status: completed
 priority: low
 origin: dogfooding v0.4.2 on docs/content
 ---

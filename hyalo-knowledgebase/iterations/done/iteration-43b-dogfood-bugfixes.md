@@ -1,11 +1,11 @@
 ---
-title: "Iteration 43b — Dogfood Bugfixes (v0.4.0)"
+title: Iteration 43b — Dogfood Bugfixes (v0.4.0)
 type: iteration
 date: 2026-03-26
 tags:
   - iteration
-  - bugfix
   - dogfooding
+  - bug-fix
 status: completed
 branch: iter-43/dogfood-bugfixes
 ---

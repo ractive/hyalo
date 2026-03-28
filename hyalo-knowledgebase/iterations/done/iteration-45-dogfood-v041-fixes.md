@@ -1,11 +1,11 @@
 ---
-title: "Iteration 45 — Dogfood v0.4.1 Bugfixes"
+title: Iteration 45 — Dogfood v0.4.1 Bugfixes
 type: iteration
 date: 2026-03-26
 tags:
   - iteration
-  - bugfix
   - dogfooding
+  - bug-fix
 status: completed
 branch: iter-45/site-prefix-fix
 ---
