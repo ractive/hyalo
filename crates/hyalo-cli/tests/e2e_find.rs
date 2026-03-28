@@ -2325,25 +2325,21 @@ fn find_single_glob_backward_compat() {
 }
 
 // ---------------------------------------------------------------------------
-// --limit 0 = unlimited
+// --limit 0 = rejected by clap
 // ---------------------------------------------------------------------------
 
 #[test]
-fn find_limit_zero_returns_all_files() {
+fn find_limit_zero_is_rejected() {
     let tmp = setup_vault();
-    let (status_zero, json_zero, stderr) = find_json(&tmp, &["--limit", "0"]);
-    assert!(status_zero.success(), "stderr: {stderr}");
-
-    let (status_all, json_all, _) = find_json(&tmp, &[]);
-    assert!(status_all.success());
-
-    let count_zero = json_zero.as_array().unwrap().len();
-    let count_all = json_all.as_array().unwrap().len();
-    assert_eq!(
-        count_zero, count_all,
-        "--limit 0 should return all files ({count_all}), got {count_zero}"
+    let (status, _json, stderr) = find_json(&tmp, &["--limit", "0"]);
+    assert!(
+        !status.success(),
+        "--limit 0 should fail but exited successfully"
     );
-    assert!(count_all > 0, "vault should have files");
+    assert!(
+        stderr.contains("0") || stderr.contains("invalid"),
+        "expected clap error about invalid value, got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2430,18 +2426,41 @@ fn find_sort_links_count_without_fields_links() {
 }
 
 // ---------------------------------------------------------------------------
-// Empty body pattern warning
+// Empty body pattern error
 // ---------------------------------------------------------------------------
 
 #[test]
-fn find_empty_body_pattern_warns() {
+fn find_empty_body_pattern_errors() {
     let tmp = setup_vault();
-    let (status, json, stderr) = find_json(&tmp, &[""]);
-    assert!(status.success(), "should succeed: {stderr}");
-    let arr = json.as_array().unwrap();
-    assert!(!arr.is_empty(), "empty pattern should still return files");
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", ""]);
+    let output = cmd.output().unwrap();
     assert!(
-        stderr.contains("warning"),
-        "stderr should contain a warning about empty pattern, got: {stderr}"
+        !output.status.success(),
+        "empty pattern should exit non-zero"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("body pattern must not be empty"),
+        "stderr should contain error about empty pattern, got: {stderr}"
+    );
+}
+
+#[test]
+fn find_whitespace_only_body_pattern_errors() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "   "]);
+    let output = cmd.output().unwrap();
+    assert!(
+        !output.status.success(),
+        "whitespace-only pattern should exit non-zero"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("body pattern must not be empty"),
+        "stderr should contain error about empty pattern, got: {stderr}"
     );
 }

@@ -314,8 +314,8 @@ enum Commands {
         /// Sort order: 'file' (default), 'modified', 'backlinks_count', or 'links_count'
         #[arg(long)]
         sort: Option<String>,
-        /// Maximum number of results to return
-        #[arg(short = 'n', long)]
+        /// Maximum number of results to return (must be at least 1)
+        #[arg(short = 'n', long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
         limit: Option<usize>,
     },
     /// Read file body content, optionally filtered by section or line range (read-only)
@@ -1274,7 +1274,7 @@ fn main() {
             if let Some(ref idx) = snapshot_index {
                 summary_commands::summary_from_index(idx, glob, recent, depth, effective_format)
             } else {
-                summary_commands::summary(&dir, glob, recent, depth, effective_format)
+                summary_commands::summary(&dir, glob, recent, depth, site_prefix, effective_format)
             }
         }
         Commands::Set {
