@@ -141,9 +141,16 @@ pub fn append(
 
     // Validate all K=V args upfront (must have `=` and a non-empty key)
     for arg in property_args {
-        if let Err(msg) = parse_kv(arg) {
-            let out = crate::output::format_error(format, &msg, None, None, None);
-            return Ok(CommandOutcome::UserError(out));
+        match parse_kv(arg) {
+            Err(msg) => {
+                let out = crate::output::format_error(format, &msg, None, None, None);
+                return Ok(CommandOutcome::UserError(out));
+            }
+            Ok((key, _)) => {
+                if let Some(outcome) = super::reject_filter_in_mutation_property(key, format) {
+                    return Ok(outcome);
+                }
+            }
         }
     }
 
@@ -685,5 +692,69 @@ title: Note
         assert!(tagged_content.contains("rust-note"));
         let untagged_content = fs::read_to_string(tmp.path().join("untagged.md")).unwrap();
         assert!(!untagged_content.contains("rust-note"));
+    }
+
+    // --- filter guard ---
+
+    #[test]
+    fn append_rejects_gte_filter_in_property() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: x\n---\n").unwrap();
+        let outcome = append(
+            tmp.path(),
+            &["priority>=3".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(msg.contains("--where-property"), "msg: {msg}");
+            }
+            other => panic!("expected UserError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn append_rejects_neq_filter_in_property() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: x\n---\n").unwrap();
+        let outcome = append(
+            tmp.path(),
+            &["status!=draft".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn append_rejects_regex_filter_in_property() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: x\n---\n").unwrap();
+        let outcome = append(
+            tmp.path(),
+            &["name~=pattern".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 }

@@ -509,3 +509,80 @@ tags:
     assert!(stdout.contains("rust"), "tag name: {stdout}");
     assert!(stdout.contains("1/1 modified"), "counts: {stdout}");
 }
+
+// ---------------------------------------------------------------------------
+// Filter guard: reject operator suffixes in --property
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_rejects_gte_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        remove_json(&tmp, &["--property", "priority>=3", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn remove_rejects_lte_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        remove_json(&tmp, &["--property", "priority<=3", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn remove_rejects_neq_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        remove_json(&tmp, &["--property", "status!=draft", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn remove_rejects_regex_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        remove_json(&tmp, &["--property", "name~=pattern", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn remove_accepts_plain_key_property() {
+    // Ensure bare K removal still works after guard
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\nstatus: draft\n---\n");
+    let (status, json, stderr) = remove_json(&tmp, &["--property", "status", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["property"], "status");
+}
+
+#[test]
+fn remove_accepts_kv_property() {
+    // Ensure K=V removal still works after guard
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\nstatus: draft\n---\n");
+    let (status, json, stderr) =
+        remove_json(&tmp, &["--property", "status=draft", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["property"], "status");
+}

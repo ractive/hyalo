@@ -659,6 +659,8 @@ enum Commands {
             - --property K=V: creates or overwrites the property. Type is auto-inferred from V \
               (number, bool, text). Use K=[a,b,c] to create a YAML list; values are comma-split and trimmed. \
               A file is skipped if the stored value is already identical.\n\
+            GUARD: --property accepts only plain K=V assignments. Filter syntax (>=, <=, !=, ~=) \
+            is rejected — use --where-property for filtering.\n\
             - --tag T: idempotent tag add. Creates the 'tags' list if absent. Skips files that already have the tag.\n\
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
@@ -702,6 +704,8 @@ Repeatable (AND).\n\
             - --property K: removes the entire key from frontmatter. Skips files where it is absent.\n\
             - --property K=V: if the property is a list, removes V from the list; if it is a scalar \
               that matches V (case-insensitive), removes the key entirely; otherwise skips the file.\n\
+            GUARD: --property accepts only plain K or K=V arguments. Filter syntax (>=, <=, !=, ~=) \
+            is rejected — use --where-property for filtering.\n\
             - --tag T: removes the tag from the 'tags' list. Skips files where the tag is not present.\n\
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, [\"value\": V,] \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
@@ -793,6 +797,8 @@ Repeatable (AND).\n\
             - Property is a list: appends V if not already present (case-insensitive duplicate check).\n\
             - Property is a scalar (string, number, bool): promotes to [existing, V].\n\
             - Property is a mapping: returns an error.\n\
+            GUARD: --property accepts only plain K=V assignments. Filter syntax (>=, <=, !=, ~=) \
+            is rejected — use --where-property for filtering.\n\
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             FILTERS (optional, narrow which files are mutated):\n\

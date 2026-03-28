@@ -6,7 +6,7 @@ tags:
   - performance
   - index
   - daemon
-status: planned
+status: wont-do
 ---
 
 # RAII Index Server with File Watcher

@@ -968,3 +968,77 @@ title: Good
         "warning should name the bad file; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Filter guard: reject operator suffixes in --property
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_rejects_gte_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) = set_json(&tmp, &["--property", "priority>=3", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_rejects_lte_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) = set_json(&tmp, &["--property", "priority<=3", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_rejects_neq_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) = set_json(&tmp, &["--property", "status!=draft", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_rejects_regex_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) = set_json(&tmp, &["--property", "name~=pattern", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_accepts_plain_kv_property() {
+    // Ensure normal K=V still works after guard is added
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "status=done", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["property"], "status");
+}
+
+#[test]
+fn set_accepts_list_property() {
+    // Ensure K=[a,b] still works
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "tags=[a, b, c]", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["property"], "tags");
+}

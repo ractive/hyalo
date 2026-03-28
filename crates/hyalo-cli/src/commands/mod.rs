@@ -136,6 +136,38 @@ pub fn require_file_or_glob(
     }
 }
 
+/// Characters that form the start of comparison operators in filter syntax (`>=`, `<=`,
+/// `!=`, `~=`).  When a `--property` key ends with one of these in a mutation command
+/// (`set`, `remove`, `append`), it almost certainly means the user intended
+/// `--where-property` instead.
+const FILTER_OP_SUFFIXES: &[char] = &['<', '>', '!', '~'];
+
+/// Reject a `--property` key that looks like a filter expression (ends with a comparison
+/// operator prefix).  Returns `Some(CommandOutcome::UserError(...))` when rejected, or
+/// `None` when the key is fine.
+#[must_use]
+pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<CommandOutcome> {
+    let trimmed = key.trim_end();
+    let ch = trimmed.chars().last()?;
+    if !FILTER_OP_SUFFIXES.contains(&ch) {
+        return None;
+    }
+    let out = crate::output::format_error(
+        format,
+        &format!(
+            "invalid property name '{trimmed}': ends with '{ch}' which looks like a filter \
+             operator (e.g. >=, <=, !=, ~=)"
+        ),
+        None,
+        Some(
+            "--property in mutation commands is for mutation, not filtering — \
+             use --where-property to filter which files are mutated",
+        ),
+        None,
+    );
+    Some(CommandOutcome::UserError(out))
+}
+
 /// If exactly one file was specified and there is exactly one result, unwrap to a bare
 /// JSON object. Otherwise return the full array.
 #[must_use]
@@ -192,6 +224,51 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- reject_filter_in_mutation_property ---
+
+    #[test]
+    fn reject_filter_gt() {
+        assert!(reject_filter_in_mutation_property("priority>", Format::Json).is_some());
+    }
+
+    #[test]
+    fn reject_filter_lt() {
+        assert!(reject_filter_in_mutation_property("priority<", Format::Json).is_some());
+    }
+
+    #[test]
+    fn reject_filter_bang() {
+        assert!(reject_filter_in_mutation_property("status!", Format::Json).is_some());
+    }
+
+    #[test]
+    fn reject_filter_tilde() {
+        assert!(reject_filter_in_mutation_property("name~", Format::Json).is_some());
+    }
+
+    #[test]
+    fn accept_plain_key() {
+        assert!(reject_filter_in_mutation_property("status", Format::Json).is_none());
+    }
+
+    #[test]
+    fn accept_hyphenated_key() {
+        assert!(reject_filter_in_mutation_property("my-key", Format::Json).is_none());
+    }
+
+    #[test]
+    fn accept_underscored_key() {
+        assert!(reject_filter_in_mutation_property("key_name", Format::Json).is_none());
+    }
+
+    #[test]
+    fn accept_empty_key() {
+        // Empty keys are handled elsewhere; the guard should not panic
+        assert!(reject_filter_in_mutation_property("", Format::Json).is_none());
+    }
+
+    // --- iso8601 ---
 
     #[test]
     fn iso8601_epoch() {
