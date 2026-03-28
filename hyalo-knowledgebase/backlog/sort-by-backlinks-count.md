@@ -1,10 +1,10 @@
 ---
-title: "Add backlinks_count and links_count as sort fields"
+title: Add backlinks_count and links_count as sort fields
 type: backlog
 date: 2026-03-26
 origin: dogfooding v0.4.1 on GitHub Docs and VS Code Docs
 priority: medium
-status: planned
+status: completed
 ---
 
 `find --sort backlinks_count` errors with "unknown sort field". Only `file` and `modified` are valid. This makes it impossible to natively find the most-linked-to files — users must pipe through jq.
