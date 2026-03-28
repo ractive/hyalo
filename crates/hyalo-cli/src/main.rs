@@ -769,6 +769,10 @@ fn die(code: i32) -> ! {
 
 #[allow(clippy::too_many_lines)]
 fn main() {
+    // Pre-scan for --quiet / -q so config-loading warnings are also suppressed.
+    let early_quiet = std::env::args().any(|a| a == "--quiet" || a == "-q");
+    hyalo_cli::warn::init(early_quiet);
+
     // Load per-project config from .hyalo.toml in CWD before parsing args.
     // This lets us hide flags that already have config-provided defaults,
     // keeping `--help` output focused on what the user actually needs to set.
@@ -828,9 +832,8 @@ fn main() {
         Err(e) => e.exit(),
     };
 
-    // Initialise the warning system as early as possible after CLI parsing.
-    // Warnings emitted before this point (e.g. from config loading) are always
-    // printed since quiet mode was not yet known.
+    // Re-apply quiet flag from the fully-parsed CLI (the early pre-scan
+    // covers the common case but this ensures correctness after full parsing).
     hyalo_cli::warn::init(cli.quiet);
 
     // `init` operates on CWD directly and needs no config or format resolution.
@@ -1491,4 +1494,7 @@ fn main() {
             die(2);
         }
     }
+
+    // Flush any dedup summary on the success path (die() handles error paths).
+    hyalo_cli::warn::flush_summary();
 }

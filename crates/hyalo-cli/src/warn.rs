@@ -65,14 +65,13 @@ pub fn warn(msg: impl AsRef<str>) {
     if let Ok(mut guard) = SUPPRESSED.lock()
         && let Some(ref mut map) = *guard
     {
-        let count = map.entry(msg.to_owned()).or_insert(0);
-        if *count > 0 {
+        if let Some(count) = map.get_mut(msg) {
             // Already printed once — suppress and increment counter.
             *count += 1;
             return;
         }
-        // First occurrence: mark as seen (count = 1) and fall through to print.
-        *count = 1;
+        // First occurrence: insert and fall through to print.
+        map.insert(msg.to_owned(), 1);
         // guard.is_none() means init() hasn't been called yet — fall through to print.
     }
 

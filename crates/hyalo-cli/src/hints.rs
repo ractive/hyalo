@@ -252,7 +252,11 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
         }
 
         // Pick the most common tag (if any results have tags).
-        if let Some((top_tag, _)) = tag_counts.iter().max_by_key(|(_, c)| *c) {
+        // Break ties alphabetically for deterministic output.
+        if let Some((top_tag, _)) = tag_counts
+            .iter()
+            .max_by(|(a_tag, a_cnt), (b_tag, b_cnt)| a_cnt.cmp(b_cnt).then(b_tag.cmp(a_tag)))
+        {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
                 hints.push(build_command_with_glob(ctx, &["find", "--tag", top_tag]));
@@ -264,8 +268,8 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
             .iter()
             .map(|(v, c)| (*v, *c, status_priority(v)))
             .collect();
-        // Sort by priority (ascending), then by count (descending) as tiebreaker.
-        status_vec.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.cmp(&a.1)));
+        // Sort by priority (ascending), then count (descending), then name (ascending).
+        status_vec.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.cmp(&a.1)).then(a.0.cmp(b.0)));
 
         if let Some((top_status, _, _)) = status_vec.first() {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
