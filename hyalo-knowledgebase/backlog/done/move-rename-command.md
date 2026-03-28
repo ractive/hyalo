@@ -34,7 +34,7 @@ Behaviour:
 ## Constraints
 
 - Requires scanning all files (O(n) on vault size) — acceptable for small/medium vaults
-- For large vaults, this would benefit from the SQLite index ([[backlog/sqlite-indexing]])
+- For large vaults, this would benefit from the SQLite index ([[backlog/done/sqlite-indexing]])
 - Must handle both `[[path]]` and `[[path|alias]]` forms
 - Should work with the current direct-path resolution model
 

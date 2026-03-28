@@ -101,7 +101,7 @@ Rules:
 - Case-insensitive (display preserves first-seen casing)
 - Nested via `/`: searching `#inbox` also matches `#inbox/to-read`
 
-Also settable in frontmatter (see [[obsidian-properties]]).
+Also settable in frontmatter (see [[research/obsidian-properties]]).
 
 ### Task Lists (Extended)
 

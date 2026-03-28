@@ -31,7 +31,7 @@ Small — the scanner already tracks fenced code block state with the same open/
 ## References
 
 - [[decision-log#DEC-015]]: documented as known limitation, explicitly noted as "straightforward to add"
-- [[iteration-02-links]]: listed under Known Limitations
+- [[iterations/done/iteration-02-links]]: listed under Known Limitations
 
 ## My Comments
 With our own "parser", this could be done easily I guess?

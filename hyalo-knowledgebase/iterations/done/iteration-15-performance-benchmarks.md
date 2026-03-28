@@ -16,7 +16,7 @@ branch: iter-15/performance-benchmarks
 
 Establish a benchmark infrastructure for hyalo using the obsidian-hub vault (6,540 files) as the real-world test bed. This enables data-driven optimization decisions for future iterations (parallelization, indexing, caching).
 
-See [[performance-benchmarking]] for full research and rationale.
+See [[research/performance-benchmarking]] for full research and rationale.
 
 ## Goals
 

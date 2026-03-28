@@ -40,4 +40,4 @@ Atomically removes the old tag and adds the new one across all files that have i
 - [ ] Reports how many files were modified
 - [ ] Works with `--where-property` / `--where-tag` for scoped renames
 
-See [[rename-property-command]]
+See [[backlog/done/rename-property-command]]

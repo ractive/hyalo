@@ -19,9 +19,9 @@ Address UX friction found during dogfooding: config-aware help text, properties-
 
 ## Backlog items
 
-- [[backlog/config-aware-help-text]] (medium)
+- [[backlog/done/config-aware-help-text]] (medium)
 - [[backlog/done/backlinks-absolute-path-resolution]] (medium)
-- [[backlog/properties-typed-naming-inconsistency]] (low)
+- [[backlog/done/properties-typed-naming-inconsistency]] (low)
 - [[backlog/done/hints-flag-no-op-for-most-commands]] (low)
 
 ## Tasks

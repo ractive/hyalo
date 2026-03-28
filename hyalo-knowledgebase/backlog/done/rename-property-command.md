@@ -44,4 +44,4 @@ What about
 
 The same for tags
 `hyalo tags rename--from foo --to bar`
-[[bulk-tag-rename]]
+[[backlog/done/bulk-tag-rename]]

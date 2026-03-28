@@ -25,7 +25,7 @@ causes two kinds of unwanted reformatting:
 This is a papercut that shows up in every `git diff` after a hyalo mutation and makes diffs
 noisy. It also discourages adoption — users don't want a tool that silently reformats their files.
 
-See: [[iteration-53-saphyr-hardening]] for the serde-saphyr migration that makes this fix possible.
+See: [[iterations/done/iteration-53-saphyr-hardening]] for the serde-saphyr migration that makes this fix possible.
 
 ## Approach
 

@@ -18,4 +18,4 @@ Currently `--sort` only accepts `file`, `modified`, `backlinks_count`, `links_co
 - Files missing the sort property/title sort last
 - Equal values use file path as deterministic tie-breaker
 
-This pairs well with [[backlog/sort-reverse.md]] (if it existed) for `--reverse` support.
+A future `--reverse` flag would complement this nicely.

@@ -1,10 +1,11 @@
 ---
-title: "Decision Log"
+title: Decision Log
 type: decisions
 date: 2026-03-20
 tags:
   - decisions
   - architecture
+status: reference
 ---
 
 # Decision Log
@@ -266,7 +267,7 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 
 ## DEC-031: Discoverable Drill-Down Hints Architecture (2026-03-22)
 
-**Context:** After building summary, outline, and tags commands, dogfooding revealed that LLM agents (and humans) had no way to discover follow-up commands from output alone. An agent seeing "rust: 7 files" in tags summary had to already know `hyalo tag find --name rust` exists. This is the CLI equivalent of the HATEOAS problem in REST APIs. See [[discoverable-drill-down-commands]] for the original backlog item.
+**Context:** After building summary, outline, and tags commands, dogfooding revealed that LLM agents (and humans) had no way to discover follow-up commands from output alone. An agent seeing "rust: 7 files" in tags summary had to already know `hyalo tag find --name rust` exists. This is the CLI equivalent of the HATEOAS problem in REST APIs. See [[backlog/done/discoverable-drill-down-commands]] for the original backlog item.
 
 **Decision:** Add a hint system with these architectural choices:
 

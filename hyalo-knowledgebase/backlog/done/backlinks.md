@@ -6,7 +6,7 @@ status: completed
 tags:
 - backlog
 - links
-- indexing
+- index
 title: Backlinks — which files link to this one?
 type: backlog
 ---

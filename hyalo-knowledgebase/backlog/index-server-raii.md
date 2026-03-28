@@ -20,7 +20,7 @@ Long-running `hyalo index-server` process that:
 Useful when a skill session both reads and mutates files, so subsequent queries see
 updated state without a full rescan.
 
-Depends on: [[iteration-47-snapshot-index]] (snapshot index infrastructure).
+Depends on: [[iterations/done/iteration-47-snapshot-index]] (snapshot index infrastructure).
 
 ## Alternative: stdin/stdout protocol
 

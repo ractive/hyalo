@@ -42,4 +42,4 @@ Option B is probably the best balance of power and simplicity. Option A risks fa
 
 ## My Comments
 Why not introduce the same operators as in the tag ans proeprty filters: <, >, <=, >=, ~, /regexp/
-See also [[property-value-search]]
+See also [[backlog/done/property-value-search]]

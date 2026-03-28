@@ -49,4 +49,4 @@ During dogfooding, discovered that hints for the tags summary were showing the a
 ## References
 
 - [[decision-log#DEC-031]]: hints architecture decisions
-- [[discoverable-drill-down-commands]]: backlog item (status: completed)
+- [[backlog/done/discoverable-drill-down-commands]]: backlog item (status: completed)

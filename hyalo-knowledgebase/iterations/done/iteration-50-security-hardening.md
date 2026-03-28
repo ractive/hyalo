@@ -1,7 +1,7 @@
 ---
 branch: iter-50/security-hardening
 date: 2026-03-26
-status: in-progress
+status: completed
 tags:
 - security
 - pre-release

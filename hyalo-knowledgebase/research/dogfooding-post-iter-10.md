@@ -66,13 +66,13 @@ Running `outline --file SEED.md --format text` on a nearly empty file outputs ju
 
 ### ISSUE-3: Unresolved link target `obsidian-properties` not helpful
 
-`links --file research/obsidian-markdown-compatibility.md --unresolved` shows `obsidian-properties (unresolved)`. The file `research/obsidian-properties.md` exists, so this is the known shortest-path resolution limitation ([[shortest-path-link-resolution]]). The wikilink `[[obsidian-properties]]` should resolve to `research/obsidian-properties.md` but doesn't because hyalo requires the path prefix. This is already tracked as a backlog item.
+`links --file research/obsidian-markdown-compatibility.md --unresolved` shows `obsidian-properties (unresolved)`. The file `research/obsidian-properties.md` exists, so this is the known shortest-path resolution limitation ([[backlog/done/shortest-path-link-resolution]]). The wikilink `[[obsidian-properties]]` should resolve to `research/obsidian-properties.md` but doesn't because hyalo requires the path prefix. This is already tracked as a backlog item.
 
 ### ISSUE-4: No way to search file body content
 
 There is no `grep` or `search` command. If I want to find files mentioning "rayon" in the body text (not just frontmatter), I can't do it with hyalo. I have to use external grep. This is the biggest missing feature for a vault management tool.
 
-**Suggestion:** A `hyalo search --query "rayon"` or `hyalo grep "rayon"` command that searches markdown body content (excluding frontmatter) and returns file paths + matching lines. This would complement the existing property/tag find commands. See [[combined-queries]].
+**Suggestion:** A `hyalo search --query "rayon"` or `hyalo grep "rayon"` command that searches markdown body content (excluding frontmatter) and returns file paths + matching lines. This would complement the existing property/tag find commands. See [[backlog/done/combined-queries]].
 
 ### ISSUE-5: No way to view/read file content
 
@@ -92,7 +92,7 @@ The text summary shows `Status: active (2), completed (13), ...` but doesn't tel
 
 The superseded iterations (iteration-08-tasks.md, iteration-3b-tasks.md) show 31-32 incomplete tasks each. These are never going to be completed because the iterations were superseded. There's no way to filter by frontmatter status when listing tasks, e.g., "show me todo tasks only in files where status != superseded".
 
-**Suggestion:** Allow combining `tasks` with property filters, e.g., `tasks --todo --where status=completed` or integrate with [[combined-queries]]. Alternatively, the workaround is `tasks --todo --glob 'iterations/iteration-09*'` to target specific files, which already works.
+**Suggestion:** Allow combining `tasks` with property filters, e.g., `tasks --todo --where status=completed` or integrate with [[backlog/done/combined-queries]]. Alternatively, the workaround is `tasks --todo --glob 'iterations/iteration-09*'` to target specific files, which already works.
 
 ### IDEA-1: Pipe-friendly file list output
 
@@ -111,7 +111,7 @@ Initially thought summary didn't support `--glob`, but it does! `summary --glob 
 `tasks --todo --format text` works but is noisy (ISSUE-1). The jq workaround is adequate for JSON consumers but bad for text-mode humans.
 
 ### Workflow: "Drill down from summary to details"
-Summary shows "Status: planned (2)". To find out which: `property find --name status --value planned`. This works but requires knowing the command tree. The [[discoverable-drill-down-commands]] backlog item would help here.
+Summary shows "Status: planned (2)". To find out which: `property find --name status --value planned`. This works but requires knowing the command tree. The [[backlog/done/discoverable-drill-down-commands]] backlog item would help here.
 
 ### Workflow: "What changed recently?"
 Summary shows recent files. But to see _what_ changed, you'd need to read the file. No read command exists (ISSUE-5).
