@@ -19,7 +19,7 @@ parser-level limits, strict YAML 1.2 booleans, and duplicate-key detection — a
 currently either doesn't do or does with manual pre-read caps. Wiring these in hardens the
 parser with minimal code change.
 
-See: [[iteration-51-safe-yaml-parser]] for the migration that made this possible.
+See: [[iterations/done/iteration-51-safe-yaml-parser]] for the migration that made this possible.
 
 ## Tasks
 

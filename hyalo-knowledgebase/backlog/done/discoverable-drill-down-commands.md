@@ -65,7 +65,7 @@ In `--format text` output, append runnable commands as hints after each summary 
 
 ## Why this matters for LLM agents
 
-An LLM agent consuming summary output can autonomously drill down without needing a mental model of the full command tree. The output itself becomes self-documenting — the HATEOAS principle applied to CLI. This complements the [[vault-dashboard]] idea: the dashboard gives overview, and each piece of data tells you how to go deeper.
+An LLM agent consuming summary output can autonomously drill down without needing a mental model of the full command tree. The output itself becomes self-documenting — the HATEOAS principle applied to CLI. This complements the [[backlog/done/vault-dashboard]] idea: the dashboard gives overview, and each piece of data tells you how to go deeper.
 
 ## Design considerations
 
@@ -81,4 +81,4 @@ The tricky part could be to know the "context" and decide on what actual command
 
 ## Resolution
 
-Implemented in [[iteration-11-discoverable-drill-down-commands]]. The heuristic question was solved by making hint generation state-aware — inspecting the actual output data rather than using static lookup tables. The `--hints` flag was chosen over `--no-hints` (opt-in rather than opt-out) to keep default output clean.
+Implemented in [[iterations/done/iteration-11-discoverable-drill-down-commands]]. The heuristic question was solved by making hint generation state-aware — inspecting the actual output data rather than using static lookup tables. The `--hints` flag was chosen over `--no-hints` (opt-in rather than opt-out) to keep default output clean.

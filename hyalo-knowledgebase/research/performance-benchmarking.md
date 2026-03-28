@@ -151,5 +151,5 @@ hyperfine \
 
 ## Related
 
-- [[performance-parallelization]] — rayon opportunities identified earlier
+- [[research/performance-parallelization]] — rayon opportunities identified earlier
 - [[iteration-plan]] — indexing as the long-term alternative to full scans

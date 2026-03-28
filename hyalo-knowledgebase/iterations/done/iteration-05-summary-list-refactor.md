@@ -24,7 +24,7 @@ Before this iteration, `properties` dumped an aggregate summary and `tags` did t
 
 The same pattern applies to both `properties` and `tags`, so a consistent CLI model reduces cognitive load.
 
-## Relationship to [[iteration-04-property-find]]
+## Relationship to [[iterations/done/iteration-04-property-find]]
 
 Iteration 4 added `property find` and generic list operations (`add-to-list`, `remove-from-list`). This iteration restructures the read-only listing commands (`properties`, `tags`) without changing the mutation commands from iteration 4.
 

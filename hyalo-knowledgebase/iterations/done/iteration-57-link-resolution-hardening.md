@@ -6,7 +6,7 @@ status: completed
 branch: iter-57/link-resolution
 tags:
   - links
-  - parsing
+  - parser
 ---
 
 # Iteration 57 — Link resolution hardening

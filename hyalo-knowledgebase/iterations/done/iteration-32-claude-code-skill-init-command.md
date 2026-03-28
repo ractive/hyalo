@@ -5,8 +5,8 @@ status: completed
 tags:
   - iteration
   - cli
-  - claude
   - skill
+  - claude-code
 title: "Iteration 32: Claude Code Skill & Init Command"
 type: iteration
 ---

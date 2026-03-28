@@ -5,8 +5,8 @@ priority: high
 status: wont-do
 tags:
 - backlog
-- indexing
 - performance
+- index
 title: SQLite-backed index for vault-wide operations
 type: backlog
 ---
@@ -25,7 +25,7 @@ SQLite or similar index for properties, tags, links, and file metadata. Incremen
 - `orphans` — files with no incoming links
 - `deadends` — files with no outgoing links
 - Vault-wide task search
-- Shortest-path link resolution (see [[backlog/shortest-path-link-resolution]])
+- Shortest-path link resolution (see [[backlog/done/shortest-path-link-resolution]])
 
 ## Trigger
 

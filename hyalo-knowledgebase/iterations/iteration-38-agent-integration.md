@@ -1,9 +1,13 @@
 ---
-title: "Iteration 38 — Agent Integration & Distribution"
+title: Iteration 38 — Agent Integration & Distribution
 type: iteration
 date: 2026-03-23
-tags: [iteration, llm, cli, distribution]
-status: planned
+tags:
+  - iteration
+  - llm
+  - cli
+  - distribution
+status: shelved
 branch: iter-38/agent-integration
 ---
 

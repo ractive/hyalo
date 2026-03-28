@@ -6,7 +6,7 @@ tags:
 - cli
 - ux
 - error-handling
-- llm-friendliness
+- llm
 title: Subcommand Suggestion on Misplaced Flags
 type: iteration
 ---
@@ -127,6 +127,6 @@ Keep this optional; exact match is the priority.
 
 ## References
 
-- [[iteration-49-init-improvements]] — last iteration touching CLI parsing
+- [[iterations/done/iteration-49-init-improvements]] — last iteration touching CLI parsing
 - clap `ErrorKind::UnknownArgument` + `ContextKind::Suggested`
 - clap `try_get_matches_from()` API

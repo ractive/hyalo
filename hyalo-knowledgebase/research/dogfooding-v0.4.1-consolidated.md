@@ -13,7 +13,7 @@ tags:
 
 **Tested**: 2026-03-26
 **Repos**: GitHub Docs (`../docs/content`, 3520 files), VS Code Docs (`../vscode-docs/docs`, 339 files)
-**Detailed reports**: [[dogfooding-v0.4.1-edge-cases]], [[perf-benchmarks-v041]], [[dogfooding-v0.4.1-backlinks-mv]], [[dogfooding-v0.4.1-creative-testing]], [[dogfooding-v0.4.1-dir-styles]]
+**Detailed reports**: [[research/dogfooding-v0.4.1-edge-cases]], [[research/perf-benchmarks-v041]], [[research/dogfooding-v0.4.1-backlinks-mv]], [[research/dogfooding-v0.4.1-creative-testing]], [[research/dogfooding-v0.4.1-dir-styles]]
 
 ---
 

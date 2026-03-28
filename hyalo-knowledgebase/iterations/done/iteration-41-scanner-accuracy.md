@@ -22,7 +22,7 @@ Fix scanner inconsistencies found during dogfooding: content search missing code
 - [[backlog/done/text-search-skips-code-blocks-undocumented]] (medium)
 - [[backlog/done/regex-case-sensitivity-flags-inert]] (low)
 - [[backlog/done/heading-code-spans-parsed-empty]] (low)
-- [[backlog/summary-count-discrepancy]] (low)
+- [[backlog/done/summary-count-discrepancy]] (low)
 
 ## Tasks
 

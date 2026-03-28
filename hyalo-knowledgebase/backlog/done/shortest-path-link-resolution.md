@@ -9,7 +9,7 @@ blocked-by: indexing
 tags:
   - backlog
   - links
-  - indexing
+  - index
 ---
 
 # Obsidian-style shortest-path link resolution

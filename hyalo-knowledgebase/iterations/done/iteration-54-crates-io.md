@@ -32,5 +32,5 @@ Hyalo already ships pre-built binaries via GitHub Releases, Homebrew, Scoop, and
 
 ## References
 
-- [[iteration-53-windows-package-managers]] — prior distribution work
-- [[iteration-31-homebrew-distribution]] — initial Homebrew setup
+- [[iterations/done/iteration-53-windows-package-managers]] — prior distribution work
+- [[iterations/done/iteration-31-homebrew-distribution]] — initial Homebrew setup

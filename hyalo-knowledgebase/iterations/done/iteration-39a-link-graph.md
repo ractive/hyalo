@@ -15,7 +15,7 @@ Build an in-memory link graph to enable vault-wide link operations, starting wit
 
 ## Design decisions
 
-**No SQLite index.** Reading and parsing markdown files is fast enough that an in-memory `HashMap<PathBuf, Vec<BacklinkEntry>>` built per CLI invocation is sufficient. The drawbacks of a persistent index (staleness, cache invalidation, extra dependency, file locking on Windows) outweigh the few milliseconds saved. See [[backlog/sqlite-indexing]] for the original proposal — it can be revisited if vaults grow to tens of thousands of files.
+**No SQLite index.** Reading and parsing markdown files is fast enough that an in-memory `HashMap<PathBuf, Vec<BacklinkEntry>>` built per CLI invocation is sufficient. The drawbacks of a persistent index (staleness, cache invalidation, extra dependency, file locking on Windows) outweigh the few milliseconds saved. See [[backlog/done/sqlite-indexing]] for the original proposal — it can be revisited if vaults grow to tens of thousands of files.
 
 **Reuse existing scanner.** The `FileVisitor` trait and `scan_file_multi` already handle fence tracking, inline code stripping, and comment skipping. A new `LinkGraphVisitor` reuses this infrastructure rather than building a separate scanner.
 
@@ -25,7 +25,7 @@ Build an in-memory link graph to enable vault-wide link operations, starting wit
 
 - [[backlog/done/backlinks]] (medium)
 - [[backlog/done/move-rename-command]] (medium)
-- [[backlog/shortest-path-link-resolution]] (medium)
+- [[backlog/done/shortest-path-link-resolution]] (medium)
 
 ## Tasks
 

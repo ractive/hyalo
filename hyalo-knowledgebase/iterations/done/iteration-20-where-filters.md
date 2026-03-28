@@ -43,4 +43,4 @@ Enable single-command bulk mutations without shell pipelines. LLMs (the primary 
 
 ## Backlog item
 
-Resolves [[inline-mutation-on-find]]
+Resolves [[backlog/done/inline-mutation-on-find]]

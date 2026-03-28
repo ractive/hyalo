@@ -31,7 +31,7 @@ its Properties UI to flat maps with scalar values and simple lists, but the unde
 can contain any YAML. Since hyalo processes arbitrary user vaults, we need a proper YAML parser
 — not a restricted subset parser.
 
-See: [[iteration-50-security-hardening]] for full audit findings.
+See: [[iterations/done/iteration-50-security-hardening]] for full audit findings.
 
 ## Migration plan
 

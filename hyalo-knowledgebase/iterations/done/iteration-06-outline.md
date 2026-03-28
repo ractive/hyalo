@@ -25,8 +25,8 @@ The `outline` command fills this gap. It returns a section-aware table of conten
 
 ## Relationship to Prior Work
 
-- Builds on the streaming scanner from [[iteration-02-links]] (heading extraction reuses the code-block-aware line scanner)
-- Reuses `collect_files()` from [[iteration-05-summary-list-refactor]] for `--file`/`--glob` targeting
+- Builds on the streaming scanner from [[iterations/done/iteration-02-links]] (heading extraction reuses the code-block-aware line scanner)
+- Reuses `collect_files()` from [[iterations/done/iteration-05-summary-list-refactor]] for `--file`/`--glob` targeting
 - Complements `links` (which gives flat link lists) by adding section context to links
 - Complements `properties` (which gives metadata) by showing body structure
 

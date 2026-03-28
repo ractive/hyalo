@@ -714,3 +714,60 @@ fn links_fix_default_threshold_finds_fuzzy_match() {
         "default threshold should yield >= fixes than threshold=0.99: default={fixable}, high={high_fixable}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// links fix: self-link guard
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_rejects_self_link() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    // A file with a broken link whose only fuzzy candidate is itself.
+    write_md(
+        tmp.path(),
+        "sort-by-property-value.md",
+        md!(r"
+---
+title: Sort by property value
+---
+See [[sort-reverse]] for reverse sorting.
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--format",
+            "json",
+            "--threshold",
+            "0.5",
+        ])
+        .output()
+        .expect("hyalo links fix should run");
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+
+    // The broken link should be unfixable, not matched to itself.
+    let fixes = json["fixes"]
+        .as_array()
+        .expect("'fixes' should be an array");
+    assert!(
+        fixes.is_empty(),
+        "self-link should not appear in fixes: {fixes:?}"
+    );
+    assert_eq!(
+        json["unfixable"]
+            .as_u64()
+            .expect("'unfixable' should be a number"),
+        1,
+        "broken self-link should be counted as unfixable"
+    );
+}

@@ -23,7 +23,7 @@ Address all UX issues and minor bugs found during v0.4.1 dogfooding on GitHub Do
 - [[backlog/done/trailing-slash-link-resolution]]
 - [[backlog/done/query-string-link-resolution]]
 - [[backlog/done/limit-zero-means-unlimited]]
-- [[backlog/bare-subcommand-defaults]]
+- [[backlog/done/bare-subcommand-defaults]]
 - [[backlog/done/empty-body-pattern-matches-all]]
 
 ## Tasks
