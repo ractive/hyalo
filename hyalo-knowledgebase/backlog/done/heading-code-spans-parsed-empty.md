@@ -26,6 +26,6 @@ Find files with code-span headings in docs/content and check `--fields sections`
 
 ## Acceptance criteria
 
-- [ ] Headings containing inline code spans preserve the code text
-- [ ] `--fields sections` shows the actual heading text
-- [ ] E2e test with a code-span heading
+- [x] Headings containing inline code spans preserve the code text
+- [x] `--fields sections` shows the actual heading text
+- [x] E2e test with a code-span heading

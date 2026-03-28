@@ -29,8 +29,8 @@ Address UX friction found during dogfooding: config-aware help text, properties-
 ### Config-aware help text
 - [x] Load `.hyalo.toml` before building `clap::Command`
 - [x] Use `mut_arg()` to hide args that have config defaults (e.g. `--dir` when `dir` is set)
-- [ ] Strip config-defaulted flags from examples and cookbook snippets in help output
-- [ ] Strip from `--hints` output
+- [x] Strip config-defaulted flags from examples and cookbook snippets in help output
+- [x] Strip from `--hints` output
 - [x] E2e tests: help output with/without config
 
 ### properties-typed naming
@@ -49,7 +49,7 @@ Address UX friction found during dogfooding: config-aware help text, properties-
 - [x] `cargo fmt`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo test --workspace`
-- [ ] Dogfood: backlinks on vscode-docs (with `dir = "docs"`) resolves absolute links
+- [x] Dogfood: backlinks on vscode-docs (with `dir = "docs"`) resolves absolute links
 
 ## Acceptance Criteria
 

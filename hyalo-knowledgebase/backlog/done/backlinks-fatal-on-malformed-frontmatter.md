@@ -37,8 +37,8 @@ The link graph scanner should use the same graceful skip-and-warn strategy as th
 
 ## Acceptance criteria
 
-- [ ] `backlinks` command completes on vaults with malformed files (warns and skips)
-- [ ] `--fields backlinks` in `find` completes on vaults with malformed files
-- [ ] Exit code is 0 when broken files are skipped
-- [ ] Warning messages include the file path
-- [ ] E2e test: backlinks on a vault with a broken file succeeds
+- [x] `backlinks` command completes on vaults with malformed files (warns and skips)
+- [x] `--fields backlinks` in `find` completes on vaults with malformed files
+- [x] Exit code is 0 when broken files are skipped
+- [x] Warning messages include the file path
+- [x] E2e test: backlinks on a vault with a broken file succeeds

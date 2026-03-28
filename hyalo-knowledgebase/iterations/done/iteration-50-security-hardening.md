@@ -5,6 +5,7 @@ status: completed
 tags:
 - security
 - pre-release
+- iteration
 title: Security hardening for pre-release
 type: iteration
 ---
@@ -37,8 +38,8 @@ Overall security posture is strong. This iteration addresses all actionable find
 
 ## Tooling & CI
 
-- [ ] Run `cargo +nightly miri test` manually to verify unsafe blocks (not in CI — requires nightly, ~10-100x slower)
-- [ ] Run `cargo-fuzz` manually on YAML frontmatter parsing and markdown link extraction (not in CI — open-ended runtime)
+- [x] Run `cargo +nightly miri test` manually to verify unsafe blocks (not in CI — requires nightly, ~10-100x slower)
+- [x] Run `cargo-fuzz` manually on YAML frontmatter parsing and markdown link extraction (not in CI — open-ended runtime)
 - [x] Document `--jq` infinite-loop risk in CLI help or README (informational)
 
 ## Verified Secure (no action needed)

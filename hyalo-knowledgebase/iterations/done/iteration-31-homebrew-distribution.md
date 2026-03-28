@@ -34,15 +34,15 @@ Set up a Homebrew tap so macOS (and Linux Homebrew) users can `brew install ract
 
 ### Test
 - [x] `brew tap ractive/tap`
-- [ ] `brew install ractive/tap/hyalo`
-- [ ] `hyalo --help` works from Homebrew-installed binary
-- [ ] Test on both ARM64 and Intel Mac if possible
+- [x] `brew install ractive/tap/hyalo`
+- [x] `hyalo --help` works from Homebrew-installed binary
+- [x] Test on both ARM64 and Intel Mac if possible
 
 ### Documentation
 - [x] Add installation instructions to README.md (Homebrew, cargo install, manual download)
 
 ## Acceptance Criteria
 
-- [ ] `brew install ractive/tap/hyalo` works on macOS ARM64
-- [ ] Formula auto-updates on each new GitHub Release
-- [ ] README has installation instructions for all methods
+- [x] `brew install ractive/tap/hyalo` works on macOS ARM64
+- [x] Formula auto-updates on each new GitHub Release
+- [x] README has installation instructions for all methods

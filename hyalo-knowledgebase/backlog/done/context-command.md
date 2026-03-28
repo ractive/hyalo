@@ -40,8 +40,8 @@ Required frontmatter for type=iteration: title, type, date, tags, status, branch
 
 ## Acceptance Criteria
 
-- [ ] `hyalo context` command exists
-- [ ] Reads `.hyalo.toml` and reports effective defaults (dir, format, hints)
-- [ ] Summarizes vault stats (file count, tags, properties, status values)
-- [ ] Output is concise (under 20 lines) and designed for LLM context windows
-- [ ] `--format json` returns structured data for programmatic use
+- [x] `hyalo context` command exists
+- [x] Reads `.hyalo.toml` and reports effective defaults (dir, format, hints)
+- [x] Summarizes vault stats (file count, tags, properties, status values)
+- [x] Output is concise (under 20 lines) and designed for LLM context windows
+- [x] `--format json` returns structured data for programmatic use

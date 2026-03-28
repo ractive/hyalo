@@ -6,6 +6,7 @@ tags:
 - init
 - cli
 - developer-experience
+- iteration
 title: >-
   Replace hardcoded hyalo-knowledgebase in init --claude and add fuzzy dir
   detection
@@ -29,4 +30,4 @@ Additionally, auto-detection only checks exact directory names from a fixed list
 - [x] Update agent template to not hardcode hyalo-knowledgebase
 - [x] Add unit tests for fuzzy detection and template parameterization
 - [x] Add e2e tests verifying skills are parameterized
-- [ ] Create PR and review
+- [x] Create PR and review

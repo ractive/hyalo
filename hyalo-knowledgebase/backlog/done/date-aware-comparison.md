@@ -31,6 +31,6 @@ This is low priority since properly formatted vaults use ISO 8601 dates where le
 
 ## Acceptance criteria
 
-- [ ] Date comparisons produce chronologically correct results
-- [ ] Works with common date formats (ISO 8601, MM/DD/YYYY, YYYY-MM-DD)
-- [ ] Non-date values fall back to string comparison
+- [x] Date comparisons produce chronologically correct results
+- [x] Works with common date formats (ISO 8601, MM/DD/YYYY, YYYY-MM-DD)
+- [x] Non-date values fall back to string comparison

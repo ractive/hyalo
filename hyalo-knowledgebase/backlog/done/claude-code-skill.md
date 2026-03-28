@@ -43,7 +43,7 @@ The CLAUDE.md file contains hyalo usage instructions interleaved with Rust conve
 
 ## Acceptance Criteria
 
-- [ ] Skill created at `.claude/skills/hyalo-knowledgebase/SKILL.md`
-- [ ] Reference files created with complete command docs and query patterns
-- [ ] CLAUDE.md hyalo section replaced with pointer to skill
-- [ ] Verified skill auto-triggers on knowledgebase-related prompts
+- [x] Skill created at `.claude/skills/hyalo-knowledgebase/SKILL.md`
+- [x] Reference files created with complete command docs and query patterns
+- [x] CLAUDE.md hyalo section replaced with pointer to skill
+- [x] Verified skill auto-triggers on knowledgebase-related prompts

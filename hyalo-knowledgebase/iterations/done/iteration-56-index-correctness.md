@@ -8,6 +8,7 @@ tags:
   - index
   - validation
   - bug-fix
+  - iteration
 ---
 
 # Iteration 56 — Index correctness & input validation

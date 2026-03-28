@@ -28,6 +28,6 @@ For example, with `dir = "docs"` in `.hyalo.toml`, `/docs/configure/settings.md`
 
 ## Acceptance criteria
 
-- [ ] Absolute links starting with `/<dir>/` are resolved by stripping the prefix
-- [ ] Backlinks work on repos using site-absolute link conventions
-- [ ] E2e test with absolute-path links
+- [x] Absolute links starting with `/<dir>/` are resolved by stripping the prefix
+- [x] Backlinks work on repos using site-absolute link conventions
+- [x] E2e test with absolute-path links

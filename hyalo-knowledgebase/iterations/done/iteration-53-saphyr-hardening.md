@@ -5,6 +5,7 @@ status: completed
 tags:
 - security
 - parser
+- iteration
 title: Leverage serde-saphyr Options for parsing hardening
 type: iteration
 ---
@@ -31,7 +32,7 @@ See: [[iterations/done/iteration-51-safe-yaml-parser]] for the migration that ma
 - [x] Unit test: YAML with excessive aliases/anchors is rejected
 
 ### Compact snapshot serialization
-- [ ] ~~Switch `rmp_serde::to_vec_named` → `rmp_serde::to_vec` in `index.rs`~~ — **Dropped**: compact (positional) encoding is incompatible with `#[serde(skip_serializing_if)]` on nested types like `OutlineSection::tasks`. Would require a separate snapshot-specific struct hierarchy — not worth the complexity for an ephemeral format.
+- [x] ~~Switch `rmp_serde::to_vec_named` → `rmp_serde::to_vec` in `index.rs`~~ — **Dropped**: compact (positional) encoding is incompatible with `#[serde(skip_serializing_if)]` on nested types like `OutlineSection::tasks`. Would require a separate snapshot-specific struct hierarchy — not worth the complexity for an ephemeral format.
 
 ### Duplicate key detection
 - [x] Set `duplicate_keys: DuplicateKeyPolicy::Error` in the shared options

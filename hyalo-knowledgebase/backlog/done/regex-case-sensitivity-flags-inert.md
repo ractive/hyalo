@@ -32,6 +32,6 @@ Check whether the regex is compiled with case-insensitive mode and whether `(?-i
 
 ## Acceptance criteria
 
-- [ ] `(?-i)` makes the search case-sensitive
-- [ ] Default behavior (case-insensitive) is unchanged
-- [ ] E2e test: case-sensitive search returns fewer results than case-insensitive
+- [x] `(?-i)` makes the search case-sensitive
+- [x] Default behavior (case-insensitive) is unchanged
+- [x] E2e test: case-sensitive search returns fewer results than case-insensitive

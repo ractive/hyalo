@@ -27,4 +27,4 @@ Option B: Reject `--hints` on commands that don't support it.
 
 ## Acceptance criteria
 
-- [ ] `--hints` either produces output or warns on commands that don't support it
+- [x] `--hints` either produces output or warns on commands that don't support it

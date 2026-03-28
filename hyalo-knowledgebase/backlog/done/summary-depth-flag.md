@@ -30,6 +30,6 @@ Add `--depth N` flag to control how deep the directory listing goes:
 
 ## Acceptance criteria
 
-- [ ] `--depth N` limits directory listing depth
-- [ ] Stats section (properties, tags, status, tasks) is always shown regardless of depth
-- [ ] Default behavior is unchanged (full depth) for backwards compatibility
+- [x] `--depth N` limits directory listing depth
+- [x] Stats section (properties, tags, status, tasks) is always shown regardless of depth
+- [x] Default behavior is unchanged (full depth) for backwards compatibility

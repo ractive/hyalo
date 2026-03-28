@@ -33,10 +33,10 @@ Atomically renames the property key across all matching files, preserving the va
 
 ## Acceptance criteria
 
-- [ ] Single command renames a property key across files
-- [ ] Preserves value and type (text, list, number, etc.)
-- [ ] Works with `--where-property` / `--where-tag` for scoped renames
-- [ ] Reports how many files were modified
+- [x] Single command renames a property key across files
+- [x] Preserves value and type (text, list, number, etc.)
+- [x] Works with `--where-property` / `--where-tag` for scoped renames
+- [x] Reports how many files were modified
 
 ## My Comments
 What about

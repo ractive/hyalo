@@ -22,13 +22,13 @@ Hyalo already ships pre-built binaries via GitHub Releases, Homebrew, Scoop, and
 
 ## Tasks
 
-- [ ] Remove `publish = false` from workspace Cargo.toml
-- [ ] Add `version` field to workspace `hyalo-core` dependency for crates.io resolution
-- [ ] Add crates.io metadata to `hyalo-core` (description, repository, keywords, categories)
-- [ ] Add crates.io metadata to `hyalo-cli` (description, repository, readme, keywords, categories)
-- [ ] Add `crates-io` job to release workflow (publish hyalo-core then hyalo-cli)
-- [ ] Verify with `cargo publish --dry-run`
-- [ ] Pass all quality gates (fmt, clippy, test)
+- [x] Remove `publish = false` from workspace Cargo.toml
+- [x] Add `version` field to workspace `hyalo-core` dependency for crates.io resolution
+- [x] Add crates.io metadata to `hyalo-core` (description, repository, keywords, categories)
+- [x] Add crates.io metadata to `hyalo-cli` (description, repository, readme, keywords, categories)
+- [x] Add `crates-io` job to release workflow (publish hyalo-core then hyalo-cli)
+- [x] Verify with `cargo publish --dry-run`
+- [x] Pass all quality gates (fmt, clippy, test)
 
 ## References
 
