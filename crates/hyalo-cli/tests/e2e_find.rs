@@ -590,6 +590,48 @@ fn find_fields_backlinks_not_included_by_default() {
     }
 }
 
+#[test]
+fn find_fields_all_includes_every_category() {
+    let tmp = setup_vault();
+    // Use --file alpha.md so backlinks scanning covers a single file with known content
+    let (status, json, stderr) = find_json(&tmp, &["--fields", "all", "--file", "alpha.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let entry = &arr[0];
+
+    assert!(
+        entry["properties"].is_object(),
+        "properties should be present with --fields all"
+    );
+    assert!(
+        entry["properties_typed"].is_array(),
+        "properties_typed should be present with --fields all"
+    );
+    assert!(
+        entry["tags"].is_array(),
+        "tags should be present with --fields all"
+    );
+    assert!(
+        entry["sections"].is_array(),
+        "sections should be present with --fields all"
+    );
+    assert!(
+        entry["tasks"].is_array(),
+        "tasks should be present with --fields all"
+    );
+    assert!(
+        entry["links"].is_array(),
+        "links should be present with --fields all"
+    );
+    // backlinks is always an array (may be empty) when explicitly requested
+    assert!(
+        entry["backlinks"].is_array(),
+        "backlinks should be present with --fields all"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Sort
 // ---------------------------------------------------------------------------
@@ -2462,5 +2504,150 @@ fn find_whitespace_only_body_pattern_errors() {
     assert!(
         stderr.contains("body pattern must not be empty"),
         "stderr should contain error about empty pattern, got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// --fields title
+// ---------------------------------------------------------------------------
+
+fn setup_title_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // File with title in frontmatter
+    write_md(
+        tmp.path(),
+        "with_fm_title.md",
+        md!(r"
+---
+title: Frontmatter Title
+status: active
+---
+# H1 Heading That Should Not Be Used
+
+Some body text.
+"),
+    );
+
+    // File with no title frontmatter property but an H1 heading
+    write_md(
+        tmp.path(),
+        "with_h1_title.md",
+        md!(r"
+---
+status: active
+---
+# H1 Heading Title
+
+Some body text.
+"),
+    );
+
+    // File with neither title property nor H1
+    write_md(
+        tmp.path(),
+        "no_title.md",
+        md!(r"
+---
+status: active
+---
+## Only an H2
+
+Some body text.
+"),
+    );
+
+    tmp
+}
+
+#[test]
+fn find_title_from_frontmatter() {
+    let tmp = setup_title_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "with_fm_title.md", "--fields", "title"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let obj = &arr[0];
+    assert_eq!(
+        obj["title"].as_str(),
+        Some("Frontmatter Title"),
+        "title should come from frontmatter: {obj}"
+    );
+    // Other fields should not be present when --fields title is used alone
+    assert!(
+        obj.get("properties").is_none(),
+        "properties should not appear"
+    );
+    assert!(obj.get("tags").is_none(), "tags should not appear");
+    assert!(obj.get("sections").is_none(), "sections should not appear");
+}
+
+#[test]
+fn find_title_from_h1_when_no_frontmatter_property() {
+    let tmp = setup_title_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "with_h1_title.md", "--fields", "title"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let obj = &arr[0];
+    assert_eq!(
+        obj["title"].as_str(),
+        Some("H1 Heading Title"),
+        "title should fall back to H1 heading: {obj}"
+    );
+}
+
+#[test]
+fn find_title_null_when_neither_found() {
+    let tmp = setup_title_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--file", "no_title.md", "--fields", "title"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let obj = &arr[0];
+    assert!(
+        obj["title"].is_null(),
+        "title should be null when neither frontmatter nor H1 found: {obj}"
+    );
+}
+
+#[test]
+fn find_title_not_present_by_default() {
+    let tmp = setup_title_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--file", "with_fm_title.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let obj = &arr[0];
+    assert!(
+        obj.get("title").is_none(),
+        "title should not appear in default output: {obj}"
+    );
+}
+
+#[test]
+fn find_fields_all_includes_title() {
+    let tmp = setup_title_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--file", "with_fm_title.md", "--fields", "all"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let obj = &arr[0];
+    assert!(
+        obj.get("title").is_some(),
+        "--fields all should include title: {obj}"
+    );
+    assert_eq!(obj["title"].as_str(), Some("Frontmatter Title"));
+    // Other standard fields should also be present
+    assert!(
+        obj.get("properties").is_some(),
+        "properties should appear with --fields all"
+    );
+    assert!(
+        obj.get("tags").is_some(),
+        "tags should appear with --fields all"
     );
 }

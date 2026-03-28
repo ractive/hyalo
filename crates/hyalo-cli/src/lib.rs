@@ -3,3 +3,4 @@ pub mod config;
 pub mod hints;
 pub mod output;
 pub mod suggest;
+pub mod warn;

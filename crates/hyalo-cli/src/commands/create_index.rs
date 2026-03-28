@@ -32,7 +32,7 @@ pub fn create_index(
 
     // Warn about skipped files
     for w in &build.warnings {
-        eprintln!("warning: skipped {}: {}", w.rel_path, w.message);
+        crate::warn::warn(format!("skipped {}: {}", w.rel_path, w.message));
     }
 
     // Determine output path
@@ -57,12 +57,12 @@ pub fn create_index(
             if stale_path == index_path {
                 continue;
             }
-            eprintln!(
-                "warning: stale index at {} (vault: {}, created: {})",
+            crate::warn::warn(format!(
+                "stale index at {} (vault: {}, created: {})",
                 stale_path.display(),
                 stale_vault,
                 stale_ts,
-            );
+            ));
         }
     }
 

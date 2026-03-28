@@ -73,7 +73,7 @@ pub fn collect_files(
                         format!("invalid path ({reason}): {path}")
                     }
                 };
-                eprintln!("warning: {msg}");
+                crate::warn::warn(&msg);
             }
             Ok(FilesOrOutcome::Files(resolved))
         }

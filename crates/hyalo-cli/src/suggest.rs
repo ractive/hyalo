@@ -1,3 +1,14 @@
+/// Returns `true` when a clap `UnknownArgument` error was triggered by `flag`.
+///
+/// Inspects `ContextKind::InvalidArg` in the error's context chain.
+/// The `flag` parameter must include the leading `--` (e.g. `"--filter"`).
+pub fn unknown_arg_is(err: &clap::Error, flag: &str) -> bool {
+    use clap::error::{ContextKind, ContextValue};
+    err.context().any(|(kind, value)| {
+        kind == ContextKind::InvalidArg && matches!(value, ContextValue::String(s) if s == flag)
+    })
+}
+
 /// Given the raw CLI args and the clap Command tree, detect when an unknown
 /// `--flag` matches a known subcommand name and return a corrected command suggestion.
 ///

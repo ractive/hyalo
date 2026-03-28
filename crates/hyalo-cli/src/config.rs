@@ -50,7 +50,9 @@ pub fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
         Ok(cwd) => load_config_from(&cwd),
         Err(e) => {
-            eprintln!("warning: could not determine current directory to locate .hyalo.toml: {e}");
+            crate::warn::warn(format!(
+                "could not determine current directory to locate .hyalo.toml: {e}"
+            ));
             ResolvedDefaults::hardcoded()
         }
     }
@@ -69,7 +71,7 @@ pub fn load_config_from(dir: &Path) -> ResolvedDefaults {
             return ResolvedDefaults::hardcoded();
         }
         Err(e) => {
-            eprintln!("warning: could not read .hyalo.toml: {e}");
+            crate::warn::warn(format!("could not read .hyalo.toml: {e}"));
             return ResolvedDefaults::hardcoded();
         }
     };
@@ -77,7 +79,7 @@ pub fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let cfg: ConfigFile = match toml::from_str(&contents) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("warning: malformed .hyalo.toml: {e}");
+            crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
             return ResolvedDefaults::hardcoded();
         }
     };

@@ -42,7 +42,7 @@ pub fn backlinks(
     // Build the in-memory link graph
     let build = LinkGraph::build(dir, site_prefix)?;
     for (path, msg) in &build.warnings {
-        eprintln!("warning: skipping {}: {msg}", path.display());
+        crate::warn::warn(format!("skipping {}: {msg}", path.display()));
     }
 
     // Look up backlinks, then exclude self-links at the display boundary.

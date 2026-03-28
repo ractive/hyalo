@@ -520,6 +520,8 @@ pub struct Fields {
     pub links: bool,
     /// Backlinks are opt-in only: building the link graph requires scanning all files.
     pub backlinks: bool,
+    /// Title extracted from frontmatter `title` property or first H1 heading.
+    pub title: bool,
 }
 
 impl Default for Fields {
@@ -532,6 +534,7 @@ impl Default for Fields {
             tasks: true,
             links: true,
             backlinks: false,
+            title: false,
         }
     }
 }
@@ -555,6 +558,7 @@ impl Fields {
             tasks: false,
             links: false,
             backlinks: false,
+            title: false,
         };
 
         for item in input {
@@ -564,6 +568,16 @@ impl Fields {
                     continue;
                 }
                 match part {
+                    "all" => {
+                        fields.properties = true;
+                        fields.properties_typed = true;
+                        fields.tags = true;
+                        fields.sections = true;
+                        fields.tasks = true;
+                        fields.links = true;
+                        fields.backlinks = true;
+                        fields.title = true;
+                    }
                     "properties" => fields.properties = true,
                     "properties-typed" => fields.properties_typed = true,
                     "tags" => fields.tags = true,
@@ -571,8 +585,9 @@ impl Fields {
                     "tasks" => fields.tasks = true,
                     "links" => fields.links = true,
                     "backlinks" => fields.backlinks = true,
+                    "title" => fields.title = true,
                     unknown => bail!(
-                        "unknown field {:?}: valid fields are properties, properties-typed, tags, sections, tasks, links, backlinks",
+                        "unknown field {:?}: valid fields are all, properties, properties-typed, tags, sections, tasks, links, backlinks, title",
                         unknown
                     ),
                 }
@@ -1155,6 +1170,33 @@ mod tests {
         let f = Fields::parse(&input).unwrap();
         assert!(f.properties);
         assert!(f.properties_typed);
+    }
+
+    #[test]
+    fn fields_all_keyword_enables_everything() {
+        let input = vec!["all".to_owned()];
+        let f = Fields::parse(&input).unwrap();
+        assert!(f.properties, "properties should be set");
+        assert!(f.properties_typed, "properties_typed should be set");
+        assert!(f.tags, "tags should be set");
+        assert!(f.sections, "sections should be set");
+        assert!(f.tasks, "tasks should be set");
+        assert!(f.links, "links should be set");
+        assert!(f.backlinks, "backlinks should be set");
+        assert!(f.title, "title should be set");
+    }
+
+    #[test]
+    fn fields_title_only() {
+        let input = vec!["title".to_owned()];
+        let f = Fields::parse(&input).unwrap();
+        assert!(f.title, "title should be set");
+        assert!(!f.properties, "properties should not be set");
+        assert!(!f.tags, "tags should not be set");
+        assert!(!f.sections, "sections should not be set");
+        assert!(!f.tasks, "tasks should not be set");
+        assert!(!f.links, "links should not be set");
+        assert!(!f.backlinks, "backlinks should not be set");
     }
 
     #[test]
