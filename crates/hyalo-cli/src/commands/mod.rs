@@ -147,19 +147,20 @@ const FILTER_OP_SUFFIXES: &[char] = &['<', '>', '!', '~'];
 /// `None` when the key is fine.
 #[must_use]
 pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<CommandOutcome> {
-    let ch = key.chars().last()?;
+    let trimmed = key.trim_end();
+    let ch = trimmed.chars().last()?;
     if !FILTER_OP_SUFFIXES.contains(&ch) {
         return None;
     }
     let out = crate::output::format_error(
         format,
         &format!(
-            "invalid property name '{key}': ends with '{ch}' which looks like a filter operator \
-             (e.g. >=, <=, !=, ~=)"
+            "invalid property name '{trimmed}': ends with '{ch}' which looks like a filter \
+             operator (e.g. >=, <=, !=, ~=)"
         ),
         None,
         Some(
-            "--property in mutation commands is for assignment, not filtering — \
+            "--property in mutation commands is for mutation, not filtering — \
              use --where-property to filter which files are mutated",
         ),
         None,
