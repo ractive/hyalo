@@ -185,7 +185,7 @@ hyalo find --fields properties,backlinks           # combine with other fields
 
 # Sort and limit
 hyalo find --sort modified --limit 10
-hyalo find --sort title                             # sort by frontmatter title
+hyalo find --sort title                             # sort by title (frontmatter or first H1)
 hyalo find --sort date                              # sort by frontmatter date
 hyalo find --sort property:priority                 # sort by any frontmatter property
 ```

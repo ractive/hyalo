@@ -11,10 +11,11 @@ Currently `--sort` only accepts `file`, `modified`, `backlinks_count`, `links_co
 
 `--sort modified` is also useless on git-cloned repos where all files share the same mtime.
 
-**Proposed behavior:**
-- `--sort title` — alias for sorting by the `title` frontmatter property (string sort)
+**Implemented behavior:**
+- `--sort title` — sorts by resolved title (frontmatter `title` property, then first H1 heading)
 - `--sort date` — alias for sorting by the `date` frontmatter property
 - `--sort property:KEY` — generic syntax to sort by any frontmatter property value
-- Files missing the sort property sort last (or first with reverse sort)
+- Files missing the sort property/title sort last
+- Equal values use file path as deterministic tie-breaker
 
 This pairs well with [[backlog/sort-reverse.md]] (if it existed) for `--reverse` support.
