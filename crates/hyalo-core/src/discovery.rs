@@ -26,27 +26,38 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    // Filter out symlinks that resolve outside the vault boundary
+    // Filter out symlinks whose target resolves outside the vault boundary.
+    // Only canonicalize paths that are actually symlinks to avoid unnecessary
+    // syscalls on the common (non-symlink) path.
     let canonical_dir = canonicalize_vault_dir(dir)?;
-    files.retain(|path| match dunce::canonicalize(path) {
-        Ok(canonical) => {
-            if canonical.starts_with(&canonical_dir) {
-                true
-            } else {
+    files.retain(|path| {
+        let is_symlink = path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if !is_symlink {
+            return true;
+        }
+        match dunce::canonicalize(path) {
+            Ok(canonical) => {
+                if canonical.starts_with(&canonical_dir) {
+                    true
+                } else {
+                    eprintln!(
+                        "warning: skipping {}: symlink target resolves outside vault",
+                        path.display()
+                    );
+                    false
+                }
+            }
+            Err(e) => {
                 eprintln!(
-                    "warning: skipping {}: symlink target resolves outside vault",
-                    path.display()
+                    "warning: skipping {}: failed to resolve path: {}",
+                    path.display(),
+                    e
                 );
                 false
             }
-        }
-        Err(e) => {
-            eprintln!(
-                "warning: skipping {}: failed to resolve path: {}",
-                path.display(),
-                e
-            );
-            false
         }
     });
 

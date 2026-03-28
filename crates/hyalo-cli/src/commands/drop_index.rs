@@ -19,22 +19,37 @@ pub fn drop_index(
         None => dir.join(".hyalo-index"),
     };
 
-    // Vault boundary check: only applies when the caller specified a custom path
+    // Vault boundary check: only applies when the caller specified a custom path.
+    // Fail closed — if canonicalization fails we refuse the operation rather than
+    // allowing a potentially out-of-vault deletion.
     if path.is_some() && !allow_outside_vault {
         let canonical_dir = hyalo_core::discovery::canonicalize_vault_dir(dir)?;
-        // The file should exist at this point; canonicalize it directly.
-        // If it doesn't exist the remove_file below will return a NotFound error.
-        if let Ok(canonical_path) = std::fs::canonicalize(&index_path)
-            && !canonical_path.starts_with(&canonical_dir)
-        {
-            let out = crate::output::format_error(
-                format,
-                "index path is outside the vault boundary",
-                Some(&index_path.display().to_string()),
-                Some("use --allow-outside-vault to override"),
-                None,
-            );
-            return Ok(CommandOutcome::UserError(out));
+        match dunce::canonicalize(&index_path) {
+            Ok(canonical_path) => {
+                if !canonical_path.starts_with(&canonical_dir) {
+                    let out = crate::output::format_error(
+                        format,
+                        "index path is outside the vault boundary",
+                        Some(&index_path.display().to_string()),
+                        Some("use --allow-outside-vault to override"),
+                        None,
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+            }
+            Err(e) => {
+                let details = format!("failed to resolve index path for boundary check: {e}");
+                let out = crate::output::format_error(
+                    format,
+                    "could not verify that index path is inside the vault",
+                    Some(&index_path.display().to_string()),
+                    Some(
+                        "ensure the path is accessible and inside the vault, or use --allow-outside-vault",
+                    ),
+                    Some(&details),
+                );
+                return Ok(CommandOutcome::UserError(out));
+            }
         }
     }
 
