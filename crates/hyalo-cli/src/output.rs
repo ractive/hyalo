@@ -445,6 +445,11 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // Header: file path and modified timestamp — always present.
     let mut parts = vec![r#""\"\(.file)\"  (\(.modified))""#.to_owned()];
 
+    // Title: "  title: <value>" or "  title: (none)"
+    if map.contains_key("title") {
+        parts.push(r#""  title: \(if .title then .title else "(none)" end)""#.to_owned());
+    }
+
     // Properties: header then each as "    key: value"
     if map.contains_key("properties") {
         parts.push(

@@ -7,6 +7,7 @@ use tempfile::TempDir;
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
+/// A 3-file vault sufficient for basic hints tests.
 fn setup_vault() -> TempDir {
     let tmp = TempDir::new().unwrap();
 
@@ -662,4 +663,221 @@ fn append_with_hints_warns() {
         stderr.contains("warning: --hints has no effect on mutation commands"),
         "should warn when --hints is passed to append: {stderr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Larger vault fixture for data-driven find --hints tests
+// ---------------------------------------------------------------------------
+
+/// A 6-file vault where:
+///   - "rust" appears on 4 files (top tag)
+///   - status "planned" appears on 4 files (most interesting non-completed status)
+///   - status "completed" appears on 2 files
+fn setup_large_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    for (name, status, tags) in &[
+        ("a", "planned", vec!["rust", "cli"]),
+        ("b", "planned", vec!["rust"]),
+        ("c", "planned", vec!["rust"]),
+        ("d", "planned", vec!["rust"]),
+        ("e", "completed", vec!["cli"]),
+        ("f", "completed", vec!["docs"]),
+    ] {
+        let tags_yaml: String = tags
+            .iter()
+            .map(|t| format!("  - {t}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write_md(
+            tmp.path(),
+            &format!("{name}.md"),
+            md!(&format!(
+                "---\ntitle: {name}\nstatus: {status}\ntags:\n{tags_yaml}\n---\n# {name}\n"
+            )),
+        );
+    }
+
+    tmp
+}
+
+// ---------------------------------------------------------------------------
+// find --hints: data-driven narrowing suggestions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_hints_suggests_top_tag_from_results() {
+    let tmp = setup_large_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // "rust" is the most common tag — hints should suggest it.
+    assert!(
+        stdout.contains("find --tag rust"),
+        "should suggest --tag rust (most common tag): {stdout}"
+    );
+}
+
+#[test]
+fn find_hints_suggests_interesting_status_from_results() {
+    let tmp = setup_large_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // "planned" should be preferred over "completed" even though counts are close.
+    assert!(
+        stdout.contains("status=planned"),
+        "should suggest status=planned (interesting status): {stdout}"
+    );
+    // "completed" should NOT be suggested when "planned" is available.
+    assert!(
+        !stdout.contains("status=completed"),
+        "should not suggest completed when planned is available: {stdout}"
+    );
+}
+
+#[test]
+fn find_hints_no_hardcoded_draft() {
+    let tmp = setup_large_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // The vault has no "draft" items — hints should not hardcode it.
+    assert!(
+        !stdout.contains("status=draft"),
+        "should not suggest hardcoded status=draft: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--tag draft"),
+        "should not suggest hardcoded tag draft: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// properties summary --hints: verify data-driven suggestions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn properties_summary_hints_json_envelope() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["properties", "summary", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert!(parsed.get("data").is_some(), "should have 'data' key");
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(!hints.is_empty(), "should have hints");
+    for hint in hints {
+        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+    }
+}
+
+#[test]
+fn properties_summary_hints_suggest_top_properties() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["properties", "summary", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // The vault has "title" and "status" properties on all 3 files.
+    assert!(
+        stdout.contains("find --property title") || stdout.contains("find --property status"),
+        "should suggest find --property for common properties: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// tags summary --hints: verify data-driven suggestions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_summary_hints_json_envelope() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "summary", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert!(parsed.get("data").is_some(), "should have 'data' key");
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(!hints.is_empty(), "should have hints");
+    for hint in hints {
+        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+    }
+}
+
+#[test]
+fn tags_summary_hints_suggest_top_tag_by_count() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "summary", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // "rust" tag appears on 2 files (alpha and beta), "docs" on 1 — rust should be top.
+    assert!(
+        stdout.contains("find --tag rust"),
+        "should suggest find --tag for top tag (rust): {stdout}"
+    );
+}
+
+#[test]
+fn tags_summary_hints_empty_vault_no_crash() {
+    let tmp = TempDir::new().unwrap();
+    // Empty vault — no tags at all.
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["tags", "summary", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    // Should succeed without crashing.
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    // Either no envelope (no hints) or empty hints array.
+    if let Some(hints) = parsed.get("hints") {
+        assert!(
+            hints.as_array().map(|a| a.is_empty()).unwrap_or(false),
+            "empty vault should produce no hints: {parsed}"
+        );
+    }
 }

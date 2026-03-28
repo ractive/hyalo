@@ -202,6 +202,12 @@ pub struct ContentMatch {
 pub struct FileObject {
     pub file: String,
     pub modified: String,
+    /// Title extracted from frontmatter `title` property or first H1 heading.
+    /// - `None`: field not requested (omitted from JSON output)
+    /// - `Some(Value::String(...))`: title found
+    /// - `Some(Value::Null)`: title requested but not found
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]

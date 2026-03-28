@@ -241,7 +241,7 @@ pub fn remove(
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
-                eprintln!("warning: skipping {rel_path}: {e}");
+                crate::warn::warn(format!("skipping {rel_path}: {e}"));
                 continue;
             }
             Err(e) => return Err(e),

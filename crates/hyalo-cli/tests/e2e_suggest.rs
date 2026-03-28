@@ -119,3 +119,30 @@ fn no_suggestion_for_valid_task_toggle() {
         "exit code 2 indicates a clap error was hit; stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --filter typo → suggest --property (not --file)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn suggest_property_when_filter_used() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--filter", "status=draft"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--property"),
+        "expected '--property' suggestion in stderr; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--file"),
+        "unexpected '--file' suggestion in stderr; got: {stderr}"
+    );
+}

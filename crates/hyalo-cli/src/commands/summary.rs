@@ -79,7 +79,7 @@ pub fn summary(
         match scan_result {
             Ok(()) => {}
             Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
-                eprintln!("warning: skipping {rel_path}: {e}");
+                crate::warn::warn(format!("skipping {rel_path}: {e}"));
                 total_files -= 1;
                 continue;
             }

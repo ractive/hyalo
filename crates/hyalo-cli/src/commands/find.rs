@@ -114,7 +114,7 @@ pub fn find(
     let link_graph = if fields.backlinks || sort_needs_backlinks {
         let build = LinkGraph::build(dir, site_prefix)?;
         for (path, msg) in &build.warnings {
-            eprintln!("warning: skipping {}: {msg}", path.display());
+            crate::warn::warn(format!("skipping {}: {msg}", path.display()));
             link_graph_warned.insert(path.to_string_lossy().replace('\\', "/"));
         }
         Some(build.graph)
@@ -143,7 +143,11 @@ pub fn find(
         // --- Single-pass scan ---
         let mut fm = FrontmatterCollector::new(body_needed);
         let mut section_scanner = if body_needed
-            && (fields.sections || fields.links || sort_needs_links || has_section_filter)
+            && (fields.sections
+                || fields.links
+                || fields.title
+                || sort_needs_links
+                || has_section_filter)
         {
             Some(SectionScanner::new())
         } else {
@@ -189,7 +193,7 @@ pub fn find(
                 // Only warn if the link graph build hasn't already warned for this path.
                 // Both are forward-slash-normalized relative strings.
                 if !link_graph_warned.contains(rel_path.as_str()) {
-                    eprintln!("warning: skipping {rel_path}: {e}");
+                    crate::warn::warn(format!("skipping {rel_path}: {e}"));
                 }
                 continue;
             }
@@ -347,7 +351,7 @@ pub fn find(
     // explicit notice on stderr so the caller knows the query succeeded but
     // matched nothing.  JSON mode keeps the empty array on stdout unchanged.
     if format == crate::output::Format::Text && json_array.is_empty() {
-        eprintln!("warning: No files matched.");
+        crate::warn::warn("No files matched.");
     }
 
     let json_output = serde_json::Value::Array(json_array);
@@ -611,7 +615,7 @@ pub fn find_from_index(
             match scan_result {
                 Ok(()) => {}
                 Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
-                    eprintln!("warning: skipping {}: {e}", entry.rel_path);
+                    crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
                     continue;
                 }
                 Err(e) => return Err(e),
@@ -728,9 +732,19 @@ pub fn find_from_index(
             None
         };
 
+        // --- Title field (index path) ---
+        // entry.sections is always available in the index, so we can look up
+        // the first H1 even when fields.sections is false.
+        let title = if fields.title {
+            Some(extract_title(&entry.properties, Some(&entry.sections)))
+        } else {
+            None
+        };
+
         let obj = FileObject {
             file: entry.rel_path.clone(),
             modified: entry.modified.clone(),
+            title,
             properties,
             properties_typed,
             tags: tags_field,
@@ -793,7 +807,7 @@ pub fn find_from_index(
         .collect::<Result<_>>()?;
 
     if format == crate::output::Format::Text && json_array.is_empty() {
-        eprintln!("warning: No files matched.");
+        crate::warn::warn("No files matched.");
     }
 
     let json_output = serde_json::Value::Array(json_array);
@@ -818,9 +832,37 @@ fn needs_body(
     fields.sections
         || fields.tasks
         || fields.links
+        || fields.title
         || has_content_search
         || has_task_filter
         || has_section_filter
+}
+
+/// Extract the title value for `--fields title`.
+///
+/// Priority:
+/// 1. `title` frontmatter property (if it is a string)
+/// 2. First H1 heading in the document outline
+/// 3. `serde_json::Value::Null` if neither found
+fn extract_title(
+    props: &indexmap::IndexMap<String, serde_json::Value>,
+    outline_sections: Option<&Vec<OutlineSection>>,
+) -> serde_json::Value {
+    // 1. Frontmatter title property
+    if let Some(serde_json::Value::String(s)) = props.get("title") {
+        return serde_json::Value::String(s.clone());
+    }
+    // 2. First H1 heading from outline
+    if let Some(sections) = outline_sections {
+        for sec in sections {
+            if sec.level == 1
+                && let Some(ref heading) = sec.heading
+            {
+                return serde_json::Value::String(heading.clone());
+            }
+        }
+    }
+    serde_json::Value::Null
 }
 
 /// Return true if `tasks` satisfy `filter`.
@@ -902,6 +944,13 @@ fn build_file_object(
         None
     };
 
+    // Extract title before outline_sections is consumed into sections.
+    let title = if fields.title {
+        Some(extract_title(props, outline_sections.as_ref()))
+    } else {
+        None
+    };
+
     let sections = if fields.sections {
         outline_sections.map(|mut secs| {
             if !scope_ranges.is_empty() {
@@ -962,6 +1011,7 @@ fn build_file_object(
     FileObject {
         file: rel_path.to_owned(),
         modified: modified.to_owned(),
+        title,
         properties,
         properties_typed,
         tags: tags_field,
@@ -1789,6 +1839,7 @@ title: Empty Body
             tasks: false,
             links: false,
             backlinks: false,
+            title: false,
         };
         assert!(!needs_body(&fields, false, false, false));
     }
@@ -1803,6 +1854,7 @@ title: Empty Body
             tasks: false,
             links: false,
             backlinks: false,
+            title: false,
         };
         assert!(needs_body(&fields, true, false, false));
     }
@@ -1817,6 +1869,7 @@ title: Empty Body
             tasks: false,
             links: false,
             backlinks: false,
+            title: false,
         };
         assert!(needs_body(&fields, false, false, false));
     }
@@ -2096,6 +2149,7 @@ Just intro, no tasks section.
             tasks: false,
             links: false,
             backlinks: false,
+            title: false,
         };
         assert!(needs_body(&fields, false, false, true));
         assert!(!needs_body(&fields, false, false, false));

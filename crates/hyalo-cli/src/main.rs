@@ -257,6 +257,14 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     index: Option<PathBuf>,
 
+    /// Suppress all warnings printed to stderr.
+    ///
+    /// Useful in scripts or CI pipelines where warning noise is undesirable.
+    /// Identical warnings are always deduplicated regardless of this flag;
+    /// use `--quiet` to suppress them entirely.
+    #[arg(short = 'q', long, global = true)]
+    quiet: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -308,7 +316,7 @@ enum Commands {
         /// Glob pattern(s) to select files (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
-        /// Comma-separated list of optional fields to include: properties, properties-typed, tags, sections, tasks, links, backlinks (default: all except properties-typed and backlinks). 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files. Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
+        /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: all standard fields except properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default), 'modified', 'backlinks_count', or 'links_count'
@@ -738,16 +746,25 @@ fn parse_where_filters(
         Ok(f) => f,
         Err(e) => {
             eprintln!("Error: {e}");
-            process::exit(1);
+            die(1);
         }
     };
     for tag in where_tags {
         if let Err(msg) = hyalo_cli::commands::tags::validate_tag(tag) {
             eprintln!("Error: {msg}");
-            process::exit(1);
+            die(1);
         }
     }
     filters
+}
+
+/// Exit the process, flushing any pending warning summary first.
+///
+/// Use this in place of `process::exit` after `warn::init` has been called so
+/// that duplicate-warning counts are always reported before the process ends.
+fn die(code: i32) -> ! {
+    hyalo_cli::warn::flush_summary();
+    process::exit(code)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -778,6 +795,20 @@ fn main() {
     let matches = match cmd.try_get_matches_from(raw_args.iter().map(String::as_str)) {
         Ok(m) => m,
         Err(e) => {
+            // Intercept `--filter` before falling through to clap's built-in
+            // suggestion, which picks `--file` (closest by Levenshtein distance).
+            // Users almost always mean `--property` here.
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && hyalo_cli::suggest::unknown_arg_is(&e, "--filter")
+            {
+                eprintln!(
+                    "error: unexpected argument '--filter' found\n\n\
+                     tip: did you mean '--property'?\n\n\
+                     Example: hyalo find --property status=planned\n"
+                );
+                process::exit(2);
+            }
+
             // Only attempt subcommand suggestions when clap couldn't recognise a
             // flag or subcommand — this avoids misleading tips for other error kinds.
             if matches!(
@@ -796,6 +827,11 @@ fn main() {
         Ok(c) => c,
         Err(e) => e.exit(),
     };
+
+    // Initialise the warning system as early as possible after CLI parsing.
+    // Warnings emitted before this point (e.g. from config loading) are always
+    // printed since quiet mode was not yet known.
+    hyalo_cli::warn::init(cli.quiet);
 
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
@@ -816,7 +852,7 @@ fn main() {
                 2
             }
         };
-        process::exit(code);
+        die(code);
     }
 
     // Merge: CLI args override config, config overrides hardcoded defaults.
@@ -833,7 +869,7 @@ fn main() {
             "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
             dir.display()
         );
-        process::exit(1);
+        die(1);
     }
 
     // Derive site_prefix with tri-state precedence:
@@ -879,7 +915,7 @@ fn main() {
                     "Invalid output format '{}' in .hyalo.toml; supported formats are: json, text",
                     config.format
                 );
-                process::exit(2);
+                die(2);
             }
         }
     };
@@ -907,7 +943,7 @@ fn main() {
     if jq_filter.is_some() && format != Format::Json {
         eprintln!("Error: --jq cannot be combined with --format {}", format);
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
-        process::exit(2);
+        die(2);
     }
     // When --jq or --hints is active, force JSON internally so we can re-parse the output.
     // The user-requested format is applied afterwards.
@@ -979,7 +1015,7 @@ fn main() {
             Commands::Set { .. } | Commands::Remove { .. } | Commands::Append { .. }
         )
     {
-        eprintln!("warning: --hints has no effect on mutation commands");
+        hyalo_cli::warn::warn("--hints has no effect on mutation commands");
     }
 
     // Load snapshot index if --index is provided.
@@ -1003,11 +1039,11 @@ fn main() {
                     let vault_dir_str = canonical_dir.to_string_lossy();
                     if !idx.validate(&vault_dir_str, site_prefix) {
                         let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
-                        eprintln!(
-                            "warning: index was built for vault '{}' (prefix {:?}) but current \
+                        hyalo_cli::warn::warn(format!(
+                            "index was built for vault '{}' (prefix {:?}) but current \
                              vault is '{}' (prefix {:?}); falling back to disk scan",
                             hdr_vault, hdr_prefix, vault_dir_str, site_prefix,
-                        );
+                        ));
                         None
                     } else {
                         Some(idx)
@@ -1015,7 +1051,9 @@ fn main() {
                 }
                 Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
                 Err(e) => {
-                    eprintln!("warning: failed to load index: {e}; falling back to disk scan");
+                    hyalo_cli::warn::warn(format!(
+                        "failed to load index: {e}; falling back to disk scan"
+                    ));
                     None
                 }
             }
@@ -1049,7 +1087,7 @@ fn main() {
                 Ok(f) => f,
                 Err(e) => {
                     eprintln!("Error: {e}");
-                    process::exit(1);
+                    die(1);
                 }
             };
             // Parse task filter
@@ -1057,7 +1095,7 @@ fn main() {
                 Some(Ok(f)) => Some(f),
                 Some(Err(e)) => {
                     eprintln!("Error: {e}");
-                    process::exit(1);
+                    die(1);
                 }
                 None => None,
             };
@@ -1066,7 +1104,7 @@ fn main() {
                 Ok(f) => f,
                 Err(e) => {
                     eprintln!("Error: {e}");
-                    process::exit(1);
+                    die(1);
                 }
             };
             // Parse sort
@@ -1074,7 +1112,7 @@ fn main() {
                 Some(Ok(f)) => Some(f),
                 Some(Err(e)) => {
                     eprintln!("Error: {e}");
-                    process::exit(1);
+                    die(1);
                 }
                 None => None,
             };
@@ -1087,7 +1125,7 @@ fn main() {
                 Ok(f) => f,
                 Err(e) => {
                     eprintln!("Error: {e}");
-                    process::exit(1);
+                    die(1);
                 }
             };
 
@@ -1253,7 +1291,7 @@ fn main() {
                         None,
                     );
                     eprintln!("{out}");
-                    process::exit(1);
+                    die(1);
                 }
                 task_commands::task_set_status(
                     &dir,
@@ -1390,7 +1428,7 @@ fn main() {
                             Some(&e.to_string()),
                         );
                         eprintln!("{msg}");
-                        process::exit(2);
+                        die(2);
                     }
                 };
                 match apply_jq_filter_result(filter, &value) {
@@ -1404,7 +1442,7 @@ fn main() {
                             Some(&e),
                         );
                         eprintln!("{msg}");
-                        process::exit(1);
+                        die(1);
                     }
                 }
             } else if let Some(ctx) = &hint_ctx {
@@ -1415,7 +1453,7 @@ fn main() {
                         // Should not happen since effective_format is forced to JSON,
                         // but fall through to plain output if it does.
                         println!("{output}");
-                        process::exit(0);
+                        die(0);
                     }
                 };
                 let hints = generate_hints(ctx, &value);
@@ -1436,7 +1474,7 @@ fn main() {
         }
         Ok(CommandOutcome::UserError(output)) => {
             eprintln!("{output}");
-            process::exit(1);
+            die(1);
         }
         Err(e) => {
             let msg = hyalo_cli::output::format_error(
@@ -1450,7 +1488,7 @@ fn main() {
                     .as_deref(),
             );
             eprintln!("{msg}");
-            process::exit(2);
+            die(2);
         }
     }
 }

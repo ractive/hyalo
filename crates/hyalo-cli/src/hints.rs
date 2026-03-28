@@ -223,13 +223,60 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
         ));
     }
 
-    // When there are many results, suggest narrowing filters.
+    // When there are many results, suggest data-driven narrowing filters.
     if results.len() > 5 {
-        hints.push(build_command_with_glob(
-            ctx,
-            &["find", "--property", "status=draft"],
-        ));
-        hints.push(build_command_with_glob(ctx, &["find", "--tag", "draft"]));
+        // Collect tag frequencies across all results.
+        let mut tag_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for item in results.iter() {
+            if let Some(tags) = item.get("tags").and_then(|t| t.as_array()) {
+                for tag in tags {
+                    if let Some(name) = tag.as_str() {
+                        *tag_counts.entry(name).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        // Collect status property frequencies — status is the most useful drill-down.
+        let mut status_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for item in results.iter() {
+            if let Some(status) = item
+                .get("properties")
+                .and_then(|p| p.get("status"))
+                .and_then(|s| s.as_str())
+            {
+                *status_counts.entry(status).or_insert(0) += 1;
+            }
+        }
+
+        // Pick the most common tag (if any results have tags).
+        if let Some((top_tag, _)) = tag_counts.iter().max_by_key(|(_, c)| *c) {
+            let remaining = MAX_HINTS.saturating_sub(hints.len());
+            if remaining > 0 {
+                hints.push(build_command_with_glob(ctx, &["find", "--tag", top_tag]));
+            }
+        }
+
+        // Pick the most interesting status value (prefer active/planned over completed).
+        let mut status_vec: Vec<(&str, usize, u8)> = status_counts
+            .iter()
+            .map(|(v, c)| (*v, *c, status_priority(v)))
+            .collect();
+        // Sort by priority (ascending), then by count (descending) as tiebreaker.
+        status_vec.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.cmp(&a.1)));
+
+        if let Some((top_status, _, _)) = status_vec.first() {
+            let remaining = MAX_HINTS.saturating_sub(hints.len());
+            if remaining > 0 {
+                let filter = format!("status={top_status}");
+                hints.push(build_command_with_glob(
+                    ctx,
+                    &["find", "--property", &filter],
+                ));
+            }
+        }
     }
 
     hints
@@ -505,6 +552,130 @@ mod tests {
         let hints = generate_hints(&c, &data);
         assert!(hints[0].contains("--glob"));
         assert!(hints[0].contains("notes/*.md"));
+    }
+
+    // --- hints_for_find ---
+
+    fn make_find_item(file: &str, status: Option<&str>, tags: &[&str]) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        if let Some(s) = status {
+            props.insert("status".to_owned(), serde_json::Value::String(s.to_owned()));
+        }
+        json!({
+            "file": file,
+            "properties": props,
+            "tags": tags,
+            "sections": [],
+            "tasks": [],
+            "links": [],
+            "modified": "2026-01-01T00:00:00Z"
+        })
+    }
+
+    #[test]
+    fn find_empty_results_no_hints() {
+        let c = ctx(HintSource::Find);
+        let hints = generate_hints(&c, &json!([]));
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn find_single_result_suggests_read_and_backlinks() {
+        let c = ctx(HintSource::Find);
+        let data = json!([make_find_item("notes/alpha.md", None, &[])]);
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.contains("read") && h.contains("alpha.md")),
+            "should suggest read: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.contains("backlinks") && h.contains("alpha.md")),
+            "should suggest backlinks: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_many_results_suggests_top_tag() {
+        let c = ctx(HintSource::Find);
+        // 6 results; rust appears 4 times, cli 2 times — rust should be suggested.
+        let data = json!([
+            make_find_item("a.md", Some("planned"), &["rust", "cli"]),
+            make_find_item("b.md", Some("planned"), &["rust"]),
+            make_find_item("c.md", Some("in-progress"), &["rust"]),
+            make_find_item("d.md", Some("completed"), &["rust"]),
+            make_find_item("e.md", Some("completed"), &["cli"]),
+            make_find_item("f.md", Some("completed"), &[]),
+        ]);
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.contains("--tag") && h.contains("rust")),
+            "should suggest --tag rust (most common): {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_many_results_suggests_interesting_status() {
+        let c = ctx(HintSource::Find);
+        // 6 results; in-progress is more interesting than completed.
+        let data = json!([
+            make_find_item("a.md", Some("in-progress"), &[]),
+            make_find_item("b.md", Some("completed"), &[]),
+            make_find_item("c.md", Some("completed"), &[]),
+            make_find_item("d.md", Some("completed"), &[]),
+            make_find_item("e.md", Some("completed"), &[]),
+            make_find_item("f.md", Some("completed"), &[]),
+        ]);
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.contains("--property") && h.contains("status=in-progress")),
+            "should prefer in-progress status: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_many_results_no_tags_falls_back_to_status() {
+        let c = ctx(HintSource::Find);
+        // 6 results, none with tags; should still suggest status narrowing.
+        let data = json!([
+            make_find_item("a.md", Some("planned"), &[]),
+            make_find_item("b.md", Some("planned"), &[]),
+            make_find_item("c.md", Some("planned"), &[]),
+            make_find_item("d.md", Some("planned"), &[]),
+            make_find_item("e.md", Some("planned"), &[]),
+            make_find_item("f.md", Some("planned"), &[]),
+        ]);
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.contains("--property") && h.contains("status=planned")),
+            "should suggest status filter: {hints:?}"
+        );
+        // No --tag hints when no tags exist.
+        assert!(
+            !hints.iter().any(|h| h.contains("--tag")),
+            "should not suggest --tag when no tags: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_hints_never_exceed_max() {
+        let c = ctx(HintSource::Find);
+        // 10 results with varied tags and statuses.
+        let items: Vec<serde_json::Value> = (0..10)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
+            .collect();
+        let data = serde_json::Value::Array(items);
+        let hints = generate_hints(&c, &data);
+        assert!(hints.len() <= MAX_HINTS);
     }
 
     // --- flag propagation ---

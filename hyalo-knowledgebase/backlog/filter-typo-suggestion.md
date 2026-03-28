@@ -9,7 +9,4 @@ origin: dogfooding v0.4.2 on docs/content
 
 When a user types `--filter` (which doesn't exist), clap suggests `--file` as the closest match. Since the user almost certainly meant `--property`, the error message is misleading.
 
-**Fix options:**
-1. Add `--filter` as a hidden alias for `--property` (most user-friendly)
-2. Customize the clap error to suggest `--property` explicitly
-3. Add `visible_alias("filter")` to the property arg in clap
+**Fix:** Customize clap's error handling so that unknown flags like `--filter` suggest `--property` instead of the misleading `--file` suggestion based on string similarity alone.
