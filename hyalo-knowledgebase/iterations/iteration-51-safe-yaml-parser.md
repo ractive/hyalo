@@ -1,7 +1,7 @@
 ---
 branch: iter-51/safe-yaml-parser
 date: 2026-03-27
-status: in-progress
+status: completed
 tags:
 - security
 - dependencies

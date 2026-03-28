@@ -1,7 +1,7 @@
 ---
 branch: iter-43/data-quality
 date: 2026-03-25
-status: in-progress
+status: superseded
 tags:
 - iteration
 - data-quality
