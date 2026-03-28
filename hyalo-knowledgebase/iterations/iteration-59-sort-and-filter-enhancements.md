@@ -2,7 +2,7 @@
 title: Iteration 59 — Sort & filter enhancements
 type: iteration
 date: 2026-03-28
-status: in-progress
+status: completed
 branch: iter-59/sort-filter
 tags:
   - find
