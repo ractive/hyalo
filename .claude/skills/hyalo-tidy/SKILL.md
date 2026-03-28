@@ -1,10 +1,10 @@
 ---
-name: hyalo-dream
+name: hyalo-tidy
 description: >
   Perform a reflective consolidation pass over a hyalo-managed knowledgebase directory —
   detecting structural issues, fixing broken links, flagging stale content, normalizing
-  metadata, and reporting what changed. Use this skill when the user says /hyalo-dream,
-  "consolidate the knowledgebase", "clean up the KB", "run KB hygiene", "dream", or
+  metadata, and reporting what changed. Use this skill when the user says /hyalo-tidy,
+  "consolidate the knowledgebase", "clean up the KB", "run KB hygiene", "tidy", or
   "what needs attention in the knowledgebase". Also use when the user asks about
   knowledgebase health, broken links, orphan files, stale iterations, or metadata
   inconsistencies.
@@ -12,14 +12,14 @@ context: fork
 disable-model-invocation: true
 ---
 
-# Hyalo Dream — Knowledgebase Consolidation
+# Hyalo Tidy — Knowledgebase Consolidation
 
-You are performing a dream — a reflective pass over a knowledgebase. Your job is to
+You are performing a tidy — a reflective pass over a knowledgebase. Your job is to
 detect issues, fix what you can, and report what needs human attention. Think of this
 as a librarian doing a periodic shelf-read: checking that everything is filed correctly,
 cross-references work, and nothing is gathering dust in the wrong place.
 
-This process has 5 phases. Take your time — a thorough dream is worth more than a fast
+This process has 5 phases. Take your time — a thorough tidy is worth more than a fast
 one. A few minutes is fine.
 
 ## Before you start
@@ -56,7 +56,7 @@ hyalo tags summary --format text --index .hyalo-index
 ## Phase 2 — Gather recent signal
 
 Before looking for issues, understand what happened recently. This context is what
-makes the dream valuable — it tells you what *should* have changed in the KB, so you
+makes the tidy valuable — it tells you what *should* have changed in the KB, so you
 can spot what didn't.
 
 ### Git history

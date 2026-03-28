@@ -260,11 +260,11 @@ fn init_claude_overwrites_existing_skill() {
 }
 
 // ---------------------------------------------------------------------------
-// --claude flag: hyalo-dream skill creation
+// --claude flag: hyalo-tidy skill creation
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_claude_creates_dream_skill() {
+fn init_claude_creates_tidy_skill() {
     let tmp = TempDir::new().unwrap();
 
     let output = hyalo()
@@ -276,41 +276,37 @@ fn init_claude_creates_dream_skill() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
 
-    let dream_skill_path = tmp
+    let tidy_skill_path = tmp
         .path()
         .join(".claude")
         .join("skills")
-        .join("hyalo-dream")
+        .join("hyalo-tidy")
         .join("SKILL.md");
     assert!(
-        dream_skill_path.exists(),
-        "hyalo-dream SKILL.md should have been created"
+        tidy_skill_path.exists(),
+        "hyalo-tidy SKILL.md should have been created"
     );
 
-    let content = fs::read_to_string(&dream_skill_path).unwrap();
+    let content = fs::read_to_string(&tidy_skill_path).unwrap();
     assert!(
-        content.contains("name: hyalo-dream"),
+        content.contains("name: hyalo-tidy"),
         "SKILL.md should have frontmatter name field; got: {content}"
     );
     assert!(
         content.contains("Knowledgebase Consolidation"),
-        "SKILL.md should contain dream skill content"
+        "SKILL.md should contain tidy skill content"
     );
 }
 
 #[test]
-fn init_claude_overwrites_existing_dream_skill() {
-    // Dream skill is always overwritten on re-run; summary says "updated".
+fn init_claude_overwrites_existing_tidy_skill() {
+    // Tidy skill is always overwritten on re-run; summary says "updated".
     let tmp = TempDir::new().unwrap();
-    let dream_skill_dir = tmp
-        .path()
-        .join(".claude")
-        .join("skills")
-        .join("hyalo-dream");
-    fs::create_dir_all(&dream_skill_dir).unwrap();
-    let dream_skill_path = dream_skill_dir.join("SKILL.md");
-    let original = "---\nname: custom-dream\n---\nstale content\n";
-    fs::write(&dream_skill_path, original).unwrap();
+    let tidy_skill_dir = tmp.path().join(".claude").join("skills").join("hyalo-tidy");
+    fs::create_dir_all(&tidy_skill_dir).unwrap();
+    let tidy_skill_path = tidy_skill_dir.join("SKILL.md");
+    let original = "---\nname: custom-tidy\n---\nstale content\n";
+    fs::write(&tidy_skill_path, original).unwrap();
 
     let output = hyalo()
         .current_dir(tmp.path())
@@ -323,17 +319,17 @@ fn init_claude_overwrites_existing_dream_skill() {
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
         stdout.contains("updated"),
-        "expected 'updated' for overwritten dream SKILL.md; got: {stdout}"
+        "expected 'updated' for overwritten tidy SKILL.md; got: {stdout}"
     );
 
-    let content = fs::read_to_string(&dream_skill_path).unwrap();
+    let content = fs::read_to_string(&tidy_skill_path).unwrap();
     assert_ne!(
         content, original,
-        "dream SKILL.md should have been overwritten, not preserved"
+        "tidy SKILL.md should have been overwritten, not preserved"
     );
     assert!(
-        content.contains("name: hyalo-dream"),
-        "overwritten dream SKILL.md should contain canonical name field; got: {content}"
+        content.contains("name: hyalo-tidy"),
+        "overwritten tidy SKILL.md should contain canonical name field; got: {content}"
     );
 }
 
@@ -729,8 +725,8 @@ fn init_prints_summary_of_actions() {
         "summary should mention hyalo SKILL.md; got: {stdout}"
     );
     assert!(
-        stdout.contains("skills/hyalo-dream/SKILL.md"),
-        "summary should mention hyalo-dream SKILL.md; got: {stdout}"
+        stdout.contains("skills/hyalo-tidy/SKILL.md"),
+        "summary should mention hyalo-tidy SKILL.md; got: {stdout}"
     );
     assert!(
         stdout.contains("CLAUDE.md"),
@@ -762,7 +758,7 @@ fn init_summary_mentions_rule() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_claude_dream_skill_parameterized_with_dir() {
+fn init_claude_tidy_skill_parameterized_with_dir() {
     let tmp = TempDir::new().unwrap();
 
     let output = hyalo()
@@ -774,23 +770,23 @@ fn init_claude_dream_skill_parameterized_with_dir() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
 
-    let dream_skill_path = tmp
+    let tidy_skill_path = tmp
         .path()
         .join(".claude")
         .join("skills")
-        .join("hyalo-dream")
+        .join("hyalo-tidy")
         .join("SKILL.md");
-    let content = fs::read_to_string(&dream_skill_path).unwrap();
+    let content = fs::read_to_string(&tidy_skill_path).unwrap();
 
     // Sentinel must have been replaced
     assert!(
         !content.contains("hyalo-knowledgebase"),
-        "dream SKILL.md should not contain sentinel after parameterization; got: {content}"
+        "tidy SKILL.md should not contain sentinel after parameterization; got: {content}"
     );
     // Actual dir name must be present
     assert!(
         content.contains("my-kb"),
-        "dream SKILL.md should contain the configured dir 'my-kb'; got: {content}"
+        "tidy SKILL.md should contain the configured dir 'my-kb'; got: {content}"
     );
 }
 

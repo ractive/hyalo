@@ -12,7 +12,7 @@ use crate::output::CommandOutcome;
 // ---------------------------------------------------------------------------
 
 const SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo/SKILL.md");
-const DREAM_SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo-dream/SKILL.md");
+const TIDY_SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo-tidy/SKILL.md");
 const RULE_TEMPLATE: &str = include_str!("../../../../.claude/rules/knowledgebase.md");
 
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations.\n\
@@ -33,7 +33,7 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 ///
 /// - `dir`: explicit value for the `dir` key in `.hyalo.toml`; when `None` the
 ///   function auto-detects a common doc directory.
-/// - `claude`: when `true`, also installs the hyalo and hyalo-dream skills and
+/// - `claude`: when `true`, also installs the hyalo and hyalo-tidy skills and
 ///   writes a managed section to `.claude/CLAUDE.md`.
 pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
@@ -143,28 +143,28 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
     }
 
     // ------------------------------------------------------------------
-    // Step 3: write (overwrite) .claude/skills/hyalo-dream/SKILL.md
+    // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
     // ------------------------------------------------------------------
-    let dream_skill_path = cwd
+    let tidy_skill_path = cwd
         .join(".claude")
         .join("skills")
-        .join("hyalo-dream")
+        .join("hyalo-tidy")
         .join("SKILL.md");
-    let dream_skill_existed = dream_skill_path.exists();
-    let dream_skill_dir = dream_skill_path
+    let tidy_skill_existed = tidy_skill_path.exists();
+    let tidy_skill_dir = tidy_skill_path
         .parent()
-        .context("dream skill path has no parent directory")?;
-    fs::create_dir_all(dream_skill_dir)
-        .with_context(|| format!("failed to create directory {}", dream_skill_dir.display()))?;
+        .context("tidy skill path has no parent directory")?;
+    fs::create_dir_all(tidy_skill_dir)
+        .with_context(|| format!("failed to create directory {}", tidy_skill_dir.display()))?;
     fs::write(
-        &dream_skill_path,
-        parameterize_template(DREAM_SKILL_CONTENT, &dir_value),
+        &tidy_skill_path,
+        parameterize_template(TIDY_SKILL_CONTENT, &dir_value),
     )
-    .with_context(|| format!("failed to write {}", dream_skill_path.display()))?;
-    if dream_skill_existed {
-        writeln!(summary, "updated  .claude/skills/hyalo-dream/SKILL.md").unwrap();
+    .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
+    if tidy_skill_existed {
+        writeln!(summary, "updated  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
     } else {
-        writeln!(summary, "created  .claude/skills/hyalo-dream/SKILL.md").unwrap();
+        writeln!(summary, "created  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
     }
 
     // ------------------------------------------------------------------
@@ -825,7 +825,7 @@ mod tests {
             panic!("expected success");
         };
         assert!(out1.contains("created  .claude/skills/hyalo/SKILL.md"));
-        assert!(out1.contains("created  .claude/skills/hyalo-dream/SKILL.md"));
+        assert!(out1.contains("created  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out1.contains("created  .claude/rules/knowledgebase.md"));
 
         // Second run — should say "updated", not "created"
@@ -834,7 +834,7 @@ mod tests {
             panic!("expected success");
         };
         assert!(out2.contains("updated  .claude/skills/hyalo/SKILL.md"));
-        assert!(out2.contains("updated  .claude/skills/hyalo-dream/SKILL.md"));
+        assert!(out2.contains("updated  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out2.contains("updated  .claude/rules/knowledgebase.md"));
     }
 
