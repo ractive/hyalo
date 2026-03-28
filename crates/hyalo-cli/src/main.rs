@@ -88,6 +88,9 @@ const HELP_LONG: &str = "COMMAND REFERENCE:
   Backlinks (reverse link lookup, read-only):
     hyalo backlinks -f/--file F
 
+  Links (link operations):
+    hyalo links fix [--apply] [--threshold T] [-g/--glob G]   Detect and fix broken links (default: dry-run)
+
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
 
@@ -596,7 +599,8 @@ enum Commands {
             OUTPUT: A single 'VaultSummary' object with file counts (total + by directory), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
             status grouping (files grouped by frontmatter 'status' value), \
-            task counts (total/done), and recently modified files.\n\
+            task counts (total/done), link health (total/broken links with source locations), \
+            orphan files, and recently modified files.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
