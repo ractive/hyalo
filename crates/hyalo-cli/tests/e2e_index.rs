@@ -3,6 +3,9 @@ mod common;
 use common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+
 // ---------------------------------------------------------------------------
 // Vault fixture
 // ---------------------------------------------------------------------------
@@ -1086,5 +1089,297 @@ fn chained_mutations_with_index_keep_index_consistent() {
     assert_eq!(
         tags, disk_tags,
         "index and disk scan should agree after chained mutations"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Vault boundary checks — create-index
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_index_rejects_output_outside_vault() {
+    let vault = setup_vault();
+    let outside = TempDir::new().unwrap();
+    let outside_path = outside.path().join("evil.idx");
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["create-index", "--output", outside_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "create-index should fail for paths outside vault"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("outside the vault boundary")
+            || combined.contains("--allow-outside-vault"),
+        "should mention vault boundary or escape hatch, got: {combined}"
+    );
+    assert!(
+        !outside_path.exists(),
+        "index file should not have been written outside vault"
+    );
+}
+
+#[test]
+fn create_index_allow_outside_vault_flag() {
+    let vault = setup_vault();
+    let outside = TempDir::new().unwrap();
+    let outside_path = outside.path().join("allowed.idx");
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args([
+            "create-index",
+            "--output",
+            outside_path.to_str().unwrap(),
+            "--allow-outside-vault",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "create-index with --allow-outside-vault should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        outside_path.exists(),
+        "index file should have been written with escape hatch"
+    );
+}
+
+#[test]
+fn create_index_normal_in_vault_path_works() {
+    let vault = setup_vault();
+    let in_vault_path = vault.path().join("subdir");
+    std::fs::create_dir_all(&in_vault_path).unwrap();
+    let index_path = in_vault_path.join("my.idx");
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["create-index", "--output", index_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "create-index with in-vault path should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(index_path.exists(), "index file should exist inside vault");
+}
+
+// ---------------------------------------------------------------------------
+// Vault boundary checks — drop-index
+// ---------------------------------------------------------------------------
+
+#[test]
+fn drop_index_rejects_path_outside_vault() {
+    let vault = setup_vault();
+    // Create a real file outside the vault to try to delete
+    let outside = TempDir::new().unwrap();
+    let outside_file = outside.path().join("victim.idx");
+    std::fs::write(&outside_file, b"fake index").unwrap();
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["drop-index", "--path", outside_file.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "drop-index should fail for paths outside vault"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("outside the vault boundary")
+            || combined.contains("--allow-outside-vault"),
+        "should mention vault boundary or escape hatch, got: {combined}"
+    );
+    assert!(
+        outside_file.exists(),
+        "file outside vault should NOT have been deleted"
+    );
+}
+
+#[test]
+fn drop_index_allow_outside_vault_flag() {
+    let vault = setup_vault();
+    let outside = TempDir::new().unwrap();
+    let outside_file = outside.path().join("allowed.idx");
+    std::fs::write(&outside_file, b"fake index").unwrap();
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args([
+            "drop-index",
+            "--path",
+            outside_file.to_str().unwrap(),
+            "--allow-outside-vault",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "drop-index with --allow-outside-vault should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !outside_file.exists(),
+        "file should have been deleted with escape hatch"
+    );
+}
+
+#[test]
+fn drop_index_normal_in_vault_path_works() {
+    let vault = setup_vault();
+    let index_path = create_default_index(&vault);
+    assert!(index_path.exists());
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["drop-index", "--path", index_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "drop-index with in-vault path should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!index_path.exists(), "index should have been deleted");
+}
+
+// ---------------------------------------------------------------------------
+// Symlink boundary checks — discover_files (via find)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn find_skips_symlinked_md_outside_vault() {
+    let vault = TempDir::new().unwrap();
+    write_md(
+        vault.path(),
+        "real.md",
+        md!(r"
+---
+title: Real
+---
+Content
+"),
+    );
+
+    // Create a file outside the vault and symlink to it
+    let outside = TempDir::new().unwrap();
+    let outside_file = outside.path().join("secret.md");
+    std::fs::write(&outside_file, "---\ntitle: Secret\n---\nSecret content\n").unwrap();
+    unix_fs::symlink(&outside_file, vault.path().join("evil.md")).unwrap();
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .arg("find")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "find should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&"real.md"),
+        "real.md should be found: {files:?}"
+    );
+    assert!(
+        !files.iter().any(|f| f.contains("evil")),
+        "symlinked file outside vault should be skipped: {files:?}"
+    );
+
+    // Should emit a warning on stderr
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning") && stderr.contains("outside vault"),
+        "should warn about skipped symlink: {stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn find_includes_symlinked_md_inside_vault() {
+    let vault = TempDir::new().unwrap();
+    write_md(
+        vault.path(),
+        "real.md",
+        md!(r"
+---
+title: Real
+---
+Content
+"),
+    );
+
+    // Create a subdirectory with a file, then symlink within the vault
+    std::fs::create_dir_all(vault.path().join("sub")).unwrap();
+    write_md(
+        vault.path(),
+        "sub/target.md",
+        md!(r"
+---
+title: Target
+---
+Target content
+"),
+    );
+    unix_fs::symlink(
+        vault.path().join("sub/target.md"),
+        vault.path().join("link.md"),
+    )
+    .unwrap();
+
+    let output = hyalo()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .arg("find")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "find should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&"real.md"),
+        "real.md should be found: {files:?}"
+    );
+    // The symlink resolves inside the vault, so it should be included
+    assert!(
+        files.iter().any(|f| f.contains("link")),
+        "symlinked file inside vault should be included: {files:?}"
     );
 }

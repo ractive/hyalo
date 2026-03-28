@@ -158,7 +158,8 @@ pub fn append(
     let parsed_args: Vec<(&str, &str, Value)> = {
         let mut v = Vec::with_capacity(property_args.len());
         for arg in property_args {
-            let (name, raw_value) = parse_kv(arg).expect("already validated");
+            let (name, raw_value) =
+                parse_kv(arg).map_err(|e| anyhow::anyhow!("invalid property argument: {e}"))?;
             let parsed = frontmatter::parse_value(raw_value, None)
                 .map_err(|e| anyhow::anyhow!("failed to parse value for property '{name}': {e}"))?;
             v.push((name, raw_value, parsed));

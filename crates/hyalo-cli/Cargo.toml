@@ -18,6 +18,7 @@ hyalo-core = { workspace = true }
 anyhow = { workspace = true }
 indexmap = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+dunce = { workspace = true }
 jaq-core = { workspace = true }
 jaq-json = { workspace = true }
 jaq-std = { workspace = true }
