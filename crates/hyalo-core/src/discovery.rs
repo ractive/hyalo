@@ -26,6 +26,30 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
+    // Filter out symlinks that resolve outside the vault boundary
+    let canonical_dir = canonicalize_vault_dir(dir)?;
+    files.retain(|path| match dunce::canonicalize(path) {
+        Ok(canonical) => {
+            if canonical.starts_with(&canonical_dir) {
+                true
+            } else {
+                eprintln!(
+                    "warning: skipping {}: symlink target resolves outside vault",
+                    path.display()
+                );
+                false
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: skipping {}: failed to resolve path: {}",
+                path.display(),
+                e
+            );
+            false
+        }
+    });
+
     files.sort();
     Ok(files)
 }
@@ -121,7 +145,7 @@ pub fn canonicalize_vault_dir(dir: &Path) -> Result<PathBuf> {
 /// - `Ok(true)`  — `full` is within the vault
 /// - `Ok(false)` — `full` resolves outside the vault boundary
 /// - `Err(_)`    — `full` could not be canonicalized (permission error, symlink loop, etc.)
-pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
+pub fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
     let canonical_full = dunce::canonicalize(full)
         .with_context(|| format!("failed to canonicalize path: {}", full.display()))?;
     Ok(canonical_full.starts_with(canonical_dir))

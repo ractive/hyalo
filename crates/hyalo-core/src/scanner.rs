@@ -125,6 +125,13 @@ pub(crate) fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -
 /// Strip inline code spans from a line, replacing their content with spaces
 /// to preserve byte positions for link parsing.
 /// Returns a borrowed reference when no backticks are present (zero allocation).
+///
+/// # Safety constraint
+///
+/// The `unsafe` block at the end of this function relies on the fact that
+/// backtick (0x60) and space (0x20) are both single-byte ASCII characters.
+/// Any future change to the delimiter or replacement byte must preserve this
+/// single-byte-ASCII invariant to keep the UTF-8 validity proof sound.
 pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     if !line.contains('`') {
         return Cow::Borrowed(line);
@@ -204,6 +211,13 @@ pub(crate) fn is_comment_fence(line: &str) -> bool {
 ///
 /// Returns a borrowed reference when no `%%` is present (zero allocation).
 /// Unmatched opening `%%` is treated as literal text.
+///
+/// # Safety constraint
+///
+/// The `unsafe` block at the end of this function relies on the fact that
+/// percent (0x25) and space (0x20) are both single-byte ASCII characters.
+/// Any future change to the delimiter or replacement byte must preserve this
+/// single-byte-ASCII invariant to keep the UTF-8 validity proof sound.
 pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     if !line.contains("%%") {
         return Cow::Borrowed(line);

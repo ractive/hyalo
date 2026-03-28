@@ -771,6 +771,9 @@ Repeatable (AND).\n\
         /// Output path for the index file (default: .hyalo-index in --dir)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Allow writing the index file outside the vault directory
+        #[arg(long)]
+        allow_outside_vault: bool,
     },
     /// Delete a snapshot index file created with create-index
     #[command(
@@ -786,6 +789,9 @@ Repeatable (AND).\n\
         /// Path to the index file to delete (default: .hyalo-index in --dir)
         #[arg(short, long)]
         path: Option<PathBuf>,
+        /// Allow deleting an index file outside the vault directory
+        #[arg(long)]
+        allow_outside_vault: bool,
     },
     /// Append values to list properties in file(s) frontmatter, promoting scalars to lists
     #[command(
@@ -1700,15 +1706,25 @@ fn main() {
             &mut snapshot_index,
             cli.index.as_deref(),
         ),
-        Commands::CreateIndex { ref output } => create_index_commands::create_index(
+        Commands::CreateIndex {
+            ref output,
+            allow_outside_vault,
+        } => create_index_commands::create_index(
             &dir,
             site_prefix,
             output.as_deref(),
             effective_format,
+            allow_outside_vault,
         ),
-        Commands::DropIndex { ref path } => {
-            drop_index_commands::drop_index(&dir, path.as_deref(), effective_format)
-        }
+        Commands::DropIndex {
+            ref path,
+            allow_outside_vault,
+        } => drop_index_commands::drop_index(
+            &dir,
+            path.as_deref(),
+            effective_format,
+            allow_outside_vault,
+        ),
         Commands::Links { action } => match action {
             LinksAction::Fix {
                 dry_run: _,

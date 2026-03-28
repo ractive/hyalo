@@ -1,5 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::Result;
+use anyhow::{Context, Result};
 use hyalo_core::discovery;
 use hyalo_core::index::{ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ pub fn create_index(
     site_prefix: Option<&str>,
     output: Option<&Path>,
     format: Format,
+    allow_outside_vault: bool,
 ) -> Result<CommandOutcome> {
     // Discover all markdown files
     let all = discovery::discover_files(dir)?;
@@ -40,6 +41,30 @@ pub fn create_index(
         Some(p) => p.to_path_buf(),
         None => dir.join(".hyalo-index"),
     };
+
+    // Vault boundary check: only applies when the caller specified a custom path
+    if output.is_some() && !allow_outside_vault {
+        let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
+        let parent = index_path
+            .parent()
+            .context("output path has no parent directory")?;
+        let canonical_parent = std::fs::canonicalize(parent).with_context(|| {
+            format!(
+                "failed to canonicalize parent of output path: {}",
+                parent.display()
+            )
+        })?;
+        if !canonical_parent.starts_with(&canonical_dir) {
+            let out = crate::output::format_error(
+                format,
+                "output path is outside the vault boundary",
+                Some(&index_path.display().to_string()),
+                Some("use --allow-outside-vault to override"),
+                None,
+            );
+            return Ok(CommandOutcome::UserError(out));
+        }
+    }
 
     // Serialize vault_dir as a canonical string (fall back to raw display)
     let vault_dir_str = std::fs::canonicalize(dir)

@@ -224,8 +224,10 @@ pub fn remove(
     // Pre-parse property args: (name, opt_value)
     let parsed_props: Vec<(&str, Option<&str>)> = property_args
         .iter()
-        .map(|arg| parse_kv_optional(arg).expect("already validated"))
-        .collect();
+        .map(|arg| {
+            parse_kv_optional(arg).map_err(|e| anyhow::anyhow!("invalid property argument: {e}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let files = collect_files(dir, files, globs, format)?;
     let files = match files {
