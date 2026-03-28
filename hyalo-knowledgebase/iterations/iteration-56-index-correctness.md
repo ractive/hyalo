@@ -2,7 +2,7 @@
 title: Iteration 56 — Index correctness & input validation
 type: iteration
 date: 2026-03-28
-status: in-progress
+status: completed
 branch: iter-56/index-correctness
 tags:
   - bugfix
