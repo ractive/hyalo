@@ -263,6 +263,10 @@ use super::format_iso8601;
 /// files, orphans) is derived from `IndexEntry` values rather than scanning
 /// files from disk.
 ///
+/// Unlike [`summary`], this function does not take a `site_prefix` parameter
+/// because the prefix is already baked into the index's `LinkGraph` at build
+/// time (via `ScannedIndex::build` → `LinkGraph::from_file_links`).
+///
 /// `globs` optionally narrows which entries are included (same semantics as the
 /// `--glob` flag on the `summary` command).
 pub fn summary_from_index(

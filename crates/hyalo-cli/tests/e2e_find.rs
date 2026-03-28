@@ -2337,7 +2337,7 @@ fn find_limit_zero_is_rejected() {
         "--limit 0 should fail but exited successfully"
     );
     assert!(
-        stderr.contains("0") || stderr.contains("invalid"),
+        stderr.contains("invalid value '0' for '--limit"),
         "expected clap error about invalid value, got: {stderr}"
     );
 }
