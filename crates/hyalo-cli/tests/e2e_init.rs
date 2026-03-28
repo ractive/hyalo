@@ -654,16 +654,15 @@ fn init_claude_updates_managed_section_on_rerun() {
 }
 
 #[test]
-fn init_claude_migrates_old_hint_to_managed_section() {
-    // Pre-populate with just the old bare hint line (no markers), then run init.
-    // The hint should be wrapped in markers afterwards.
+fn init_claude_appends_section_when_no_markers_exist() {
+    // Pre-populate CLAUDE.md with plain content (no markers). Init should append
+    // the managed section rather than replacing anything.
     let tmp = TempDir::new().unwrap();
     let claude_dir = tmp.path().join(".claude");
     fs::create_dir_all(&claude_dir).unwrap();
     let claude_md_path = claude_dir.join("CLAUDE.md");
-    let old_hint = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
-    let original = format!("# Header\n\n{old_hint}\n\n# Footer\n");
-    fs::write(&claude_md_path, &original).unwrap();
+    let original = "# Header\n\nSome existing instructions.\n\n# Footer\n";
+    fs::write(&claude_md_path, original).unwrap();
 
     let output = hyalo()
         .current_dir(tmp.path())
@@ -696,11 +695,9 @@ fn init_claude_migrates_old_hint_to_managed_section() {
         content.contains("<!-- hyalo:end -->"),
         "end marker added; got: {content}"
     );
-    // Hint should appear exactly once (now inside the managed section).
-    assert_eq!(
-        content.matches("hyalo --help").count(),
-        1,
-        "hint should appear exactly once; got: {content}"
+    assert!(
+        content.contains("hyalo --help"),
+        "hint present; got: {content}"
     );
 }
 

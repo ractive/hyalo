@@ -15,7 +15,9 @@ const SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo/SKILL
 const DREAM_SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo-dream/SKILL.md");
 const RULE_TEMPLATE: &str = include_str!("../../../../.claude/rules/knowledgebase.md");
 
-const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations (frontmatter, tags, tasks, search). Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
+const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations.\n\
+Examples: `hyalo find --property status=planned --format text`, `hyalo find \"search text\"`, `hyalo find --property 'title~=pattern'`.\n\
+Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
 
 const SECTION_START: &str = "<!-- hyalo:start -->";
 const SECTION_END: &str = "<!-- hyalo:end -->";
@@ -419,9 +421,7 @@ fn append_line_to_file_content(content: &str, line: &str) -> String {
 /// 1. If both `<!-- hyalo:start -->` and `<!-- hyalo:end -->` markers are present,
 ///    replace everything between them (inclusive) with `section`.
 /// 2. If only the start marker is present (no matching end marker), treat as absent.
-/// 3. If the bare `CLAUDE_MD_HINT` text appears without markers, replace that line
-///    with `section` (migration path from old format).
-/// 4. Otherwise, append `section` separated by a blank line.
+/// 3. Otherwise, append `section` separated by a blank line.
 fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str) {
     let lines: Vec<&str> = content.lines().collect();
 
@@ -448,23 +448,7 @@ fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str
     }
 
     // Only start marker without end: treat as absent (fall through).
-    // Check for old bare hint line and migrate it.
-    if let Some(hint_idx) = lines.iter().position(|l| *l == CLAUDE_MD_HINT) {
-        let mut result = String::new();
-        for line in &lines[..hint_idx] {
-            result.push_str(line);
-            result.push('\n');
-        }
-        result.push_str(section);
-        result.push('\n');
-        for line in &lines[hint_idx + 1..] {
-            result.push_str(line);
-            result.push('\n');
-        }
-        return (result, "migrated to managed section");
-    }
-
-    // No markers and no old hint — append.
+    // No markers found — append.
     let appended = append_line_to_file_content(content, section);
     (appended, "appended managed section")
 }
@@ -774,21 +758,6 @@ mod tests {
         // Verify only one copy of start/end markers.
         assert_eq!(result.matches(SECTION_START).count(), 1);
         assert_eq!(result.matches(SECTION_END).count(), 1);
-    }
-
-    #[test]
-    fn upsert_managed_section_migrates_old_hint() {
-        let section = make_section();
-        let old_content = format!("# Header\n\n{CLAUDE_MD_HINT}\n\n# Footer\n");
-        let (result, action) = upsert_managed_section(&old_content, &section);
-        assert_eq!(action, "migrated to managed section");
-        assert!(result.contains("# Header"), "header preserved");
-        assert!(result.contains("# Footer"), "footer preserved");
-        assert!(result.contains(SECTION_START), "start marker added");
-        assert!(result.contains(SECTION_END), "end marker added");
-        assert!(result.contains(CLAUDE_MD_HINT), "hint content present");
-        // Should still appear exactly once.
-        assert_eq!(result.matches(CLAUDE_MD_HINT).count(), 1);
     }
 
     #[test]

@@ -15,7 +15,10 @@ After an iteration or before starting one, build hyalo with "cargo build --relea
 Then use target/release/hyalo to work with the documentation in `./hyalo-knowledgebase/` to dogfood what you did. Mention issues you have using it, propose features you'd like to have.
 
 **Always use hyalo for knowledgebase interactions — never use Edit/Read/Grep directly:**
-- **Read**: `hyalo find`, `hyalo summary`, `hyalo properties`, `hyalo tags`
+- **Search/filter**: `hyalo find --property status=planned --tag iteration --format text`
+- **Body search**: `hyalo find "broken links" --format text`
+- **Title regex**: `hyalo find --property 'title~=link' --format text`
+- **Overview**: `hyalo summary`, `hyalo properties`, `hyalo tags`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set --property status=completed --file iterations/iteration-16-robustness.md`)
 - Only fall back to Edit for body content changes (markdown prose, task checkboxes) that hyalo can't handle
 - **Do NOT pass `--dir hyalo-knowledgebase/`** — `.hyalo.toml` already sets it as the default
