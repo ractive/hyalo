@@ -5,6 +5,7 @@ status: completed
 tags:
 - security
 - hardening
+- iteration
 title: Security Hardening
 type: iteration
 ---

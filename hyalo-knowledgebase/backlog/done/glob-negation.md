@@ -30,10 +30,10 @@ Alternatively, add a separate `--exclude` flag.
 
 ## Acceptance criteria
 
-- [ ] Can exclude files matching a glob pattern
-- [ ] Works in combination with positive globs (include + exclude)
-- [ ] Help text documents the syntax
-- [ ] E2e tests cover negation globs
+- [x] Can exclude files matching a glob pattern
+- [x] Works in combination with positive globs (include + exclude)
+- [x] Help text documents the syntax
+- [x] E2e tests cover negation globs
 
 ## My Comments
 What's more common? ! or --exclude?

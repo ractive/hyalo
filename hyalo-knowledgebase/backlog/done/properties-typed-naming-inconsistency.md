@@ -30,4 +30,4 @@ Given that JSON keys with hyphens require bracket notation, the underscore conve
 
 ## Acceptance criteria
 
-- [ ] Flag name and JSON key are consistent, or the discrepancy is documented in help text
+- [x] Flag name and JSON key are consistent, or the discrepancy is documented in help text

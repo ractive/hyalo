@@ -24,12 +24,12 @@ Load `.hyalo.toml` before building the `clap::Command` and dynamically hide args
 
 ## Tasks
 
-- [ ] Move static `after_help` / example strings from derive attributes to runtime-generated strings
-- [ ] Load `.hyalo.toml` before building the `clap::Command`
-- [ ] Use `mut_arg()` to hide args that have config defaults (e.g. `--dir` when `dir` is set)
-- [ ] Strip config-defaulted flags from all examples and cookbook snippets in help output
-- [ ] Also strip from `--hints` output (verify existing `HintContext` logic covers this)
-- [ ] E2e tests: help output without config shows `--dir`, help output with config omits it
+- [x] Move static `after_help` / example strings from derive attributes to runtime-generated strings
+- [x] Load `.hyalo.toml` before building the `clap::Command`
+- [x] Use `mut_arg()` to hide args that have config defaults (e.g. `--dir` when `dir` is set)
+- [x] Strip config-defaulted flags from all examples and cookbook snippets in help output
+- [x] Also strip from `--hints` output (verify existing `HintContext` logic covers this)
+- [x] E2e tests: help output without config shows `--dir`, help output with config omits it
 
 ## References
 

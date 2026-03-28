@@ -8,6 +8,7 @@ tags:
   - find
   - sorting
   - filtering
+  - iteration
 ---
 
 # Iteration 59 — Sort & filter enhancements

@@ -29,7 +29,7 @@ Option A is more composable and consistent with the existing `!=` operator.
 
 ## Acceptance criteria
 
-- [ ] Can filter for files missing a specific property
-- [ ] Works in combination with other filters (AND semantics)
-- [ ] Help text documents the syntax
-- [ ] E2e tests cover absence filter
+- [x] Can filter for files missing a specific property
+- [x] Works in combination with other filters (AND semantics)
+- [x] Help text documents the syntax
+- [x] E2e tests cover absence filter

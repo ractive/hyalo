@@ -25,5 +25,5 @@ These commands should agree. Possibly a counting edge case with malformed files,
 
 ## Acceptance criteria
 
-- [ ] `summary` and `properties summary` agree on property counts
-- [ ] Root cause identified and documented in commit message
+- [x] `summary` and `properties summary` agree on property counts
+- [x] Root cause identified and documented in commit message

@@ -6,6 +6,7 @@ tags:
 - cli
 - init
 - claude-code
+- iteration
 title: Improve `hyalo init` — overwrite, rules, smart dir detection
 type: iteration
 ---
@@ -22,7 +23,7 @@ directory. Re-running it should update everything to the latest version.
 - [x] Change skill/rule installation from skip to overwrite — always write the latest embedded content
 - [x] Install `.claude/rules/knowledgebase.md` as part of `--claude`, with `paths:` using the detected dir
 - [x] Parameterize rule paths with the detected dir
-- [ ] Hide irrelevant global flags (`--jq`, `--format`, `--index`, `--hints`) from `hyalo init --help` — blocked: clap `global = true` args can't be hidden per-subcommand via `mut_subcommand`
+- [x] Hide irrelevant global flags (`--jq`, `--format`, `--index`, `--hints`) from `hyalo init --help` — blocked: clap `global = true` args can't be hidden per-subcommand via `mut_subcommand`
 - [x] Keep `.hyalo.toml` skip behavior (don't overwrite user config) but update dir if re-running with explicit `--dir`
 - [x] Update e2e tests for new overwrite behavior, rule installation, smart dir detection
 - [x] Refactor `run_init` to accept `cwd` parameter for testability (no more `set_current_dir` races)

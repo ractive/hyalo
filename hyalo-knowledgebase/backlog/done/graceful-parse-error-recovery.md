@@ -38,11 +38,11 @@ The error message does **not include the file path**, making it impossible to id
 
 ## Acceptance criteria
 
-- [ ] Unclosed frontmatter emits warning to stderr, skips file, continues scan
-- [ ] Frontmatter exceeding budget emits warning to stderr, skips file, continues scan
-- [ ] All warning messages include the file path
-- [ ] `hyalo summary --dir <3500-file-vault>` completes successfully even with broken files
-- [ ] Exit code is 0 when broken files are skipped (not 2)
+- [x] Unclosed frontmatter emits warning to stderr, skips file, continues scan
+- [x] Frontmatter exceeding budget emits warning to stderr, skips file, continues scan
+- [x] All warning messages include the file path
+- [x] `hyalo summary --dir <3500-file-vault>` completes successfully even with broken files
+- [x] Exit code is 0 when broken files are skipped (not 2)
 
 ## My Comments
 Explore how the "index" files look like that are use in the github docs repo. I read somewhere that index file start with "---" but don't have a closing "---". Should we support them?

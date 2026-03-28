@@ -36,9 +36,9 @@ Make the backlinks/link-graph code path as robust as the rest of the scanner. Cu
 - [x] `cargo fmt`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo test --workspace`
-- [ ] Dogfood: `hyalo find --fields backlinks --dir ../docs/content` succeeds
+- [x] Dogfood: `hyalo find --fields backlinks --dir ../docs/content` succeeds
 
 ## Acceptance Criteria
 
-- [ ] Backlinks works on docs/content (3,517 files, 4 malformed) without fatal errors
+- [x] Backlinks works on docs/content (3,517 files, 4 malformed) without fatal errors
 - [x] All quality gates pass

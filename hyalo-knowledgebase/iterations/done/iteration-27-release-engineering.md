@@ -24,7 +24,7 @@ Bring CI/CD and release pipeline to the gold standard set by ripgrep/bat/fd. Add
 - [x] Pin all GitHub Actions to commit SHAs (with version comments)
 
 ### Release matrix expansion
-- [ ] Add `x86_64-apple-darwin` (Intel Mac) target
+- [x] Add `x86_64-apple-darwin` (Intel Mac) target
 - [x] Add `x86_64-unknown-linux-musl` target (static binary)
 - [x] Add `aarch64-unknown-linux-musl` target (static binary)
 
@@ -36,12 +36,12 @@ Bring CI/CD and release pipeline to the gold standard set by ripgrep/bat/fd. Add
 - [x] Add version sync check: validate git tag matches `Cargo.toml` version
 
 ### Release notes
-- [ ] Add `git-cliff` configuration for automated changelog generation
+- [x] Add `git-cliff` configuration for automated changelog generation
 - [x] Or: enable GitHub auto-generated release notes as a simpler alternative
 
 ### Quality gates
-- [ ] Verify release workflow runs correctly with a test tag (dry-run or pre-release)
-- [ ] Verify all 6+ target binaries are present in release artifacts
+- [x] Verify release workflow runs correctly with a test tag (dry-run or pre-release)
+- [x] Verify all 6+ target binaries are present in release artifacts
 
 ## Acceptance Criteria
 

@@ -7,6 +7,7 @@ tags:
 - index
 - cli
 - architecture
+- iteration
 title: Iteration 47 — Snapshot Index for Repeated Queries
 type: iteration
 ---

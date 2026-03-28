@@ -35,9 +35,9 @@ Atomically removes the old tag and adds the new one across all files that have i
 
 ## Acceptance criteria
 
-- [ ] Single command renames a tag across all files
-- [ ] Atomic: if the new tag already exists on a file, only the old one is removed
-- [ ] Reports how many files were modified
-- [ ] Works with `--where-property` / `--where-tag` for scoped renames
+- [x] Single command renames a tag across all files
+- [x] Atomic: if the new tag already exists on a file, only the old one is removed
+- [x] Reports how many files were modified
+- [x] Works with `--where-property` / `--where-tag` for scoped renames
 
 See [[backlog/done/rename-property-command]]

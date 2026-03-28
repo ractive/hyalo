@@ -6,6 +6,7 @@ tags:
 - security
 - dependencies
 - parser
+- iteration
 title: Replace serde_yaml_ng with serde-saphyr (safe Rust YAML parser)
 type: iteration
 ---

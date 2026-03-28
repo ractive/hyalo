@@ -28,6 +28,6 @@ Support a list literal syntax in `set`, e.g.:
 
 ## Acceptance criteria
 
-- [ ] `set --property 'K=[a, b, c]'` creates a YAML list property
-- [ ] Existing text values with brackets are not accidentally converted
-- [ ] Help text documents the list syntax
+- [x] `set --property 'K=[a, b, c]'` creates a YAML list property
+- [x] Existing text values with brackets are not accidentally converted
+- [x] Help text documents the list syntax

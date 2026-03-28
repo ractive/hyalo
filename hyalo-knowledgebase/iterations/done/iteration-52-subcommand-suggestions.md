@@ -7,6 +7,7 @@ tags:
 - ux
 - error-handling
 - llm
+- iteration
 title: Subcommand Suggestion on Misplaced Flags
 type: iteration
 ---

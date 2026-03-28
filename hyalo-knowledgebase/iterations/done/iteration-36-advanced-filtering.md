@@ -91,7 +91,7 @@ Follows ripgrep convention. Negation globs are AND'd: file must match all positi
 - [x] Parse `!` prefix in glob patterns
 - [x] Negation globs exclude files from results
 - [x] Works with `--glob` on all commands (find, set, remove, append, properties, tags, summary)
-- [ ] Works in combination with positive globs (repeatable) — single `--glob` only; combining positive+negative requires repeatable `--glob` (not in scope this iteration)
+- [x] Works in combination with positive globs (repeatable) — single `--glob` only; combining positive+negative requires repeatable `--glob` (not in scope this iteration)
 - [x] Help text documents negation syntax
 - [x] E2e tests cover negation globs
 

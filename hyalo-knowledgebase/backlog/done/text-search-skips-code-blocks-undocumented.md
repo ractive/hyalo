@@ -31,7 +31,7 @@ Links and tasks should continue to skip code blocks — only content search chan
 
 ## Acceptance criteria
 
-- [ ] `hyalo find "term"` matches lines inside fenced code blocks
-- [ ] Link extraction still skips code blocks (no regression)
-- [ ] Task extraction still skips code blocks (no regression)
-- [ ] E2e test: search term only inside a code block is found
+- [x] `hyalo find "term"` matches lines inside fenced code blocks
+- [x] Link extraction still skips code blocks (no regression)
+- [x] Task extraction still skips code blocks (no regression)
+- [x] E2e test: search term only inside a code block is found
