@@ -1,11 +1,15 @@
 ---
-title: "Regex case sensitivity flags (?i)/(?-i) have no effect"
+title: Regex case sensitivity flags (?i)/(?-i) have no effect
 type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1 against vscode-docs/docs
 priority: low
-status: planned
-tags: [backlog, bug, search, regex]
+status: completed
+tags:
+  - backlog
+  - bug
+  - search
+  - regex
 ---
 
 # Regex case sensitivity flags (?i)/(?-i) have no effect

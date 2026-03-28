@@ -1,11 +1,15 @@
 ---
-title: "Heading text inside code spans parsed as empty string"
+title: Heading text inside code spans parsed as empty string
 type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1 against docs/content
 priority: low
-status: planned
-tags: [backlog, bug, scanner, sections]
+status: completed
+tags:
+  - backlog
+  - bug
+  - scanner
+  - sections
 ---
 
 # Heading text inside code spans parsed as empty string
