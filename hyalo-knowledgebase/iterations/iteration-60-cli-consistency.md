@@ -2,7 +2,7 @@
 title: Iteration 60 — CLI consistency & minor fixes
 type: iteration
 date: 2026-03-28
-status: in-progress
+status: completed
 branch: iter-60/cli-consistency
 tags:
   - cli
