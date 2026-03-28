@@ -293,15 +293,14 @@ impl LinkMatcher {
     /// Returns `true` if `candidate` (vault-relative) refers to the same file
     /// as `source`, ignoring `.md` suffix and ASCII case.
     fn is_self_link(source: &str, candidate: &str) -> bool {
-        let s = source
-            .strip_suffix(".md")
-            .or_else(|| source.strip_suffix(".MD"))
-            .unwrap_or(source);
-        let c = candidate
-            .strip_suffix(".md")
-            .or_else(|| candidate.strip_suffix(".MD"))
-            .unwrap_or(candidate);
-        s.eq_ignore_ascii_case(c)
+        fn strip_md(s: &str) -> &str {
+            if s.len() >= 3 && s[s.len() - 3..].eq_ignore_ascii_case(".md") {
+                &s[..s.len() - 3]
+            } else {
+                s
+            }
+        }
+        strip_md(source).eq_ignore_ascii_case(strip_md(candidate))
     }
 
     /// Try to find a matching file for a broken link target.
@@ -756,10 +755,25 @@ mod tests {
     }
 
     #[test]
+    fn matcher_rejects_self_link_extension_mismatch() {
+        // Source without .md suffix; only candidate is the .md form — should be blocked.
+        let matcher = LinkMatcher::new(make_files(&["notes/foo.md"]), 0.8);
+        assert!(matcher.find_match("notes/foo.md", "notes/foo").is_none());
+    }
+
+    #[test]
     fn matcher_rejects_self_link_shortest_path() {
         // Unique stem match that resolves to the source file — should return None.
         let matcher = LinkMatcher::new(make_files(&["sub/bar.md"]), 0.8);
         assert!(matcher.find_match("bar", "sub/bar.md").is_none());
+    }
+
+    #[test]
+    fn matcher_self_link_among_ambiguous_stems_picks_other() {
+        // Two files share a stem; source is one of them — matcher should pick the other.
+        let matcher = LinkMatcher::new(make_files(&["a/bar.md", "b/bar.md"]), 0.8);
+        let result = matcher.find_match("bar", "a/bar.md").unwrap();
+        assert_eq!(result.matched_file, "b/bar.md");
     }
 
     #[test]

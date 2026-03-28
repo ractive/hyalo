@@ -764,7 +764,9 @@ See [[sort-reverse]] for reverse sorting.
         "self-link should not appear in fixes: {fixes:?}"
     );
     assert_eq!(
-        json["unfixable"].as_u64().expect("'unfixable' should be a number"),
+        json["unfixable"]
+            .as_u64()
+            .expect("'unfixable' should be a number"),
         1,
         "broken self-link should be counted as unfixable"
     );
