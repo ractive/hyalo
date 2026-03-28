@@ -1,11 +1,15 @@
 ---
-title: "Content search should include lines inside code blocks"
+title: Content search should include lines inside code blocks
 type: backlog
 date: 2026-03-25
 origin: dogfooding v0.3.1 against vscode-docs/docs
 priority: medium
-status: planned
-tags: [backlog, bug, search, scanner]
+status: completed
+tags:
+  - backlog
+  - bug
+  - search
+  - scanner
 ---
 
 # Content search should include lines inside code blocks

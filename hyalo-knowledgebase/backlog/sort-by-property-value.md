@@ -1,8 +1,8 @@
 ---
-title: "Support --sort by frontmatter property value (title, date, custom)"
+title: Support --sort by frontmatter property value (title, date, custom)
 type: backlog
 date: 2026-03-28
-status: planned
+status: completed
 priority: medium
 origin: dogfooding v0.4.2 on docs/content and vscode-docs/docs
 ---
