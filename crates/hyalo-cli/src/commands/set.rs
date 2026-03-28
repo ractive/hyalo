@@ -68,12 +68,9 @@ pub fn parse_kv(s: &str) -> Result<(&str, &str), String> {
 /// Returns `true` if the tag was actually added (i.e. was not already present).
 ///
 /// Mirrors the logic in `add_values_to_list_property` for the `tags` key, but
-/// operates on an already-loaded `BTreeMap` to avoid a second `read_frontmatter`
+/// operates on an already-loaded `IndexMap` to avoid a second `read_frontmatter`
 /// call when processing multiple mutations for the same file.
-fn add_tag_in_memory(
-    props: &mut std::collections::BTreeMap<String, Value>,
-    tag: &str,
-) -> Result<bool> {
+fn add_tag_in_memory(props: &mut indexmap::IndexMap<String, Value>, tag: &str) -> Result<bool> {
     const KEY: &str = "tags";
 
     // Guard: reject non-list scalar types that are neither string nor sequence.

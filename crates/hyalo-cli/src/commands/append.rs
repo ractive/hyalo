@@ -41,7 +41,7 @@ pub struct AppendPropertyResult {
 /// - Property is a scalar string/number/bool: promotes to `[existing, new_value]`
 /// - Any other type (Mapping, Tagged): bail with an error
 fn append_value_in_memory(
-    props: &mut std::collections::BTreeMap<String, Value>,
+    props: &mut indexmap::IndexMap<String, Value>,
     name: &str,
     raw_value: &str,
     new_val: &Value,

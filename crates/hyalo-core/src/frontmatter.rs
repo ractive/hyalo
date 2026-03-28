@@ -1,8 +1,8 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use serde_json::Value;
-use serde_saphyr::{Budget, DuplicateKeyPolicy, Options};
-use std::collections::BTreeMap;
+use serde_saphyr::{Budget, DuplicateKeyPolicy, Options, SerializerOptions};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -31,16 +31,83 @@ pub fn hyalo_options() -> Options {
     }
 }
 
+/// Build `SerializerOptions` that preserve the detected list indentation style.
+fn hyalo_serializer_options(compact_list_indent: bool) -> SerializerOptions {
+    SerializerOptions {
+        compact_list_indent,
+        ..SerializerOptions::default()
+    }
+}
+
+/// Detect whether the YAML content uses compact list indentation.
+///
+/// Scans for the first sequence indicator (`- `) and checks whether it is indented
+/// further than its parent mapping key. Returns `true` for compact (flush) style,
+/// `false` for indented style. Defaults to `false` if no sequences are found.
+fn detect_list_indent_style(yaml: &str) -> bool {
+    // Look for a mapping key followed by a newline and then a sequence indicator.
+    // Pattern: a line like "key:\n- item" (compact) vs "key:\n  - item" (indented).
+    let mut prev_key_indent: Option<usize> = None;
+
+    for line in yaml.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+
+        // Skip blank lines and comment-only lines — they don't reset the
+        // preceding-key state (e.g. `tags:\n  # note\n  - a`).
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Check if this line is a sequence indicator
+        if trimmed.starts_with("- ") || trimmed == "-" {
+            if let Some(key_indent) = prev_key_indent {
+                // Compact: sequence indicator is at the same level as the key
+                // Indented: sequence indicator is indented further than the key
+                return indent <= key_indent;
+            }
+            // Sequence without a preceding key — treat as compact
+            return true;
+        }
+
+        // Check if this line is a mapping key (ends with `:` or `: value`)
+        if let Some(colon_pos) = trimmed.find(':') {
+            let before_colon = &trimmed[..colon_pos];
+            // Basic check: the part before `:` looks like a key (no spaces except in quoted strings)
+            if !before_colon.is_empty()
+                && !before_colon.starts_with('-')
+                && (trimmed.len() == colon_pos + 1 || trimmed.as_bytes()[colon_pos + 1] == b' ')
+            {
+                // If the value after `:` is empty or only a comment, next line might be a sequence
+                let after_colon = trimmed[colon_pos + 1..].trim();
+                if after_colon.is_empty() || after_colon.starts_with('#') {
+                    prev_key_indent = Some(indent);
+                    continue;
+                }
+            }
+        }
+
+        prev_key_indent = None;
+    }
+
+    // No sequences found — default to indented (non-compact)
+    false
+}
+
 /// Represents parsed frontmatter and the remaining body content.
 #[derive(Debug, Clone)]
 pub struct Document {
-    properties: BTreeMap<String, Value>,
+    properties: IndexMap<String, Value>,
     body: String,
+    /// Whether the original YAML used compact list indentation (flush `- item`).
+    /// `false` means indented style (`  - item` under its parent key).
+    /// Defaults to `false` (indented) when no sequences are present.
+    compact_list_indent: bool,
 }
 
 impl Document {
     #[must_use]
-    pub fn properties(&self) -> &BTreeMap<String, Value> {
+    pub fn properties(&self) -> &IndexMap<String, Value> {
         &self.properties
     }
 
@@ -55,17 +122,21 @@ impl Document {
     pub fn parse(content: &str) -> Result<Self> {
         let (yaml_str, body) = extract_frontmatter(content)?;
 
-        let properties: BTreeMap<String, Value> = match yaml_str {
+        let (properties, compact_list_indent) = match yaml_str {
             Some(yaml) if !yaml.trim().is_empty() => {
-                serde_saphyr::from_str_with_options(yaml, hyalo_options())
-                    .context("failed to parse YAML frontmatter")?
+                let compact = detect_list_indent_style(yaml);
+                let props: IndexMap<String, Value> =
+                    serde_saphyr::from_str_with_options(yaml, hyalo_options())
+                        .context("failed to parse YAML frontmatter")?;
+                (props, compact)
             }
-            _ => BTreeMap::new(),
+            _ => (IndexMap::new(), false),
         };
 
         Ok(Self {
             properties,
             body: body.to_owned(),
+            compact_list_indent,
         })
     }
 
@@ -75,8 +146,11 @@ impl Document {
 
         if !self.properties.is_empty() {
             out.push_str("---\n");
-            let yaml =
-                serde_saphyr::to_string(&self.properties).context("failed to serialize YAML")?;
+            let yaml = serde_saphyr::to_string_with_options(
+                &self.properties,
+                hyalo_serializer_options(self.compact_list_indent),
+            )
+            .context("failed to serialize YAML")?;
             out.push_str(&yaml);
             // The YAML serializer adds a trailing newline, but let's ensure
             if !yaml.ends_with('\n') {
@@ -102,7 +176,7 @@ impl Document {
 
     /// Remove a property, returning the old value if it existed.
     pub fn remove_property(&mut self, name: &str) -> Option<Value> {
-        self.properties.remove(name)
+        self.properties.shift_remove(name)
     }
 }
 
@@ -116,7 +190,7 @@ pub fn is_parse_error(err: &anyhow::Error) -> bool {
 
 /// Read only the YAML frontmatter from a file, stopping as soon as the closing `---` is found.
 /// The body is never read into memory. Use this for read-only property operations.
-pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
+pub fn read_frontmatter(path: &Path) -> Result<IndexMap<String, Value>> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     read_frontmatter_from_reader(reader)
@@ -131,12 +205,30 @@ pub fn read_frontmatter(path: &Path) -> Result<BTreeMap<String, Value>> {
 ///
 /// If `props` is empty (all properties removed), no frontmatter block is written —
 /// the file starts directly with the body.
-pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result<()> {
-    // --- Step 1: find the byte offset where the body starts ---
+pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result<()> {
+    // --- Step 1: find the byte offset where the body starts and detect indent style ---
     let mut file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
 
     let body_offset = find_body_offset(&mut file)?;
+
+    // Detect list indent style from the existing frontmatter before overwriting
+    let compact_list_indent = if body_offset > 0 {
+        file.seek(SeekFrom::Start(0))
+            .with_context(|| format!("failed to seek in {}", path.display()))?;
+        let mut fm_bytes = vec![0u8; body_offset as usize];
+        file.read_exact(&mut fm_bytes)
+            .with_context(|| format!("failed to read frontmatter of {}", path.display()))?;
+        let fm_str = String::from_utf8_lossy(&fm_bytes);
+        // Extract just the YAML content between the --- delimiters
+        let yaml_content = fm_str
+            .strip_prefix("---\n")
+            .or_else(|| fm_str.strip_prefix("---\r\n"))
+            .unwrap_or(&fm_str);
+        detect_list_indent_style(yaml_content)
+    } else {
+        false
+    };
 
     // --- Step 2: read the body bytes from that offset ---
     file.seek(SeekFrom::Start(body_offset))
@@ -150,7 +242,11 @@ pub fn write_frontmatter(path: &Path, props: &BTreeMap<String, Value>) -> Result
     let mut out: Vec<u8> = Vec::new();
     if !props.is_empty() {
         out.extend_from_slice(b"---\n");
-        let yaml = serde_saphyr::to_string(props).context("failed to serialize YAML")?;
+        let yaml = serde_saphyr::to_string_with_options(
+            props,
+            hyalo_serializer_options(compact_list_indent),
+        )
+        .context("failed to serialize YAML")?;
         out.extend_from_slice(yaml.as_bytes());
         if !yaml.ends_with('\n') {
             out.push(b'\n');
@@ -262,7 +358,7 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 /// `Budget` now enforces its own limits. The pre-read cap stops reading early for
 /// files with a missing closing `---`, which the parser budget cannot detect (it
 /// only sees the YAML string that was already read).
-fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String, Value>> {
+fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<IndexMap<String, Value>> {
     const MAX_FRONTMATTER_LINES: usize = 200;
     const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
@@ -271,7 +367,7 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
     // First line must be `---`
     match lines.next() {
         Some(Ok(line)) if line.trim() == "---" => {}
-        _ => return Ok(BTreeMap::new()),
+        _ => return Ok(IndexMap::new()),
     }
 
     let mut yaml = String::new();
@@ -302,7 +398,7 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
         // consumes the terminator but yields nothing more.  This mirrors
         // `extract_frontmatter`'s treatment of those inputs as "no frontmatter".
         if !has_content_lines {
-            return Ok(BTreeMap::new());
+            return Ok(IndexMap::new());
         }
         anyhow::bail!(
             "unclosed frontmatter: file starts with `---` but no closing `---` was found"
@@ -310,7 +406,7 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<BTreeMap<String
     }
 
     if yaml.trim().is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok(IndexMap::new());
     }
 
     serde_saphyr::from_str_with_options(&yaml, hyalo_options())
@@ -1087,6 +1183,148 @@ Body.
             props.get("flag"),
             Some(&Value::String("yes".into())),
             "streaming parser should treat `yes` as string"
+        );
+    }
+
+    // --- Key order preservation tests ---
+
+    #[test]
+    fn roundtrip_preserves_key_order() {
+        let content = md!(r"
+---
+title: Hello
+type: iteration
+date: 2026-03-27
+status: planned
+branch: iter-54/test
+---
+Body.
+");
+        let doc = Document::parse(content).unwrap();
+        let serialized = doc.serialize().unwrap();
+        let doc2 = Document::parse(&serialized).unwrap();
+        let keys: Vec<&str> = doc2.properties().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["title", "type", "date", "status", "branch"],
+            "key order should be preserved through roundtrip"
+        );
+    }
+
+    #[test]
+    fn roundtrip_preserves_key_order_after_mutation() {
+        let content = md!(r"
+---
+title: Hello
+type: iteration
+date: 2026-03-27
+status: planned
+---
+Body.
+");
+        let mut doc = Document::parse(content).unwrap();
+        doc.set_property("status".into(), Value::String("completed".into()));
+        let serialized = doc.serialize().unwrap();
+        let doc2 = Document::parse(&serialized).unwrap();
+        let keys: Vec<&str> = doc2.properties().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec!["title", "type", "date", "status"],
+            "key order should be preserved after mutation"
+        );
+    }
+
+    // --- List indent style detection tests ---
+
+    #[test]
+    fn detect_compact_list_style() {
+        let yaml = "title: Test\ntags:\n- a\n- b\n";
+        assert!(
+            detect_list_indent_style(yaml),
+            "flush `- item` should be detected as compact"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_style() {
+        let yaml = "title: Test\ntags:\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "indented `  - item` should be detected as non-compact"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_with_comment_after_key() {
+        let yaml = "tags: # my tags\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "comment after key colon should still detect indented style"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_with_blank_line_between() {
+        let yaml = "tags:\n\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "blank line between key and sequence should not break detection"
+        );
+    }
+
+    #[test]
+    fn detect_indented_list_with_comment_line_between() {
+        let yaml = "tags:\n  # note\n  - a\n  - b\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "comment line between key and sequence should not break detection"
+        );
+    }
+
+    #[test]
+    fn detect_no_sequences_defaults_to_non_compact() {
+        let yaml = "title: Test\nstatus: draft\n";
+        assert!(
+            !detect_list_indent_style(yaml),
+            "no sequences should default to non-compact"
+        );
+    }
+
+    #[test]
+    fn roundtrip_compact_list_style() {
+        let content = md!(r"
+---
+title: Test
+tags:
+- a
+- b
+---
+Body.
+");
+        let doc = Document::parse(content).unwrap();
+        let serialized = doc.serialize().unwrap();
+        assert!(
+            serialized.contains("tags:\n- a\n- b"),
+            "compact list style should be preserved: {serialized}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_indented_list_style() {
+        let content = md!(r"
+---
+title: Test
+tags:
+  - a
+  - b
+---
+Body.
+");
+        let doc = Document::parse(content).unwrap();
+        let serialized = doc.serialize().unwrap();
+        assert!(
+            serialized.contains("tags:\n  - a\n  - b"),
+            "indented list style should be preserved: {serialized}"
         );
     }
 }

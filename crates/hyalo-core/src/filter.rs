@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
+use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Tag extraction and matching
@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 /// - `tags` as a scalar string → single-element vec
 /// - `tags` as empty sequence → empty vec
 #[must_use]
-pub fn extract_tags(props: &BTreeMap<String, Value>) -> Vec<String> {
+pub fn extract_tags(props: &IndexMap<String, Value>) -> Vec<String> {
     match props.get("tags") {
         Some(Value::Array(seq)) => seq
             .iter()
@@ -284,7 +284,7 @@ fn parse_regex_pattern(s: &str) -> Result<Regex> {
 
 impl PropertyFilter {
     /// Return true if the given property map satisfies this filter.
-    pub fn matches(&self, props: &BTreeMap<String, Value>) -> bool {
+    pub fn matches(&self, props: &IndexMap<String, Value>) -> bool {
         match self {
             PropertyFilter::Absent { key } => !props.contains_key(key),
             PropertyFilter::RegexMatch { key, pattern } => {
@@ -339,7 +339,7 @@ impl PropertyFilter {
 /// Extracts tags internally. If the caller already has tags (e.g. for output),
 /// use [`matches_filters_with_tags`] to avoid double extraction.
 pub fn matches_frontmatter_filters(
-    props: &BTreeMap<String, Value>,
+    props: &IndexMap<String, Value>,
     property_filters: &[PropertyFilter],
     tag_filters: &[String],
 ) -> bool {
@@ -358,7 +358,7 @@ pub fn matches_frontmatter_filters(
 /// Use this when the caller needs the tags for other purposes (e.g. output)
 /// to avoid extracting them twice.
 pub fn matches_filters_with_tags(
-    props: &BTreeMap<String, Value>,
+    props: &IndexMap<String, Value>,
     property_filters: &[PropertyFilter],
     tags: &[String],
     tag_filters: &[String],
@@ -613,8 +613,8 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
     use serde_json::{Value, json};
-    use std::collections::BTreeMap;
 
     // -----------------------------------------------------------------------
     // Property filter parsing
@@ -979,7 +979,7 @@ mod tests {
     // Property filter matching
     // -----------------------------------------------------------------------
 
-    fn props(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
+    fn props(pairs: &[(&str, Value)]) -> IndexMap<String, Value> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))

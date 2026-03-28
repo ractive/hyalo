@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSetBuilder};
-use std::collections::BTreeMap;
+use indexmap::IndexMap;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -875,7 +875,7 @@ use super::format_iso8601;
 fn build_file_object(
     rel_path: &str,
     modified: &str,
-    props: &BTreeMap<String, serde_json::Value>,
+    props: &IndexMap<String, serde_json::Value>,
     tags: &[String],
     fields: &Fields,
     outline_sections: Option<Vec<OutlineSection>>,

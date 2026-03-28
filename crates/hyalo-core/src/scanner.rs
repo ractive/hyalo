@@ -1,9 +1,9 @@
 #![allow(clippy::missing_errors_doc)]
 use crate::frontmatter::hyalo_options;
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use serde_json::Value;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -274,9 +274,9 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
 /// All methods have default no-op implementations, so visitors only need
 /// to override the events they care about.
 pub trait FileVisitor {
-    /// Called with parsed frontmatter properties (empty `BTreeMap` if none).
+    /// Called with parsed frontmatter properties (empty `IndexMap` if none).
     /// Return `ScanAction::Stop` to skip the body scan for this visitor.
-    fn on_frontmatter(&mut self, _props: &BTreeMap<String, Value>) -> ScanAction {
+    fn on_frontmatter(&mut self, _props: &IndexMap<String, Value>) -> ScanAction {
         ScanAction::Continue
     }
 
@@ -364,7 +364,7 @@ pub fn scan_reader_multi<R: BufRead>(
     let n = reader.read_line(&mut buf).context("failed to read line")?;
     if n == 0 {
         // Empty file — deliver empty frontmatter
-        let empty = BTreeMap::new();
+        let empty = IndexMap::new();
         for (i, v) in visitors.iter_mut().enumerate() {
             if v.on_frontmatter(&empty) == ScanAction::Stop {
                 active[i] = false;
@@ -423,16 +423,16 @@ pub fn scan_reader_multi<R: BufRead>(
         if !found_close {
             anyhow::bail!("unclosed frontmatter (no closing `---` found)");
         }
-        let props: BTreeMap<String, Value> = match yaml {
+        let props: IndexMap<String, Value> = match yaml {
             Some(ref y) if !y.trim().is_empty() => {
                 serde_saphyr::from_str_with_options(y, hyalo_options())
                     .context("failed to parse YAML frontmatter")?
             }
-            _ => BTreeMap::new(),
+            _ => IndexMap::new(),
         };
         (props, fm_line_count)
     } else {
-        (BTreeMap::new(), 0usize)
+        (IndexMap::new(), 0usize)
     };
 
     // Deliver frontmatter to all visitors
@@ -696,7 +696,7 @@ fn dispatch_body_line(
 
 /// Collects frontmatter properties from a file scan.
 pub struct FrontmatterCollector {
-    props: BTreeMap<String, Value>,
+    props: IndexMap<String, Value>,
     body_needed: bool,
 }
 
@@ -706,20 +706,20 @@ impl FrontmatterCollector {
     #[must_use]
     pub fn new(body_needed: bool) -> Self {
         Self {
-            props: BTreeMap::new(),
+            props: IndexMap::new(),
             body_needed,
         }
     }
 
     /// Consume the collector and return the parsed properties.
     #[must_use]
-    pub fn into_props(self) -> BTreeMap<String, Value> {
+    pub fn into_props(self) -> IndexMap<String, Value> {
         self.props
     }
 }
 
 impl FileVisitor for FrontmatterCollector {
-    fn on_frontmatter(&mut self, props: &BTreeMap<String, Value>) -> ScanAction {
+    fn on_frontmatter(&mut self, props: &IndexMap<String, Value>) -> ScanAction {
         self.props = props.clone();
         if self.body_needed {
             ScanAction::Continue
