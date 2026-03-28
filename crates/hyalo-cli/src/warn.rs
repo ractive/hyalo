@@ -105,8 +105,9 @@ pub fn suppressed_count_for(msg: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// Return whether the given message was emitted (printed) at least once.
+/// Return whether the given message was tracked at least once after `init()`.
 ///
+/// Note: warnings emitted before `init()` are not tracked.
 /// **For use in tests only.**
 #[cfg(test)]
 pub fn was_emitted(msg: &str) -> bool {

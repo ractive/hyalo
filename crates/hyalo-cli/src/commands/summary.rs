@@ -106,14 +106,16 @@ pub fn summary(
                 .entry((name.clone(), prop_type.clone()))
                 .or_insert(0) += 1;
             // Track string (text) values for rare-value inconsistency detection.
+            // Cap at 50 distinct values per property to avoid wasting memory on
+            // high-cardinality fields (e.g. title, origin) that aren't controlled
+            // vocabularies.
             if prop_type == "text"
                 && let serde_json::Value::String(s) = value
             {
-                *string_prop_values
-                    .entry(name.clone())
-                    .or_default()
-                    .entry(s.clone())
-                    .or_insert(0) += 1;
+                let entry = string_prop_values.entry(name.clone()).or_default();
+                if entry.len() < 50 || entry.contains_key(s.as_str()) {
+                    *entry.entry(s.clone()).or_insert(0) += 1;
+                }
             }
         }
 
@@ -435,14 +437,14 @@ pub fn summary_from_index(
                 .entry((name.clone(), prop_type.clone()))
                 .or_insert(0) += 1;
             // Track string (text) values for rare-value inconsistency detection.
+            // Cap at 50 distinct values per property (same as disk-scan path).
             if prop_type == "text"
                 && let serde_json::Value::String(s) = value
             {
-                *string_prop_values
-                    .entry(name.clone())
-                    .or_default()
-                    .entry(s.clone())
-                    .or_insert(0) += 1;
+                let entry = string_prop_values.entry(name.clone()).or_default();
+                if entry.len() < 50 || entry.contains_key(s.as_str()) {
+                    *entry.entry(s.clone()).or_insert(0) += 1;
+                }
             }
         }
 
@@ -1128,7 +1130,7 @@ No tasks here.
         crate::warn::reset_for_test();
         crate::warn::init(false);
 
-        // "done" vs "completed" — Levenshtein 8 > max_distance 2 → no warning
+        // "done" vs "completed" — Levenshtein 7 > max_distance 2 → no warning
         let vc = counts(&[("done", 1), ("completed", 10)]);
         warn_rare_values("status", &vc, 1, 3, 2);
 
@@ -1182,13 +1184,22 @@ No tasks here.
         map.insert("status".to_owned(), counts(&[("a", 1), ("b", 1), ("c", 1)]));
         warn_inconsistent_properties(&map);
 
-        // None of the single-occurrence values should trigger warnings
+        // No warnings should have been emitted — all values are unique so no
+        // dominant value exists (count >= dominant_min of 3).
+        // Check full warning format (was_emitted uses exact key match).
         for val in ["a", "b", "c"] {
-            let msg = format!(r#"property "status" value "{val}" appears in 1 file"#);
-            assert!(
-                !crate::warn::was_emitted(&msg),
-                "expected no warning when all values are unique: {msg}"
-            );
+            for other in ["a", "b", "c"] {
+                if val == other {
+                    continue;
+                }
+                let msg = format!(
+                    r#"property "status" value "{val}" appears in 1 file — did you mean "{other}" (1 files)?"#
+                );
+                assert!(
+                    !crate::warn::was_emitted(&msg),
+                    "expected no warning when all values are unique"
+                );
+            }
         }
     }
 }

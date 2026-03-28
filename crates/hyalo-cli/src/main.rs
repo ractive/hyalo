@@ -312,10 +312,8 @@ fn filter_examples(hide_dir: bool, hide_format: bool) -> String {
 /// - **COMMAND REFERENCE / Global flags**: line-level — drop the specific flag
 ///   rows (`-d/--dir` and/or `--format json|text`) when they are config-defaulted.
 /// - **COOKBOOK**: paragraph-level — each recipe is separated by a blank line.
-///   Drop an entire recipe (comment + command) when the command contains a
-///   config-defaulted flag.
-/// - **OUTPUT SHAPES**: line-level — drop the trailing `--format text` comment
-///   when format is config-defaulted.
+///   Drop an entire recipe (comment + command) when the command line contains a
+///   config-defaulted flag (drops the whole example, not just the flag).
 ///
 /// This keeps the help focused on flags the user actually needs to type.
 fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
