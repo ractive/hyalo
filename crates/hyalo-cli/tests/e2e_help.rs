@@ -186,3 +186,166 @@ fn help_shows_dir_without_config() {
         "--dir should be visible in Options: when no config is present:\n{opts}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Config-aware help: examples and cookbook filtering
+// ---------------------------------------------------------------------------
+
+/// Extract the EXAMPLES block from `-h` output (short help).
+///
+/// Returns the text from the `EXAMPLES:` heading to the end of the output.
+fn examples_block(help: &str) -> &str {
+    let start = help.find("EXAMPLES:").expect("no EXAMPLES: block in help");
+    &help[start..]
+}
+
+/// Extract the COOKBOOK block from `--help` output (long help).
+///
+/// Returns the text from the `COOKBOOK:` heading to the next major section
+/// (`OUTPUT SHAPES`) or end of output.
+fn cookbook_block(help: &str) -> &str {
+    let start = help.find("COOKBOOK:").expect("no COOKBOOK: block in help");
+    // Trim to just the cookbook section (end at the next section heading).
+    let slice = &help[start..];
+    if let Some(end_offset) = slice.find("\nOUTPUT SHAPES") {
+        &slice[..end_offset]
+    } else {
+        slice
+    }
+}
+
+#[test]
+fn examples_omit_format_when_config_sets_it() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
+
+    let output = hyalo().arg("-h").current_dir(tmp.path()).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let examples = examples_block(&stdout);
+
+    assert!(
+        !examples.contains("--format"),
+        "EXAMPLES should omit --format when config sets format:\n{examples}"
+    );
+}
+
+#[test]
+fn examples_show_format_without_config() {
+    let tmp = TempDir::new().unwrap();
+    // No .hyalo.toml
+
+    let output = hyalo().arg("-h").current_dir(tmp.path()).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let examples = examples_block(&stdout);
+
+    assert!(
+        examples.contains("--format"),
+        "EXAMPLES should show --format when no config is present:\n{examples}"
+    );
+}
+
+#[test]
+fn cookbook_omits_format_when_config_sets_it() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
+
+    let output = hyalo()
+        .arg("--help")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let cookbook = cookbook_block(&stdout);
+
+    assert!(
+        !cookbook.contains("--format"),
+        "COOKBOOK should omit --format when config sets format:\n{cookbook}"
+    );
+}
+
+#[test]
+fn cookbook_shows_format_without_config() {
+    let tmp = TempDir::new().unwrap();
+    // No .hyalo.toml
+
+    let output = hyalo()
+        .arg("--help")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let cookbook = cookbook_block(&stdout);
+
+    assert!(
+        cookbook.contains("--format"),
+        "COOKBOOK should show --format when no config is present:\n{cookbook}"
+    );
+}
+
+/// Extract the "Global flags" sub-section from a `--help` output string.
+///
+/// Returns text from the `Global flags` heading to the next blank line
+/// that follows (i.e., just the flag table rows).
+fn global_flags_block(help: &str) -> &str {
+    let start = help
+        .find("Global flags (apply to all commands):")
+        .expect("no 'Global flags' section in --help");
+    let slice = &help[start..];
+    // The block ends at the first blank line after the heading.
+    if let Some(end_offset) = slice.find("\n\n") {
+        &slice[..end_offset]
+    } else {
+        slice
+    }
+}
+
+#[test]
+fn command_reference_omits_dir_flag_when_config_sets_it() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+    let output = hyalo()
+        .arg("--help")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // The global flags table row for -d/--dir should be absent.
+    let flags = global_flags_block(&stdout);
+    assert!(
+        !flags.contains("-d/--dir"),
+        "Global flags table should omit -d/--dir when config sets dir:\n{flags}"
+    );
+}
+
+#[test]
+fn command_reference_shows_dir_flag_without_config() {
+    let tmp = TempDir::new().unwrap();
+    // No .hyalo.toml
+
+    let output = hyalo()
+        .arg("--help")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    let flags = global_flags_block(&stdout);
+    assert!(
+        flags.contains("-d/--dir"),
+        "Global flags table should show -d/--dir when no config is present:\n{flags}"
+    );
+}

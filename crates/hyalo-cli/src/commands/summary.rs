@@ -43,6 +43,9 @@ pub fn summary(
     let mut total_files: usize = 0;
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // string_prop_values: for inconsistency detection — property_name -> (value -> count)
+    // Only tracks text-typed string properties (not date/datetime/number/checkbox/list).
+    let mut string_prop_values: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
     let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut total_tasks: usize = 0;
@@ -100,8 +103,20 @@ pub fn summary(
         for (name, value) in props.iter().filter(|(n, _)| n.as_str() != "tags") {
             let prop_type = infer_type(value).to_owned();
             *property_counts
-                .entry((name.clone(), prop_type))
+                .entry((name.clone(), prop_type.clone()))
                 .or_insert(0) += 1;
+            // Track string (text) values for rare-value inconsistency detection.
+            // Cap at 50 distinct values per property to avoid wasting memory on
+            // high-cardinality fields (e.g. title, origin) that aren't controlled
+            // vocabularies.
+            if prop_type == "text"
+                && let serde_json::Value::String(s) = value
+            {
+                let entry = string_prop_values.entry(name.clone()).or_default();
+                if entry.len() < 50 || entry.contains_key(s.as_str()) {
+                    *entry.entry(s.clone()).or_insert(0) += 1;
+                }
+            }
         }
 
         // Tags aggregation (case-insensitive, preserve first-seen casing)
@@ -237,6 +252,9 @@ pub fn summary(
         }
     };
 
+    // Emit warnings for any property value that looks like a typo of a dominant value.
+    warn_inconsistent_properties(&string_prop_values);
+
     let vault_summary = VaultSummary {
         files: file_counts,
         orphans,
@@ -256,6 +274,111 @@ pub fn summary(
 }
 
 use super::format_iso8601;
+
+// ---------------------------------------------------------------------------
+// Rare-value inconsistency detection
+// ---------------------------------------------------------------------------
+
+/// Compute the Levenshtein edit distance between two strings.
+///
+/// Uses the standard iterative two-row DP algorithm.
+/// Runs in O(|a| * |b|) time and O(min(|a|, |b|)) space.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+
+    // Ensure the shorter string is in the column dimension for minimal allocation.
+    let (a, b) = if a.len() < b.len() { (b, a) } else { (a, b) };
+
+    let m = a.len();
+    let n = b.len();
+
+    // prev[j] = edit distance between a[..i-1] and b[..j]
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr: Vec<usize> = vec![0; n + 1];
+
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (curr[j - 1] + 1) // insertion
+                .min(prev[j] + 1) // deletion
+                .min(prev[j - 1] + cost); // substitution
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[n]
+}
+
+/// Emit warnings for property values that appear in very few files and closely
+/// resemble a much more common value (likely typos or inconsistencies).
+///
+/// A value is flagged when:
+/// - It appears in at most `rare_threshold` files, AND
+/// - There exists another value appearing in at least `dominant_min` files, AND
+/// - The Levenshtein distance between the two values is at most `max_distance`.
+fn warn_rare_values(
+    prop_name: &str,
+    value_counts: &BTreeMap<String, usize>,
+    rare_threshold: usize,
+    dominant_min: usize,
+    max_distance: usize,
+) {
+    // Sort by count descending so the most-frequent value is first.
+    // This makes it easy to find the dominant candidate and allows us to
+    // short-circuit the rare-value search from the end.
+    let mut sorted: Vec<(&str, usize)> =
+        value_counts.iter().map(|(v, &c)| (v.as_str(), c)).collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+
+    // Iterate in reverse (least-frequent first) to visit rare values.
+    for (rare_val, rare_count) in sorted.iter().rev() {
+        if *rare_count > rare_threshold {
+            // Everything from here toward the front of the reversed iteration
+            // is above the threshold — stop early.
+            break;
+        }
+        // Find the most-frequent value (other than this one) that qualifies
+        // as dominant. `sorted` is still in descending order, so `.find`
+        // returns the highest-count match first.
+        if let Some((dominant_val, dominant_count)) = sorted
+            .iter()
+            .find(|(v, c)| *c >= dominant_min && *v != *rare_val)
+        {
+            let dist = levenshtein(rare_val, dominant_val);
+            if dist <= max_distance {
+                let file_word = if *rare_count == 1 { "file" } else { "files" };
+                crate::warn::warn(format!(
+                    "property \"{prop_name}\" value \"{rare_val}\" appears in {rare_count} {file_word} — did you mean \"{dominant_val}\" ({dominant_count} files)?"
+                ));
+            }
+        }
+    }
+}
+
+/// Emit rare-value inconsistency warnings for all string-valued properties
+/// collected during a summary scan.
+///
+/// `string_prop_values` maps `property_name -> (value -> file_count)`.
+fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<String, usize>>) {
+    for (prop_name, value_counts) in string_prop_values {
+        // Skip properties where no value reaches the dominant threshold —
+        // warn_rare_values would find nothing to compare against anyway.
+        let dominant_min = 3;
+        let max_count = value_counts.values().copied().max().unwrap_or(0);
+        if max_count < dominant_min {
+            continue;
+        }
+        warn_rare_values(
+            prop_name,
+            value_counts,
+            /* rare_threshold */ 1,
+            /* dominant_min */ 3,
+            /* max_distance */ 2,
+        );
+    }
+}
 
 /// Show a high-level vault summary using pre-scanned index data.
 ///
@@ -284,6 +407,9 @@ pub fn summary_from_index(
     let mut total_files: usize = 0;
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // string_prop_values: for inconsistency detection — property_name -> (value -> count)
+    // Only tracks text-typed string properties (not date/datetime/number/checkbox/list).
+    let mut string_prop_values: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
     let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut total_tasks: usize = 0;
@@ -310,8 +436,18 @@ pub fn summary_from_index(
         {
             let prop_type = infer_type(value).to_owned();
             *property_counts
-                .entry((name.clone(), prop_type))
+                .entry((name.clone(), prop_type.clone()))
                 .or_insert(0) += 1;
+            // Track string (text) values for rare-value inconsistency detection.
+            // Cap at 50 distinct values per property (same as disk-scan path).
+            if prop_type == "text"
+                && let serde_json::Value::String(s) = value
+            {
+                let entry = string_prop_values.entry(name.clone()).or_default();
+                if entry.len() < 50 || entry.contains_key(s.as_str()) {
+                    *entry.entry(s.clone()).or_insert(0) += 1;
+                }
+            }
         }
 
         // Tags aggregation (case-insensitive, preserve first-seen casing)
@@ -434,6 +570,9 @@ pub fn summary_from_index(
         total: orphan_files.len(),
         files: orphan_files,
     };
+
+    // Emit warnings for any property value that looks like a typo of a dominant value.
+    warn_inconsistent_properties(&string_prop_values);
 
     let vault_summary = VaultSummary {
         files: file_counts,
@@ -922,5 +1061,152 @@ No tasks here.
         let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         // Only the 3 good files should be counted
         assert_eq!(val["files"]["total"], 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // levenshtein tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn levenshtein_equal_strings() {
+        assert_eq!(levenshtein("completed", "completed"), 0);
+    }
+
+    #[test]
+    fn levenshtein_empty_strings() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+    }
+
+    #[test]
+    fn levenshtein_single_substitution() {
+        // "done" vs "dune" — one substitution
+        assert_eq!(levenshtein("done", "dune"), 1);
+    }
+
+    #[test]
+    fn levenshtein_typical_typos() {
+        // "done" vs "completed" — clearly different
+        assert_eq!(levenshtein("done", "completed"), 7);
+        // "planed" vs "planned" — one insertion
+        assert_eq!(levenshtein("planed", "planned"), 1);
+        // "in-progres" vs "in-progress" — one insertion
+        assert_eq!(levenshtein("in-progres", "in-progress"), 1);
+    }
+
+    #[test]
+    fn levenshtein_commutative() {
+        let a = "kitten";
+        let b = "sitting";
+        assert_eq!(levenshtein(a, b), levenshtein(b, a));
+    }
+
+    // -----------------------------------------------------------------------
+    // warn_rare_values tests
+    // -----------------------------------------------------------------------
+
+    // Helper: build a BTreeMap<String, usize> from key/value pairs.
+    fn counts(pairs: &[(&str, usize)]) -> BTreeMap<String, usize> {
+        pairs.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect()
+    }
+
+    #[test]
+    fn warn_rare_values_emits_for_typo() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+
+        // "complted" (missing 'e') vs "completed" — Levenshtein 1, should warn.
+        let vc = counts(&[("complted", 1), ("completed", 10)]);
+        warn_rare_values("status", &vc, 1, 3, 2);
+
+        let msg = r#"property "status" value "complted" appears in 1 file — did you mean "completed" (10 files)?"#;
+        assert!(
+            crate::warn::was_emitted(msg),
+            "expected warning to be emitted for near-duplicate value"
+        );
+    }
+
+    #[test]
+    fn warn_rare_values_no_warning_for_distant_values() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+
+        // "done" vs "completed" — Levenshtein 7 > max_distance 2 → no warning
+        let vc = counts(&[("done", 1), ("completed", 10)]);
+        warn_rare_values("status", &vc, 1, 3, 2);
+
+        let msg = r#"property "status" value "done" appears in 1 file — did you mean "completed" (10 files)?"#;
+        assert!(
+            !crate::warn::was_emitted(msg),
+            "expected no warning for clearly distinct values"
+        );
+    }
+
+    #[test]
+    fn warn_rare_values_no_warning_when_dominant_too_rare() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+
+        // Both values appear rarely — dominant_min=3, "completed" only appears 2x
+        let vc = counts(&[("complted", 1), ("completed", 2)]);
+        warn_rare_values("status", &vc, 1, 3, 2);
+
+        // Neither candidate message should have been emitted.
+        let msg = r#"property "status" value "complted" appears in 1 file — did you mean "completed" (2 files)?"#;
+        assert!(
+            !crate::warn::was_emitted(msg),
+            "expected no warning when dominant is below dominant_min"
+        );
+    }
+
+    #[test]
+    fn warn_rare_values_no_warning_when_count_above_threshold() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+
+        // rare_count=2 > rare_threshold=1 — "complted" is not rare enough to warn
+        let vc = counts(&[("complted", 2), ("completed", 10)]);
+        warn_rare_values("status", &vc, 1, 3, 2);
+
+        let msg = r#"property "status" value "complted" appears in 2 files — did you mean "completed" (10 files)?"#;
+        assert!(
+            !crate::warn::was_emitted(msg),
+            "expected no warning when rare_count exceeds rare_threshold"
+        );
+    }
+
+    #[test]
+    fn warn_inconsistent_properties_skips_all_unique() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+
+        // Every value appears exactly once — max_count < dominant_min → skip entirely
+        let mut map: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+        map.insert("status".to_owned(), counts(&[("a", 1), ("b", 1), ("c", 1)]));
+        warn_inconsistent_properties(&map);
+
+        // No warnings should have been emitted — all values are unique so no
+        // dominant value exists (count >= dominant_min of 3).
+        // Check full warning format (was_emitted uses exact key match).
+        for val in ["a", "b", "c"] {
+            for other in ["a", "b", "c"] {
+                if val == other {
+                    continue;
+                }
+                let msg = format!(
+                    r#"property "status" value "{val}" appears in 1 file — did you mean "{other}" (1 files)?"#
+                );
+                assert!(
+                    !crate::warn::was_emitted(&msg),
+                    "expected no warning when all values are unique"
+                );
+            }
+        }
     }
 }

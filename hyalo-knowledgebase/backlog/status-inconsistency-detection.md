@@ -1,8 +1,8 @@
 ---
-title: "Status value inconsistency detection"
+title: Status value inconsistency detection
 type: backlog
 date: 2026-03-23
-status: planned
+status: completed
 priority: low
 origin: dogfooding post-iter-19
 tags:

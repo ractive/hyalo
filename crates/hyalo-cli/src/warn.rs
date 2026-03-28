@@ -105,6 +105,19 @@ pub fn suppressed_count_for(msg: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Return whether the given message was tracked at least once after `init()`.
+///
+/// Note: warnings emitted before `init()` are not tracked.
+/// **For use in tests only.**
+#[cfg(test)]
+pub fn was_emitted(msg: &str) -> bool {
+    SUPPRESSED
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|m| m.contains_key(msg)))
+        .unwrap_or(false)
+}
+
 /// Return the total number of suppressed (duplicate) warning occurrences.
 ///
 /// **For use in tests only.**
@@ -147,19 +160,22 @@ pub fn flush_summary() {
     }
 }
 
+/// Test-level mutex to serialise tests that touch the global warn state.
+///
+/// The global `SUPPRESSED` and `QUIET` statics are shared across all tests in
+/// the same process, so parallel execution would cause interference. Any test
+/// module that calls `reset_for_test()` / `init()` / `was_emitted()` must
+/// acquire this lock first.
+#[cfg(test)]
+pub(crate) static WARN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
-
-    // Unit tests use a coarse test-level mutex to serialise execution.
-    // The global SUPPRESSED and QUIET statics are shared across all tests in the
-    // same process, so parallel execution would cause interference.
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
     fn dedup_first_occurrence_not_suppressed() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
         reset_for_test();
         init(false);
         warn("msg-dedup-first");
@@ -168,7 +184,7 @@ mod tests {
 
     #[test]
     fn dedup_second_occurrence_counted() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
         reset_for_test();
         init(false);
         warn("msg-dedup-second");
@@ -178,7 +194,7 @@ mod tests {
 
     #[test]
     fn dedup_many_occurrences_all_counted() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
         reset_for_test();
         init(false);
         for _ in 0..5 {
@@ -191,7 +207,7 @@ mod tests {
 
     #[test]
     fn quiet_mode_suppresses_all() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
         reset_for_test();
         init(true);
         warn("msg-quiet-a");
@@ -202,7 +218,7 @@ mod tests {
 
     #[test]
     fn different_messages_not_deduped() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
         reset_for_test();
         init(false);
         warn("msg-diff-a");
@@ -214,7 +230,7 @@ mod tests {
 
     #[test]
     fn total_suppressed_across_multiple_messages() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
         reset_for_test();
         init(false);
         // "x" fires 3 times → 2 suppressed; "y" fires 2 times → 1 suppressed
