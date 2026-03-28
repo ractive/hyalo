@@ -1,5 +1,5 @@
 ---
-title: "Guard against filter syntax in set/remove/append --property"
+title: Guard against filter syntax in set/remove/append --property
 type: backlog
 date: 2026-03-28
 tags:
@@ -7,7 +7,7 @@ tags:
   - ux
   - safety
 priority: high
-status: planned
+status: completed
 origin: dogfooding legalize-es
 ---
 
