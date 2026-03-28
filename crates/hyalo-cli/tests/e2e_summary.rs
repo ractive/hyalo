@@ -869,3 +869,134 @@ fn summary_glob_negation_excludes_files() {
         );
     }
 }
+
+/// Orphan lists from disk scan and snapshot index must be identical,
+/// even when absolute links and `--site-prefix` are involved.
+#[test]
+fn summary_orphan_parity_disk_vs_index_with_site_prefix() {
+    let tmp = TempDir::new().unwrap();
+    let dir_str = tmp.path().to_str().unwrap();
+
+    // a.md → b via wikilink
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+[[b]]
+"),
+    );
+    // b.md → c via absolute link (needs site_prefix to resolve)
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+[see c](/docs/c.md)
+"),
+    );
+    // c.md: inbound from b only if site_prefix=docs
+    write_md(
+        tmp.path(),
+        "c.md",
+        md!(r"
+---
+title: C
+---
+No links.
+"),
+    );
+    // orphan.md: no links
+    write_md(
+        tmp.path(),
+        "orphan.md",
+        md!(r"
+---
+title: Orphan
+---
+No links.
+"),
+    );
+
+    // Disk scan with site_prefix
+    let disk_out = hyalo()
+        .args([
+            "--dir",
+            dir_str,
+            "--site-prefix",
+            "docs",
+            "--format",
+            "json",
+        ])
+        .arg("summary")
+        .output()
+        .unwrap();
+    assert!(
+        disk_out.status.success(),
+        "disk summary failed: {}",
+        String::from_utf8_lossy(&disk_out.stderr)
+    );
+    let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
+    let disk_orphans: Vec<&str> = disk_json["orphans"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+
+    // Create index with same site_prefix
+    let idx_create = hyalo()
+        .args(["--dir", dir_str, "--site-prefix", "docs"])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        idx_create.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&idx_create.stderr)
+    );
+
+    // Index-based summary
+    let index_path = tmp.path().join(".hyalo-index");
+    let idx_out = hyalo()
+        .args([
+            "--dir",
+            dir_str,
+            "--site-prefix",
+            "docs",
+            "--index",
+            index_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .arg("summary")
+        .output()
+        .unwrap();
+    assert!(
+        idx_out.status.success(),
+        "index summary failed: {}",
+        String::from_utf8_lossy(&idx_out.stderr)
+    );
+    let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
+    let idx_orphans: Vec<&str> = idx_json["orphans"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        disk_orphans, idx_orphans,
+        "disk scan and index orphan lists must match"
+    );
+    // With site_prefix=docs, /docs/c.md resolves to c.md, so c.md is not orphan
+    assert!(
+        !disk_orphans.contains(&"c.md"),
+        "c.md should not be orphan: {disk_orphans:?}"
+    );
+    assert_eq!(disk_orphans, vec!["orphan.md"]);
+}

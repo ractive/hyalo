@@ -1,8 +1,8 @@
 ---
-title: "Snapshot index computes different orphan count than disk scan"
+title: Snapshot index computes different orphan count than disk scan
 type: backlog
 date: 2026-03-28
-status: planned
+status: completed
 priority: critical
 origin: dogfooding v0.4.2 on vscode-docs/docs
 ---

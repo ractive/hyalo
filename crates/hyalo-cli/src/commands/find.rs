@@ -55,26 +55,17 @@ pub fn find(
     limit: Option<usize>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    // Treat --limit 0 as "no limit" (more intuitive than returning zero results).
-    let limit = match limit {
-        Some(0) => None,
-        other => other,
-    };
-
     let files = collect_files(dir, files_arg, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
 
-    // Normalize empty / whitespace-only pattern to None so that
-    // `hyalo find ""` behaves the same as `hyalo find` (no filter).
     if pattern.is_some_and(|p| p.trim().is_empty()) {
-        eprintln!(
-            "warning: empty body pattern ignored (matches all files); omit the pattern to find all files"
-        );
+        return Ok(CommandOutcome::UserError(
+            "body pattern must not be empty; omit the pattern to match all files".to_owned(),
+        ));
     }
-    let pattern = pattern.and_then(|p| if p.trim().is_empty() { None } else { Some(p) });
 
     let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
     let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
@@ -510,19 +501,11 @@ pub fn find_from_index(
     limit: Option<usize>,
     format: Format,
 ) -> Result<CommandOutcome> {
-    // Treat --limit 0 as "no limit"
-    let limit = match limit {
-        Some(0) => None,
-        other => other,
-    };
-
-    // Normalize empty pattern
     if pattern.is_some_and(|p| p.trim().is_empty()) {
-        eprintln!(
-            "warning: empty body pattern ignored (matches all files); omit the pattern to find all files"
-        );
+        return Ok(CommandOutcome::UserError(
+            "body pattern must not be empty; omit the pattern to match all files".to_owned(),
+        ));
     }
-    let pattern = pattern.and_then(|p| if p.trim().is_empty() { None } else { Some(p) });
 
     let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
     let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
@@ -1435,101 +1418,73 @@ title: Empty Body
     }
 
     #[test]
-    fn find_empty_string_pattern_matches_all_files() {
-        // `hyalo find ""` must return the same count as `hyalo find`.
-        // Previously, files with empty bodies were excluded because no body
-        // line could match the empty-string pattern, producing an empty
-        // content_matches vec that the filter treated as "no match".
+    fn find_empty_string_pattern_errors() {
+        // `hyalo find ""` must return a user error, not match all files.
         let tmp = setup_vault_with_empty_body();
         let fields = Fields::default();
 
-        let count_no_pattern = {
-            let out = unwrap_success(
-                find(
-                    tmp.path(),
-                    None,
-                    None,
-                    None,
-                    &[],
-                    &[],
-                    None,
-                    &[],
-                    &[],
-                    &[],
-                    &fields,
-                    None,
-                    None,
-                    Format::Json,
-                )
-                .unwrap(),
-            );
-            let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-            parsed.as_array().unwrap().len()
-        };
+        let outcome = find(
+            tmp.path(),
+            None,
+            Some(""),
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &fields,
+            None,
+            None,
+            Format::Json,
+        )
+        .unwrap();
 
-        let count_empty_pattern = {
-            let out = unwrap_success(
-                find(
-                    tmp.path(),
-                    None,
-                    Some(""),
-                    None,
-                    &[],
-                    &[],
-                    None,
-                    &[],
-                    &[],
-                    &[],
-                    &fields,
-                    None,
-                    None,
-                    Format::Json,
-                )
-                .unwrap(),
-            );
-            let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-            parsed.as_array().unwrap().len()
-        };
-
-        assert_eq!(
-            count_empty_pattern, count_no_pattern,
-            "empty pattern should return the same files as no pattern"
-        );
-        assert_eq!(count_no_pattern, 2, "vault has 2 files");
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(
+                    msg.contains("body pattern must not be empty"),
+                    "error message should mention empty pattern, got: {msg}"
+                );
+            }
+            CommandOutcome::Success(_) => panic!("expected user error for empty pattern"),
+        }
     }
 
     #[test]
-    fn find_whitespace_only_pattern_matches_all_files() {
-        // `hyalo find "   "` should also be treated as no filter.
+    fn find_whitespace_only_pattern_errors() {
+        // `hyalo find "   "` should also return a user error.
         let tmp = setup_vault_with_empty_body();
         let fields = Fields::default();
 
-        let out = unwrap_success(
-            find(
-                tmp.path(),
-                None,
-                Some("   "),
-                None,
-                &[],
-                &[],
-                None,
-                &[],
-                &[],
-                &[],
-                &fields,
-                None,
-                None,
-                Format::Json,
-            )
-            .unwrap(),
-        );
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
-        assert_eq!(
-            arr.len(),
-            2,
-            "whitespace-only pattern should match all files"
-        );
+        let outcome = find(
+            tmp.path(),
+            None,
+            Some("   "),
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &fields,
+            None,
+            None,
+            Format::Json,
+        )
+        .unwrap();
+
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(
+                    msg.contains("body pattern must not be empty"),
+                    "error message should mention empty pattern, got: {msg}"
+                );
+            }
+            CommandOutcome::Success(_) => panic!("expected user error for whitespace-only pattern"),
+        }
     }
 
     // --- find: task filter ---

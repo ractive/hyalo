@@ -23,6 +23,7 @@ pub fn summary(
     globs: &[String],
     recent: usize,
     depth: Option<usize>,
+    site_prefix: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
     let files = collect_files(dir, &[], globs, format)?;
@@ -209,9 +210,9 @@ pub fn summary(
     // When glob: build vault-wide link graph so links from outside the glob count.
     let orphans = {
         let build = if collect_links {
-            LinkGraph::from_file_links(collected_links, None)
+            LinkGraph::from_file_links(collected_links, site_prefix)
         } else {
-            LinkGraph::build(dir, None)
+            LinkGraph::build(dir, site_prefix)
                 .context("failed to build link graph for orphan detection")?
         };
         let targets = build.graph.all_targets();
@@ -261,6 +262,10 @@ use super::format_iso8601;
 /// All aggregation (file counts, properties, tags, status groups, tasks, recent
 /// files, orphans) is derived from `IndexEntry` values rather than scanning
 /// files from disk.
+///
+/// Unlike [`summary`], this function does not take a `site_prefix` parameter
+/// because the prefix is already baked into the index's `LinkGraph` at build
+/// time (via `ScannedIndex::build` → `LinkGraph::from_file_links`).
 ///
 /// `globs` optionally narrows which entries are included (same semantics as the
 /// `--glob` flag on the `summary` command).
@@ -543,14 +548,14 @@ No tasks here.
     #[test]
     fn summary_file_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         assert_eq!(val["files"]["total"], 3);
     }
 
     #[test]
     fn summary_directory_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         // Should have "." and "notes"
         assert!(
@@ -568,7 +573,7 @@ No tasks here.
     #[test]
     fn summary_task_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         // a.md: 2 tasks (1 done), b.md: 1 task (0 done), c.md: 0 tasks
         assert_eq!(val["tasks"]["total"], 3);
         assert_eq!(val["tasks"]["done"], 1);
@@ -577,7 +582,7 @@ No tasks here.
     #[test]
     fn summary_property_aggregation() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let props = val["properties"].as_array().unwrap();
         // title appears in all 3 files, status in all 3 files, tags in 2 files
         let title = props.iter().find(|p| p["name"] == "title").unwrap();
@@ -589,7 +594,7 @@ No tasks here.
     #[test]
     fn summary_tag_aggregation() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let total_tags = val["tags"]["total"].as_u64().unwrap();
         // rust and cli are unique tag names
         assert_eq!(total_tags, 2);
@@ -603,7 +608,7 @@ No tasks here.
     #[test]
     fn summary_status_grouping() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let status_groups = val["status"].as_array().unwrap();
         let draft = status_groups
             .iter()
@@ -618,7 +623,7 @@ No tasks here.
     #[test]
     fn summary_recent_files_respects_limit() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 2, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 2, None, None, Format::Json).unwrap());
         let recent = val["recent_files"].as_array().unwrap();
         // With limit=2, at most 2 recent files
         assert!(recent.len() <= 2);
@@ -627,7 +632,7 @@ No tasks here.
     #[test]
     fn summary_recent_files_have_iso8601_timestamps() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let recent = val["recent_files"].as_array().unwrap();
         for entry in recent {
             let modified = entry["modified"].as_str().unwrap();
@@ -644,7 +649,15 @@ No tasks here.
         let tmp = setup_vault();
         // Only scan root files, not notes/
         let val = unwrap_success(
-            summary(tmp.path(), &["*.md".to_owned()], 10, None, Format::Json).unwrap(),
+            summary(
+                tmp.path(),
+                &["*.md".to_owned()],
+                10,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
         );
         assert_eq!(val["files"]["total"], 2);
     }
@@ -652,7 +665,7 @@ No tasks here.
     #[test]
     fn summary_text_format() {
         let tmp = setup_vault();
-        let outcome = summary(tmp.path(), &[], 10, None, Format::Text).unwrap();
+        let outcome = summary(tmp.path(), &[], 10, None, None, Format::Text).unwrap();
         match outcome {
             CommandOutcome::Success(s) => {
                 assert!(s.contains("Files:"), "expected 'Files:' in: {s}");
@@ -679,7 +692,8 @@ No tasks here.
     #[test]
     fn summary_depth_zero_collapses_all() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, Some(0), Format::Json).unwrap());
+        let val =
+            unwrap_success(summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         assert_eq!(by_dir.len(), 1);
         assert_eq!(by_dir[0]["directory"], ".");
@@ -689,7 +703,8 @@ No tasks here.
     #[test]
     fn summary_depth_one_shows_top_level() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, Some(1), Format::Json).unwrap());
+        let val =
+            unwrap_success(summary(tmp.path(), &[], 10, Some(1), None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         // "." (1 file) and "notes" (2 files collapsed from notes/ and notes/sub/)
         assert_eq!(by_dir.len(), 2);
@@ -702,7 +717,7 @@ No tasks here.
     #[test]
     fn summary_depth_none_shows_all() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         assert_eq!(by_dir.len(), 3);
         assert!(by_dir.iter().any(|d| d["directory"] == "."));
@@ -715,9 +730,9 @@ No tasks here.
         // Stats (tasks, tags, properties) must be computed from all files regardless of depth
         let tmp = setup_vault_nested();
         let val_no_depth =
-            unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+            unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let val_depth0 =
-            unwrap_success(summary(tmp.path(), &[], 10, Some(0), Format::Json).unwrap());
+            unwrap_success(summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
         assert_eq!(val_no_depth["files"]["total"], val_depth0["files"]["total"]);
         assert_eq!(val_no_depth["tasks"], val_depth0["tasks"]);
         assert_eq!(val_no_depth["tags"], val_depth0["tags"]);
@@ -738,7 +753,7 @@ No tasks here.
         .unwrap();
 
         // No glob: single-pass code path
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let orphan_files: Vec<&str> = val["orphans"]["files"]
             .as_array()
             .unwrap()
@@ -781,7 +796,15 @@ No tasks here.
 
         // Passing "*.md" glob activates the separate LinkGraph::build code path.
         let val = unwrap_success(
-            summary(tmp.path(), &["*.md".to_owned()], 10, None, Format::Json).unwrap(),
+            summary(
+                tmp.path(),
+                &["*.md".to_owned()],
+                10,
+                None,
+                None,
+                Format::Json,
+            )
+            .unwrap(),
         );
         let orphan_files: Vec<&str> = val["orphans"]["files"]
             .as_array()
@@ -808,6 +831,85 @@ No tasks here.
         );
     }
 
+    /// Disk-scan and snapshot-index must produce identical orphan lists.
+    /// Uses absolute links with `site_prefix` to exercise the resolution path
+    /// that was previously inconsistent (disk scan hardcoded `None`).
+    #[test]
+    fn summary_orphan_parity_disk_vs_index() {
+        use hyalo_core::index::{ScannedIndex, SnapshotIndex};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // a.md links to b via wikilink
+        fs::write(dir.join("a.md"), "---\ntitle: A\n---\n[[b]]\n").unwrap();
+        // b.md links to c via absolute markdown link (needs site_prefix)
+        fs::write(
+            dir.join("b.md"),
+            "---\ntitle: B\n---\n[see c](/docs/c.md)\n",
+        )
+        .unwrap();
+        // c.md has an inbound link from b (only with correct site_prefix)
+        fs::write(dir.join("c.md"), "---\ntitle: C\n---\nNo links.\n").unwrap();
+        // orphan.md has no links in or out
+        fs::write(
+            dir.join("orphan.md"),
+            "---\ntitle: Orphan\n---\nNo links.\n",
+        )
+        .unwrap();
+
+        let prefix = Some("docs");
+
+        // Disk-scan path
+        let disk_val = unwrap_success(summary(dir, &[], 10, None, prefix, Format::Json).unwrap());
+        let disk_orphans: Vec<&str> = disk_val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        // Index path: build index with same site_prefix, then query via summary_from_index
+        let all = hyalo_core::discovery::discover_files(dir).unwrap();
+        let files: Vec<(std::path::PathBuf, String)> = all
+            .into_iter()
+            .map(|p| {
+                let rel = hyalo_core::discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
+        let build = ScannedIndex::build(&files, prefix).unwrap();
+        let index_path = dir.join(".hyalo-index");
+        SnapshotIndex::save(
+            &build.index,
+            &index_path,
+            &dir.display().to_string(),
+            prefix,
+        )
+        .unwrap();
+        let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
+        let index_val =
+            unwrap_success(summary_from_index(&loaded, &[], 10, None, Format::Json).unwrap());
+        let index_orphans: Vec<&str> = index_val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert_eq!(
+            disk_orphans, index_orphans,
+            "disk scan and index must produce identical orphan lists"
+        );
+        // c.md should NOT be an orphan (b.md links to it via absolute link with site_prefix)
+        assert!(
+            !disk_orphans.contains(&"c.md"),
+            "c.md should not be orphan with site_prefix: {disk_orphans:?}"
+        );
+        // orphan.md should be the only orphan
+        assert_eq!(disk_orphans, vec!["orphan.md"]);
+    }
+
     #[test]
     fn summary_skips_broken_frontmatter_file() {
         let tmp = setup_vault();
@@ -817,7 +919,7 @@ No tasks here.
             "---\ntitle: Broken\nNo closing delimiter.\n",
         )
         .unwrap();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, Format::Json).unwrap());
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         // Only the 3 good files should be counted
         assert_eq!(val["files"]["total"], 3);
     }
