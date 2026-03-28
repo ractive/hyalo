@@ -501,3 +501,83 @@ tags:
     // Should list the file
     assert!(stdout.contains("note.md"), "modified file: {stdout}");
 }
+
+// ---------------------------------------------------------------------------
+// Filter guard: reject operator suffixes in --property
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_rejects_gte_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        append_json(&tmp, &["--property", "priority>=3", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn append_rejects_lte_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        append_json(&tmp, &["--property", "priority<=3", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn append_rejects_neq_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        append_json(&tmp, &["--property", "status!=draft", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn append_rejects_regex_filter_in_property() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, _, stderr) =
+        append_json(&tmp, &["--property", "name~=pattern", "--file", "note.md"]);
+    assert!(!status.success(), "should fail; stderr: {stderr}");
+    assert!(
+        stderr.contains("--where-property"),
+        "hint missing; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn append_accepts_plain_kv_property() {
+    // Ensure normal K=V still works after guard
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, json, stderr) = append_json(
+        &tmp,
+        &["--property", "aliases=my-note", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["property"], "aliases");
+}
+
+#[test]
+fn append_accepts_list_property() {
+    // Ensure K=[a,b] still works
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+    let (status, json, stderr) =
+        append_json(&tmp, &["--property", "tags=[a, b]", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["property"], "tags");
+}
