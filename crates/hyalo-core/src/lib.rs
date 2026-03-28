@@ -5,6 +5,7 @@ pub mod frontmatter;
 pub mod fs_util;
 pub mod heading;
 pub mod index;
+pub mod link_fix;
 pub mod link_graph;
 pub mod link_rewrite;
 pub mod links;

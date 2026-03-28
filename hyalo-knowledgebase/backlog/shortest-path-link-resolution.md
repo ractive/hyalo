@@ -1,8 +1,8 @@
 ---
-title: "Obsidian-style shortest-path link resolution"
+title: Obsidian-style shortest-path link resolution
 type: backlog
 date: 2026-03-21
-status: deferred
+status: completed
 priority: medium
 origin: DEC-014, iteration-plan
 blocked-by: indexing

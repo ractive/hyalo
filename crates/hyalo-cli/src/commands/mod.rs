@@ -5,6 +5,7 @@ pub mod create_index;
 pub mod drop_index;
 pub mod find;
 pub mod init;
+pub mod links;
 pub mod mv;
 pub mod properties;
 pub mod read;

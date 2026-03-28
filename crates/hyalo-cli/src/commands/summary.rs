@@ -9,12 +9,14 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
+use hyalo_core::link_fix::detect_broken_links;
+use hyalo_core::link_fix::detect_broken_links_from_index;
 use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
-    DirectoryCount, FileCounts, OrphanSummary, PropertySummaryEntry, RecentFile, StatusGroup,
-    TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
+    DirectoryCount, FileCounts, LinkHealthSummary, OrphanSummary, PropertySummaryEntry, RecentFile,
+    StatusGroup, TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
 };
 
 /// Show a high-level vault summary.
@@ -220,6 +222,16 @@ pub fn summary(
         })
         .collect();
 
+    // Detect broken links from collected link data (only available when no glob).
+    let link_health = {
+        let report = detect_broken_links(dir, &collected_links, site_prefix);
+        LinkHealthSummary {
+            total: report.total_links,
+            broken: report.broken.len(),
+            broken_links: report.broken,
+        }
+    };
+
     // Build orphan list: files with no inbound AND no outbound links (fully isolated).
     // When no glob: use pre-collected link data (single pass, no re-read).
     // When glob: build vault-wide link graph so links from outside the glob count.
@@ -258,6 +270,7 @@ pub fn summary(
     let vault_summary = VaultSummary {
         files: file_counts,
         orphans,
+        links: link_health,
         properties,
         tags,
         status,
@@ -393,10 +406,12 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
 /// `globs` optionally narrows which entries are included (same semantics as the
 /// `--glob` flag on the `summary` command).
 pub fn summary_from_index(
+    dir: &Path,
     index: &dyn VaultIndex,
     globs: &[String],
     recent: usize,
     depth: Option<usize>,
+    site_prefix: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
@@ -574,9 +589,20 @@ pub fn summary_from_index(
     // Emit warnings for any property value that looks like a typo of a dominant value.
     warn_inconsistent_properties(&string_prop_values);
 
+    // Link health is intentionally vault-wide regardless of any --glob scope.
+    let link_health = {
+        let report = detect_broken_links_from_index(dir, index, site_prefix);
+        LinkHealthSummary {
+            total: report.total_links,
+            broken: report.broken.len(),
+            broken_links: report.broken,
+        }
+    };
+
     let vault_summary = VaultSummary {
         files: file_counts,
         orphans,
+        links: link_health,
         properties,
         tags,
         status,
@@ -1027,8 +1053,9 @@ No tasks here.
         )
         .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
-        let index_val =
-            unwrap_success(summary_from_index(&loaded, &[], 10, None, Format::Json).unwrap());
+        let index_val = unwrap_success(
+            summary_from_index(dir, &loaded, &[], 10, None, prefix, Format::Json).unwrap(),
+        );
         let index_orphans: Vec<&str> = index_val["orphans"]["files"]
             .as_array()
             .unwrap()

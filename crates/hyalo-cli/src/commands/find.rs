@@ -53,6 +53,7 @@ pub fn find(
     fields: &Fields,
     sort: Option<&SortField>,
     limit: Option<usize>,
+    broken_links: bool,
     format: Format,
 ) -> Result<CommandOutcome> {
     let files = collect_files(dir, files_arg, globs, format)?;
@@ -142,21 +143,24 @@ pub fn find(
         && !sort_needs_properties
         && !sort_needs_title;
 
-    // When sorting by a frontmatter property or title, force the relevant
-    // field on even if the user didn't request it via --fields.
+    // When sorting by a frontmatter property or title, or when --broken-links
+    // is active, force the relevant fields on even if not requested via --fields.
     let original_fields = fields;
     let effective_fields;
-    let fields =
-        if (sort_needs_properties && !fields.properties) || (sort_needs_title && !fields.title) {
-            effective_fields = Fields {
-                properties: fields.properties || sort_needs_properties,
-                title: fields.title || sort_needs_title,
-                ..fields.clone()
-            };
-            &effective_fields
-        } else {
-            fields
+    let fields = if (sort_needs_properties && !fields.properties)
+        || (sort_needs_title && !fields.title)
+        || (broken_links && !fields.links)
+    {
+        effective_fields = Fields {
+            properties: fields.properties || sort_needs_properties,
+            title: fields.title || sort_needs_title,
+            links: fields.links || broken_links,
+            ..fields.clone()
         };
+        &effective_fields
+    } else {
+        fields
+    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -300,6 +304,19 @@ pub fn find(
             link_graph.as_ref(),
             site_prefix,
         );
+
+        // --- Apply broken-links filter ---
+        if broken_links {
+            let has_broken = obj
+                .links
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|l| l.path.is_none());
+            if !has_broken {
+                continue;
+            }
+        }
 
         results.push(obj);
 
@@ -501,6 +518,7 @@ pub fn find_from_index(
     fields: &Fields,
     sort: Option<&SortField>,
     limit: Option<usize>,
+    broken_links: bool,
     format: Format,
 ) -> Result<CommandOutcome> {
     if pattern.is_some_and(|p| p.trim().is_empty()) {
@@ -559,21 +577,24 @@ pub fn find_from_index(
         && !sort_needs_properties
         && !sort_needs_title;
 
-    // When sorting by a frontmatter property or title, force the relevant
-    // field on even if the user didn't request it via --fields.
+    // When sorting by a frontmatter property or title, or when --broken-links
+    // is active, force the relevant fields on even if not requested via --fields.
     let original_fields = fields;
     let effective_fields;
-    let fields =
-        if (sort_needs_properties && !fields.properties) || (sort_needs_title && !fields.title) {
-            effective_fields = Fields {
-                properties: fields.properties || sort_needs_properties,
-                title: fields.title || sort_needs_title,
-                ..fields.clone()
-            };
-            &effective_fields
-        } else {
-            fields
+    let fields = if (sort_needs_properties && !fields.properties)
+        || (sort_needs_title && !fields.title)
+        || (broken_links && !fields.links)
+    {
+        effective_fields = Fields {
+            properties: fields.properties || sort_needs_properties,
+            title: fields.title || sort_needs_title,
+            links: fields.links || broken_links,
+            ..fields.clone()
         };
+        &effective_fields
+    } else {
+        fields
+    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -772,6 +793,19 @@ pub fn find_from_index(
             backlinks,
             matches: content_matches,
         };
+
+        // --- Apply broken-links filter ---
+        if broken_links {
+            let has_broken = obj
+                .links
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|l| l.path.is_none());
+            if !has_broken {
+                continue;
+            }
+        }
 
         results.push(obj);
 
@@ -1200,6 +1234,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1228,6 +1263,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1259,6 +1295,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1296,6 +1333,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1326,6 +1364,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1357,6 +1396,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1386,6 +1426,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1416,6 +1457,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1445,6 +1487,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1477,6 +1520,7 @@ Just some text here.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1538,6 +1582,7 @@ title: Empty Body
             &fields,
             None,
             None,
+            false,
             Format::Json,
         )
         .unwrap();
@@ -1573,6 +1618,7 @@ title: Empty Body
             &fields,
             None,
             None,
+            false,
             Format::Json,
         )
         .unwrap();
@@ -1609,6 +1655,7 @@ title: Empty Body
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1639,6 +1686,7 @@ title: Empty Body
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1670,6 +1718,7 @@ title: Empty Body
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1704,6 +1753,7 @@ title: Empty Body
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1742,6 +1792,7 @@ title: Empty Body
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1777,6 +1828,7 @@ title: Empty Body
                 &fields,
                 None,
                 Some(1),
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1807,6 +1859,7 @@ title: Empty Body
                 &fields,
                 Some(&SortField::Modified),
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1844,6 +1897,7 @@ title: Empty Body
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -1872,6 +1926,7 @@ title: Empty Body
             &fields,
             None,
             None,
+            false,
             Format::Json,
         )
         .unwrap();
@@ -2039,6 +2094,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2071,6 +2127,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2105,6 +2162,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2138,6 +2196,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2177,6 +2236,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2230,6 +2290,7 @@ Just intro, no tasks section.
             &fields,
             None,
             None,
+            false,
             Format::Json,
         )
         .unwrap();
@@ -2265,6 +2326,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2323,6 +2385,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2361,6 +2424,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2400,6 +2464,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2432,6 +2497,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
@@ -2466,6 +2532,7 @@ Just intro, no tasks section.
                 &fields,
                 None,
                 None,
+                false,
                 Format::Json,
             )
             .unwrap(),
