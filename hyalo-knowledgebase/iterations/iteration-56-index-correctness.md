@@ -1,0 +1,25 @@
+---
+title: "Iteration 56 — Index correctness & input validation"
+type: iteration
+date: 2026-03-28
+status: planned
+branch: iter-56/index-correctness
+tags:
+  - bugfix
+  - index
+  - validation
+---
+
+# Iteration 56 — Index correctness & input validation
+
+Fix the critical index orphan bug and the medium-priority input validation issues. These are correctness bugs that should be addressed before any feature work.
+
+## Tasks
+
+- [ ] Fix orphan count discrepancy between disk scan and snapshot index ([[backlog/index-orphan-count-discrepancy.md]])
+  - Diff link graphs from `ScannedIndex` vs `SnapshotIndex` to find divergence
+  - Add test: `summary` orphan count must match with and without `--index`
+  - Test on vscode-docs/docs (339 files) where bug was reproduced
+- [ ] Validate `--limit 0` — reject with error or document as unlimited ([[backlog/limit-zero-means-unlimited.md]])
+- [ ] Reject empty body pattern `""` with error instead of matching all files ([[backlog/empty-body-pattern-matches-all.md]])
+- [ ] Dogfood on docs/content and vscode-docs/docs to verify fixes

@@ -1,12 +1,14 @@
 ---
-title: "--limit 0 should mean unlimited, not zero results"
+title: "--limit 0 silently returns all files — should validate"
 type: backlog
-date: 2026-03-26
-origin: dogfooding v0.4.1
-priority: low
+date: 2026-03-28
+origin: dogfooding v0.4.1 + v0.4.2
+priority: medium
 status: planned
 ---
 
-`hyalo find --limit 0` returns `[]` (empty array). Most CLI tools treat `--limit 0` as "no limit / unlimited". This is a minor footgun.
+`hyalo find --limit 0` returns ALL files (330,981 lines of JSON on docs/content). It behaves as if `--limit` were omitted entirely — `0` is treated as "no limit".
 
-Fix: treat `--limit 0` the same as omitting `--limit` entirely. In the find command, convert `Some(0)` to `None` before passing the limit downstream.
+This violates the principle of least surprise. A user passing `--limit 0` likely expects either zero results or an error, not a full dump.
+
+**Fix:** Either reject `--limit 0` with an error ("limit must be >= 1") or explicitly document that 0 means unlimited. The former is safer for scripts that compute the limit value dynamically.
