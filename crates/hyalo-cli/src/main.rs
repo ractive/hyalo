@@ -986,7 +986,10 @@ fn main() {
     // the project config.  `mut_arg` is scoped to the root command, but because
     // both `--dir` and `--format` are declared `global = true`, hiding them on
     // the root is sufficient for --help at every level.
-    let hide_dir = config.dir.as_os_str() != ".";
+    let hide_dir = config
+        .dir
+        .components()
+        .ne(std::path::Path::new(".").components());
     let hide_format = config.format != "json";
 
     let mut cmd = Cli::command();
