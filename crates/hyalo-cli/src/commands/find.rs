@@ -70,6 +70,7 @@ pub fn find(
     let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
     let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
     let sort_needs_properties = matches!(sort, Some(SortField::Property(_)));
+    let sort_needs_title = matches!(sort, Some(SortField::Title));
 
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
@@ -79,7 +80,8 @@ pub fn find(
         has_content_search,
         has_task_filter,
         has_section_filter,
-    ) || sort_needs_links;
+    ) || sort_needs_links
+        || sort_needs_title;
 
     // Compile the regex once (if any), then clone cheaply per file.
     // Invalid regex is a user error (exit 1), not an internal error (exit 2).
@@ -137,21 +139,24 @@ pub fn find(
         && !fields.backlinks
         && !sort_needs_backlinks
         && !sort_needs_links
-        && !sort_needs_properties;
+        && !sort_needs_properties
+        && !sort_needs_title;
 
-    // When sorting by a frontmatter property, we need properties populated in
-    // the FileObject even if the user didn't request --fields properties.
+    // When sorting by a frontmatter property or title, force the relevant
+    // field on even if the user didn't request it via --fields.
     let original_fields = fields;
     let effective_fields;
-    let fields = if sort_needs_properties && !fields.properties {
-        effective_fields = Fields {
-            properties: true,
-            ..fields.clone()
+    let fields =
+        if (sort_needs_properties && !fields.properties) || (sort_needs_title && !fields.title) {
+            effective_fields = Fields {
+                properties: fields.properties || sort_needs_properties,
+                title: fields.title || sort_needs_title,
+                ..fields.clone()
+            };
+            &effective_fields
+        } else {
+            fields
         };
-        &effective_fields
-    } else {
-        fields
-    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -317,6 +322,11 @@ pub fn find(
     if sort_needs_properties && !original_fields.properties {
         for obj in &mut results {
             obj.properties = None;
+        }
+    }
+    if sort_needs_title && !original_fields.title {
+        for obj in &mut results {
+            obj.title = None;
         }
     }
     // Note: no strip needed for BacklinksCount — build_file_object only populates
@@ -502,6 +512,7 @@ pub fn find_from_index(
     let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
     let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
     let sort_needs_properties = matches!(sort, Some(SortField::Property(_)));
+    let sort_needs_title = matches!(sort, Some(SortField::Title));
 
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
@@ -545,20 +556,24 @@ pub fn find_from_index(
         && !fields.backlinks
         && !sort_needs_backlinks
         && !sort_needs_links
-        && !sort_needs_properties;
+        && !sort_needs_properties
+        && !sort_needs_title;
 
-    // When sorting by a frontmatter property, ensure properties are populated.
+    // When sorting by a frontmatter property or title, force the relevant
+    // field on even if the user didn't request it via --fields.
     let original_fields = fields;
     let effective_fields;
-    let fields = if sort_needs_properties && !fields.properties {
-        effective_fields = Fields {
-            properties: true,
-            ..fields.clone()
+    let fields =
+        if (sort_needs_properties && !fields.properties) || (sort_needs_title && !fields.title) {
+            effective_fields = Fields {
+                properties: fields.properties || sort_needs_properties,
+                title: fields.title || sort_needs_title,
+                ..fields.clone()
+            };
+            &effective_fields
+        } else {
+            fields
         };
-        &effective_fields
-    } else {
-        fields
-    };
 
     let mut results: Vec<FileObject> = Vec::new();
 
@@ -779,6 +794,11 @@ pub fn find_from_index(
             obj.properties = None;
         }
     }
+    if sort_needs_title && !original_fields.title {
+        for obj in &mut results {
+            obj.title = None;
+        }
+    }
 
     // --- Limit ---
     if let Some(n) = limit {
@@ -903,11 +923,18 @@ fn apply_sort(
                 b_count.cmp(&a_count)
             });
         }
+        SortField::Title => {
+            results.sort_by(|a, b| {
+                let a_val = a.title.as_ref();
+                let b_val = b.title.as_ref();
+                filter::compare_property_values(a_val, b_val).then_with(|| a.file.cmp(&b.file))
+            });
+        }
         SortField::Property(key) => {
             results.sort_by(|a, b| {
                 let a_val = a.properties.as_ref().and_then(|p| p.get(key));
                 let b_val = b.properties.as_ref().and_then(|p| p.get(key));
-                filter::compare_property_values(a_val, b_val)
+                filter::compare_property_values(a_val, b_val).then_with(|| a.file.cmp(&b.file))
             });
         }
     }

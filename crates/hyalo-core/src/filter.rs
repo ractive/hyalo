@@ -607,7 +607,9 @@ pub enum SortField {
     Modified,
     BacklinksCount,
     LinksCount,
-    /// Sort by a frontmatter property value (e.g. `title`, `date`, or any key).
+    /// Sort by the resolved title (frontmatter `title` property, then first H1).
+    Title,
+    /// Sort by a frontmatter property value (e.g. `date`, or any key via `property:KEY`).
     Property(String),
 }
 
@@ -622,7 +624,7 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
         "modified" => Ok(SortField::Modified),
         "backlinks_count" => Ok(SortField::BacklinksCount),
         "links_count" => Ok(SortField::LinksCount),
-        "title" => Ok(SortField::Property("title".to_owned())),
+        "title" => Ok(SortField::Title),
         "date" => Ok(SortField::Property("date".to_owned())),
         other => {
             if let Some(key) = other.strip_prefix("property:") {
@@ -646,9 +648,11 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
 /// Ordering rules:
 /// - `Null` / missing sorts **last** (greater than any non-null value).
 /// - Strings are compared lexicographically (case-sensitive).
-/// - Numbers are compared as f64.
+/// - Numbers are compared as f64 (may lose precision for very large integers).
 /// - Booleans: `false` < `true`.
-/// - Arrays/objects are compared by their JSON string representation (fallback).
+/// - All other cases (including mixed primitive types like string vs number,
+///   arrays, and objects) fall back to comparing their JSON string
+///   representations, ensuring a total ordering across all JSON value types.
 pub fn compare_property_values(
     a: Option<&serde_json::Value>,
     b: Option<&serde_json::Value>,
@@ -1273,11 +1277,8 @@ mod tests {
     }
 
     #[test]
-    fn sort_title_alias() {
-        assert_eq!(
-            parse_sort("title").unwrap(),
-            SortField::Property("title".to_owned())
-        );
+    fn sort_title() {
+        assert_eq!(parse_sort("title").unwrap(), SortField::Title);
     }
 
     #[test]

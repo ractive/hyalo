@@ -2477,12 +2477,44 @@ fn find_sort_title() {
     let (status, json, stderr) = find_json(&tmp, &["--sort", "title"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 4);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
-    // Alpha, Beta, Nested sort first (alphabetically), gamma.md (no title) sorts last
+    // Title uses extract_title: frontmatter title first, then first H1.
+    // gamma.md has no frontmatter title but has "# Gamma" → resolves to "Gamma".
+    // All four: Alpha, Beta, Gamma, Nested (alphabetical).
     assert_eq!(files[0], "alpha.md");
     assert_eq!(files[1], "beta.md");
-    assert_eq!(files[2], "sub/nested.md");
-    assert_eq!(files[3], "gamma.md", "file without title should sort last");
+    assert_eq!(files[2], "gamma.md");
+    assert_eq!(files[3], "sub/nested.md");
+}
+
+#[test]
+fn find_sort_title_missing_sorts_last() {
+    // File with neither frontmatter title nor H1 heading sorts last.
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: Alpha
+---
+Content.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+No frontmatter, no heading.
+"),
+    );
+    let (status, json, stderr) = find_json(&tmp, &["--sort", "title"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files[0], "a.md");
+    assert_eq!(files[1], "b.md", "file without any title should sort last");
 }
 
 #[test]
@@ -2502,14 +2534,31 @@ fn find_sort_property_generic() {
 }
 
 #[test]
-fn find_sort_property_without_fields_properties() {
-    // Sort by property should work even when --fields excludes properties
+fn find_sort_title_without_fields_title() {
+    // Sort by title should work even when --fields excludes title
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--sort", "title", "--fields", "tags"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = json.as_array().unwrap();
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "alpha.md");
+    // Verify title field is NOT in output (user excluded it via --fields)
+    assert!(
+        arr[0].get("title").is_none(),
+        "title should not appear in output when not in --fields"
+    );
+}
+
+#[test]
+fn find_sort_property_without_fields_properties() {
+    // Sort by property should work even when --fields excludes properties
+    let tmp = setup_vault();
+    let (status, json, stderr) =
+        find_json(&tmp, &["--sort", "property:status", "--fields", "tags"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = json.as_array().unwrap();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files[0], "beta.md", "completed should sort first");
     // Verify properties field is NOT in output (user excluded it via --fields)
     assert!(
         arr[0].get("properties").is_none(),
