@@ -2,7 +2,7 @@
 title: "links fix: reject fuzzy matches that resolve to the source file"
 type: backlog
 date: 2026-03-28
-status: planned
+status: completed
 priority: medium
 origin: dogfooding v0.5.0 link health
 tags:
@@ -25,7 +25,7 @@ After the fuzzy matcher finds a candidate, add a guard that rejects any match wh
 
 ## Acceptance criteria
 
-- [ ] `links fix` never proposes a fix where `new_target` resolves to the same file as `source`
-- [ ] A self-link candidate is skipped and the next-best match is tried
-- [ ] If no non-self match exists, the link is reported as unfixable
-- [ ] Unit test covering the self-link rejection case
+- [x] `links fix` never proposes a fix where `new_target` resolves to the same file as `source`
+- [x] A self-link candidate is skipped and the next-best match is tried
+- [x] If no non-self match exists, the link is reported as unfixable
+- [x] Unit test covering the self-link rejection case

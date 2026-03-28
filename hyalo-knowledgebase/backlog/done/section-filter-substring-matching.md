@@ -41,5 +41,5 @@ Option B is probably the best balance of power and simplicity. Option A risks fa
 - Error hint still shows available sections when no match is found
 
 ## My Comments
-Why not introduce the same operators as in the tag ans proeprty filters: <, >, <=, >=, ~, /regexp/
+Why not introduce the same operators as in the tag and property filters: <, >, <=, >=, ~, /regexp/
 See also [[backlog/done/property-value-search]]
