@@ -2,7 +2,7 @@
 title: Iteration 58 — Find command UX polish
 type: iteration
 date: 2026-03-28
-status: in-progress
+status: completed
 branch: iter-58/find-ux-polish
 tags:
   - ux
