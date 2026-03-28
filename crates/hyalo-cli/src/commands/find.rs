@@ -82,7 +82,10 @@ pub fn find(
         has_task_filter,
         has_section_filter,
     ) || sort_needs_links
-        || sort_needs_title;
+        || sort_needs_title
+        // --broken-links forces fields.links on (applied later in effective_fields),
+        // so we must also force body scanning here before effective_fields is built.
+        || broken_links;
 
     // Compile the regex once (if any), then clone cheaply per file.
     // Invalid regex is a user error (exit 1), not an internal error (exit 2).

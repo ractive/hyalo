@@ -855,7 +855,7 @@ enum LinksAction {
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
         /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
-        #[arg(long, default_value = "0.8")]
+        #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
         /// Glob pattern(s) to filter which files to check (repeatable); prefix '!' to negate
         #[arg(short, long)]
@@ -979,6 +979,20 @@ enum TagsAction {
         #[arg(short, long)]
         glob: Vec<String>,
     },
+}
+
+/// Value parser for `--threshold`: accepts a `f64` in `[0.0, 1.0]`.
+fn parse_threshold(s: &str) -> Result<f64, String> {
+    let v: f64 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid floating-point number"))?;
+    if (0.0..=1.0).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!(
+            "threshold must be between 0.0 and 1.0 (inclusive), got {v}"
+        ))
+    }
 }
 
 /// Parse `--where-property` filters and validate `--where-tag` names.

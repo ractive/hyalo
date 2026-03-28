@@ -521,39 +521,44 @@ fn links_fix_apply_reduces_broken_links() {
         .expect("'fixable' should be a number");
     assert!(fixed_count >= 1, "should have applied at least 1 fix");
 
-    // After applying, run find --broken-links; the count should be lower
+    // Capture the broken link count reported by the apply run (before fixes were written).
     let before_broken = apply_json["broken"]
         .as_u64()
         .expect("'broken' should be a number");
 
+    // Re-run links fix in dry-run mode to measure the remaining broken link count
+    // (same unit: number of broken links, not files).
     let after_output = hyalo()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "find",
-            "--broken-links",
+            "links",
+            "fix",
             "--format",
             "json",
         ])
         .output()
-        .expect("hyalo find --broken-links should run after fix");
-    assert!(after_output.status.success());
+        .expect("hyalo links fix (dry-run) should run after apply");
+    assert!(
+        after_output.status.success(),
+        "links fix dry-run after apply exited non-zero: {}",
+        String::from_utf8_lossy(&after_output.stderr)
+    );
 
-    let after_json: serde_json::Value =
-        serde_json::from_slice(&after_output.stdout).expect("after stdout should be valid JSON");
+    let after_json: serde_json::Value = serde_json::from_slice(&after_output.stdout)
+        .expect("after dry-run stdout should be valid JSON");
 
-    let after_files = after_json
-        .as_array()
-        .expect("find output should be an array");
-    let after_broken = after_files.len() as u64;
+    let after_broken = after_json["broken"]
+        .as_u64()
+        .expect("'broken' should be a number in after dry-run output");
 
-    // After applying fixes, the count of files with broken links must be lower
-    // (or equal if all were unfixable, but we know at least one is fixable).
+    // After applying fixes, the broken link count must be lower — both values
+    // are broken-link counts reported by `links fix`, so the comparison is like-for-like.
     assert!(
         after_broken < before_broken,
-        "after applying fixes, broken link file count should decrease: before={before_broken}, after={after_broken}"
+        "after applying fixes, broken link count should decrease: before={before_broken}, after={after_broken}"
     );
 }
 

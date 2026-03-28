@@ -222,9 +222,34 @@ pub fn summary(
         })
         .collect();
 
-    // Detect broken links from collected link data (only available when no glob).
+    // Link health is intentionally vault-wide regardless of any --glob scope:
+    // a broken link is a broken link whether or not the referencing file matches
+    // the glob filter, and scoped results (0/0 when globs are active) would be
+    // misleading.  When no glob is active, `collected_links` already covers the
+    // whole vault so we reuse it; otherwise we do a separate vault-wide scan.
     let link_health = {
-        let report = detect_broken_links(dir, &collected_links, site_prefix);
+        let report = if collect_links {
+            detect_broken_links(dir, &collected_links, site_prefix)
+        } else {
+            let all_files = hyalo_core::discovery::discover_files(dir)
+                .context("failed to discover files for link health")?;
+            let mut all_links: Vec<FileLinks> = Vec::with_capacity(all_files.len());
+            for full_path in &all_files {
+                let rel = full_path
+                    .strip_prefix(dir)
+                    .unwrap_or(full_path)
+                    .to_path_buf();
+                let mut lv = LinkGraphVisitor::new(rel);
+                match scan_file_multi(full_path, &mut [&mut lv]) {
+                    Ok(()) => {
+                        all_links.push(lv.into_file_links());
+                    }
+                    Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            detect_broken_links(dir, &all_links, site_prefix)
+        };
         LinkHealthSummary {
             total: report.total_links,
             broken: report.broken.len(),
@@ -589,7 +614,10 @@ pub fn summary_from_index(
     // Emit warnings for any property value that looks like a typo of a dominant value.
     warn_inconsistent_properties(&string_prop_values);
 
-    // Link health is intentionally vault-wide regardless of any --glob scope.
+    // Link health is intentionally vault-wide: detect_broken_links_from_index
+    // scans all entries in the index regardless of any --glob scope.  This is
+    // consistent with the disk-scan path and ensures the report is meaningful
+    // (scoped results would produce misleadingly low counts).
     let link_health = {
         let report = detect_broken_links_from_index(dir, index, site_prefix);
         LinkHealthSummary {

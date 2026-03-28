@@ -221,6 +221,8 @@ pub struct LinkMatcher {
     files: Vec<String>,
     /// Lowercased path → original index into `files`.
     lower_to_idx: HashMap<String, usize>,
+    /// Exact-case path → index into `files` (used for O(1) strategy-2 lookup).
+    exact_to_idx: HashMap<String, usize>,
     /// Lowercased stem (filename without .md and path) → list of indices.
     /// Used for shortest-path: unique means unambiguous.
     stem_to_indices: HashMap<String, Vec<usize>>,
@@ -240,9 +242,23 @@ impl LinkMatcher {
     /// Build a matcher from a list of vault-relative file paths.
     pub fn new(files: Vec<String>, threshold: f64) -> Self {
         let mut lower_to_idx = HashMap::with_capacity(files.len());
+        let mut exact_to_idx = HashMap::with_capacity(files.len());
         let mut stem_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
 
         for (i, f) in files.iter().enumerate() {
+            // Index by exact path, plus the extension-toggled form.
+            exact_to_idx.entry(f.clone()).or_insert(i);
+            let alt = if f.to_ascii_lowercase().ends_with(".md") {
+                f.strip_suffix(".md")
+                    .or_else(|| f.strip_suffix(".MD"))
+                    .map(|s| s.to_string())
+            } else {
+                Some(format!("{f}.md"))
+            };
+            if let Some(a) = alt {
+                exact_to_idx.entry(a).or_insert(i);
+            }
+
             // Index by lowercased full path (with and without .md).
             let lower = f.to_ascii_lowercase();
             lower_to_idx.entry(lower.clone()).or_insert(i);
@@ -262,6 +278,7 @@ impl LinkMatcher {
         Self {
             files,
             lower_to_idx,
+            exact_to_idx,
             stem_to_indices,
             threshold,
         }
@@ -283,14 +300,14 @@ impl LinkMatcher {
             .unwrap_or(target_filename);
 
         // --- Strategy 1: Case-insensitive exact match ---
+        // `target_lower` is also used for the exact-case alt computation below.
         let target_lower = raw_target.to_ascii_lowercase();
 
         // Precompute the exact-case alt form so strategy 1 doesn't steal strategy 2 hits.
-        let exact_alt = if raw_target.ends_with(".md") {
-            raw_target
-                .strip_suffix(".md")
-                .unwrap_or(raw_target)
-                .to_string()
+        // Check the .md suffix on the lowercased form to avoid a case-sensitive comparison.
+        let exact_alt = if target_lower.ends_with(".md") {
+            // Strip the original suffix (preserving the non-suffix casing).
+            raw_target[..raw_target.len() - 3].to_string()
         } else {
             format!("{raw_target}.md")
         };
@@ -308,14 +325,13 @@ impl LinkMatcher {
         }
 
         // --- Strategy 2: Extension mismatch (exact case, only extension differs) ---
-        for candidate in &self.files {
-            if *candidate == exact_alt {
-                return Some(MatchResult {
-                    matched_file: candidate.clone(),
-                    strategy: FixStrategy::ExtensionMismatch,
-                    confidence: 1.0,
-                });
-            }
+        // Use the pre-built exact_to_idx for O(1) lookup instead of a linear scan.
+        if let Some(&idx) = self.exact_to_idx.get(&exact_alt) {
+            return Some(MatchResult {
+                matched_file: self.files[idx].clone(),
+                strategy: FixStrategy::ExtensionMismatch,
+                confidence: 1.0,
+            });
         }
 
         // --- Strategy 3: Shortest-path (unique stem match) ---
@@ -331,7 +347,12 @@ impl LinkMatcher {
         }
 
         // --- Strategy 4: Fuzzy match (Jaro-Winkler on filename stem) ---
+        // Track the top-two scores to detect ties: if two candidates score within
+        // 0.01 of each other the match is ambiguous and we return None rather than
+        // silently picking the first.
+        const TIE_DELTA: f64 = 0.01;
         let mut best_score = self.threshold;
+        let mut second_score = 0.0_f64;
         let mut best_idx: Option<usize> = None;
 
         for (i, candidate) in self.files.iter().enumerate() {
@@ -339,9 +360,18 @@ impl LinkMatcher {
             let fstem = fname.strip_suffix(".md").unwrap_or(fname);
             let score = strsim::jaro_winkler(target_stem, fstem);
             if score > best_score {
+                second_score = best_score;
                 best_score = score;
                 best_idx = Some(i);
+            } else if score > second_score {
+                second_score = score;
             }
+        }
+
+        // If the runner-up is within TIE_DELTA of the winner the match is
+        // ambiguous — decline rather than guessing.
+        if best_score - second_score <= TIE_DELTA {
+            return None;
         }
 
         best_idx.map(|idx| MatchResult {
@@ -525,7 +555,20 @@ fn build_replacements_for_file(
                         .unwrap_or(&fix.new_target)
                         .to_string()
                 }
-                LinkKind::Markdown => fix.new_target.clone(),
+                LinkKind::Markdown => {
+                    // Preserve the original `.md` presence/absence in the link.
+                    // If the original target had no `.md` suffix, strip it from
+                    // the new target too so the style is unchanged.
+                    let orig_had_md = fix.old_target.to_ascii_lowercase().ends_with(".md");
+                    if orig_had_md {
+                        fix.new_target.clone()
+                    } else {
+                        fix.new_target
+                            .strip_suffix(".md")
+                            .unwrap_or(&fix.new_target)
+                            .to_string()
+                    }
+                }
             };
 
             // Build old_text / new_text from the ORIGINAL line bytes.
