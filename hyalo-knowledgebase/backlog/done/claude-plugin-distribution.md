@@ -4,7 +4,7 @@ type: backlog
 date: 2026-03-23
 origin: skill packaging initiative
 priority: medium
-status: planned
+status: wont-do
 tags:
   - backlog
   - cli
