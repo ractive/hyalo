@@ -21,6 +21,7 @@ rmp-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
+strsim = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]

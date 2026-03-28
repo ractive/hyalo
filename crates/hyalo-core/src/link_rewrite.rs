@@ -437,7 +437,7 @@ fn plan_outbound_rewrites(content: &str, old_rel: &str, new_rel: &str) -> Vec<Re
 /// Replacements are matched against lines by their `old_text`.  Multiple
 /// replacements on the same line are applied right-to-left (by first
 /// occurrence of `old_text`) to avoid offset shifts.
-fn apply_replacements(content: &str, replacements: &[Replacement]) -> String {
+pub(crate) fn apply_replacements(content: &str, replacements: &[Replacement]) -> String {
     // Group replacements by 1-based line number.
     let mut by_line: HashMap<usize, Vec<&Replacement>> = HashMap::new();
     for r in replacements {

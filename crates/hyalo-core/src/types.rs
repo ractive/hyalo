@@ -130,11 +130,28 @@ pub struct TaskReadResult {
 pub struct VaultSummary {
     pub files: FileCounts,
     pub orphans: OrphanSummary,
+    pub links: LinkHealthSummary,
     pub properties: Vec<PropertySummaryEntry>,
     pub tags: TagSummary,
     pub status: Vec<StatusGroup>,
     pub tasks: TaskCount,
     pub recent_files: Vec<RecentFile>,
+}
+
+/// Vault-wide link health: total links, broken count, and broken link details.
+#[derive(Debug, Clone, Serialize)]
+pub struct LinkHealthSummary {
+    pub total: usize,
+    pub broken: usize,
+    pub broken_links: Vec<BrokenLinkInfo>,
+}
+
+/// A single broken link with source file, line number, and raw target.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrokenLinkInfo {
+    pub source: String,
+    pub line: usize,
+    pub target: String,
 }
 
 /// Fully isolated files: no inbound links (nothing links to them) and no

@@ -136,6 +136,9 @@ Search and filter files. Returns an array of file objects, each containing front
 # All files
 hyalo find
 
+# Files with broken links (unresolved wikilinks or markdown links)
+hyalo find --broken-links
+
 # Content search (case-insensitive substring)
 hyalo find "retry backoff"
 hyalo find "retry" --tag research
@@ -245,7 +248,7 @@ hyalo tags rename --from old-tag --to new-tag --glob "notes/*.md"
 
 ### summary
 
-High-level vault overview: file counts, property and tag aggregates, status groups, tasks, orphan files (fully isolated — no links in or out), and recently modified files.
+High-level vault overview: file counts, property and tag aggregates, status groups, tasks, link health (total and broken links with source locations), orphan files (fully isolated — no links in or out), and recently modified files.
 
 ```sh
 hyalo summary
@@ -401,6 +404,31 @@ Updated 1 link in 1 file:
 Use `--dry-run` to preview which files and links would change without modifying anything.
 
 Root-absolute links (e.g. `/docs/guides/setup.md`) are also rewritten during a move. Hyalo uses the site prefix to map these to vault-relative paths. If `mv` reports 0 links updated but you expect absolute links to be rewritten, check your `--site-prefix` setting (see [Absolute link resolution](#absolute-link-resolution-site-prefix)).
+
+### links
+
+Subcommand group for link operations.
+
+```sh
+# Preview broken link fixes (dry-run, default)
+hyalo links fix
+
+# Apply fixes to disk
+hyalo links fix --apply
+
+# Adjust fuzzy matching threshold (0.0–1.0, default: 0.8)
+hyalo links fix --threshold 0.9
+
+# Scope to specific files
+hyalo links fix --glob "notes/*.md"
+
+# Text output
+hyalo links fix --format text
+```
+
+`links fix` detects broken `[[wikilinks]]` and `[markdown](links)` across the vault and attempts auto-repair using four strategies (in priority order): case-insensitive exact match, extension mismatch (`.md` present/absent), unique stem match anywhere in the vault (shortest-path resolution), and Jaro-Winkler fuzzy match above `--threshold`.
+
+Default is `--dry-run` (preview only). Pass `--apply` to write fixes to disk.
 
 ### Hints
 

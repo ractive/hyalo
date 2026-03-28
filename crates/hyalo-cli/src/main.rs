@@ -6,8 +6,8 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use hyalo_cli::commands::{
     append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
-    find as find_commands, init as init_commands, mv as mv_commands, properties,
-    read as read_commands, remove as remove_commands, set as set_commands,
+    find as find_commands, init as init_commands, links as links_commands, mv as mv_commands,
+    properties, read as read_commands, remove as remove_commands, set as set_commands,
     summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use hyalo_cli::hints::{HintContext, HintSource, generate_hints};
@@ -87,6 +87,9 @@ const HELP_LONG: &str = "COMMAND REFERENCE:
 
   Backlinks (reverse link lookup, read-only):
     hyalo backlinks -f/--file F
+
+  Links (link operations):
+    hyalo links fix [--apply] [--threshold T] [-g/--glob G]   Detect and fix broken links (default: dry-run)
 
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
@@ -526,6 +529,9 @@ enum Commands {
         /// Maximum number of results to return (must be at least 1)
         #[arg(short = 'n', long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
         limit: Option<usize>,
+        /// Only return files with at least one unresolved link (auto-includes links field)
+        #[arg(long)]
+        broken_links: bool,
     },
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(long_about = "Read the body content of a markdown file.\n\n\
@@ -593,7 +599,8 @@ enum Commands {
             OUTPUT: A single 'VaultSummary' object with file counts (total + by directory), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
             status grouping (files grouped by frontmatter 'status' value), \
-            task counts (total/done), and recently modified files.\n\
+            task counts (total/done), link health (total/broken links with source locations), \
+            orphan files, and recently modified files.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
@@ -816,6 +823,48 @@ Repeatable (AND).\n\
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
     },
+    /// Detect and repair broken links across the vault
+    #[command(
+        long_about = "Detect and repair broken wikilinks and markdown links.\n\n\
+            Scans the vault for links that cannot be resolved to an existing file, \
+            then uses fuzzy matching (case-insensitive, extension mismatch, shortest-path, \
+            Jaro-Winkler) to find the best candidate replacement.\n\n\
+            Default behaviour is a dry run — no files are modified. Pass --apply to write fixes.\n\n\
+            OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
+            (source, line, old_target, new_target, strategy, confidence), and \
+            the list of links that could not be matched.\n\
+            SIDE EFFECTS: None unless --apply is passed."
+    )]
+    Links {
+        #[command(subcommand)]
+        action: LinksAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum LinksAction {
+    /// Auto-repair broken links using fuzzy matching
+    #[command(long_about = "Find broken links and propose (or apply) fixes.\n\n\
+            Matching strategies (in priority order):\n\
+            1. Case-insensitive exact match\n\
+            2. Extension mismatch (.md present/absent)\n\
+            3. Unique stem match anywhere in the vault (shortest-path)\n\
+            4. Jaro-Winkler fuzzy match above --threshold\n\n\
+            Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.")]
+    Fix {
+        /// Preview changes without modifying files (default when --apply is omitted)
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply fixes to files on disk
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
+        #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
+        threshold: f64,
+        /// Glob pattern(s) to filter which files to check (repeatable); prefix '!' to negate
+        #[arg(short, long)]
+        glob: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -934,6 +983,20 @@ enum TagsAction {
         #[arg(short, long)]
         glob: Vec<String>,
     },
+}
+
+/// Value parser for `--threshold`: accepts a `f64` in `[0.0, 1.0]`.
+fn parse_threshold(s: &str) -> Result<f64, String> {
+    let v: f64 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid floating-point number"))?;
+    if (0.0..=1.0).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!(
+            "threshold must be between 0.0 and 1.0 (inclusive), got {v}"
+        ))
+    }
 }
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
@@ -1297,6 +1360,7 @@ fn main() {
             ref fields,
             ref sort,
             limit,
+            broken_links,
         } => {
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
@@ -1365,6 +1429,7 @@ fn main() {
                     &parsed_fields,
                     sort_field.as_ref(),
                     limit,
+                    broken_links,
                     effective_format,
                 )
             } else {
@@ -1382,6 +1447,7 @@ fn main() {
                     &parsed_fields,
                     sort_field.as_ref(),
                     limit,
+                    broken_links,
                     effective_format,
                 )
             }
@@ -1530,7 +1596,15 @@ fn main() {
             depth,
         } => {
             if let Some(ref idx) = snapshot_index {
-                summary_commands::summary_from_index(idx, glob, recent, depth, effective_format)
+                summary_commands::summary_from_index(
+                    &dir,
+                    idx,
+                    glob,
+                    recent,
+                    depth,
+                    site_prefix,
+                    effective_format,
+                )
             } else {
                 summary_commands::summary(&dir, glob, recent, depth, site_prefix, effective_format)
             }
@@ -1629,6 +1703,35 @@ fn main() {
         Commands::DropIndex { ref path } => {
             drop_index_commands::drop_index(&dir, path.as_deref(), effective_format)
         }
+        Commands::Links { action } => match action {
+            LinksAction::Fix {
+                dry_run: _,
+                apply,
+                threshold,
+                ref glob,
+            } => {
+                if let Some(ref idx) = snapshot_index {
+                    links_commands::links_fix_from_index(
+                        idx,
+                        &dir,
+                        site_prefix,
+                        glob,
+                        !apply,
+                        threshold,
+                        effective_format,
+                    )
+                } else {
+                    links_commands::links_fix(
+                        &dir,
+                        site_prefix,
+                        glob,
+                        !apply,
+                        threshold,
+                        effective_format,
+                    )
+                }
+            }
+        },
         // `Init` is handled as an early return before this match is reached.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
     };
