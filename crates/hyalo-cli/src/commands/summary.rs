@@ -363,9 +363,11 @@ fn warn_rare_values(
 /// `string_prop_values` maps `property_name -> (value -> file_count)`.
 fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<String, usize>>) {
     for (prop_name, value_counts) in string_prop_values {
-        // Skip properties where every value appears only once — no signal.
+        // Skip properties where no value reaches the dominant threshold —
+        // warn_rare_values would find nothing to compare against anyway.
+        let dominant_min = 3;
         let max_count = value_counts.values().copied().max().unwrap_or(0);
-        if max_count < 2 {
+        if max_count < dominant_min {
             continue;
         }
         warn_rare_values(
@@ -1111,6 +1113,7 @@ No tasks here.
 
     #[test]
     fn warn_rare_values_emits_for_typo() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
         crate::warn::reset_for_test();
         crate::warn::init(false);
 
@@ -1127,6 +1130,7 @@ No tasks here.
 
     #[test]
     fn warn_rare_values_no_warning_for_distant_values() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
         crate::warn::reset_for_test();
         crate::warn::init(false);
 
@@ -1143,6 +1147,7 @@ No tasks here.
 
     #[test]
     fn warn_rare_values_no_warning_when_dominant_too_rare() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
         crate::warn::reset_for_test();
         crate::warn::init(false);
 
@@ -1160,6 +1165,7 @@ No tasks here.
 
     #[test]
     fn warn_rare_values_no_warning_when_count_above_threshold() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
         crate::warn::reset_for_test();
         crate::warn::init(false);
 
@@ -1176,10 +1182,11 @@ No tasks here.
 
     #[test]
     fn warn_inconsistent_properties_skips_all_unique() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
         crate::warn::reset_for_test();
         crate::warn::init(false);
 
-        // Every value appears exactly once — max_count < 2 → skip entirely
+        // Every value appears exactly once — max_count < dominant_min → skip entirely
         let mut map: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
         map.insert("status".to_owned(), counts(&[("a", 1), ("b", 1), ("c", 1)]));
         warn_inconsistent_properties(&map);
