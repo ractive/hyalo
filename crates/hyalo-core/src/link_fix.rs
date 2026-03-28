@@ -290,10 +290,28 @@ impl LinkMatcher {
         Self::new(files, threshold)
     }
 
+    /// Returns `true` if `candidate` (vault-relative) refers to the same file
+    /// as `source`, ignoring `.md` suffix and ASCII case.
+    fn is_self_link(source: &str, candidate: &str) -> bool {
+        let s = source
+            .strip_suffix(".md")
+            .or_else(|| source.strip_suffix(".MD"))
+            .unwrap_or(source);
+        let c = candidate
+            .strip_suffix(".md")
+            .or_else(|| candidate.strip_suffix(".MD"))
+            .unwrap_or(candidate);
+        s.eq_ignore_ascii_case(c)
+    }
+
     /// Try to find a matching file for a broken link target.
     ///
+    /// `source` is the vault-relative path of the file that contains the
+    /// broken link.  Candidates that resolve back to `source` are skipped so
+    /// the matcher never proposes a self-referential fix.
+    ///
     /// Returns `None` if no match is found above the configured threshold.
-    pub fn find_match(&self, raw_target: &str) -> Option<MatchResult> {
+    pub fn find_match(&self, raw_target: &str, source: &str) -> Option<MatchResult> {
         let target_filename = raw_target.rsplit('/').next().unwrap_or(raw_target);
         let target_stem = target_filename
             .strip_suffix(".md")
@@ -314,8 +332,9 @@ impl LinkMatcher {
 
         if let Some(&idx) = self.lower_to_idx.get(&target_lower) {
             let candidate = &self.files[idx];
-            // Only report as case-insensitive if it's not an exact-case extension mismatch.
-            if *candidate != exact_alt {
+            // Only report as case-insensitive if it's not an exact-case extension mismatch
+            // and not the source file itself.
+            if *candidate != exact_alt && !Self::is_self_link(source, candidate) {
                 return Some(MatchResult {
                     matched_file: candidate.clone(),
                     strategy: FixStrategy::CaseInsensitive,
@@ -326,7 +345,9 @@ impl LinkMatcher {
 
         // --- Strategy 2: Extension mismatch (exact case, only extension differs) ---
         // Use the pre-built exact_to_idx for O(1) lookup instead of a linear scan.
-        if let Some(&idx) = self.exact_to_idx.get(&exact_alt) {
+        if let Some(&idx) = self.exact_to_idx.get(&exact_alt)
+            && !Self::is_self_link(source, &self.files[idx])
+        {
             return Some(MatchResult {
                 matched_file: self.files[idx].clone(),
                 strategy: FixStrategy::ExtensionMismatch,
@@ -338,6 +359,7 @@ impl LinkMatcher {
         let target_stem_lower = target_stem.to_ascii_lowercase();
         if let Some(indices) = self.stem_to_indices.get(&target_stem_lower)
             && indices.len() == 1
+            && !Self::is_self_link(source, &self.files[indices[0]])
         {
             return Some(MatchResult {
                 matched_file: self.files[indices[0]].clone(),
@@ -356,6 +378,9 @@ impl LinkMatcher {
         let mut best_idx: Option<usize> = None;
 
         for (i, candidate) in self.files.iter().enumerate() {
+            if Self::is_self_link(source, candidate) {
+                continue;
+            }
             let fname = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
             let fstem = fname.strip_suffix(".md").unwrap_or(fname);
             let score = strsim::jaro_winkler(target_stem, fstem);
@@ -393,7 +418,7 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
     let mut unfixable = Vec::new();
 
     for info in broken {
-        if let Some(result) = matcher.find_match(&info.target) {
+        if let Some(result) = matcher.find_match(&info.target, &info.source) {
             fixes.push(FixPlan {
                 source: info.source.clone(),
                 line: info.line,
@@ -638,7 +663,7 @@ mod tests {
     #[test]
     fn matcher_case_insensitive() {
         let matcher = LinkMatcher::new(make_files(&["Auth.md"]), 0.8);
-        let result = matcher.find_match("auth").unwrap();
+        let result = matcher.find_match("auth", "__test__").unwrap();
         assert_eq!(result.matched_file, "Auth.md");
         assert!(matches!(result.strategy, FixStrategy::CaseInsensitive));
         assert_eq!(result.confidence, 1.0);
@@ -647,7 +672,7 @@ mod tests {
     #[test]
     fn matcher_extension_mismatch_add_md() {
         let matcher = LinkMatcher::new(make_files(&["notes/foo.md"]), 0.8);
-        let result = matcher.find_match("notes/foo").unwrap();
+        let result = matcher.find_match("notes/foo", "__test__").unwrap();
         assert_eq!(result.matched_file, "notes/foo.md");
         assert!(matches!(result.strategy, FixStrategy::ExtensionMismatch));
     }
@@ -655,7 +680,7 @@ mod tests {
     #[test]
     fn matcher_extension_mismatch_strip_md() {
         let matcher = LinkMatcher::new(make_files(&["foo"]), 0.8);
-        let result = matcher.find_match("foo.md").unwrap();
+        let result = matcher.find_match("foo.md", "__test__").unwrap();
         assert_eq!(result.matched_file, "foo");
         assert!(matches!(result.strategy, FixStrategy::ExtensionMismatch));
     }
@@ -663,7 +688,7 @@ mod tests {
     #[test]
     fn matcher_shortest_path_unique_stem() {
         let matcher = LinkMatcher::new(make_files(&["sub/deep/bar.md"]), 0.8);
-        let result = matcher.find_match("bar").unwrap();
+        let result = matcher.find_match("bar", "__test__").unwrap();
         assert_eq!(result.matched_file, "sub/deep/bar.md");
         assert!(matches!(result.strategy, FixStrategy::ShortestPath));
         assert_eq!(result.confidence, 0.95);
@@ -672,7 +697,7 @@ mod tests {
     #[test]
     fn matcher_shortest_path_ambiguous_skipped() {
         let matcher = LinkMatcher::new(make_files(&["a/bar.md", "b/bar.md"]), 0.99);
-        let result = matcher.find_match("bar");
+        let result = matcher.find_match("bar", "__test__");
         // Both stem-match so shortest-path doesn't fire; fuzzy threshold is
         // very high (0.99) but "bar" vs "bar" scores 1.0, so fuzzy wins.
         if let Some(r) = result {
@@ -684,7 +709,7 @@ mod tests {
     fn matcher_fuzzy_match() {
         let matcher = LinkMatcher::new(make_files(&["authentication.md"]), 0.7);
         // "authentcation" is a typo of "authentication"
-        let result = matcher.find_match("authentcation").unwrap();
+        let result = matcher.find_match("authentcation", "__test__").unwrap();
         assert_eq!(result.matched_file, "authentication.md");
         assert!(matches!(result.strategy, FixStrategy::FuzzyMatch));
         assert!(result.confidence >= 0.7);
@@ -693,7 +718,57 @@ mod tests {
     #[test]
     fn matcher_no_match() {
         let matcher = LinkMatcher::new(make_files(&["completely-unrelated.md"]), 0.95);
-        assert!(matcher.find_match("xyz-abc-notexist").is_none());
+        assert!(matcher.find_match("xyz-abc-notexist", "__test__").is_none());
+    }
+
+    // --- Self-link guard ---
+
+    #[test]
+    fn matcher_rejects_self_link_fuzzy() {
+        // When the only fuzzy candidate is the source file itself, return None.
+        let matcher = LinkMatcher::new(make_files(&["sort-by-property-value.md"]), 0.7);
+        assert!(
+            matcher
+                .find_match("sort-reverse", "sort-by-property-value.md")
+                .is_none(),
+            "should not match source file via fuzzy"
+        );
+    }
+
+    #[test]
+    fn matcher_rejects_self_link_picks_next_best() {
+        // When the best fuzzy candidate is the source, the runner-up should win.
+        let matcher = LinkMatcher::new(
+            make_files(&["sort-by-property-value.md", "sort-reverse.md"]),
+            0.7,
+        );
+        let result = matcher
+            .find_match("sort-reverse", "sort-by-property-value.md")
+            .unwrap();
+        assert_eq!(result.matched_file, "sort-reverse.md");
+    }
+
+    #[test]
+    fn matcher_rejects_self_link_case_insensitive() {
+        // The only case-insensitive match is the source file — should return None.
+        let matcher = LinkMatcher::new(make_files(&["Auth.md"]), 0.8);
+        assert!(matcher.find_match("auth", "Auth.md").is_none());
+    }
+
+    #[test]
+    fn matcher_rejects_self_link_shortest_path() {
+        // Unique stem match that resolves to the source file — should return None.
+        let matcher = LinkMatcher::new(make_files(&["sub/bar.md"]), 0.8);
+        assert!(matcher.find_match("bar", "sub/bar.md").is_none());
+    }
+
+    #[test]
+    fn plan_fixes_self_link_is_unfixable() {
+        let matcher = LinkMatcher::new(make_files(&["sort-by-property-value.md"]), 0.7);
+        let broken_links = vec![broken("sort-by-property-value.md", 10, "sort-reverse")];
+        let report = plan_fixes(&broken_links, &matcher);
+        assert!(report.fixes.is_empty(), "self-link should not be a fix");
+        assert_eq!(report.unfixable.len(), 1);
     }
 
     // --- plan_fixes integration ---
