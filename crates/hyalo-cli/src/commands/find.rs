@@ -332,6 +332,20 @@ pub fn find(
     // --- Sort ---
     apply_sort(&mut results, sort, link_graph.as_ref());
 
+    if let Some(SortField::Property(key)) = sort
+        && results.len() > 1
+        && results.iter().all(|r| {
+            r.properties
+                .as_ref()
+                .and_then(|p| p.get(key.as_str()))
+                .is_none()
+        })
+    {
+        crate::warn::warn(format!(
+            "no files have property '{key}' — sort has no effect"
+        ));
+    }
+
     // Strip internally-computed fields that the user didn't request in --fields.
     // These were populated only to support sorting by count or property.
     if sort_needs_links && !original_fields.links {
@@ -819,6 +833,20 @@ pub fn find_from_index(
 
     // --- Sort ---
     apply_sort(&mut results, sort, link_graph_ref);
+
+    if let Some(SortField::Property(key)) = sort
+        && results.len() > 1
+        && results.iter().all(|r| {
+            r.properties
+                .as_ref()
+                .and_then(|p| p.get(key.as_str()))
+                .is_none()
+        })
+    {
+        crate::warn::warn(format!(
+            "no files have property '{key}' — sort has no effect"
+        ));
+    }
 
     // Strip internally-computed fields that the user didn't request in --fields.
     if sort_needs_links && !original_fields.links {

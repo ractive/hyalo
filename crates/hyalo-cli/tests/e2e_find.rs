@@ -2805,3 +2805,127 @@ fn find_fields_all_includes_title() {
         "tags should appear with --fields all"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bug 2 — empty --tag value must be rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_empty_tag_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+tags: [foo]
+---
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", dir.path().to_str().unwrap(), "find", "--tag", ""])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected failure for empty --tag; exit code: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Error"),
+        "expected 'Error' in stderr; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bug 3 — sort by missing property should warn on stderr
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_sort_missing_property_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+"),
+    );
+    write_md(
+        dir.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            dir.path().to_str().unwrap(),
+            "find",
+            "--sort",
+            "property:nonexistent",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no files have property"),
+        "expected 'no files have property' warning in stderr; got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bug 5 — --limit 0 must be rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_limit_zero_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            dir.path().to_str().unwrap(),
+            "find",
+            "--limit",
+            "0",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected failure for --limit 0; exit code: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("limit must be at least 1"),
+        "expected 'limit must be at least 1' in stderr; got: {stderr}"
+    );
+}

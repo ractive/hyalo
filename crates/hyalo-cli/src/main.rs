@@ -17,6 +17,16 @@ use hyalo_cli::output::{
 use hyalo_core::filter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex};
 
+fn parse_limit(s: &str) -> Result<usize, String> {
+    let n: usize = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid number"))?;
+    if n == 0 {
+        return Err("limit must be at least 1".to_owned());
+    }
+    Ok(n)
+}
+
 // ---------------------------------------------------------------------------
 // Static help text — extracted from derive attributes so they can be filtered
 // at runtime based on loaded .hyalo.toml config.
@@ -527,7 +537,7 @@ enum Commands {
         #[arg(long)]
         sort: Option<String>,
         /// Maximum number of results to return (must be at least 1)
-        #[arg(short = 'n', long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+        #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
         /// Only return files with at least one unresolved link (auto-includes links field)
         #[arg(long)]
@@ -1116,6 +1126,31 @@ fn main() {
                 eprintln!("{e}\n  tip: did you mean:\n\n    {suggestion}\n");
                 die(2);
             }
+
+            // Suggest --version / --help when the user types a close misspelling
+            // as a bare subcommand (e.g. `hyalo versio`, `hyalo hep`).
+            if e.kind() == clap::error::ErrorKind::InvalidSubcommand {
+                use clap::error::{ContextKind, ContextValue};
+                if let Some(invalid) = e.context().find_map(|(k, v)| {
+                    if k == ContextKind::InvalidSubcommand {
+                        if let ContextValue::String(s) = v {
+                            Some(s.as_str())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }) {
+                    for (target, suggestion) in [("version", "--version"), ("help", "--help")] {
+                        if strsim::damerau_levenshtein(invalid, target) <= 2 {
+                            eprintln!("{e}\n  tip: did you mean `hyalo {suggestion}`?\n");
+                            die(2);
+                        }
+                    }
+                }
+            }
+
             e.exit();
         }
     };
@@ -1424,6 +1459,13 @@ fn main() {
                     die(1);
                 }
             };
+
+            for t in tag {
+                if let Err(msg) = hyalo_cli::commands::tags::validate_tag(t) {
+                    eprintln!("Error: {msg}");
+                    die(1);
+                }
+            }
 
             if let Some(ref idx) = snapshot_index {
                 find_commands::find_from_index(

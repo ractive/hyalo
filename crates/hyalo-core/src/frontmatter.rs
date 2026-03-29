@@ -501,7 +501,8 @@ pub fn infer_type(value: &Value) -> &'static str {
         Value::Number(_) => "number",
         Value::Array(_) => "list",
         Value::String(s) => infer_string_type(s),
-        Value::Null | Value::Object(_) => "text",
+        Value::Null => "null",
+        Value::Object(_) => "text",
     }
 }
 
@@ -729,7 +730,7 @@ No closing delimiter.
 
     #[test]
     fn infer_type_null() {
-        assert_eq!(infer_type(&Value::Null), "text");
+        assert_eq!(infer_type(&Value::Null), "null");
     }
 
     #[test]
