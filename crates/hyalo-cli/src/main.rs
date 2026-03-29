@@ -1514,14 +1514,12 @@ fn main() {
                 let has_task_filter = task_filter.is_some();
                 let has_section_filter = !section_filters.is_empty();
                 let has_title_filter = title.is_some();
-                let needs_body = parsed_fields.sections
-                    || parsed_fields.tasks
-                    || parsed_fields.links
-                    || parsed_fields.title
-                    || has_content_search
-                    || has_task_filter
-                    || has_section_filter
-                    || sort_needs_links
+                let needs_body = find_commands::needs_body(
+                    &parsed_fields,
+                    has_content_search,
+                    has_task_filter,
+                    has_section_filter,
+                ) || sort_needs_links
                     || sort_needs_title
                     || broken_links
                     || has_title_filter;

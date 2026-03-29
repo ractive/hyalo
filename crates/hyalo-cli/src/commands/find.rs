@@ -128,6 +128,31 @@ pub fn filter_index_entries<'a>(
     Ok(filtered)
 }
 
+/// Returns `true` when the command needs body content (sections, tasks, links,
+/// title, content search, or structural filters).
+///
+/// This is the core body-scan predicate shared between the `find` command
+/// dispatch in `main.rs` and any other caller that needs to decide whether to
+/// request a full body scan from [`crate::commands::build_scanned_index`].
+///
+/// Callers may add extra conditions on top (e.g. `sort_needs_links`,
+/// `broken_links`, `has_title_filter`) that are specific to their dispatch
+/// context.
+pub fn needs_body(
+    fields: &Fields,
+    has_content_search: bool,
+    has_task_filter: bool,
+    has_section_filter: bool,
+) -> bool {
+    fields.sections
+        || fields.tasks
+        || fields.links
+        || fields.title
+        || has_content_search
+        || has_task_filter
+        || has_section_filter
+}
+
 /// Find files matching the given filters and return them as a JSON array.
 ///
 /// Uses pre-scanned index data for all metadata (properties, tags, sections,

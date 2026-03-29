@@ -131,6 +131,25 @@ pub fn build_scanned_index(
     options: &ScanOptions,
 ) -> Result<ScannedIndexOutcome> {
     let files: Vec<(PathBuf, String)> = if needs_full_vault {
+        // Validate --file arguments even when doing a full-vault scan.
+        // Without this, missing files silently produce zero results instead
+        // of the expected UserError.
+        if !files_arg.is_empty() {
+            let mut resolved = Vec::new();
+            let mut first_err = None;
+            for f in files_arg {
+                match discovery::resolve_file(dir, f) {
+                    Ok(r) => resolved.push(r),
+                    Err(e) if first_err.is_none() => first_err = Some(e),
+                    Err(_) => {}
+                }
+            }
+            if resolved.is_empty() && let Some(e) = first_err {
+                return Ok(ScannedIndexOutcome::Outcome(resolve_error_to_outcome(
+                    e, format,
+                )));
+            }
+        }
         discovery::discover_files(dir)?
             .into_iter()
             .map(|p| {

@@ -71,10 +71,9 @@ pub trait VaultIndex {
 /// will be empty.  This is an optimization for commands that only need
 /// frontmatter data (e.g. `properties summary`, `tags summary`,
 /// `find --property status=planned` without body fields).
+#[derive(Debug, Clone, Copy)]
 pub struct ScanOptions {
-    /// When false, only frontmatter is read — sections, tasks, and links
-    /// fields in `IndexEntry` will be empty `Vec`s.  The `LinkGraph` will be
-    /// empty.
+    /// When false, only frontmatter is read.
     pub scan_body: bool,
 }
 
