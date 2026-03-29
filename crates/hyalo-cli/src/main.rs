@@ -536,12 +536,19 @@ enum Commands {
         /// Sort order: 'file' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
         #[arg(long)]
         sort: Option<String>,
+        /// Reverse the sort order (ascending becomes descending and vice versa)
+        #[arg(long)]
+        reverse: bool,
         /// Maximum number of results to return (must be at least 1)
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
         /// Only return files with at least one unresolved link (auto-includes links field)
         #[arg(long)]
         broken_links: bool,
+        /// Filter by title: case-insensitive substring match against the displayed title
+        /// (frontmatter 'title' property or first H1 heading). Prefix with '~=' for regex
+        #[arg(long)]
+        title: Option<String>,
     },
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(long_about = "Read the body content of a markdown file.\n\n\
@@ -855,7 +862,9 @@ Repeatable (AND).\n\
             OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
             (source, line, old_target, new_target, strategy, confidence), and \
             the list of links that could not be matched.\n\
-            SIDE EFFECTS: None unless --apply is passed."
+            SIDE EFFECTS: None unless --apply is passed.\n\n\
+            TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
+            or 'hyalo find --broken-links' (list files with unresolved links)."
     )]
     Links {
         #[command(subcommand)]
@@ -886,6 +895,10 @@ enum LinksAction {
         /// Glob pattern(s) to filter which files to check (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        /// Ignore broken links whose target contains any of these substrings (repeatable).
+        /// Useful for skipping Hugo template links, external paths, etc.
+        #[arg(long)]
+        ignore_target: Vec<String>,
     },
 }
 
@@ -1406,8 +1419,10 @@ fn main() {
             ref glob,
             ref fields,
             ref sort,
+            reverse,
             limit,
             broken_links,
+            ref title,
         } => {
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
@@ -1482,8 +1497,10 @@ fn main() {
                     glob,
                     &parsed_fields,
                     sort_field.as_ref(),
+                    reverse,
                     limit,
                     broken_links,
+                    title.as_deref(),
                     effective_format,
                 )
             } else {
@@ -1500,8 +1517,10 @@ fn main() {
                     glob,
                     &parsed_fields,
                     sort_field.as_ref(),
+                    reverse,
                     limit,
                     broken_links,
+                    title.as_deref(),
                     effective_format,
                 )
             }
@@ -1773,6 +1792,7 @@ fn main() {
                 apply,
                 threshold,
                 ref glob,
+                ref ignore_target,
             } => {
                 if let Some(ref idx) = snapshot_index {
                     links_commands::links_fix_from_index(
@@ -1782,6 +1802,7 @@ fn main() {
                         glob,
                         !apply,
                         threshold,
+                        ignore_target,
                         effective_format,
                     )
                 } else {
@@ -1791,6 +1812,7 @@ fn main() {
                         glob,
                         !apply,
                         threshold,
+                        ignore_target,
                         effective_format,
                     )
                 }
