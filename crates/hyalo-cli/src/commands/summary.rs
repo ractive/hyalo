@@ -1199,6 +1199,62 @@ No tasks here.
         assert_eq!(orphan_files, vec!["d.md"], "orphans: {orphan_files:?}");
     }
 
+    /// Dead-end parity: disk scan and index path must agree on dead-end lists.
+    #[test]
+    fn summary_dead_end_parity_disk_vs_index() {
+        use hyalo_core::index::{ScannedIndex, SnapshotIndex};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // a.md links to b and c
+        fs::write(dir.join("a.md"), "---\ntitle: A\n---\n[[b]]\n[[c]]\n").unwrap();
+        // b.md links to c
+        fs::write(dir.join("b.md"), "---\ntitle: B\n---\n[[c]]\n").unwrap();
+        // c.md is a dead-end (inbound from a and b, no outbound)
+        fs::write(dir.join("c.md"), "---\ntitle: C\n---\nNo links.\n").unwrap();
+        // d.md is an orphan (no links in or out)
+        fs::write(dir.join("d.md"), "---\ntitle: D\n---\nNo links.\n").unwrap();
+
+        // Disk-scan path
+        let disk_val = unwrap_success(summary(dir, &[], 10, None, None, Format::Json).unwrap());
+        let disk_dead_ends: Vec<&str> = disk_val["dead_ends"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        // Index path
+        let all = hyalo_core::discovery::discover_files(dir).unwrap();
+        let files: Vec<(std::path::PathBuf, String)> = all
+            .into_iter()
+            .map(|p| {
+                let rel = hyalo_core::discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
+        let build = ScannedIndex::build(&files, None).unwrap();
+        let index_path = dir.join(".hyalo-index");
+        SnapshotIndex::save(&build.index, &index_path, &dir.display().to_string(), None).unwrap();
+        let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
+        let index_val = unwrap_success(
+            summary_from_index(dir, &loaded, &[], 10, None, None, Format::Json).unwrap(),
+        );
+        let index_dead_ends: Vec<&str> = index_val["dead_ends"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert_eq!(
+            disk_dead_ends, index_dead_ends,
+            "disk scan and index must produce identical dead-end lists"
+        );
+        assert_eq!(disk_dead_ends, vec!["c.md"]);
+    }
+
     #[test]
     fn summary_skips_broken_frontmatter_file() {
         let tmp = setup_vault();

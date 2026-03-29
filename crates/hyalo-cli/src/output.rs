@@ -527,6 +527,9 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
         }
         serde_json::Value::Object(map) => {
             // Detect the find results envelope: {"total": N, "results": [...]}
+            // This is duck-typed — any object with both keys triggers this path.
+            // Currently only `find` produces this shape; if another command does
+            // in the future, add an explicit tag or dedicated serialisation path.
             // Format each result element normally; append "showing N of M matches"
             // only when limit actually truncated results.
             if let (Some(total_val), Some(results_val)) = (map.get("total"), map.get("results"))

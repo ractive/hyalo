@@ -41,6 +41,17 @@ See [[backlog/summary-dead-ends]]
 
 See [[backlog/find-limit-total-count]]
 
+### Memory optimisation: find --limit with pre-sorted iteration
+
+- [x] Scan path: pre-sort file list when `--sort file` + `--limit` + `!reverse`
+- [x] Index path: pre-sort entries by any sort key (except backlinks_count) when `--limit` + `!reverse`
+- [x] Skip FileObject construction once limit reached (count-only mode)
+- [x] Both `find()` and `find_from_index()` paths
+- [x] E2e test: deterministic results with `--sort file --limit N`
+- [x] E2e test: accurate total with filters + `--sort file --limit`
+
+See [[backlog/find-limit-memory-optimization]]
+
 ### Quality gates
 
 - [x] `cargo fmt`

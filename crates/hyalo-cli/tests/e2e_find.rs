@@ -862,6 +862,93 @@ fn find_limit_with_explicit_files_uses_sort_order() {
     );
 }
 
+/// --sort file --limit N triggers the early-exit memory optimisation.
+/// The results must be identical to a full scan sorted by file path and
+/// truncated to N, proving that the pre-sorted-iteration shortcut is correct.
+#[test]
+fn find_sort_file_limit_deterministic() {
+    let tmp = setup_vault();
+
+    // Full scan with explicit file sort — reference result set.
+    let (status, full_json, stderr) = find_json(&tmp, &["--sort", "file"]);
+    assert!(status.success(), "full scan stderr: {stderr}");
+    let full_arr = unwrap_results(&full_json);
+
+    // --sort file --limit 2 should return the first 2 from full_arr,
+    // exercising the early-exit path (pre-sorted files, capped collection).
+    let (status, limited_json, stderr) = find_json(&tmp, &["--sort", "file", "--limit", "2"]);
+    assert!(status.success(), "limited scan stderr: {stderr}");
+
+    // Envelope must report the total before truncation.
+    let total = limited_json["total"].as_u64().unwrap();
+    assert_eq!(
+        total,
+        full_arr.len() as u64,
+        "total in envelope must equal full match count"
+    );
+
+    let limited_arr = unwrap_results(&limited_json);
+    assert_eq!(limited_arr.len(), 2);
+
+    let expected_files: Vec<&str> = full_arr[..2]
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    let actual_files: Vec<&str> = limited_arr
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actual_files, expected_files,
+        "--sort file --limit must return the first N files in alphabetical order"
+    );
+}
+
+/// --sort file --limit with property filter: the total must reflect only
+/// files that pass the filter, not all vault files.
+#[test]
+fn find_sort_file_limit_with_filter_reports_accurate_total() {
+    let tmp = setup_vault();
+
+    // Full filtered scan — only status=planned files.
+    let (status, full_json, stderr) =
+        find_json(&tmp, &["--property", "status=planned", "--sort", "file"]);
+    assert!(status.success(), "full scan stderr: {stderr}");
+    let full_arr = unwrap_results(&full_json);
+    assert!(
+        full_arr.len() >= 2,
+        "test fixture must have ≥2 planned files"
+    );
+
+    // Limited to 1 result.
+    let (status, limited_json, stderr) = find_json(
+        &tmp,
+        &[
+            "--property",
+            "status=planned",
+            "--sort",
+            "file",
+            "--limit",
+            "1",
+        ],
+    );
+    assert!(status.success(), "limited stderr: {stderr}");
+
+    let total = limited_json["total"].as_u64().unwrap();
+    assert_eq!(
+        total,
+        full_arr.len() as u64,
+        "total must equal the count of matching files, not total vault files"
+    );
+
+    let limited_arr = unwrap_results(&limited_json);
+    assert_eq!(limited_arr.len(), 1);
+    assert_eq!(
+        limited_arr[0]["file"].as_str().unwrap(),
+        full_arr[0]["file"].as_str().unwrap(),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Text format
 // ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 ---
-title: "Reduce memory usage when find --limit + --sort file are combined"
+title: Reduce memory usage when find --limit + --sort file are combined
 type: backlog
-status: planned
+status: completed
 date: 2026-03-29
-origin: PR #78 review — Copilot flagged memory cost of accumulating all results
+origin: PR
 priority: low
 tags:
   - find
