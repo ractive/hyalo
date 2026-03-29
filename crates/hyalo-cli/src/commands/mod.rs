@@ -19,6 +19,7 @@ pub mod tasks;
 use crate::output::{CommandOutcome, Format};
 use anyhow::Result;
 use hyalo_core::discovery::{self, FileResolveError};
+use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,50 @@ pub fn collect_files(
     }
 }
 
+/// Outcome of building a scanned index — either success or a user-facing error.
+pub enum ScannedIndexOutcome {
+    Index(ScannedIndexBuild),
+    Outcome(CommandOutcome),
+}
+
+/// Build a [`ScannedIndex`] from disk, handling file discovery, warnings, and user errors.
+///
+/// When `needs_full_vault` is `true`, all `.md` files in `dir` are scanned regardless of
+/// `files_arg` and `globs`.  Otherwise the normal `collect_files` resolution is used and a
+/// user-error outcome is propagated if resolution fails.
+pub fn build_scanned_index(
+    dir: &Path,
+    files_arg: &[String],
+    globs: &[String],
+    format: Format,
+    site_prefix: Option<&str>,
+    needs_full_vault: bool,
+    options: &ScanOptions,
+) -> Result<ScannedIndexOutcome> {
+    let files: Vec<(PathBuf, String)> = if needs_full_vault {
+        discovery::discover_files(dir)?
+            .into_iter()
+            .map(|p| {
+                let rel = discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect()
+    } else {
+        match collect_files(dir, files_arg, globs, format)? {
+            FilesOrOutcome::Outcome(o) => return Ok(ScannedIndexOutcome::Outcome(o)),
+            FilesOrOutcome::Files(f) => f,
+        }
+    };
+
+    let build = ScannedIndex::build(&files, site_prefix, options)?;
+
+    for w in &build.warnings {
+        crate::warn::warn(format!("skipping {}: {}", w.rel_path, w.message));
+    }
+
+    Ok(ScannedIndexOutcome::Index(build))
+}
+
 /// Guard that mutation commands require `--file` or `--glob`.
 ///
 /// Returns `Some(CommandOutcome::UserError(...))` when neither flag is provided, or `None`
@@ -182,14 +227,6 @@ pub fn unwrap_single_file_result(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared time formatting
-// ---------------------------------------------------------------------------
-
-/// Format Unix timestamp (seconds since epoch) as ISO 8601 UTC.
-/// Delegates to the canonical implementation in `hyalo_core::index`.
-pub(crate) use hyalo_core::index::format_iso8601;
-
 /// Convert a `FileResolveError` into a user-facing `CommandOutcome`.
 #[must_use]
 pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
@@ -224,6 +261,7 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyalo_core::index::format_iso8601;
 
     // --- reject_filter_in_mutation_property ---
 

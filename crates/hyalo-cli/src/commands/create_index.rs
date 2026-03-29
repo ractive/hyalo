@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use hyalo_core::discovery;
-use hyalo_core::index::{ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
+use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
 use std::path::{Path, PathBuf};
 
 use crate::output::{CommandOutcome, Format, format_success};
@@ -60,7 +60,7 @@ pub fn create_index(
         .collect();
 
     // Build the scanned index
-    let build = ScannedIndex::build(&files, site_prefix)?;
+    let build = ScannedIndex::build(&files, site_prefix, &ScanOptions { scan_body: true })?;
 
     // Warn about skipped files
     for w in &build.warnings {

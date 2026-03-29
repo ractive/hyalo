@@ -7,68 +7,14 @@ use crate::output::{CommandOutcome, Format, format_output};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
-use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::types::PropertySummaryEntry;
 use serde::Serialize;
-
-/// Aggregate summary: unique property names with types and file counts.
-/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
-pub fn properties_summary(
-    dir: &Path,
-    file: Option<&str>,
-    globs: &[String],
-    format: Format,
-) -> Result<CommandOutcome> {
-    let file_vec: Vec<String> = file.map(|f| vec![f.to_owned()]).unwrap_or_default();
-    let files = collect_files(dir, &file_vec, globs, format)?;
-    let files = match files {
-        FilesOrOutcome::Files(f) => f,
-        FilesOrOutcome::Outcome(o) => return Ok(o),
-    };
-
-    // Aggregate: (name, type) -> count — same key and same scanner path as `summary`
-    // so both commands always agree.  Using scan_file_multi + FrontmatterCollector
-    // (rather than read_frontmatter) ensures identical parse-error semantics: the
-    // scanner treats a bare `---` with no closing delimiter as an error and skips
-    // it, while read_frontmatter silently returns empty props for that case.
-    let mut agg: std::collections::BTreeMap<(String, String), usize> =
-        std::collections::BTreeMap::new();
-
-    for (fp, rel) in &files {
-        let mut fm = FrontmatterCollector::new(false);
-        match scan_file_multi(fp, &mut [&mut fm]) {
-            Ok(()) => {}
-            Err(e) if frontmatter::is_parse_error(&e) => {
-                crate::warn::warn(format!("skipping {rel}: {e}"));
-                continue;
-            }
-            Err(e) => return Err(e),
-        }
-        let props = fm.into_props();
-        for (key, value) in props.iter().filter(|(k, _)| k.as_str() != "tags") {
-            let prop_type = frontmatter::infer_type(value).to_owned();
-            *agg.entry((key.clone(), prop_type)).or_insert(0) += 1;
-        }
-    }
-
-    let mut result: Vec<PropertySummaryEntry> = agg
-        .into_iter()
-        .map(|((name, prop_type), count)| PropertySummaryEntry {
-            name,
-            prop_type,
-            count,
-        })
-        .collect();
-    result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
-
-    Ok(CommandOutcome::Success(format_output(format, &result)))
-}
 
 /// Aggregate property summary using pre-scanned index data.
 ///
 /// `file_filter` is an optional list of vault-relative paths to include.
 /// When `None` (or an empty slice), all index entries are used.
-pub fn properties_summary_from_index(
+pub fn properties_summary(
     index: &dyn VaultIndex,
     file_filter: Option<&[String]>,
     format: Format,
@@ -215,12 +161,33 @@ pub fn properties_rename(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyalo_core::index::{ScanOptions, ScannedIndex};
     use std::fs;
 
     macro_rules! md {
         ($s:expr) => {
             $s.strip_prefix('\n').unwrap_or($s)
         };
+    }
+
+    /// Build a `ScannedIndex` from `dir` and call `properties_summary`.
+    /// Mirrors the old disk-scan helper signature used in pre-Phase-5 tests.
+    fn run_properties_summary(
+        dir: &std::path::Path,
+        file: Option<&str>,
+        format: Format,
+    ) -> anyhow::Result<CommandOutcome> {
+        let all = hyalo_core::discovery::discover_files(dir)?;
+        let file_pairs: Vec<(std::path::PathBuf, String)> = all
+            .into_iter()
+            .map(|p| {
+                let rel = hyalo_core::discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
+        let build = ScannedIndex::build(&file_pairs, None, &ScanOptions { scan_body: false })?;
+        let file_filter: Option<Vec<String>> = file.map(|f| vec![f.to_owned()]);
+        properties_summary(&build.index, file_filter.as_deref(), format)
     }
 
     fn setup_dir() -> tempfile::TempDir {
@@ -256,7 +223,7 @@ tags:
     fn properties_summary_aggregates() {
         let tmp = setup_dir();
         let (out, ok) =
-            unwrap_output(properties_summary(tmp.path(), None, &[], Format::Json).unwrap());
+            unwrap_output(run_properties_summary(tmp.path(), None, Format::Json).unwrap());
         assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         assert!(!parsed.is_empty());
@@ -384,7 +351,7 @@ Keywords: other
         fs::write(tmp.path().join("number.md"), "---\npriority: 3\n---\n").unwrap();
 
         let (out, ok) =
-            unwrap_output(properties_summary(tmp.path(), None, &[], Format::Json).unwrap());
+            unwrap_output(run_properties_summary(tmp.path(), None, Format::Json).unwrap());
         assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         let priority_entries: Vec<&serde_json::Value> =
@@ -420,7 +387,7 @@ title: Good Note
         )
         .unwrap();
 
-        let outcome = properties_summary(tmp.path(), None, &[], Format::Json).unwrap();
+        let outcome = run_properties_summary(tmp.path(), None, Format::Json).unwrap();
         let (out, ok) = unwrap_output(outcome);
         assert!(ok, "expected Success, got UserError: {out}");
 
@@ -446,7 +413,7 @@ title: Good Note
         // properties_summary must do the same (not silently count it as empty).
         fs::write(tmp.path().join("bare.md"), "---\n").unwrap();
 
-        let outcome = properties_summary(tmp.path(), None, &[], Format::Json).unwrap();
+        let outcome = run_properties_summary(tmp.path(), None, Format::Json).unwrap();
         let (out, ok) = unwrap_output(outcome);
         assert!(ok, "expected Success: {out}");
 
