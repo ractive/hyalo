@@ -233,6 +233,13 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         bail!("property filter must not be empty");
     }
 
+    if input.contains('!') || input.contains('~') {
+        bail!(
+            "invalid property filter {input:?}: contains operator-like characters; \
+             supported operators: =, !=, >=, <=, >, <, ~=, =~, ! (absence)"
+        );
+    }
+
     Ok(PropertyFilter::Scalar {
         name: input.to_owned(),
         op: FilterOp::Exists,
@@ -643,11 +650,42 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
     }
 }
 
+// Extract a `YYYY-MM-DD` prefix from an ISO 8601 date or datetime string.
+// Returns `Some(prefix)` when the first 10 characters look like a `YYYY-MM-DD`
+// date with basic bounds (month 01-12, day 01-31), `None` otherwise. Only ISO
+// format is recognised -- locale-dependent formats like `MM/DD/YYYY` are
+// intentionally ignored. This does not validate actual calendar dates (e.g.
+// it may accept `2023-02-31`).
+fn try_as_iso_date(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 {
+        return None;
+    }
+    if bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    // All other positions must be ASCII digits.
+    for &i in &[0, 1, 2, 3, 5, 6, 8, 9] {
+        if !bytes[i].is_ascii_digit() {
+            return None;
+        }
+    }
+    // Basic range check: month 01–12, day 01–31.
+    let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');
+    let day = (bytes[8] - b'0') * 10 + (bytes[9] - b'0');
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(&s[..10])
+}
+
 /// Compare two `serde_json::Value`s for sorting purposes.
 ///
 /// Ordering rules:
 /// - `Null` / missing sorts **last** (greater than any non-null value).
-/// - Strings are compared lexicographically (case-sensitive).
+/// - Strings: if both values look like ISO 8601 dates (`YYYY-MM-DD` prefix),
+///   compare by date prefix first; otherwise compare lexicographically
+///   (case-sensitive).
 /// - Numbers are compared as f64 (may lose precision for very large integers).
 /// - Booleans: `false` < `true`.
 /// - All other cases (including mixed primitive types like string vs number,
@@ -664,7 +702,13 @@ pub fn compare_property_values(
         (None | Some(Value::Null), None | Some(Value::Null)) => Ordering::Equal,
         (None | Some(Value::Null), _) => Ordering::Greater, // missing sorts last
         (_, None | Some(Value::Null)) => Ordering::Less,
-        (Some(Value::String(sa)), Some(Value::String(sb))) => sa.cmp(sb),
+        (Some(Value::String(sa)), Some(Value::String(sb))) => {
+            if let (Some(da), Some(db)) = (try_as_iso_date(sa), try_as_iso_date(sb)) {
+                da.cmp(db)
+            } else {
+                sa.cmp(sb)
+            }
+        }
         (Some(Value::Number(na)), Some(Value::Number(nb))) => {
             let fa = na.as_f64().unwrap_or(f64::NAN);
             let fb = nb.as_f64().unwrap_or(f64::NAN);
@@ -1445,5 +1489,103 @@ mod tests {
         let p = props(&[("status", Value::String("active".into()))]);
         let filters = [parse_property_filter("status=archived").unwrap()];
         assert!(!matches_frontmatter_filters(&p, &filters, &[]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 1: existence-check fallback rejects operator-like chars
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_existence_with_bang_errors() {
+        assert!(parse_property_filter("title!!!broken").is_err());
+    }
+
+    #[test]
+    fn parse_existence_with_tilde_errors() {
+        assert!(parse_property_filter("name~bad").is_err());
+    }
+
+    #[test]
+    fn parse_existence_valid_name_succeeds() {
+        let f = parse_property_filter("valid_name").unwrap();
+        assert_scalar(&f, "valid_name", FilterOp::Exists, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 4: try_as_iso_date
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn try_as_iso_date_valid() {
+        assert_eq!(try_as_iso_date("2023-01-18"), Some("2023-01-18"));
+        assert_eq!(try_as_iso_date("2026-02-04T08:00:00"), Some("2026-02-04"));
+    }
+
+    #[test]
+    fn try_as_iso_date_invalid_separator() {
+        assert_eq!(try_as_iso_date("2023/01/18"), None);
+        assert_eq!(try_as_iso_date("20230118"), None);
+    }
+
+    #[test]
+    fn try_as_iso_date_invalid_month_or_day() {
+        assert_eq!(try_as_iso_date("2023-00-01"), None);
+        assert_eq!(try_as_iso_date("2023-13-01"), None);
+        assert_eq!(try_as_iso_date("2023-01-00"), None);
+        assert_eq!(try_as_iso_date("2023-01-32"), None);
+    }
+
+    #[test]
+    fn try_as_iso_date_too_short() {
+        assert_eq!(try_as_iso_date("2023-01"), None);
+        assert_eq!(try_as_iso_date(""), None);
+    }
+
+    #[test]
+    fn try_as_iso_date_non_digit() {
+        assert_eq!(try_as_iso_date("YYYY-MM-DD"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 4: compare_property_values date-aware string sort
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compare_iso_dates_correct_order() {
+        use std::cmp::Ordering;
+        let a = Value::String("2023-01-18".into());
+        let b = Value::String("2026-02-04".into());
+        assert_eq!(compare_property_values(Some(&a), Some(&b)), Ordering::Less);
+        assert_eq!(
+            compare_property_values(Some(&b), Some(&a)),
+            Ordering::Greater
+        );
+        assert_eq!(compare_property_values(Some(&a), Some(&a)), Ordering::Equal);
+    }
+
+    #[test]
+    fn compare_iso_datetimes_correct_order() {
+        use std::cmp::Ordering;
+        let a = Value::String("2023-01-18T10:00:00".into());
+        let b = Value::String("2026-02-04T08:00:00".into());
+        assert_eq!(compare_property_values(Some(&a), Some(&b)), Ordering::Less);
+    }
+
+    #[test]
+    fn compare_non_date_strings_lexicographic() {
+        use std::cmp::Ordering;
+        let a = Value::String("alpha".into());
+        let b = Value::String("beta".into());
+        assert_eq!(compare_property_values(Some(&a), Some(&b)), Ordering::Less);
+    }
+
+    #[test]
+    fn compare_mixed_date_and_non_date_fallback_lexicographic() {
+        use std::cmp::Ordering;
+        // "2023-01-18" is a valid date; "not-a-date" is not.
+        // Falls back to lexicographic: "2" < "n" in ASCII.
+        let a = Value::String("2023-01-18".into());
+        let b = Value::String("not-a-date".into());
+        assert_eq!(compare_property_values(Some(&a), Some(&b)), Ordering::Less);
     }
 }

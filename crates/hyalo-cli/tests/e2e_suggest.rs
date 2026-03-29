@@ -146,3 +146,37 @@ fn suggest_property_when_filter_used() {
         "unexpected '--file' suggestion in stderr; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bug 7 — bare-word typos that resemble top-level flags should suggest them
+// ---------------------------------------------------------------------------
+
+#[test]
+fn suggest_version_for_typo() {
+    let output = hyalo().arg("versio").output().unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected failure for unknown subcommand 'versio'"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--version"),
+        "expected '--version' suggestion in stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn suggest_help_for_typo() {
+    let output = hyalo().arg("hep").output().unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected failure for unknown subcommand 'hep'"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--help"),
+        "expected '--help' suggestion in stderr; got: {stderr}"
+    );
+}
