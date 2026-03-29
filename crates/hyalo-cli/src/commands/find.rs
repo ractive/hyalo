@@ -143,24 +143,11 @@ pub fn find(
         None
     };
 
-    // Short-circuit: when sort order is by file path (the same order
-    // `discover_files` already returns) and backlinks are not requested
-    // (which would need a full-vault scan regardless), we can stop as soon
-    // as we have accumulated `limit` matching results instead of scanning
-    // every file and truncating afterwards.
-    //
-    // Disabled when `--file` args are given: explicit file lists preserve CLI
-    // order (not alphabetical), so stopping early could return the wrong N files.
-    let can_short_circuit = limit.is_some()
-        && files_arg.is_empty()
-        && matches!(sort.unwrap_or(&SortField::File), SortField::File)
-        && !fields.backlinks
-        && !sort_needs_backlinks
-        && !sort_needs_links
-        && !sort_needs_properties
-        && !sort_needs_title
-        // Reverse requires all results before we can reverse+limit correctly.
-        && !reverse;
+    // Short-circuit is disabled: when --limit is active we need to count all
+    // matching results to report the accurate total in the output envelope.
+    // Previously this optimisation stopped scanning after N matches, which
+    // made it impossible to know the true total without a second full pass.
+    let can_short_circuit = false;
 
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
@@ -398,9 +385,14 @@ pub fn find(
     }
 
     // --- Limit ---
-    if let Some(n) = limit {
+    let total_before_limit = results.len();
+    let was_truncated = if let Some(n) = limit {
+        let truncated = total_before_limit > n;
         results.truncate(n);
-    }
+        truncated
+    } else {
+        false
+    };
 
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
@@ -416,7 +408,15 @@ pub fn find(
         crate::warn::warn("No files matched.");
     }
 
-    let json_output = serde_json::Value::Array(json_array);
+    let json_output = if was_truncated {
+        // Wrap in an envelope so callers can see "showing N of M".
+        serde_json::json!({
+            "total": total_before_limit,
+            "results": json_array,
+        })
+    } else {
+        serde_json::Value::Array(json_array)
+    };
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
@@ -624,16 +624,9 @@ pub fn find_from_index(
         None
     };
 
-    let can_short_circuit = limit.is_some()
-        && files_arg.is_empty()
-        && matches!(sort.unwrap_or(&SortField::File), SortField::File)
-        && !fields.backlinks
-        && !sort_needs_backlinks
-        && !sort_needs_links
-        && !sort_needs_properties
-        && !sort_needs_title
-        // Reverse requires all results before we can reverse+limit correctly.
-        && !reverse;
+    // Short-circuit is disabled: when --limit is active we need to count all
+    // matching results to report the accurate total in the output envelope.
+    let can_short_circuit = false;
 
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
@@ -920,9 +913,14 @@ pub fn find_from_index(
     }
 
     // --- Limit ---
-    if let Some(n) = limit {
+    let total_before_limit = results.len();
+    let was_truncated = if let Some(n) = limit {
+        let truncated = total_before_limit > n;
         results.truncate(n);
-    }
+        truncated
+    } else {
+        false
+    };
 
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
@@ -934,7 +932,15 @@ pub fn find_from_index(
         crate::warn::warn("No files matched.");
     }
 
-    let json_output = serde_json::Value::Array(json_array);
+    let json_output = if was_truncated {
+        // Wrap in an envelope so callers can see "showing N of M".
+        serde_json::json!({
+            "total": total_before_limit,
+            "results": json_array,
+        })
+    } else {
+        serde_json::Value::Array(json_array)
+    };
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
@@ -1998,8 +2004,15 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
-        assert_eq!(arr.len(), 1);
+        // When limit truncates results, output is an envelope {total, results}.
+        assert!(parsed.is_object(), "expected envelope, got: {parsed}");
+        let results = parsed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        // total reflects the full vault size (3 files in unit test vault).
+        assert!(
+            parsed["total"].as_u64().unwrap() > 1,
+            "total should exceed the limit"
+        );
     }
 
     // --- find: sort ---

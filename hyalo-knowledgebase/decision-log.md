@@ -369,3 +369,75 @@ Supports `--file`, `--glob`, and vault-wide mode (unlike `links` which is single
 **Consequences:**
 - No output sanitization, escaping, or filtering added to hyalo
 - If hyalo ever adds a server mode (MCP server, HTTP API) serving vault content to remote/untrusted clients, this decision should be revisited — trust boundaries change in that scenario
+
+## DEC-036: Orphan vs Dead-End Terminology (2026-03-29)
+
+**Context:** During v0.6.0 dogfood tidy across 3 external repos, the `summary` command's orphan count (25 in vscode-docs) diverged from a `find --fields backlinks` query filtering for zero backlinks (56 files). Investigation revealed `summary` defines orphans as files with **no inbound AND no outbound links** (fully isolated), matching Obsidian Graph View and Foam. The backlinks-based query finds files with **no inbound links** (unreachable), matching the Wikipedia/SEO definition.
+
+Research across tools:
+- **Wikipedia/SEO** (older, broader): orphan = no inbound links; dead-end = no outbound links
+- **Obsidian Graph View / Foam / Logseq**: orphan = no links in either direction (isolated)
+
+**Decision:** Keep hyalo's orphan definition as-is (no inbound AND no outbound = fully isolated, consistent with Obsidian). Add a new **dead-end** concept: files with no outbound links, regardless of inbound links.
+
+**Why:** Both definitions are useful. Orphans (isolated files) are clearly disconnected. Dead-ends (no outbound links) flag navigation dead-ends where users arrive but have nowhere to go. Note: many dead-ends are not actionable — top-level files in root or well-known directories (e.g. `/iterations/`) are easily accessible by browsing and don't need outbound links.
+
+**Consequences:**
+- `summary` gains a `dead_ends` section alongside `orphans`
+- No change to existing orphan behavior
+- See [[iterations/iteration-67-summary-enhancements]]
+
+## DEC-037: Won't Fix — False-Positive Links from Square Brackets in Body Text (2026-03-29)
+
+**Context:** Dogfood on legalize-es (8,643 files) found 3 broken links that were false positives: markdown reference-style links like `[Opcion][1]` (where `[1]` is a ref label) and math expressions in square brackets like `[0,35 * kms.recorridos]`. This was flagged in v0.5.0 round 2 and again in v0.6.0.
+
+**Decision:** Won't fix.
+
+**Why:**
+
+1. **Negligible rate.** 3 false positives in 8,643 files (0.03%). The other two repos (3,520 and 339 files) had zero false positives of this type.
+
+2. **Reference-style links are real markdown syntax.** `[text][ref]` IS a valid markdown link — the issue is that hyalo doesn't resolve reference-link definitions (`[1]: http://...`). Adding a full reference-link resolver is significant parser work for near-zero practical impact.
+
+3. **Square brackets in prose are ambiguous.** Distinguishing `[math expression]` from `[link text]` in raw markdown is impossible without full rendering context. Any heuristic would be fragile.
+
+**Consequences:**
+- No changes to link parsing
+- Accept occasional false positives on repos with heavy use of reference-style links or mathematical notation
+- If this becomes a real problem for a specific repo, `--quiet` suppresses warnings
+
+## DEC-038: Won't Fix — Template/Liquid Syntax in Links (2026-03-29)
+
+**Context:** Dogfood on docs/content (Hugo, 3,520 files) flagged thousands of "broken" links that contain Liquid template syntax like `{% ifversion ghes %}...{% endif %}`. These links are dynamically expanded at Hugo build time and work correctly on the live site.
+
+**Decision:** Won't fix. Hyalo is a static analysis tool operating on raw markdown files — it cannot and should not evaluate template engines.
+
+**Why:**
+
+1. **Unbounded scope.** Hugo uses Go templates, Jekyll uses Liquid, Docusaurus uses JSX — supporting any template engine means supporting all of them.
+
+2. **Correct behavior.** Reporting these as broken is technically accurate: the raw link target does not resolve to a file. The user knows their build pipeline expands these.
+
+3. **Workaround exists.** Users can filter template-heavy files with `--glob '!**/template-dir/**'` or pipe through `--jq` to exclude links matching template patterns.
+
+**Consequences:**
+- No template-aware link resolution
+- Documentation/SKILL.md could note this as expected behavior for SSG repos
+
+## DEC-039: Won't Fix — `children` Frontmatter as Implicit Links (2026-03-29)
+
+**Context:** Hugo's docs/content repo uses a `children` frontmatter property (list of page paths) to define navigation hierarchy. Since hyalo only counts `[[wikilinks]]` and `[markdown](links)` in the body as links, 52% of files appeared as orphans despite being reachable via the `children` navigation tree.
+
+**Decision:** Won't fix. Frontmatter properties are data, not links.
+
+**Why:**
+
+1. **Convention-specific.** `children` is a Hugo convention. Other SSGs use `sidebar`, `nav`, `menu`, `weight`, or directory structure. There's no universal standard.
+
+2. **Semantic ambiguity.** A frontmatter list of paths could be references, related content, aliases, or data — hyalo can't infer intent from the key name alone.
+
+3. **Workaround exists.** Users can exclude known navigation-structured directories from orphan analysis, or use `--jq` to subtract files listed in `children` properties from the orphan set.
+
+**Consequences:**
+- Orphan counts will be inflated for SSG repos that use frontmatter-based navigation
+- This is expected and documented behavior, not a bug

@@ -678,13 +678,23 @@ fn find_sort_file_default() {
 // Limit
 // ---------------------------------------------------------------------------
 
+/// Helper: extract the results array from either a plain array or a `{total, results}` envelope.
+fn unwrap_results(json: &serde_json::Value) -> &Vec<serde_json::Value> {
+    if let Some(arr) = json.as_array() {
+        return arr;
+    }
+    json["results"]
+        .as_array()
+        .expect("expected either a JSON array or {total, results} envelope")
+}
+
 #[test]
 fn find_limit_2_returns_2_results() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--limit", "2"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 2, "expected exactly 2 results with --limit 2");
 }
 
@@ -694,15 +704,76 @@ fn find_limit_larger_than_results() {
     let (status, json, stderr) = find_json(&tmp, &["--limit", "100"]);
     assert!(status.success(), "stderr: {stderr}");
 
+    // Limit exceeds file count: plain array, no envelope.
     let arr = json.as_array().unwrap();
-    // All 4 files returned; limit is a ceiling not a floor
     assert_eq!(arr.len(), 4);
 }
 
-/// Short-circuit path: --limit with default sort (file) must return the same
-/// first N results as a full scan with explicit --sort file and truncation.
+/// When --limit truncates results, the JSON output is an envelope `{total, results}`.
 #[test]
-fn find_limit_short_circuit_matches_full_scan() {
+fn find_limit_truncated_json_envelope() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--limit", "2"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    // Must be an object, not a plain array.
+    assert!(json.is_object(), "expected envelope object, got: {json}");
+    assert_eq!(
+        json["total"].as_u64().unwrap(),
+        4,
+        "total should be 4 (all vault files)"
+    );
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "results should contain 2 entries");
+}
+
+/// When --limit equals or exceeds the match count, output is a plain array (no envelope).
+#[test]
+fn find_limit_no_truncation_plain_array() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--limit", "10"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert!(
+        json.is_array(),
+        "expected plain array when limit >= total, got: {json}"
+    );
+    assert_eq!(json.as_array().unwrap().len(), 4);
+}
+
+/// Text output when --limit truncates ends with "showing N of M matches".
+#[test]
+fn find_limit_truncated_text_shows_summary() {
+    let tmp = setup_vault();
+    let mut cmd = common::hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.args(["find", "--limit", "2"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("showing 2 of 4 matches"),
+        "expected 'showing 2 of 4 matches' in output, got:\n{stdout}"
+    );
+}
+
+/// --limit with --jq can drill into the envelope.
+#[test]
+fn find_limit_jq_total() {
+    let tmp = setup_vault();
+    let mut cmd = common::hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--limit", "2", "--jq", ".total"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert_eq!(stdout, "4", "expected .total == 4, got: {stdout}");
+}
+
+/// --limit with default sort (file) must return the same first N results as a full scan.
+#[test]
+fn find_limit_matches_full_scan_order() {
     let tmp = setup_vault();
 
     // Full scan, explicit file sort — reference result set.
@@ -710,15 +781,14 @@ fn find_limit_short_circuit_matches_full_scan() {
     assert!(status.success(), "full scan stderr: {stderr}");
     let full_arr = full_json.as_array().unwrap();
 
-    // Short-circuit path: limit=2, default sort (file).
+    // Limit=2, default sort (file) — should return an envelope.
     let (status, limited_json, stderr) = find_json(&tmp, &["--limit", "2"]);
     assert!(status.success(), "limited scan stderr: {stderr}");
-    let limited_arr = limited_json.as_array().unwrap();
+    let limited_arr = unwrap_results(&limited_json);
 
     assert_eq!(limited_arr.len(), 2);
 
-    // The first 2 files from the short-circuit path must match the first 2
-    // from the full sorted scan — same files, same order.
+    // The first 2 files must match the first 2 from the full sorted scan.
     let full_files: Vec<&str> = full_arr[..2]
         .iter()
         .map(|v| v["file"].as_str().unwrap())
@@ -729,12 +799,11 @@ fn find_limit_short_circuit_matches_full_scan() {
         .collect();
     assert_eq!(
         limited_files, full_files,
-        "short-circuit result order differs from full-scan order"
+        "limited result order differs from full-scan order"
     );
 }
 
-/// When --sort modified is used with --limit, short-circuit must NOT
-/// activate: all files must be scanned so the sort is correct.
+/// When --sort modified is used with --limit, all files must be scanned so the sort is correct.
 #[test]
 fn find_limit_with_sort_modified_returns_correct_results() {
     let tmp = setup_vault();
@@ -748,7 +817,7 @@ fn find_limit_with_sort_modified_returns_correct_results() {
     // files from the full sorted result, not the first 2 by file path.
     let (status, limited_json, stderr) = find_json(&tmp, &["--sort", "modified", "--limit", "2"]);
     assert!(status.success(), "limited stderr: {stderr}");
-    let limited_arr = limited_json.as_array().unwrap();
+    let limited_arr = unwrap_results(&limited_json);
 
     assert_eq!(limited_arr.len(), 2);
 
@@ -762,14 +831,13 @@ fn find_limit_with_sort_modified_returns_correct_results() {
         .collect();
     assert_eq!(
         actual_files, expected_files,
-        "--sort-by modified + --limit must sort first then truncate"
+        "--sort modified + --limit must sort first then truncate"
     );
 }
 
 /// With --file args in reverse alphabetical order and --limit 1, the result
 /// must be the alphabetically-first file (matching --sort file behaviour),
-/// not the first file in CLI arg order.  Short-circuit is disabled for
-/// explicit --file lists because they preserve CLI order, not sort order.
+/// not the first file in CLI arg order.
 #[test]
 fn find_limit_with_explicit_files_uses_sort_order() {
     let tmp = setup_vault();
@@ -781,7 +849,7 @@ fn find_limit_with_explicit_files_uses_sort_order() {
         &["--file", "gamma.md", "--file", "alpha.md", "--limit", "1"],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     assert_eq!(
         arr[0]["file"].as_str().unwrap(),
@@ -2992,10 +3060,11 @@ fn find_reverse_with_limit() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json.len(), 2, "expected exactly 2 results");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(results.len(), 2, "expected exactly 2 results");
     // Should be last 2 files alphabetically (reversed then limited)
-    let files: Vec<&str> = json.iter().filter_map(|v| v["file"].as_str()).collect();
+    let files: Vec<&str> = results.iter().filter_map(|v| v["file"].as_str()).collect();
     assert!(
         files[0] > files[1],
         "files should be in reverse order: {files:?}"
