@@ -333,7 +333,7 @@ pub fn find(
     apply_sort(&mut results, sort, link_graph.as_ref());
 
     if let Some(SortField::Property(key)) = sort
-        && results.len() > 1
+        && !results.is_empty()
         && results.iter().all(|r| {
             r.properties
                 .as_ref()
@@ -342,7 +342,7 @@ pub fn find(
         })
     {
         crate::warn::warn(format!(
-            "no files have property '{key}' — sort has no effect"
+            "no files have property '{key}' -- sort has no effect"
         ));
     }
 
@@ -835,7 +835,7 @@ pub fn find_from_index(
     apply_sort(&mut results, sort, link_graph_ref);
 
     if let Some(SortField::Property(key)) = sort
-        && results.len() > 1
+        && !results.is_empty()
         && results.iter().all(|r| {
             r.properties
                 .as_ref()
@@ -844,7 +844,7 @@ pub fn find_from_index(
         })
     {
         crate::warn::warn(format!(
-            "no files have property '{key}' — sort has no effect"
+            "no files have property '{key}' -- sort has no effect"
         ));
     }
 
