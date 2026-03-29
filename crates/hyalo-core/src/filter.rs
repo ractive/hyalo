@@ -651,9 +651,11 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
 }
 
 // Extract a `YYYY-MM-DD` prefix from an ISO 8601 date or datetime string.
-// Returns `Some(prefix)` when the first 10 characters form a valid date,
-// `None` otherwise.  Only ISO format is recognised — locale-dependent
-// formats like `MM/DD/YYYY` are intentionally ignored.
+// Returns `Some(prefix)` when the first 10 characters look like a `YYYY-MM-DD`
+// date with basic bounds (month 01-12, day 01-31), `None` otherwise. Only ISO
+// format is recognised -- locale-dependent formats like `MM/DD/YYYY` are
+// intentionally ignored. This does not validate actual calendar dates (e.g.
+// it may accept `2023-02-31`).
 fn try_as_iso_date(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
     if bytes.len() < 10 {
@@ -681,7 +683,9 @@ fn try_as_iso_date(s: &str) -> Option<&str> {
 ///
 /// Ordering rules:
 /// - `Null` / missing sorts **last** (greater than any non-null value).
-/// - Strings are compared lexicographically (case-sensitive).
+/// - Strings: if both values look like ISO 8601 dates (`YYYY-MM-DD` prefix),
+///   compare by date prefix first; otherwise compare lexicographically
+///   (case-sensitive).
 /// - Numbers are compared as f64 (may lose precision for very large integers).
 /// - Booleans: `false` < `true`.
 /// - All other cases (including mixed primitive types like string vs number,

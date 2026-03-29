@@ -2836,8 +2836,8 @@ tags: [foo]
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Error"),
-        "expected 'Error' in stderr; got: {stderr}"
+        stderr.contains("tag name must not be empty"),
+        "expected 'tag name must not be empty' in stderr; got: {stderr}"
     );
 }
 
