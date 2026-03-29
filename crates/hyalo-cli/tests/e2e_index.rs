@@ -128,11 +128,16 @@ fn run_find(tmp: &TempDir, extra_args: &[&str]) -> serde_json::Value {
     })
 }
 
-/// Extract and sort file paths from a find JSON array.
-fn sorted_files(json: &serde_json::Value) -> Vec<String> {
-    let mut files: Vec<String> = json
+/// Helper: extract the results array from a `{total, results}` envelope.
+fn unwrap_results(json: &serde_json::Value) -> &Vec<serde_json::Value> {
+    json["results"]
         .as_array()
-        .unwrap()
+        .expect("expected {total, results} envelope")
+}
+
+/// Extract and sort file paths from a find JSON envelope.
+fn sorted_files(json: &serde_json::Value) -> Vec<String> {
+    let mut files: Vec<String> = unwrap_results(json)
         .iter()
         .map(|v| v["file"].as_str().unwrap().to_owned())
         .collect();
@@ -275,11 +280,9 @@ fn find_with_index_preserves_properties() {
     let index_json = run_find(&tmp, &["--index", index_path.to_str().unwrap()]);
 
     // For each file returned by disk scan, check that index scan has matching properties.
-    for disk_entry in disk_json.as_array().unwrap() {
+    for disk_entry in unwrap_results(&disk_json) {
         let file = disk_entry["file"].as_str().unwrap();
-        let index_entry = index_json
-            .as_array()
-            .unwrap()
+        let index_entry = unwrap_results(&index_json)
             .iter()
             .find(|v| v["file"].as_str().unwrap() == file)
             .unwrap_or_else(|| panic!("file {file} missing from index scan"));
@@ -314,7 +317,7 @@ fn find_with_index_property_filter() {
     assert_eq!(files, vec!["alpha.md", "gamma.md"]);
 
     // Verify properties show status=draft for each result.
-    for entry in json.as_array().unwrap() {
+    for entry in unwrap_results(&json) {
         assert_eq!(
             entry["properties"]["status"].as_str().unwrap(),
             "draft",
@@ -368,7 +371,7 @@ fn find_with_index_content_search_no_match() {
         ],
     );
 
-    assert!(json.as_array().unwrap().is_empty());
+    assert!(unwrap_results(&json).is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +665,7 @@ fn incompatible_index_falls_back_to_disk_scan() {
     // Results should still contain all 4 vault files.
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json.as_array().unwrap().len(),
+        unwrap_results(&json).len(),
         4,
         "expected 4 files from disk fallback"
     );
@@ -746,9 +749,9 @@ fn set_with_index_updates_index_for_subsequent_find() {
     let files = sorted_files(&json);
     assert_eq!(files, vec!["alpha.md"]);
     assert_eq!(
-        json.as_array().unwrap()[0]["properties"]["reviewed"]
+        unwrap_results(&json)[0]["properties"]["reviewed"]
             .as_str()
-            .or_else(|| json.as_array().unwrap()[0]["properties"]["reviewed"]
+            .or_else(|| unwrap_results(&json)[0]["properties"]["reviewed"]
                 .as_bool()
                 .map(|_| "true")),
         Some("true"),
@@ -772,7 +775,7 @@ fn remove_with_index_updates_index_for_subsequent_find() {
             index_path.to_str().unwrap(),
         ],
     );
-    assert_eq!(before.as_array().unwrap().len(), 1);
+    assert_eq!(unwrap_results(&before).len(), 1);
 
     // Remove the status property via --index
     run_with_index(
@@ -850,7 +853,7 @@ fn task_toggle_with_index_updates_index() {
             index_path.to_str().unwrap(),
         ],
     );
-    let todo_tasks: Vec<&serde_json::Value> = before.as_array().unwrap()[0]["tasks"]
+    let todo_tasks: Vec<&serde_json::Value> = unwrap_results(&before)[0]["tasks"]
         .as_array()
         .unwrap()
         .iter()
@@ -888,7 +891,7 @@ fn task_toggle_with_index_updates_index() {
             index_path.to_str().unwrap(),
         ],
     );
-    let tasks = after.as_array().unwrap()[0]["tasks"].as_array().unwrap();
+    let tasks = unwrap_results(&after)[0]["tasks"].as_array().unwrap();
     let toggled = tasks
         .iter()
         .find(|t| t["line"].as_u64().unwrap() == task_line)
@@ -975,7 +978,7 @@ fn tags_rename_with_index_updates_index() {
         &["--tag", "cli", "--index", index_path.to_str().unwrap()],
     );
     assert!(
-        old.as_array().unwrap().is_empty(),
+        unwrap_results(&old).is_empty(),
         "old tag 'cli' should match nothing after rename"
     );
 }
@@ -1022,7 +1025,7 @@ fn properties_rename_with_index_updates_index() {
         ],
     );
     assert!(
-        old.as_array().unwrap().is_empty(),
+        unwrap_results(&old).is_empty(),
         "old property 'priority' should match nothing after rename"
     );
 }
@@ -1059,7 +1062,7 @@ fn chained_mutations_with_index_keep_index_consistent() {
             index_path.to_str().unwrap(),
         ],
     );
-    let entry = &json.as_array().unwrap()[0];
+    let entry = &unwrap_results(&json)[0];
     assert_eq!(entry["properties"]["status"], "archived");
     let tags: Vec<&str> = entry["tags"]
         .as_array()
@@ -1078,7 +1081,7 @@ fn chained_mutations_with_index_keep_index_consistent() {
 
     // Now do a fresh disk scan (no --index) and verify it matches
     let disk_json = run_find(&tmp, &["--file", "alpha.md"]);
-    let disk_entry = &disk_json.as_array().unwrap()[0];
+    let disk_entry = &unwrap_results(&disk_json)[0];
     assert_eq!(disk_entry["properties"]["status"], "archived");
     let disk_tags: Vec<&str> = disk_entry["tags"]
         .as_array()
@@ -1298,9 +1301,7 @@ Content
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let files: Vec<&str> = json
-        .as_array()
-        .unwrap()
+    let files: Vec<&str> = unwrap_results(&json)
         .iter()
         .map(|v| v["file"].as_str().unwrap())
         .collect();
@@ -1367,9 +1368,7 @@ Target content
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let files: Vec<&str> = json
-        .as_array()
-        .unwrap()
+    let files: Vec<&str> = unwrap_results(&json)
         .iter()
         .map(|v| v["file"].as_str().unwrap())
         .collect();

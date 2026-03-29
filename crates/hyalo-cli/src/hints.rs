@@ -203,9 +203,13 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
 }
 
 fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    let results = match data.as_array() {
-        Some(arr) => arr,
-        None => return vec![],
+    // find always returns a {total, results} envelope; fall back to bare array for compatibility.
+    let results = if let Some(arr) = data["results"].as_array() {
+        arr
+    } else if let Some(arr) = data.as_array() {
+        arr
+    } else {
+        return vec![];
     };
 
     if results.is_empty() {

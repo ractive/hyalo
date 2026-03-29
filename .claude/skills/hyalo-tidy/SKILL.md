@@ -71,7 +71,7 @@ git log --oneline --since="4 weeks ago" -- "*.rs" | head -30
 
 Extract non-completed iterations and their branches from the index:
 ```bash
-hyalo find --property type=iteration --index .hyalo-index --jq 'map(select(.properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})'
+hyalo find --property type=iteration --index .hyalo-index --jq '.results | map(select(.properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})'
 ```
 
 For each non-completed iteration that has a branch, check if that branch was merged:
@@ -113,7 +113,7 @@ All queries below use `--index .hyalo-index` — no additional disk scans needed
 
 ### Broken links
 ```bash
-hyalo find --fields links --index .hyalo-index --jq '[.[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]'
+hyalo find --fields links --index .hyalo-index --jq '[.results[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]'
 ```
 For each broken link, try to find the intended target:
 - Search for the filename in `done/` subdirectories (common after archiving)
@@ -125,7 +125,7 @@ exist at all).
 
 ### Orphan files
 ```bash
-hyalo find --fields backlinks --index .hyalo-index --jq 'map(select(.backlinks | length == 0)) | map(.file)'
+hyalo find --fields backlinks --index .hyalo-index --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
 ```
 Not all orphans are problems. Expect these to be legitimately orphaned:
 - Top-level files (SEED.md, project-pitch.md, decision-log.md)
@@ -137,19 +137,19 @@ Focus on **actionable orphans**: active/planned items that should be cross-refer
 ### Stale statuses
 ```bash
 # In-progress items — should any be completed?
-hyalo find --property status=in-progress --index .hyalo-index --jq 'map({file, date: .properties.date, branch: .properties.branch})'
+hyalo find --property status=in-progress --index .hyalo-index --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
 
 # Planned items where all tasks are done
-hyalo find --property status=planned --index .hyalo-index --jq 'map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
+hyalo find --property status=planned --index .hyalo-index --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
 
 # In-progress items sorted by date (oldest first — possibly stale)
-hyalo find --property status=in-progress --index .hyalo-index --jq 'map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
+hyalo find --property status=in-progress --index .hyalo-index --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
 ```
 Cross-reference with git merges from Phase 2. If the branch was merged, update status.
 
 ### Stale backlog items
 ```bash
-hyalo find --property status=planned --property type=backlog --index .hyalo-index --jq 'map({file, title: .properties.title})'
+hyalo find --property status=planned --property type=backlog --index .hyalo-index --jq '.results | map({file, title: .properties.title})'
 ```
 Compare each planned backlog item against merged iterations and recent git history.
 If the feature clearly shipped (in a different iteration or under a different name),

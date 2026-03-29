@@ -526,8 +526,9 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 .join(sep)
         }
         serde_json::Value::Object(map) => {
-            // Detect the --limit truncation envelope: {"total": N, "results": [...]}
-            // Format each result element normally, then append "showing N of M matches".
+            // Detect the find results envelope: {"total": N, "results": [...]}
+            // Format each result element normally; append "showing N of M matches"
+            // only when limit actually truncated results.
             if map.len() == 2
                 && map.contains_key("total")
                 && map.contains_key("results")
@@ -539,7 +540,9 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                     .iter()
                     .map(|v| format_value_as_text(v, cache))
                     .collect();
-                parts.push(format!("showing {shown} of {total} matches"));
+                if (shown as u64) < total {
+                    parts.push(format!("showing {shown} of {total} matches"));
+                }
                 // Preserve blank-line separation when results are FileObjects.
                 let is_file_objects = results
                     .first()
