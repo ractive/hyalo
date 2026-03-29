@@ -37,7 +37,9 @@ use hyalo_core::types::{
 /// - `file` / `glob`      — scope limiting
 /// - `fields`             — controls which fields appear in each `FileObject`
 /// - `sort`               — sort order; defaults to ascending by file path
+/// - `reverse`            — reverse the final sort order
 /// - `limit`              — maximum number of results
+/// - `title_filter`       — case-insensitive substring or `~=regex` match against title
 #[allow(clippy::too_many_arguments)]
 pub fn find(
     dir: &Path,
@@ -52,8 +54,10 @@ pub fn find(
     globs: &[String],
     fields: &Fields,
     sort: Option<&SortField>,
+    reverse: bool,
     limit: Option<usize>,
     broken_links: bool,
+    title_filter: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
     let files = collect_files(dir, files_arg, globs, format)?;
@@ -76,6 +80,14 @@ pub fn find(
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
+    // Compile --title filter once before the loop to avoid per-file regex
+    // compilation and repeated to_lowercase() allocation.
+    let title_matcher = match title_filter.map(TitleMatcher::parse) {
+        Some(Ok(m)) => Some(m),
+        Some(Err(outcome)) => return Ok(outcome),
+        None => None,
+    };
+    let has_title_filter = title_matcher.is_some();
     let body_needed = needs_body(
         fields,
         has_content_search,
@@ -85,7 +97,9 @@ pub fn find(
         || sort_needs_title
         // --broken-links forces fields.links on (applied later in effective_fields),
         // so we must also force body scanning here before effective_fields is built.
-        || broken_links;
+        || broken_links
+        // --title filter needs body scanning for H1 fallback when frontmatter title absent.
+        || has_title_filter;
 
     // Compile the regex once (if any), then clone cheaply per file.
     // Invalid regex is a user error (exit 1), not an internal error (exit 2).
@@ -144,7 +158,9 @@ pub fn find(
         && !sort_needs_backlinks
         && !sort_needs_links
         && !sort_needs_properties
-        && !sort_needs_title;
+        && !sort_needs_title
+        // Reverse requires all results before we can reverse+limit correctly.
+        && !reverse;
 
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
@@ -175,7 +191,8 @@ pub fn find(
                 || fields.links
                 || fields.title
                 || sort_needs_links
-                || has_section_filter)
+                || has_section_filter
+                || has_title_filter)
         {
             Some(SectionScanner::new())
         } else {
@@ -240,6 +257,14 @@ pub fn find(
         // Must happen before scope building and before build_file_object.
         let outline_sections: Option<Vec<OutlineSection>> =
             section_scanner.map(SectionScanner::into_sections);
+
+        // --- Apply title filter ---
+        if let Some(ref matcher) = title_matcher {
+            let title_val = extract_title(&props, outline_sections.as_deref());
+            if !matcher.matches(&title_val) {
+                continue;
+            }
+        }
 
         // --- Build section scope ranges (if section filter is active) ---
         let scope_ranges: Vec<SectionRange> = if has_section_filter {
@@ -366,6 +391,11 @@ pub fn find(
     // Note: no strip needed for BacklinksCount — build_file_object only populates
     // obj.backlinks when fields.backlinks is true. The sort closure queries
     // link_graph directly when obj.backlinks is None.
+
+    // --- Reverse ---
+    if reverse {
+        results.reverse();
+    }
 
     // --- Limit ---
     if let Some(n) = limit {
@@ -534,8 +564,10 @@ pub fn find_from_index(
     globs: &[String],
     fields: &Fields,
     sort: Option<&SortField>,
+    reverse: bool,
     limit: Option<usize>,
     broken_links: bool,
+    title_filter: Option<&str>,
     format: Format,
 ) -> Result<CommandOutcome> {
     if pattern.is_some_and(|p| p.trim().is_empty()) {
@@ -552,6 +584,13 @@ pub fn find_from_index(
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
+
+    // Compile --title filter once before the loop.
+    let title_matcher = match title_filter.map(TitleMatcher::parse) {
+        Some(Ok(m)) => Some(m),
+        Some(Err(outcome)) => return Ok(outcome),
+        None => None,
+    };
 
     // Compile regex once (if any)
     let compiled_regex = match regexp {
@@ -592,7 +631,9 @@ pub fn find_from_index(
         && !sort_needs_backlinks
         && !sort_needs_links
         && !sort_needs_properties
-        && !sort_needs_title;
+        && !sort_needs_title
+        // Reverse requires all results before we can reverse+limit correctly.
+        && !reverse;
 
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
@@ -624,6 +665,14 @@ pub fn find_from_index(
             tag_filters,
         ) {
             continue;
+        }
+
+        // --- Apply title filter (index path: sections are pre-indexed, no I/O needed) ---
+        if let Some(ref matcher) = title_matcher {
+            let title_val = extract_title(&entry.properties, Some(&entry.sections));
+            if !matcher.matches(&title_val) {
+                continue;
+            }
         }
 
         // --- Build section scopes from pre-indexed sections ---
@@ -865,6 +914,11 @@ pub fn find_from_index(
         }
     }
 
+    // --- Reverse ---
+    if reverse {
+        results.reverse();
+    }
+
     // --- Limit ---
     if let Some(n) = limit {
         results.truncate(n);
@@ -933,6 +987,49 @@ fn extract_title(
         }
     }
     serde_json::Value::Null
+}
+
+/// Pre-compiled title filter — avoids per-file regex compilation and repeated
+/// `to_lowercase()` allocation.
+enum TitleMatcher {
+    /// Case-insensitive substring: stores the lowered pattern.
+    Substring(String),
+    /// Pre-compiled case-insensitive regex.
+    Regex(regex::Regex),
+}
+
+impl TitleMatcher {
+    /// Parse a `--title` value into a compiled matcher.
+    ///
+    /// Returns `Err(CommandOutcome::UserError(...))` on invalid regex.
+    fn parse(pattern: &str) -> Result<Self, CommandOutcome> {
+        if let Some(regex_pat) = pattern.strip_prefix("~=") {
+            let effective = format!("(?i){regex_pat}");
+            match regex::RegexBuilder::new(&effective)
+                .size_limit(1 << 20)
+                .build()
+            {
+                Ok(re) => Ok(Self::Regex(re)),
+                Err(e) => Err(CommandOutcome::UserError(format!(
+                    "invalid --title regex: {regex_pat}\n{e}"
+                ))),
+            }
+        } else {
+            Ok(Self::Substring(pattern.to_lowercase()))
+        }
+    }
+
+    /// Returns true if the title value matches. `Null` titles never match.
+    fn matches(&self, title: &serde_json::Value) -> bool {
+        let title_str = match title {
+            serde_json::Value::String(s) => s.as_str(),
+            _ => return false,
+        };
+        match self {
+            Self::Substring(lowered) => title_str.to_lowercase().contains(lowered.as_str()),
+            Self::Regex(re) => re.is_match(title_str),
+        }
+    }
 }
 
 /// Return true if `tasks` satisfy `filter`.
@@ -1264,8 +1361,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1293,8 +1392,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1325,8 +1426,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1363,8 +1466,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1394,8 +1499,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1426,8 +1533,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1456,8 +1565,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1487,8 +1598,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1517,8 +1630,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1550,8 +1665,10 @@ Just some text here.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1612,8 +1729,10 @@ title: Empty Body
             &[],
             &fields,
             None,
+            false,
             None,
             false,
+            None,
             Format::Json,
         )
         .unwrap();
@@ -1648,8 +1767,10 @@ title: Empty Body
             &[],
             &fields,
             None,
+            false,
             None,
             false,
+            None,
             Format::Json,
         )
         .unwrap();
@@ -1685,8 +1806,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1716,8 +1839,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1748,8 +1873,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1783,8 +1910,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1822,8 +1951,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1858,8 +1989,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 Some(1),
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1889,8 +2022,10 @@ title: Empty Body
                 &[],
                 &fields,
                 Some(&SortField::Modified),
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1927,8 +2062,10 @@ title: Empty Body
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -1956,8 +2093,10 @@ title: Empty Body
             &[],
             &fields,
             None,
+            false,
             None,
             false,
+            None,
             Format::Json,
         )
         .unwrap();
@@ -2124,8 +2263,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2157,8 +2298,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2192,8 +2335,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2226,8 +2371,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2266,8 +2413,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2320,8 +2469,10 @@ Just intro, no tasks section.
             &[],
             &fields,
             None,
+            false,
             None,
             false,
+            None,
             Format::Json,
         )
         .unwrap();
@@ -2356,8 +2507,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2415,8 +2568,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2454,8 +2609,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2494,8 +2651,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2527,8 +2686,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),
@@ -2562,8 +2723,10 @@ Just intro, no tasks section.
                 &[],
                 &fields,
                 None,
+                false,
                 None,
                 false,
+                None,
                 Format::Json,
             )
             .unwrap(),

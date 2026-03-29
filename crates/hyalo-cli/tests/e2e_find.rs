@@ -2929,3 +2929,216 @@ title: A
         "expected 'limit must be at least 1' in stderr; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-2: --reverse flag for sort
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_sort_title_reverse() {
+    let tmp = setup_vault();
+    let out = hyalo()
+        .args([
+            "find",
+            "--sort",
+            "title",
+            "--reverse",
+            "--fields",
+            "title",
+            "--format",
+            "json",
+        ])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    // Titles should be in reverse alphabetical order
+    let titles: Vec<&str> = json.iter().filter_map(|v| v["title"].as_str()).collect();
+    let mut sorted = titles.clone();
+    sorted.sort();
+    sorted.reverse();
+    assert_eq!(
+        titles, sorted,
+        "titles should be reverse-sorted: {titles:?}"
+    );
+}
+
+#[test]
+fn find_reverse_with_limit() {
+    let tmp = setup_vault();
+    let out = hyalo()
+        .args([
+            "find",
+            "--sort",
+            "file",
+            "--reverse",
+            "--limit",
+            "2",
+            "--format",
+            "json",
+        ])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json.len(), 2, "expected exactly 2 results");
+    // Should be last 2 files alphabetically (reversed then limited)
+    let files: Vec<&str> = json.iter().filter_map(|v| v["file"].as_str()).collect();
+    assert!(
+        files[0] > files[1],
+        "files should be in reverse order: {files:?}"
+    );
+}
+
+#[test]
+fn find_reverse_alone() {
+    let tmp = setup_vault();
+    // --reverse without --sort should reverse the default file-path sort
+    let out = hyalo()
+        .args(["find", "--reverse", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let files: Vec<&str> = json.iter().filter_map(|v| v["file"].as_str()).collect();
+    let mut expected = files.clone();
+    expected.sort();
+    expected.reverse();
+    assert_eq!(
+        files, expected,
+        "files should be in reverse alphabetical order"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UX-1: --title filter flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_title_h1_match() {
+    let tmp = setup_vault();
+    // gamma.md has no frontmatter title but has H1 "# Gamma"
+    let out = hyalo()
+        .args(["find", "--title", "gamma", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json.len(),
+        1,
+        "expected exactly 1 match for 'gamma': {json:?}"
+    );
+    assert_eq!(json[0]["file"], "gamma.md");
+}
+
+#[test]
+fn find_title_case_insensitive() {
+    let tmp = setup_vault();
+    let out = hyalo()
+        .args(["find", "--title", "ALPHA", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json.len(),
+        1,
+        "expected exactly 1 match for 'ALPHA': {json:?}"
+    );
+    assert_eq!(json[0]["file"], "alpha.md");
+}
+
+#[test]
+fn find_title_regex_mode() {
+    let tmp = setup_vault();
+    let out = hyalo()
+        .args(["find", "--title", "~=^(Alpha|Beta)$", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json.len(),
+        2,
+        "expected exactly 2 matches for regex: {json:?}"
+    );
+}
+
+#[test]
+fn find_title_frontmatter_match() {
+    let tmp = setup_vault();
+    // alpha.md has frontmatter title "Alpha"
+    let out = hyalo()
+        .args(["find", "--title", "alph", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        json.iter().any(|v| v["file"] == "alpha.md"),
+        "should match frontmatter title 'Alpha' for pattern 'alph': {json:?}"
+    );
+}
+
+#[test]
+fn find_title_invalid_regex_returns_error() {
+    let tmp = setup_vault();
+    let out = hyalo()
+        .args(["find", "--title", "~=[unclosed", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "invalid regex should exit with error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid --title regex"),
+        "stderr should mention invalid regex: {stderr}"
+    );
+}

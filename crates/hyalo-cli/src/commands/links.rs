@@ -16,6 +16,7 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 ///
 /// `dry_run = true`  → preview only (default)
 /// `dry_run = false` → write fixes to disk (`--apply`)
+#[allow(clippy::too_many_arguments)]
 pub fn links_fix_from_index(
     index: &dyn VaultIndex,
     dir: &Path,
@@ -23,6 +24,7 @@ pub fn links_fix_from_index(
     globs: &[String],
     dry_run: bool,
     threshold: f64,
+    ignore_target: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     let report = detect_broken_links_from_index(dir, index, site_prefix);
@@ -46,6 +48,23 @@ pub fn links_fix_from_index(
             .collect()
     };
 
+    // Filter out ignored targets (--ignore-target substrings).
+    let (broken, ignored_count) = if ignore_target.is_empty() {
+        (broken, 0usize)
+    } else {
+        let before = broken.len();
+        let filtered: Vec<_> = broken
+            .into_iter()
+            .filter(|b| {
+                !ignore_target
+                    .iter()
+                    .any(|pat| b.target.contains(pat.as_str()))
+            })
+            .collect();
+        let ignored = before - filtered.len();
+        (filtered, ignored)
+    };
+
     let matcher = LinkMatcher::from_index(index, threshold);
     let fix_report = plan_fixes(&broken, &matcher);
 
@@ -57,6 +76,7 @@ pub fn links_fix_from_index(
         "broken": broken.len(),
         "fixable": fix_report.fixes.len(),
         "unfixable": fix_report.unfixable.len(),
+        "ignored": ignored_count,
         "fixes": fix_report.fixes,
         "unfixable_links": fix_report.unfixable,
         "applied": !dry_run,
@@ -80,6 +100,7 @@ pub fn links_fix(
     globs: &[String],
     dry_run: bool,
     threshold: f64,
+    ignore_target: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     let files = discovery::discover_files(dir)?;
@@ -101,6 +122,7 @@ pub fn links_fix(
         globs,
         dry_run,
         threshold,
+        ignore_target,
         format,
     )
 }

@@ -771,3 +771,135 @@ See [[sort-reverse]] for reverse sorting.
         "broken self-link should be counted as unfixable"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-3: --ignore-target
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_ignore_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    // page.md has two broken links: one normal missing link, one Hugo template target
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+# Page
+
+See [[missing-note]] and [template]({{ .RelPermalink }}).
+"),
+    );
+    write_md(
+        tmp.path(),
+        "other.md",
+        md!(r"
+---
+title: Other
+---
+# Other
+
+Some text.
+"),
+    );
+
+    let out = common::hyalo()
+        .args(["links", "fix", "--ignore-target", "{{", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // The Hugo template link should be ignored
+    assert_eq!(
+        json["ignored"]
+            .as_u64()
+            .expect("'ignored' should be a number"),
+        1,
+        "expected 1 ignored link: {json}"
+    );
+}
+
+#[test]
+fn links_fix_ignore_target_multiple() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+# Page
+
+See [[missing]] and [hugo]({{ .RelPermalink }}) and [hugo2]({{ .Site.BaseURL }}).
+"),
+    );
+
+    // Two distinct --ignore-target patterns: one matches RelPermalink, the other BaseURL
+    let out = common::hyalo()
+        .args([
+            "links",
+            "fix",
+            "--ignore-target",
+            "RelPermalink",
+            "--ignore-target",
+            "BaseURL",
+            "--format",
+            "json",
+        ])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json["ignored"].as_u64().unwrap_or(0),
+        2,
+        "expected 2 ignored links (one per pattern): {json}"
+    );
+}
+
+#[test]
+fn links_fix_ignore_target_absent() {
+    // With no matching ignore_target, count should be 0
+    let tmp = setup_vault();
+    let out = common::hyalo()
+        .args([
+            "links",
+            "fix",
+            "--ignore-target",
+            "this-will-not-match-anything",
+            "--format",
+            "json",
+        ])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json["ignored"]
+            .as_u64()
+            .expect("'ignored' should be a number"),
+        0,
+        "expected 0 ignored links when pattern doesn't match: {json}"
+    );
+}
