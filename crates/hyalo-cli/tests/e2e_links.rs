@@ -843,8 +843,18 @@ See [[missing]] and [hugo]({{ .RelPermalink }}) and [hugo2]({{ .Site.BaseURL }})
 "),
     );
 
+    // Two distinct --ignore-target patterns: one matches RelPermalink, the other BaseURL
     let out = common::hyalo()
-        .args(["links", "fix", "--ignore-target", "{{", "--format", "json"])
+        .args([
+            "links",
+            "fix",
+            "--ignore-target",
+            "RelPermalink",
+            "--ignore-target",
+            "BaseURL",
+            "--format",
+            "json",
+        ])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -855,9 +865,10 @@ See [[missing]] and [hugo]({{ .RelPermalink }}) and [hugo2]({{ .Site.BaseURL }})
         String::from_utf8_lossy(&out.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(
-        json["ignored"].as_u64().unwrap_or(0) >= 1,
-        "expected at least 1 ignored link: {json}"
+    assert_eq!(
+        json["ignored"].as_u64().unwrap_or(0),
+        2,
+        "expected 2 ignored links (one per pattern): {json}"
     );
 }
 

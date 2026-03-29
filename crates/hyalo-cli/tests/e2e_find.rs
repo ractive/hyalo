@@ -2952,8 +2952,13 @@ fn find_sort_title_reverse() {
         .arg(tmp.path())
         .output()
         .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
-    // Titles should be in reverse alphabetical order (null titles last when reversed)
+    // Titles should be in reverse alphabetical order
     let titles: Vec<&str> = json.iter().filter_map(|v| v["title"].as_str()).collect();
     let mut sorted = titles.clone();
     sorted.sort();
@@ -3115,5 +3120,25 @@ fn find_title_frontmatter_match() {
     assert!(
         json.iter().any(|v| v["file"] == "alpha.md"),
         "should match frontmatter title 'Alpha' for pattern 'alph': {json:?}"
+    );
+}
+
+#[test]
+fn find_title_invalid_regex_returns_error() {
+    let tmp = setup_vault();
+    let out = hyalo()
+        .args(["find", "--title", "~=[unclosed", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "invalid regex should exit with error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid --title regex"),
+        "stderr should mention invalid regex: {stderr}"
     );
 }

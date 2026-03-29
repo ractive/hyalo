@@ -80,7 +80,14 @@ pub fn find(
     let has_content_search = pattern.is_some() || regexp.is_some();
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
-    let has_title_filter = title_filter.is_some();
+    // Compile --title filter once before the loop to avoid per-file regex
+    // compilation and repeated to_lowercase() allocation.
+    let title_matcher = match title_filter.map(TitleMatcher::parse) {
+        Some(Ok(m)) => Some(m),
+        Some(Err(outcome)) => return Ok(outcome),
+        None => None,
+    };
+    let has_title_filter = title_matcher.is_some();
     let body_needed = needs_body(
         fields,
         has_content_search,
@@ -252,9 +259,9 @@ pub fn find(
             section_scanner.map(SectionScanner::into_sections);
 
         // --- Apply title filter ---
-        if let Some(title_pat) = title_filter {
+        if let Some(ref matcher) = title_matcher {
             let title_val = extract_title(&props, outline_sections.as_deref());
-            if !matches_title(&title_val, title_pat) {
+            if !matcher.matches(&title_val) {
                 continue;
             }
         }
@@ -578,6 +585,13 @@ pub fn find_from_index(
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
 
+    // Compile --title filter once before the loop.
+    let title_matcher = match title_filter.map(TitleMatcher::parse) {
+        Some(Ok(m)) => Some(m),
+        Some(Err(outcome)) => return Ok(outcome),
+        None => None,
+    };
+
     // Compile regex once (if any)
     let compiled_regex = match regexp {
         Some(re) => {
@@ -654,9 +668,9 @@ pub fn find_from_index(
         }
 
         // --- Apply title filter (index path: sections are pre-indexed, no I/O needed) ---
-        if let Some(title_pat) = title_filter {
+        if let Some(ref matcher) = title_matcher {
             let title_val = extract_title(&entry.properties, Some(&entry.sections));
-            if !matches_title(&title_val, title_pat) {
+            if !matcher.matches(&title_val) {
                 continue;
             }
         }
@@ -975,23 +989,46 @@ fn extract_title(
     serde_json::Value::Null
 }
 
-/// Check if a title value matches the given pattern.
-///
-/// - `~=REGEX` prefix: case-insensitive regex match
-/// - Otherwise: case-insensitive substring match
-/// - `Null` titles never match any pattern
-fn matches_title(title: &serde_json::Value, pattern: &str) -> bool {
-    let title_str = match title {
-        serde_json::Value::String(s) => s.as_str(),
-        _ => return false,
-    };
-    if let Some(regex_pat) = pattern.strip_prefix("~=") {
-        let effective = format!("(?i){regex_pat}");
-        regex::Regex::new(&effective)
-            .map(|re| re.is_match(title_str))
-            .unwrap_or(false)
-    } else {
-        title_str.to_lowercase().contains(&pattern.to_lowercase())
+/// Pre-compiled title filter — avoids per-file regex compilation and repeated
+/// `to_lowercase()` allocation.
+enum TitleMatcher {
+    /// Case-insensitive substring: stores the lowered pattern.
+    Substring(String),
+    /// Pre-compiled case-insensitive regex.
+    Regex(regex::Regex),
+}
+
+impl TitleMatcher {
+    /// Parse a `--title` value into a compiled matcher.
+    ///
+    /// Returns `Err(CommandOutcome::UserError(...))` on invalid regex.
+    fn parse(pattern: &str) -> Result<Self, CommandOutcome> {
+        if let Some(regex_pat) = pattern.strip_prefix("~=") {
+            let effective = format!("(?i){regex_pat}");
+            match regex::RegexBuilder::new(&effective)
+                .size_limit(1 << 20)
+                .build()
+            {
+                Ok(re) => Ok(Self::Regex(re)),
+                Err(e) => Err(CommandOutcome::UserError(format!(
+                    "invalid --title regex: {regex_pat}\n{e}"
+                ))),
+            }
+        } else {
+            Ok(Self::Substring(pattern.to_lowercase()))
+        }
+    }
+
+    /// Returns true if the title value matches. `Null` titles never match.
+    fn matches(&self, title: &serde_json::Value) -> bool {
+        let title_str = match title {
+            serde_json::Value::String(s) => s.as_str(),
+            _ => return false,
+        };
+        match self {
+            Self::Substring(lowered) => title_str.to_lowercase().contains(lowered.as_str()),
+            Self::Regex(re) => re.is_match(title_str),
+        }
     }
 }
 
