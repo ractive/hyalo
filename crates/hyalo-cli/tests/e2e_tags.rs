@@ -3,6 +3,13 @@ mod common;
 use common::{hyalo, md, write_md, write_tagged};
 use tempfile::TempDir;
 
+/// Helper: extract the results array from a `{total, results}` envelope.
+fn unwrap_results(json: &serde_json::Value) -> &Vec<serde_json::Value> {
+    json["results"]
+        .as_array()
+        .expect("expected {total, results} envelope")
+}
+
 // ---------------------------------------------------------------------------
 // `hyalo tags summary` — aggregate tag summary
 // ---------------------------------------------------------------------------
@@ -192,7 +199,8 @@ fn find_tag_exact_match() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json = unwrap_results(&json);
     assert_eq!(json.len(), 1);
     assert!(json[0]["file"].as_str().unwrap().contains("a.md"));
 }
@@ -212,7 +220,8 @@ fn find_tag_nested_match() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json = unwrap_results(&json);
     assert_eq!(json.len(), 3);
     let paths: Vec<&str> = json.iter().map(|e| e["file"].as_str().unwrap()).collect();
     assert!(paths.iter().any(|f| f.contains("a.md")));
@@ -233,7 +242,8 @@ fn find_tag_no_match_returns_empty_array() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json = unwrap_results(&json);
     assert!(json.is_empty());
 }
 
@@ -251,7 +261,8 @@ fn find_tag_with_glob() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json = unwrap_results(&json);
     assert_eq!(json.len(), 1);
     let paths: Vec<&str> = json.iter().map(|e| e["file"].as_str().unwrap()).collect();
     assert!(paths.iter().any(|f| f.contains("sub/a.md")));
@@ -270,7 +281,8 @@ fn find_tag_case_insensitive() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json = unwrap_results(&json);
     assert_eq!(json.len(), 1);
 }
 
@@ -528,7 +540,8 @@ fn find_tag_empty_tags_list() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let json = unwrap_results(&json);
     assert!(json.is_empty());
 }
 

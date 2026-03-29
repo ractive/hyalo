@@ -117,7 +117,7 @@ fn find_all_files_returns_sorted_array() {
     let (status, json, stderr) = find_json(&tmp, &[]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 4, "expected 4 files, got: {arr:?}");
 
     // Verify sorted by file path
@@ -136,7 +136,7 @@ fn find_all_files_have_required_fields() {
     let (status, json, stderr) = find_json(&tmp, &[]);
     assert!(status.success(), "stderr: {stderr}");
 
-    for entry in json.as_array().unwrap() {
+    for entry in unwrap_results(&json) {
         assert!(entry["file"].is_string(), "missing file field in {entry}");
         let modified = entry["modified"]
             .as_str()
@@ -157,9 +157,9 @@ fn find_single_file_returns_array_not_object() {
     let (status, json, stderr) = find_json(&tmp, &["--file", "alpha.md"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    // Must be an array, not a bare object
-    assert!(json.is_array(), "expected array, got: {json}");
-    let arr = json.as_array().unwrap();
+    // Must be an envelope {total, results}, not a bare array
+    assert!(json.is_object(), "expected envelope, got: {json}");
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -174,7 +174,7 @@ fn find_glob_sub_only() {
     let (status, json, stderr) = find_json(&tmp, &["--glob", "sub/*.md"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["file"], "sub/nested.md");
 }
@@ -205,7 +205,7 @@ fn find_property_eq_status_planned() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "status=planned"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // alpha (planned) + nested (planned) = 2
     assert_eq!(
         arr.len(),
@@ -226,7 +226,7 @@ fn find_property_neq_status_completed() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "status!=completed"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // gamma has no status → filter returns false for !=; alpha+nested have status!=completed → 2 files
     assert_eq!(arr.len(), 2, "expected 2 files (alpha, nested): {arr:?}");
     let files: Vec<&str> = arr
@@ -243,7 +243,7 @@ fn find_property_existence_status() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "status"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // alpha, beta, nested have status; gamma does not
     assert_eq!(arr.len(), 3, "expected 3 files with status: {arr:?}");
     let files: Vec<&str> = arr
@@ -261,7 +261,7 @@ fn find_property_gte_priority() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "priority>=3"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Only alpha has priority: 3
     assert_eq!(arr.len(), 1, "expected 1 file with priority>=3: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
@@ -276,7 +276,7 @@ fn find_property_and_semantics() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Only alpha satisfies both: status=planned AND priority>=3
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
@@ -292,7 +292,7 @@ fn find_tag_rust_matches_three_files() {
     let (status, json, stderr) = find_json(&tmp, &["--tag", "rust"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // alpha, beta, nested all have rust tag
     assert_eq!(arr.len(), 3, "expected 3 files with rust tag: {arr:?}");
 }
@@ -303,7 +303,7 @@ fn find_tag_cli_matches_only_alpha() {
     let (status, json, stderr) = find_json(&tmp, &["--tag", "cli"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file with cli tag: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -315,7 +315,7 @@ fn find_tag_project_matches_nested_tag() {
     let (status, json, stderr) = find_json(&tmp, &["--tag", "project"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(
         arr.len(),
         1,
@@ -331,7 +331,7 @@ fn find_tag_and_semantics() {
     let (status, json, stderr) = find_json(&tmp, &["--tag", "rust", "--tag", "cli"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file with rust+cli tags: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -346,7 +346,7 @@ fn find_pattern_rust_programming_matches_beta() {
     let (status, json, stderr) = find_json(&tmp, &["Rust programming"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "beta.md");
 }
@@ -358,7 +358,7 @@ fn find_pattern_write_matches_alpha() {
     let (status, json, stderr) = find_json(&tmp, &["Write"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -369,7 +369,7 @@ fn find_pattern_no_match_returns_empty_array() {
     let (status, json, stderr) = find_json(&tmp, &["nonexistent_phrase_xyz"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert!(arr.is_empty(), "expected empty array: {arr:?}");
 }
 
@@ -379,7 +379,7 @@ fn find_pattern_includes_matches_field() {
     let (status, json, stderr) = find_json(&tmp, &["Rust programming"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     assert!(
         arr[0]["matches"].is_array(),
@@ -393,7 +393,7 @@ fn find_no_pattern_no_matches_field() {
     let (status, json, stderr) = find_json(&tmp, &[]);
     assert!(status.success(), "stderr: {stderr}");
 
-    for entry in json.as_array().unwrap() {
+    for entry in unwrap_results(&json) {
         assert!(
             entry["matches"].is_null(),
             "matches field should be absent without pattern, got: {}",
@@ -412,7 +412,7 @@ fn find_task_todo_matches_alpha() {
     let (status, json, stderr) = find_json(&tmp, &["--task", "todo"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Only alpha has an open task
     assert_eq!(arr.len(), 1, "expected 1 file with todo task: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
@@ -424,7 +424,7 @@ fn find_task_done_matches_alpha() {
     let (status, json, stderr) = find_json(&tmp, &["--task", "done"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Only alpha has a completed task
     assert_eq!(arr.len(), 1, "expected 1 file with done task: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
@@ -436,7 +436,7 @@ fn find_task_any_matches_only_files_with_tasks() {
     let (status, json, stderr) = find_json(&tmp, &["--task", "any"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Only alpha has tasks
     assert_eq!(arr.len(), 1, "expected 1 file with any tasks: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
@@ -454,7 +454,7 @@ fn find_tag_and_property_combined() {
         find_json(&tmp, &["--tag", "rust", "--property", "status=planned"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
     let files: Vec<&str> = arr
         .iter()
@@ -471,7 +471,7 @@ fn find_pattern_and_tag_combined() {
     let (status, json, stderr) = find_json(&tmp, &["Write", "--tag", "rust"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -500,7 +500,7 @@ fn find_all_four_filters_combined() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(
         arr.len(),
         1,
@@ -519,7 +519,7 @@ fn find_fields_properties_and_tags_only() {
     let (status, json, stderr) = find_json(&tmp, &["--fields", "properties,tags"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    for entry in json.as_array().unwrap() {
+    for entry in unwrap_results(&json) {
         assert!(
             entry["properties"].is_object(),
             "properties should be present"
@@ -538,7 +538,7 @@ fn find_fields_tasks_only() {
     let (status, json, stderr) = find_json(&tmp, &["--fields", "tasks"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    for entry in json.as_array().unwrap() {
+    for entry in unwrap_results(&json) {
         // tasks field present (may be null for files without tasks, but the key exists)
         assert!(entry["properties"].is_null(), "properties should be absent");
         assert!(entry["tags"].is_null(), "tags should be absent");
@@ -547,7 +547,7 @@ fn find_fields_tasks_only() {
     }
 
     // alpha specifically should have tasks populated
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let alpha = arr
         .iter()
         .find(|e| e["file"].as_str().expect("field 'file' should be a string") == "alpha.md")
@@ -565,7 +565,7 @@ fn find_fields_backlinks_shows_incoming_links() {
     let (status, json, stderr) = find_json(&tmp, &["--fields", "backlinks", "--file", "beta.md"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let beta = &arr[0];
     let backlinks = beta["backlinks"]
@@ -582,7 +582,7 @@ fn find_fields_backlinks_not_included_by_default() {
     let (status, json, stderr) = find_json(&tmp, &[]);
     assert!(status.success(), "stderr: {stderr}");
 
-    for entry in json.as_array().unwrap() {
+    for entry in unwrap_results(&json) {
         assert!(
             !entry.as_object().unwrap().contains_key("backlinks"),
             "backlinks key should be absent by default, not just null"
@@ -597,7 +597,7 @@ fn find_fields_all_includes_every_category() {
     let (status, json, stderr) = find_json(&tmp, &["--fields", "all", "--file", "alpha.md"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let entry = &arr[0];
 
@@ -642,7 +642,7 @@ fn find_sort_modified() {
     let (status, json, stderr) = find_json(&tmp, &["--sort", "modified"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 4);
 
     let times: Vec<&str> = arr
@@ -664,7 +664,7 @@ fn find_sort_file_default() {
     let (status, json, stderr) = find_json(&tmp, &["--sort", "file"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr
         .iter()
         .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
@@ -678,13 +678,20 @@ fn find_sort_file_default() {
 // Limit
 // ---------------------------------------------------------------------------
 
+/// Helper: extract the results array from a `{total, results}` envelope.
+fn unwrap_results(json: &serde_json::Value) -> &Vec<serde_json::Value> {
+    json["results"]
+        .as_array()
+        .expect("expected {total, results} envelope")
+}
+
 #[test]
 fn find_limit_2_returns_2_results() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--limit", "2"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 2, "expected exactly 2 results with --limit 2");
 }
 
@@ -694,31 +701,98 @@ fn find_limit_larger_than_results() {
     let (status, json, stderr) = find_json(&tmp, &["--limit", "100"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
-    // All 4 files returned; limit is a ceiling not a floor
+    // Limit exceeds file count: still returns envelope with total == results.len().
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 4);
+    assert_eq!(json["total"].as_u64().unwrap(), 4);
 }
 
-/// Short-circuit path: --limit with default sort (file) must return the same
-/// first N results as a full scan with explicit --sort file and truncation.
+/// When --limit truncates results, the JSON output is an envelope `{total, results}`.
 #[test]
-fn find_limit_short_circuit_matches_full_scan() {
+fn find_limit_truncated_json_envelope() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--limit", "2"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    // Must be an object, not a plain array.
+    assert!(json.is_object(), "expected envelope object, got: {json}");
+    assert_eq!(
+        json["total"].as_u64().unwrap(),
+        4,
+        "total should be 4 (all vault files)"
+    );
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "results should contain 2 entries");
+}
+
+/// When --limit equals or exceeds the match count, output is an envelope where total == results.len().
+#[test]
+fn find_limit_no_truncation_returns_envelope() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_json(&tmp, &["--limit", "10"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert!(
+        json.is_object(),
+        "expected envelope when limit >= total, got: {json}"
+    );
+    let results = unwrap_results(&json);
+    assert_eq!(results.len(), 4);
+    assert_eq!(
+        json["total"].as_u64().unwrap(),
+        results.len() as u64,
+        "total should equal results.len() when limit is not truncating"
+    );
+}
+
+/// Text output when --limit truncates ends with "showing N of M matches".
+#[test]
+fn find_limit_truncated_text_shows_summary() {
+    let tmp = setup_vault();
+    let mut cmd = common::hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.args(["find", "--limit", "2"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("showing 2 of 4 matches"),
+        "expected 'showing 2 of 4 matches' in output, got:\n{stdout}"
+    );
+}
+
+/// --limit with --jq can drill into the envelope.
+#[test]
+fn find_limit_jq_total() {
+    let tmp = setup_vault();
+    let mut cmd = common::hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--limit", "2", "--jq", ".total"]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert_eq!(stdout, "4", "expected .total == 4, got: {stdout}");
+}
+
+/// --limit with default sort (file) must return the same first N results as a full scan.
+#[test]
+fn find_limit_matches_full_scan_order() {
     let tmp = setup_vault();
 
     // Full scan, explicit file sort — reference result set.
     let (status, full_json, stderr) = find_json(&tmp, &["--sort", "file"]);
     assert!(status.success(), "full scan stderr: {stderr}");
-    let full_arr = full_json.as_array().unwrap();
+    let full_arr = unwrap_results(&full_json);
 
-    // Short-circuit path: limit=2, default sort (file).
+    // Limit=2, default sort (file) — should return an envelope.
     let (status, limited_json, stderr) = find_json(&tmp, &["--limit", "2"]);
     assert!(status.success(), "limited scan stderr: {stderr}");
-    let limited_arr = limited_json.as_array().unwrap();
+    let limited_arr = unwrap_results(&limited_json);
 
     assert_eq!(limited_arr.len(), 2);
 
-    // The first 2 files from the short-circuit path must match the first 2
-    // from the full sorted scan — same files, same order.
+    // The first 2 files must match the first 2 from the full sorted scan.
     let full_files: Vec<&str> = full_arr[..2]
         .iter()
         .map(|v| v["file"].as_str().unwrap())
@@ -729,12 +803,11 @@ fn find_limit_short_circuit_matches_full_scan() {
         .collect();
     assert_eq!(
         limited_files, full_files,
-        "short-circuit result order differs from full-scan order"
+        "limited result order differs from full-scan order"
     );
 }
 
-/// When --sort modified is used with --limit, short-circuit must NOT
-/// activate: all files must be scanned so the sort is correct.
+/// When --sort modified is used with --limit, all files must be scanned so the sort is correct.
 #[test]
 fn find_limit_with_sort_modified_returns_correct_results() {
     let tmp = setup_vault();
@@ -742,13 +815,13 @@ fn find_limit_with_sort_modified_returns_correct_results() {
     // Full scan sorted by modified — reference.
     let (status, full_json, stderr) = find_json(&tmp, &["--sort", "modified"]);
     assert!(status.success(), "full scan stderr: {stderr}");
-    let full_arr = full_json.as_array().unwrap();
+    let full_arr = unwrap_results(&full_json);
 
     // Limit=2 with sort modified must return the 2 most-recently-modified
     // files from the full sorted result, not the first 2 by file path.
     let (status, limited_json, stderr) = find_json(&tmp, &["--sort", "modified", "--limit", "2"]);
     assert!(status.success(), "limited stderr: {stderr}");
-    let limited_arr = limited_json.as_array().unwrap();
+    let limited_arr = unwrap_results(&limited_json);
 
     assert_eq!(limited_arr.len(), 2);
 
@@ -762,14 +835,13 @@ fn find_limit_with_sort_modified_returns_correct_results() {
         .collect();
     assert_eq!(
         actual_files, expected_files,
-        "--sort-by modified + --limit must sort first then truncate"
+        "--sort modified + --limit must sort first then truncate"
     );
 }
 
 /// With --file args in reverse alphabetical order and --limit 1, the result
 /// must be the alphabetically-first file (matching --sort file behaviour),
-/// not the first file in CLI arg order.  Short-circuit is disabled for
-/// explicit --file lists because they preserve CLI order, not sort order.
+/// not the first file in CLI arg order.
 #[test]
 fn find_limit_with_explicit_files_uses_sort_order() {
     let tmp = setup_vault();
@@ -781,12 +853,99 @@ fn find_limit_with_explicit_files_uses_sort_order() {
         &["--file", "gamma.md", "--file", "alpha.md", "--limit", "1"],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     assert_eq!(
         arr[0]["file"].as_str().unwrap(),
         "alpha.md",
         "expected alphabetically-first file; --file order must not affect sort+limit result"
+    );
+}
+
+/// --sort file --limit N triggers the early-exit memory optimisation.
+/// The results must be identical to a full scan sorted by file path and
+/// truncated to N, proving that the pre-sorted-iteration shortcut is correct.
+#[test]
+fn find_sort_file_limit_deterministic() {
+    let tmp = setup_vault();
+
+    // Full scan with explicit file sort — reference result set.
+    let (status, full_json, stderr) = find_json(&tmp, &["--sort", "file"]);
+    assert!(status.success(), "full scan stderr: {stderr}");
+    let full_arr = unwrap_results(&full_json);
+
+    // --sort file --limit 2 should return the first 2 from full_arr,
+    // exercising the early-exit path (pre-sorted files, capped collection).
+    let (status, limited_json, stderr) = find_json(&tmp, &["--sort", "file", "--limit", "2"]);
+    assert!(status.success(), "limited scan stderr: {stderr}");
+
+    // Envelope must report the total before truncation.
+    let total = limited_json["total"].as_u64().unwrap();
+    assert_eq!(
+        total,
+        full_arr.len() as u64,
+        "total in envelope must equal full match count"
+    );
+
+    let limited_arr = unwrap_results(&limited_json);
+    assert_eq!(limited_arr.len(), 2);
+
+    let expected_files: Vec<&str> = full_arr[..2]
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    let actual_files: Vec<&str> = limited_arr
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actual_files, expected_files,
+        "--sort file --limit must return the first N files in alphabetical order"
+    );
+}
+
+/// --sort file --limit with property filter: the total must reflect only
+/// files that pass the filter, not all vault files.
+#[test]
+fn find_sort_file_limit_with_filter_reports_accurate_total() {
+    let tmp = setup_vault();
+
+    // Full filtered scan — only status=planned files.
+    let (status, full_json, stderr) =
+        find_json(&tmp, &["--property", "status=planned", "--sort", "file"]);
+    assert!(status.success(), "full scan stderr: {stderr}");
+    let full_arr = unwrap_results(&full_json);
+    assert!(
+        full_arr.len() >= 2,
+        "test fixture must have ≥2 planned files"
+    );
+
+    // Limited to 1 result.
+    let (status, limited_json, stderr) = find_json(
+        &tmp,
+        &[
+            "--property",
+            "status=planned",
+            "--sort",
+            "file",
+            "--limit",
+            "1",
+        ],
+    );
+    assert!(status.success(), "limited stderr: {stderr}");
+
+    let total = limited_json["total"].as_u64().unwrap();
+    assert_eq!(
+        total,
+        full_arr.len() as u64,
+        "total must equal the count of matching files, not total vault files"
+    );
+
+    let limited_arr = unwrap_results(&limited_json);
+    assert_eq!(limited_arr.len(), 1);
+    assert_eq!(
+        limited_arr[0]["file"].as_str().unwrap(),
+        full_arr[0]["file"].as_str().unwrap(),
     );
 }
 
@@ -964,7 +1123,7 @@ fn find_regexp_alternation_matches_multiple_files() {
     let (status, json, stderr) = find_json(&tmp, &["--regexp", "programming|body"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
     let files: Vec<&str> = arr
         .iter()
@@ -981,7 +1140,7 @@ fn find_regexp_short_flag_e_works() {
     let (status, json, stderr) = find_json(&tmp, &["-e", "rust.*great"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "beta.md");
 }
@@ -992,7 +1151,7 @@ fn find_regexp_case_insensitive_by_default() {
     let (status, json, stderr) = find_json(&tmp, &["--regexp", "rust PROGRAMMING"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "beta.md");
 }
@@ -1003,7 +1162,7 @@ fn find_regexp_includes_matches_field() {
     let (status, json, stderr) = find_json(&tmp, &["-e", "programming"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     assert!(
         arr[0]["matches"].is_array(),
@@ -1021,7 +1180,7 @@ fn find_regexp_no_match_returns_empty_array() {
     let (status, json, stderr) = find_json(&tmp, &["--regexp", r"\d{4}-\d{2}-\d{2}"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert!(arr.is_empty(), "expected empty array: {arr:?}");
 }
 
@@ -1032,7 +1191,7 @@ fn find_regexp_combined_with_tag() {
     let (status, json, stderr) = find_json(&tmp, &["-e", "content", "--tag", "rust"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // beta has "Content" in heading + rust tag; nested has "content" in body text + rust tag
     assert_eq!(arr.len(), 2, "expected 2 files: {arr:?}");
 }
@@ -1088,7 +1247,7 @@ title: Dotdot
     let (status, json, stderr) = find_json(&tmp, &["--file", "etc..md"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 result: {arr:?}");
     assert_eq!(arr[0]["file"], "etc..md");
 }
@@ -1142,7 +1301,7 @@ fn find_glob_no_match_returns_empty_array() {
         "non-matching glob should exit 0; stderr: {stderr}"
     );
     assert_eq!(
-        json.as_array().unwrap().len(),
+        unwrap_results(&json).len(),
         0,
         "non-matching glob should return empty array"
     );
@@ -1229,7 +1388,7 @@ fn section_filter_scopes_tasks() {
         &["--section", "Tasks", "--task", "todo", "--fields", "tasks"],
     );
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Both files have ## Tasks sections with open tasks
     assert_eq!(arr.len(), 2);
     for entry in arr {
@@ -1266,7 +1425,7 @@ fn section_filter_includes_nested_children() {
         ],
     );
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let tasks = arr[0]["tasks"]
         .as_array()
@@ -1300,7 +1459,7 @@ fn section_filter_nearest_heading_in_output() {
         ],
     );
     assert!(status.success());
-    let tasks = json.as_array().unwrap()[0]["tasks"]
+    let tasks = unwrap_results(&json)[0]["tasks"]
         .as_array()
         .expect("field 'tasks' should be an array");
     // The nested task should show "### Subtasks" as its section, not "## Tasks"
@@ -1324,7 +1483,7 @@ fn section_filter_case_insensitive() {
         &["--section", "tasks", "--task", "any", "--fields", "tasks"],
     );
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Should still match ## Tasks sections
     assert_eq!(arr.len(), 2);
 }
@@ -1339,7 +1498,7 @@ fn section_filter_level_pinned() {
         &["--section", "# Introduction", "--fields", "sections"],
     );
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // Only doc.md should be returned — other.md's ## Introduction is level 2, not level 1
     assert_eq!(
         arr.len(),
@@ -1373,7 +1532,7 @@ fn section_filter_or_semantics() {
         ],
     );
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let tasks = arr[0]["tasks"]
         .as_array()
@@ -1392,7 +1551,7 @@ fn section_filter_no_match_excludes_file() {
     let tmp = setup_section_vault();
     let (status, json, _) = find_json(&tmp, &["--section", "Nonexistent", "--task", "any"]);
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // No files should match since no section named "Nonexistent" exists
     assert!(arr.is_empty());
 }
@@ -1402,7 +1561,7 @@ fn section_filter_content_search_scoped() {
     let tmp = setup_section_vault();
     let (status, json, _) = find_json(&tmp, &["--section", "Notes", "TODO", "--file", "doc.md"]);
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let matches = arr[0]["matches"]
         .as_array()
@@ -1423,7 +1582,7 @@ fn section_filter_content_search_excludes_other_sections() {
     // "TODO" appears in both Notes and Design, but --section "Notes" should only find it in Notes
     let (status, json, _) = find_json(&tmp, &["--section", "Notes", "TODO", "--file", "other.md"]);
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // other.md has no ## Notes section, so it shouldn't match
     assert!(arr.is_empty());
 }
@@ -1481,7 +1640,10 @@ fn empty_json_result_returns_empty_array_no_stderr() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(stdout.trim(), "[]");
+    // find now always returns an envelope; for empty results: {"total":0,"results":[]}
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
+    assert_eq!(json["total"].as_u64().unwrap(), 0);
+    assert!(json["results"].as_array().unwrap().is_empty());
     assert!(
         !stderr.contains("No files matched"),
         "JSON mode should not print 'No files matched' notice"
@@ -1501,7 +1663,7 @@ fn find_fields_properties_typed_json() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let entry = &arr[0];
 
@@ -1540,7 +1702,7 @@ fn find_fields_properties_typed_type_and_value() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let typed = arr[0]["properties_typed"].as_array().unwrap();
 
     // alpha.md has: title: Alpha, status: planned, priority: 3
@@ -1573,7 +1735,7 @@ fn find_fields_properties_and_properties_typed_together_e2e() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let entry = &arr[0];
 
     // Both fields present
@@ -1638,7 +1800,7 @@ fn find_property_absence_no_priority() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "!priority"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 3, "expected 3 files without priority: {arr:?}");
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(
@@ -1657,7 +1819,7 @@ fn find_property_absence_no_status_only_gamma() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "!status"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file without status: {arr:?}");
     assert_eq!(arr[0]["file"], "gamma.md");
 }
@@ -1672,7 +1834,7 @@ fn find_property_absence_combined_with_other_filters() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 match: {arr:?}");
     assert_eq!(arr[0]["file"], "sub/nested.md");
 }
@@ -1688,7 +1850,7 @@ fn find_property_regex_bare_substring() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "status~=compl"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "beta.md");
 }
@@ -1700,7 +1862,7 @@ fn find_property_regex_delimited_anchored_exact() {
     let (status, json, stderr) = find_json(&tmp, &["--property", r"status~=/^planned$/"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 2, "expected alpha + nested: {arr:?}");
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(files.contains(&"alpha.md"));
@@ -1714,7 +1876,7 @@ fn find_property_regex_case_insensitive_flag() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "title~=/ALPHA/i"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected alpha.md: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -1726,7 +1888,7 @@ fn find_property_regex_list_property_any_element() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "tags~=cli"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected alpha.md only: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -1738,7 +1900,7 @@ fn find_property_regex_list_property_nested_tag() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "tags~=backend"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected sub/nested.md: {arr:?}");
     assert_eq!(arr[0]["file"], "sub/nested.md");
 }
@@ -1771,7 +1933,7 @@ fn find_property_eq_tilde_bare_substring() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "status=~compl"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
     assert_eq!(arr[0]["file"], "beta.md");
 }
@@ -1783,7 +1945,7 @@ fn find_property_eq_tilde_delimited_case_insensitive() {
     let (status, json, stderr) = find_json(&tmp, &["--property", "title=~/ALPHA/i"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected alpha.md: {arr:?}");
     assert_eq!(arr[0]["file"], "alpha.md");
 }
@@ -1855,7 +2017,7 @@ fn section_filter_substring_matches_heading_with_count_suffix() {
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected tasks.md to match");
     let sections = arr[0]["sections"].as_array().unwrap();
     let headings: Vec<&str> = sections
@@ -1884,7 +2046,7 @@ fn section_filter_substring_matches_ticket_heading() {
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected decision.md to match");
     let tasks = arr[0]["tasks"].as_array().unwrap();
     assert!(!tasks.is_empty(), "expected tasks in DEC-031 section");
@@ -1896,7 +2058,7 @@ fn section_filter_substring_exact_heading_still_matches() {
     let tmp = setup_section_vault();
     let (status, json, stderr) = find_json(&tmp, &["--section", "Tasks", "--task", "any"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert!(!arr.is_empty(), "expected files with ## Tasks section");
 }
 
@@ -1916,7 +2078,7 @@ fn section_filter_level_pinned_substring() {
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(
         arr.len(),
         1,
@@ -1940,7 +2102,7 @@ fn section_filter_regex_matches() {
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "expected decision.md to match");
     let tasks = arr[0]["tasks"].as_array().unwrap();
     // Both DEC-031 and DEC-032 have tasks, so we should get 2 tasks
@@ -1963,7 +2125,7 @@ fn section_filter_regex_anchored() {
         ],
     );
     assert!(status.success());
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     // tasks.md only has "Tasks [4/4]" — anchored regex should NOT match
     assert!(
         arr.is_empty(),
@@ -2017,7 +2179,7 @@ fn find_glob_negation_excludes_specific_file() {
     let tmp = setup_negation_vault();
     let (status, json, stderr) = find_json(&tmp, &["--glob", "!notes/draft.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(
         !files.contains(&"notes/draft.md"),
@@ -2038,7 +2200,7 @@ fn find_glob_negation_wildcard_pattern() {
 
     let (status, json, stderr) = find_json(&tmp, &["--glob", "!draft-*"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(
         !files.iter().any(|f| f.starts_with("draft-")),
@@ -2055,7 +2217,7 @@ fn find_glob_negation_double_star() {
     let tmp = setup_negation_vault();
     let (status, json, stderr) = find_json(&tmp, &["--glob", "!**/index.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(
         !files.iter().any(|f| f.ends_with("index.md")),
@@ -2071,7 +2233,7 @@ fn find_glob_positive_still_works() {
     let tmp = setup_negation_vault();
     let (status, json, stderr) = find_json(&tmp, &["--glob", "notes/*.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 3, "expected 3 files in notes/");
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert!(files.iter().all(|f| f.starts_with("notes/")));
@@ -2095,8 +2257,8 @@ fn find_multi_file_returns_array() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json.is_array());
-    assert_eq!(json.as_array().unwrap().len(), 2);
+    assert!(json.is_object(), "expected envelope, got: {json}");
+    assert_eq!(unwrap_results(&json).len(), 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -2123,7 +2285,7 @@ let typescript = 42;
 
     let (status, json, stderr) = find_json(&tmp, &["typescript"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "should find match inside code block: {arr:?}");
     assert_eq!(arr[0]["file"], "code.md");
 }
@@ -2149,7 +2311,7 @@ def hello_world():
 
     let (status, json, stderr) = find_json(&tmp, &["-e", "hello.*world"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "should find regex match inside code block");
 }
 
@@ -2174,7 +2336,7 @@ unique_code_term_xyz
 
     let (status, json, stderr) = find_json(&tmp, &["unique_code_term_xyz"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1, "term only inside code block should be found");
 }
 
@@ -2200,7 +2362,7 @@ Some content about versions.
 
     let (status, json, stderr) = find_json(&tmp, &["content about"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let matches = arr[0]["matches"].as_array().unwrap();
     assert_eq!(matches.len(), 1);
@@ -2235,13 +2397,13 @@ TYPESCRIPT is uppercase
     // Default: case-insensitive, all 3 lines match
     let (status, json, stderr) = find_json(&tmp, &["-e", "typescript"]);
     assert!(status.success(), "stderr: {stderr}");
-    let matches = json.as_array().unwrap()[0]["matches"].as_array().unwrap();
+    let matches = unwrap_results(&json)[0]["matches"].as_array().unwrap();
     assert_eq!(matches.len(), 3, "default should be case-insensitive");
 
     // (?-i) override: only exact case matches
     let (status, json, stderr) = find_json(&tmp, &["-e", "(?-i)TypeScript"]);
     assert!(status.success(), "stderr: {stderr}");
-    let matches = json.as_array().unwrap()[0]["matches"].as_array().unwrap();
+    let matches = unwrap_results(&json)[0]["matches"].as_array().unwrap();
     assert_eq!(
         matches.len(),
         1,
@@ -2285,7 +2447,7 @@ fn find_repeatable_glob_union_of_two_dirs() {
     let tmp = setup_multi_glob_vault();
     let (status, json, stderr) = find_json(&tmp, &["--glob", "sub1/**", "--glob", "sub2/**"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(
         arr.len(),
@@ -2309,7 +2471,7 @@ fn find_repeatable_glob_positive_and_negative() {
     let (status, json, stderr) =
         find_json(&tmp, &["--glob", "sub2/**", "--glob", "!sub2/draft.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(arr.len(), 1, "expected only c.md, got: {files:?}");
     assert!(files.contains(&"sub2/c.md"));
@@ -2326,7 +2488,7 @@ fn find_repeatable_glob_multiple_negations_only() {
     let (status, json, stderr) =
         find_json(&tmp, &["--glob", "!sub1/**", "--glob", "!sub2/draft.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     // root.md + sub2/c.md should remain (sub1/** excluded, sub2/draft.md excluded)
     assert_eq!(arr.len(), 2, "expected root.md + sub2/c.md, got: {files:?}");
@@ -2348,7 +2510,7 @@ fn find_repeatable_glob_one_positive_one_negative() {
     let tmp = setup_multi_glob_vault();
     let (status, json, stderr) = find_json(&tmp, &["--glob", "sub1/**", "--glob", "!sub1/b.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(arr.len(), 1, "expected only sub1/a.md, got: {files:?}");
     assert!(files.contains(&"sub1/a.md"));
@@ -2359,7 +2521,7 @@ fn find_single_glob_backward_compat() {
     let tmp = setup_multi_glob_vault();
     let (status, json, stderr) = find_json(&tmp, &["--glob", "sub1/**"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(arr.len(), 2, "expected 2 files in sub1, got: {files:?}");
     assert!(files.contains(&"sub1/a.md"));
@@ -2412,7 +2574,7 @@ fn find_sort_backlinks_count() {
         &["--sort", "backlinks_count", "--fields", "backlinks"],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files.len(), 3, "expected 3 files, got: {files:?}");
     assert_eq!(files[0], "c.md", "c.md should be first (2 backlinks)");
@@ -2426,7 +2588,7 @@ fn find_sort_links_count() {
     // a has 2 outbound links, b has 1, c has 0
     let (status, json, stderr) = find_json(&tmp, &["--sort", "links_count", "--fields", "links"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files.len(), 3, "expected 3 files, got: {files:?}");
     assert_eq!(files[0], "a.md", "a.md should be first (2 links)");
@@ -2440,7 +2602,7 @@ fn find_sort_backlinks_count_without_fields_backlinks() {
     let tmp = setup_link_vault();
     let (status, json, stderr) = find_json(&tmp, &["--sort", "backlinks_count"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "c.md", "c.md should be first (most backlinks)");
     // Verify backlinks field is NOT in output (user didn't request it)
@@ -2457,7 +2619,7 @@ fn find_sort_links_count_without_fields_links() {
     let (status, json, stderr) =
         find_json(&tmp, &["--sort", "links_count", "--fields", "properties"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "a.md", "a.md should be first (most links)");
     // Verify links field is NOT in output (user excluded it via --fields)
@@ -2476,7 +2638,7 @@ fn find_sort_title() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--sort", "title"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 4);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     // Title uses extract_title: frontmatter title first, then first H1.
@@ -2511,7 +2673,7 @@ No frontmatter, no heading.
     );
     let (status, json, stderr) = find_json(&tmp, &["--sort", "title"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "a.md");
     assert_eq!(files[1], "b.md", "file without any title should sort last");
@@ -2522,7 +2684,7 @@ fn find_sort_property_generic() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--sort", "property:status"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     // completed < planned (alphabetically), gamma.md (no status) sorts last
     assert_eq!(files[0], "beta.md", "completed should sort first");
@@ -2539,7 +2701,7 @@ fn find_sort_title_without_fields_title() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--sort", "title", "--fields", "tags"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "alpha.md");
     // Verify title field is NOT in output (user excluded it via --fields)
@@ -2556,7 +2718,7 @@ fn find_sort_property_without_fields_properties() {
     let (status, json, stderr) =
         find_json(&tmp, &["--sort", "property:status", "--fields", "tags"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "beta.md", "completed should sort first");
     // Verify properties field is NOT in output (user excluded it via --fields)
@@ -2604,7 +2766,7 @@ Content.
     );
     let (status, json, stderr) = find_json(&tmp, &["--sort", "date"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files[0], "older.md", "2024 should sort before 2026");
     assert_eq!(files[1], "newer.md");
@@ -2720,7 +2882,7 @@ fn find_title_from_frontmatter() {
     let (status, json, stderr) =
         find_json(&tmp, &["--file", "with_fm_title.md", "--fields", "title"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
     assert_eq!(
@@ -2743,7 +2905,7 @@ fn find_title_from_h1_when_no_frontmatter_property() {
     let (status, json, stderr) =
         find_json(&tmp, &["--file", "with_h1_title.md", "--fields", "title"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
     assert_eq!(
@@ -2758,7 +2920,7 @@ fn find_title_null_when_neither_found() {
     let tmp = setup_title_vault();
     let (status, json, stderr) = find_json(&tmp, &["--file", "no_title.md", "--fields", "title"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
     assert!(
@@ -2772,7 +2934,7 @@ fn find_title_not_present_by_default() {
     let tmp = setup_title_vault();
     let (status, json, stderr) = find_json(&tmp, &["--file", "with_fm_title.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
     assert!(
@@ -2787,7 +2949,7 @@ fn find_fields_all_includes_title() {
     let (status, json, stderr) =
         find_json(&tmp, &["--file", "with_fm_title.md", "--fields", "all"]);
     assert!(status.success(), "stderr: {stderr}");
-    let arr = json.as_array().unwrap();
+    let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
     assert!(
@@ -2957,9 +3119,10 @@ fn find_sort_title_reverse() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
     // Titles should be in reverse alphabetical order
-    let titles: Vec<&str> = json.iter().filter_map(|v| v["title"].as_str()).collect();
+    let titles: Vec<&str> = results.iter().filter_map(|v| v["title"].as_str()).collect();
     let mut sorted = titles.clone();
     sorted.sort();
     sorted.reverse();
@@ -2992,10 +3155,11 @@ fn find_reverse_with_limit() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json.len(), 2, "expected exactly 2 results");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(results.len(), 2, "expected exactly 2 results");
     // Should be last 2 files alphabetically (reversed then limited)
-    let files: Vec<&str> = json.iter().filter_map(|v| v["file"].as_str()).collect();
+    let files: Vec<&str> = results.iter().filter_map(|v| v["file"].as_str()).collect();
     assert!(
         files[0] > files[1],
         "files should be in reverse order: {files:?}"
@@ -3017,8 +3181,9 @@ fn find_reverse_alone() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
-    let files: Vec<&str> = json.iter().filter_map(|v| v["file"].as_str()).collect();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    let files: Vec<&str> = results.iter().filter_map(|v| v["file"].as_str()).collect();
     let mut expected = files.clone();
     expected.sort();
     expected.reverse();
@@ -3047,13 +3212,14 @@ fn find_title_h1_match() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
     assert_eq!(
-        json.len(),
+        results.len(),
         1,
-        "expected exactly 1 match for 'gamma': {json:?}"
+        "expected exactly 1 match for 'gamma': {results:?}"
     );
-    assert_eq!(json[0]["file"], "gamma.md");
+    assert_eq!(results[0]["file"], "gamma.md");
 }
 
 #[test]
@@ -3070,13 +3236,14 @@ fn find_title_case_insensitive() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
     assert_eq!(
-        json.len(),
+        results.len(),
         1,
-        "expected exactly 1 match for 'ALPHA': {json:?}"
+        "expected exactly 1 match for 'ALPHA': {results:?}"
     );
-    assert_eq!(json[0]["file"], "alpha.md");
+    assert_eq!(results[0]["file"], "alpha.md");
 }
 
 #[test]
@@ -3093,11 +3260,12 @@ fn find_title_regex_mode() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
     assert_eq!(
-        json.len(),
+        results.len(),
         2,
-        "expected exactly 2 matches for regex: {json:?}"
+        "expected exactly 2 matches for regex: {results:?}"
     );
 }
 
@@ -3116,10 +3284,11 @@ fn find_title_frontmatter_match() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
     assert!(
-        json.iter().any(|v| v["file"] == "alpha.md"),
-        "should match frontmatter title 'Alpha' for pattern 'alph': {json:?}"
+        results.iter().any(|v| v["file"] == "alpha.md"),
+        "should match frontmatter title 'Alpha' for pattern 'alph': {results:?}"
     );
 }
 

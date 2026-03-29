@@ -137,7 +137,11 @@ fn find_short_n_for_limit() {
         .unwrap();
     assert!(output.status.success());
     let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(v.as_array().unwrap().len(), 1);
+    // Limit truncates 2 files to 1, so output is an envelope {total, results}.
+    let results = v
+        .as_array()
+        .unwrap_or_else(|| v["results"].as_array().expect("expected array or envelope"));
+    assert_eq!(results.len(), 1);
 }
 
 // -- read: -f, -s, -l ------------------------------------------------------

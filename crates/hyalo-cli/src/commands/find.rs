@@ -143,25 +143,6 @@ pub fn find(
         None
     };
 
-    // Short-circuit: when sort order is by file path (the same order
-    // `discover_files` already returns) and backlinks are not requested
-    // (which would need a full-vault scan regardless), we can stop as soon
-    // as we have accumulated `limit` matching results instead of scanning
-    // every file and truncating afterwards.
-    //
-    // Disabled when `--file` args are given: explicit file lists preserve CLI
-    // order (not alphabetical), so stopping early could return the wrong N files.
-    let can_short_circuit = limit.is_some()
-        && files_arg.is_empty()
-        && matches!(sort.unwrap_or(&SortField::File), SortField::File)
-        && !fields.backlinks
-        && !sort_needs_backlinks
-        && !sort_needs_links
-        && !sort_needs_properties
-        && !sort_needs_title
-        // Reverse requires all results before we can reverse+limit correctly.
-        && !reverse;
-
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
     let original_fields = fields;
@@ -181,7 +162,18 @@ pub fn find(
         fields
     };
 
+    // Pre-sort the file list when we can determine the final order upfront.
+    // Currently only --sort file (explicit) qualifies for the scan path,
+    // since other sort keys require scanning the file first.
+    let presorted = matches!(sort, Some(SortField::File)) && !reverse && !fields.backlinks;
+
+    let mut files = files;
+    if presorted {
+        files.sort_by(|a, b| a.1.cmp(&b.1));
+    }
+
     let mut results: Vec<FileObject> = Vec::new();
+    let mut total_matching: usize = 0;
 
     for (full_path, rel_path) in &files {
         // --- Single-pass scan ---
@@ -313,6 +305,13 @@ pub fn find(
             continue;
         }
 
+        // When pre-sorted with a limit, skip expensive construction once full.
+        // (broken_links needs the built object, so it must fall through.)
+        if presorted && limit.is_some_and(|n| results.len() >= n) && !broken_links {
+            total_matching += 1;
+            continue;
+        }
+
         // --- Get modified time ---
         let modified = format_modified(full_path)?;
 
@@ -346,16 +345,20 @@ pub fn find(
             }
         }
 
-        results.push(obj);
-
-        // Early exit when we have enough results and a full scan is not needed.
-        if can_short_circuit && results.len() >= limit.unwrap() {
-            break;
+        if presorted {
+            total_matching += 1;
+        }
+        if !presorted || limit.is_none_or(|n| results.len() < n) {
+            results.push(obj);
         }
     }
 
     // --- Sort ---
-    apply_sort(&mut results, sort, link_graph.as_ref());
+    // When presorted, files were pre-sorted and results already collected in
+    // order — skip the redundant sort.
+    if !presorted {
+        apply_sort(&mut results, sort, link_graph.as_ref());
+    }
 
     if let Some(SortField::Property(key)) = sort
         && !results.is_empty()
@@ -398,15 +401,23 @@ pub fn find(
     }
 
     // --- Limit ---
-    if let Some(n) = limit {
-        results.truncate(n);
-    }
+    // When presorted, total_matching already holds the accurate count and
+    // results are already capped — skip truncation.
+    let total = if presorted {
+        total_matching
+    } else {
+        let t = results.len();
+        if let Some(n) = limit {
+            results.truncate(n);
+        }
+        t
+    };
 
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
         .into_iter()
-        .map(|obj| serde_json::to_value(obj).expect("derived Serialize impl should not fail"))
-        .collect();
+        .map(|obj| serde_json::to_value(obj).context("failed to serialize find result"))
+        .collect::<Result<_>>()?;
 
     // In text mode, an empty result set produces no stdout output, which an
     // LLM (or script) cannot distinguish from a silent failure.  Emit an
@@ -416,7 +427,10 @@ pub fn find(
         crate::warn::warn("No files matched.");
     }
 
-    let json_output = serde_json::Value::Array(json_array);
+    let json_output = serde_json::json!({
+        "total": total,
+        "results": json_array,
+    });
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
@@ -624,17 +638,6 @@ pub fn find_from_index(
         None
     };
 
-    let can_short_circuit = limit.is_some()
-        && files_arg.is_empty()
-        && matches!(sort.unwrap_or(&SortField::File), SortField::File)
-        && !fields.backlinks
-        && !sort_needs_backlinks
-        && !sort_needs_links
-        && !sort_needs_properties
-        && !sort_needs_title
-        // Reverse requires all results before we can reverse+limit correctly.
-        && !reverse;
-
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
     let original_fields = fields;
@@ -654,7 +657,19 @@ pub fn find_from_index(
         fields
     };
 
+    // The index has all metadata, so we can pre-sort by any sort key
+    // except BacklinksCount (which needs the link graph per result).
+    // presorted=true even without --limit — pre-sorting is no more expensive
+    // than post-sorting, and it simplifies the limit/total logic below.
+    let presorted = !reverse && !matches!(sort, Some(SortField::BacklinksCount));
+
+    let mut scoped_entries = scoped_entries;
+    if presorted {
+        presort_index_entries(&mut scoped_entries, sort, index.link_graph());
+    }
+
     let mut results: Vec<FileObject> = Vec::new();
+    let mut total_matching: usize = 0;
 
     for entry in &scoped_entries {
         // --- Metadata filters using pre-indexed data ---
@@ -741,6 +756,13 @@ pub fn find_from_index(
 
         // Filter: content search must have at least one match
         if has_content_search && content_matches.as_ref().is_some_and(|m| m.is_empty()) {
+            continue;
+        }
+
+        // When pre-sorted with a limit, skip expensive construction once full.
+        // (broken_links needs the resolved links, so fall through.)
+        if presorted && limit.is_some_and(|n| results.len() >= n) && !broken_links {
+            total_matching += 1;
             continue;
         }
 
@@ -873,15 +895,18 @@ pub fn find_from_index(
             }
         }
 
-        results.push(obj);
-
-        if can_short_circuit && results.len() >= limit.unwrap() {
-            break;
+        if presorted {
+            total_matching += 1;
+        }
+        if !presorted || limit.is_none_or(|n| results.len() < n) {
+            results.push(obj);
         }
     }
 
     // --- Sort ---
-    apply_sort(&mut results, sort, link_graph_ref);
+    if !presorted {
+        apply_sort(&mut results, sort, link_graph_ref);
+    }
 
     if let Some(SortField::Property(key)) = sort
         && !results.is_empty()
@@ -920,9 +945,17 @@ pub fn find_from_index(
     }
 
     // --- Limit ---
-    if let Some(n) = limit {
-        results.truncate(n);
-    }
+    // When presorted, total_matching already holds the accurate count and
+    // results are already capped — skip truncation.
+    let total = if presorted {
+        total_matching
+    } else {
+        let t = results.len();
+        if let Some(n) = limit {
+            results.truncate(n);
+        }
+        t
+    };
 
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
@@ -934,7 +967,10 @@ pub fn find_from_index(
         crate::warn::warn("No files matched.");
     }
 
-    let json_output = serde_json::Value::Array(json_array);
+    let json_output = serde_json::json!({
+        "total": total,
+        "results": json_array,
+    });
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format,
@@ -1097,6 +1133,53 @@ fn apply_sort(
                 let a_val = a.properties.as_ref().and_then(|p| p.get(key));
                 let b_val = b.properties.as_ref().and_then(|p| p.get(key));
                 filter::compare_property_values(a_val, b_val).then_with(|| a.file.cmp(&b.file))
+            });
+        }
+    }
+}
+
+/// Pre-sort index entries by the requested sort key so that the early-exit
+/// optimisation can collect the first N matches in final order.
+///
+/// This mirrors `apply_sort` but operates on `&IndexEntry` references
+/// instead of `FileObject` values, avoiding construction of the full object.
+fn presort_index_entries(
+    entries: &mut [&IndexEntry],
+    sort: Option<&SortField>,
+    link_graph: &LinkGraph,
+) {
+    match sort.unwrap_or(&SortField::File) {
+        SortField::File => entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path)),
+        SortField::Modified => entries.sort_by(|a, b| a.modified.cmp(&b.modified)),
+        SortField::BacklinksCount => {
+            // Descending by backlink count — matches apply_sort.
+            entries.sort_by(|a, b| {
+                let a_count = link_graph.backlinks(&a.rel_path).len();
+                let b_count = link_graph.backlinks(&b.rel_path).len();
+                b_count.cmp(&a_count)
+            });
+        }
+        SortField::LinksCount => {
+            entries.sort_by(|a, b| {
+                let a_count = a.links.len();
+                let b_count = b.links.len();
+                b_count.cmp(&a_count)
+            });
+        }
+        SortField::Title => {
+            entries.sort_by(|a, b| {
+                let a_val = extract_title(&a.properties, Some(&a.sections));
+                let b_val = extract_title(&b.properties, Some(&b.sections));
+                filter::compare_property_values(Some(&a_val), Some(&b_val))
+                    .then_with(|| a.rel_path.cmp(&b.rel_path))
+            });
+        }
+        SortField::Property(key) => {
+            entries.sort_by(|a, b| {
+                let a_val = a.properties.get(key.as_str());
+                let b_val = b.properties.get(key.as_str());
+                filter::compare_property_values(a_val, b_val)
+                    .then_with(|| a.rel_path.cmp(&b.rel_path))
             });
         }
     }
@@ -1370,7 +1453,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 3);
     }
 
@@ -1401,7 +1484,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
         let mut sorted = files.clone();
         sorted.sort();
@@ -1435,7 +1518,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         for entry in arr {
             assert!(entry["file"].as_str().is_some());
             let modified = entry["modified"].as_str().unwrap();
@@ -1475,7 +1558,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
     }
@@ -1508,7 +1591,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // alpha and beta have title; gamma does not
         assert_eq!(arr.len(), 2);
     }
@@ -1542,7 +1625,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
     }
@@ -1574,7 +1657,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert!(arr.is_empty());
     }
 
@@ -1607,7 +1690,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert!(arr[0]["file"].as_str().unwrap().contains("beta"));
     }
@@ -1639,7 +1722,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // beta has "Rust programming" in body; alpha has no Rust in body
         // (tags are in frontmatter which is not scanned for content)
         for entry in arr {
@@ -1674,7 +1757,7 @@ Just some text here.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         for entry in arr {
             assert!(entry["matches"].is_null(), "matches should be absent");
         }
@@ -1815,7 +1898,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // only alpha.md has an open task
         assert_eq!(arr.len(), 1);
         assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
@@ -1848,7 +1931,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
     }
@@ -1882,7 +1965,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         for entry in arr {
             assert!(entry["properties"].is_object());
             assert!(entry["tags"].is_null());
@@ -1919,7 +2002,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let alpha = arr
             .iter()
             .find(|e| e["file"].as_str().unwrap().contains("alpha"))
@@ -1960,7 +2043,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let alpha = &arr[0];
         let links = alpha["links"].as_array().unwrap();
         assert!(!links.is_empty());
@@ -1998,8 +2081,15 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
-        assert_eq!(arr.len(), 1);
+        // When limit truncates results, output is an envelope {total, results}.
+        assert!(parsed.is_object(), "expected envelope, got: {parsed}");
+        let results = parsed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        // total reflects the full vault size (3 files in unit test vault).
+        assert!(
+            parsed["total"].as_u64().unwrap() > 1,
+            "total should exceed the limit"
+        );
     }
 
     // --- find: sort ---
@@ -2031,7 +2121,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let times: Vec<&str> = arr
             .iter()
             .map(|v| v["modified"].as_str().unwrap())
@@ -2071,7 +2161,7 @@ title: Empty Body
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert!(parsed.as_array().unwrap().is_empty());
+        assert!(parsed["results"].as_array().unwrap().is_empty());
     }
 
     // --- find: file not found ---
@@ -2272,7 +2362,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         let tasks = arr[0]["tasks"].as_array().unwrap();
         assert_eq!(tasks.len(), 2, "should have 2 tasks in Tasks section");
@@ -2307,7 +2397,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // File has no matching section — it is excluded entirely
         assert!(
             arr.is_empty(),
@@ -2344,7 +2434,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // "background" only appears in ## Background section, not in ## Tasks, so no match
         assert!(
             arr.is_empty(),
@@ -2380,7 +2470,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         let sections = arr[0]["sections"].as_array().unwrap();
         // Only the "Tasks" section (and its heading line) should be included
@@ -2422,7 +2512,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // empty.md has no Tasks section — it is excluded entirely
         assert!(
             arr.is_empty(),
@@ -2478,7 +2568,7 @@ Just intro, no tasks section.
         .unwrap();
         let out = unwrap_success(result);
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         // Should return the 3 good files, skipping the broken one
         assert_eq!(arr.len(), 3);
         assert!(
@@ -2516,7 +2606,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let entry = &arr[0];
 
         // properties_typed must be an array of {name, type, value} objects
@@ -2577,7 +2667,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let entry = &arr[0];
 
         // Both fields present simultaneously
@@ -2618,7 +2708,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let typed = arr[0]["properties_typed"].as_array().unwrap();
 
         // alpha.md has status: planned (text) and title: Alpha Note (text)
@@ -2660,7 +2750,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let beta = &arr[0];
         let backlinks = beta["backlinks"].as_array().unwrap();
         assert_eq!(backlinks.len(), 1);
@@ -2695,7 +2785,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         for entry in arr {
             assert!(
                 !entry.as_object().unwrap().contains_key("backlinks"),
@@ -2732,7 +2822,7 @@ Just intro, no tasks section.
             .unwrap(),
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let arr = parsed.as_array().unwrap();
+        let arr = parsed["results"].as_array().unwrap();
         let gamma = &arr[0];
         let backlinks = gamma["backlinks"].as_array().unwrap();
         assert!(backlinks.is_empty());

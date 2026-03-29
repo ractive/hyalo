@@ -50,8 +50,9 @@ fn find_links(dir_arg: &str) -> serde_json::Value {
 }
 
 fn extract_link_paths(json: &serde_json::Value) -> Vec<String> {
-    json.as_array()
-        .unwrap()
+    json["results"]
+        .as_array()
+        .expect("expected {total, results} envelope")
         .iter()
         .flat_map(|entry| {
             entry["links"]

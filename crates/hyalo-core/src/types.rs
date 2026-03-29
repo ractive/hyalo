@@ -130,6 +130,7 @@ pub struct TaskReadResult {
 pub struct VaultSummary {
     pub files: FileCounts,
     pub orphans: OrphanSummary,
+    pub dead_ends: DeadEndSummary,
     pub links: LinkHealthSummary,
     pub properties: Vec<PropertySummaryEntry>,
     pub tags: TagSummary,
@@ -158,6 +159,16 @@ pub struct BrokenLinkInfo {
 /// outbound links (they don't link to anything).
 #[derive(Debug, Clone, Serialize)]
 pub struct OrphanSummary {
+    pub total: usize,
+    pub files: Vec<String>,
+}
+
+/// Navigation dead-ends: files that have inbound links (something links to
+/// them) but no outbound links (they don't link to anything else).
+/// Orphans (no inbound AND no outbound) are excluded — they are reported
+/// separately.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeadEndSummary {
     pub total: usize,
     pub files: Vec<String>,
 }

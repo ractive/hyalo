@@ -1000,3 +1000,249 @@ No links.
     );
     assert_eq!(disk_orphans, vec!["orphan.md"]);
 }
+
+// ---------------------------------------------------------------------------
+// Dead-end detection
+// ---------------------------------------------------------------------------
+
+/// Build a vault where:
+/// - a.md links to b and c (has outbound, no inbound → not a dead-end, not an orphan)
+/// - b.md links to c (has inbound from a, has outbound → not a dead-end)
+/// - c.md has no links but is linked to by a and b → dead-end
+/// - d.md has no links and nothing links to it → orphan
+fn setup_dead_end_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+[[b]]
+[[c]]
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+[[c]]
+"),
+    );
+    write_md(
+        tmp.path(),
+        "c.md",
+        md!(r"
+---
+title: C
+---
+No links.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "d.md",
+        md!(r"
+---
+title: D
+---
+No links.
+"),
+    );
+
+    tmp
+}
+
+#[test]
+fn summary_dead_ends_json() {
+    let tmp = setup_dead_end_vault();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert!(
+        json["dead_ends"]["total"].is_number(),
+        "dead_ends.total should be a number"
+    );
+    assert!(
+        json["dead_ends"]["files"].is_array(),
+        "dead_ends.files should be an array"
+    );
+
+    assert_eq!(
+        json["dead_ends"]["total"].as_u64().unwrap(),
+        1,
+        "expected 1 dead-end"
+    );
+    let dead_end_files: Vec<&str> = json["dead_ends"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(dead_end_files, vec!["c.md"]);
+
+    // d.md is the orphan, not a dead-end
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 1);
+    let orphan_files: Vec<&str> = json["orphans"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(orphan_files, vec!["d.md"]);
+}
+
+#[test]
+fn summary_dead_ends_text_format() {
+    let tmp = setup_dead_end_vault();
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("Dead-ends: 1"),
+        "expected 'Dead-ends: 1' in: {text}"
+    );
+    assert!(
+        text.contains("\"c.md\""),
+        "expected dead-end file listed in: {text}"
+    );
+}
+
+#[test]
+fn summary_dead_ends_empty_when_no_links() {
+    let tmp = TempDir::new().unwrap();
+
+    // Two isolated files: both are orphans, neither is a dead-end
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+No links.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+---
+No links.
+"),
+    );
+
+    let output = hyalo()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["dead_ends"]["total"].as_u64().unwrap(), 0);
+    assert!(json["dead_ends"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 2);
+}
+
+/// Dead-end results must be identical between disk-scan and index-based summary.
+#[test]
+fn summary_dead_end_parity_disk_vs_index() {
+    let tmp = setup_dead_end_vault();
+    let dir_str = tmp.path().to_str().unwrap();
+
+    // Disk scan
+    let disk_out = hyalo()
+        .args(["--dir", dir_str, "summary", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        disk_out.status.success(),
+        "disk summary failed: {}",
+        String::from_utf8_lossy(&disk_out.stderr)
+    );
+    let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
+    let disk_dead_ends: Vec<&str> = disk_json["dead_ends"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+
+    // Create index
+    let idx_create = hyalo()
+        .args(["--dir", dir_str, "create-index"])
+        .output()
+        .unwrap();
+    assert!(
+        idx_create.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&idx_create.stderr)
+    );
+
+    // Index-based summary
+    let index_path = tmp.path().join(".hyalo-index");
+    let idx_out = hyalo()
+        .args([
+            "--dir",
+            dir_str,
+            "--index",
+            index_path.to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        idx_out.status.success(),
+        "index summary failed: {}",
+        String::from_utf8_lossy(&idx_out.stderr)
+    );
+    let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
+    let idx_dead_ends: Vec<&str> = idx_json["dead_ends"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        disk_dead_ends, idx_dead_ends,
+        "disk scan and index dead-end lists must match"
+    );
+    assert_eq!(disk_dead_ends, vec!["c.md"]);
+}

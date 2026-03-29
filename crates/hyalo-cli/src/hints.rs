@@ -203,9 +203,11 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
 }
 
 fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    let results = match data.as_array() {
-        Some(arr) => arr,
-        None => return vec![],
+    // find always returns a {total, results} envelope.
+    let results = if let Some(arr) = data["results"].as_array() {
+        arr
+    } else {
+        return vec![];
     };
 
     if results.is_empty() {
@@ -586,7 +588,8 @@ mod tests {
     #[test]
     fn find_single_result_suggests_read_and_backlinks() {
         let c = ctx(HintSource::Find);
-        let data = json!([make_find_item("notes/alpha.md", None, &[])]);
+        let items = vec![make_find_item("notes/alpha.md", None, &[])];
+        let data = json!({"total": items.len(), "results": items});
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -606,14 +609,15 @@ mod tests {
     fn find_many_results_suggests_top_tag() {
         let c = ctx(HintSource::Find);
         // 6 results; rust appears 4 times, cli 2 times — rust should be suggested.
-        let data = json!([
+        let items = vec![
             make_find_item("a.md", Some("planned"), &["rust", "cli"]),
             make_find_item("b.md", Some("planned"), &["rust"]),
             make_find_item("c.md", Some("in-progress"), &["rust"]),
             make_find_item("d.md", Some("completed"), &["rust"]),
             make_find_item("e.md", Some("completed"), &["cli"]),
             make_find_item("f.md", Some("completed"), &[]),
-        ]);
+        ];
+        let data = json!({"total": items.len(), "results": items});
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -627,14 +631,15 @@ mod tests {
     fn find_many_results_suggests_interesting_status() {
         let c = ctx(HintSource::Find);
         // 6 results; in-progress is more interesting than completed.
-        let data = json!([
+        let items = vec![
             make_find_item("a.md", Some("in-progress"), &[]),
             make_find_item("b.md", Some("completed"), &[]),
             make_find_item("c.md", Some("completed"), &[]),
             make_find_item("d.md", Some("completed"), &[]),
             make_find_item("e.md", Some("completed"), &[]),
             make_find_item("f.md", Some("completed"), &[]),
-        ]);
+        ];
+        let data = json!({"total": items.len(), "results": items});
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -648,14 +653,15 @@ mod tests {
     fn find_many_results_no_tags_falls_back_to_status() {
         let c = ctx(HintSource::Find);
         // 6 results, none with tags; should still suggest status narrowing.
-        let data = json!([
+        let items = vec![
             make_find_item("a.md", Some("planned"), &[]),
             make_find_item("b.md", Some("planned"), &[]),
             make_find_item("c.md", Some("planned"), &[]),
             make_find_item("d.md", Some("planned"), &[]),
             make_find_item("e.md", Some("planned"), &[]),
             make_find_item("f.md", Some("planned"), &[]),
-        ]);
+        ];
+        let data = json!({"total": items.len(), "results": items});
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -677,7 +683,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..10)
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
             .collect();
-        let data = serde_json::Value::Array(items);
+        let data = json!({"total": items.len(), "results": items});
         let hints = generate_hints(&c, &data);
         assert!(hints.len() <= MAX_HINTS);
     }

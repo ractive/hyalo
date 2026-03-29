@@ -4,6 +4,13 @@ use common::{hyalo, md, sample_frontmatter, write_md};
 use std::fs;
 use tempfile::TempDir;
 
+/// Helper: extract the results array from a `{total, results}` envelope.
+fn unwrap_results(json: &serde_json::Value) -> &Vec<serde_json::Value> {
+    json["results"]
+        .as_array()
+        .expect("expected {total, results} envelope")
+}
+
 // ---------------------------------------------------------------------------
 // `hyalo properties summary` — aggregate property summary
 // ---------------------------------------------------------------------------
@@ -201,9 +208,12 @@ fn find_properties_single_file() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    let entry = &json[0];
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"]
+        .as_array()
+        .expect("{total, results} envelope");
+    assert_eq!(results.len(), 1);
+    let entry = &results[0];
     assert_eq!(entry["file"], "file.md");
 
     let props = entry["properties"]
@@ -262,10 +272,11 @@ title: Sub B
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 2);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(results.len(), 2);
 
-    let paths: Vec<&str> = json
+    let paths: Vec<&str> = results
         .iter()
         .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
         .collect();
@@ -284,10 +295,11 @@ fn find_properties_file_without_frontmatter() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0]["file"], "plain.md");
-    let props = json[0]["properties"].as_object().unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["file"], "plain.md");
+    let props = results[0]["properties"].as_object().unwrap();
     assert!(props.is_empty());
 }
 
