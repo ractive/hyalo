@@ -143,12 +143,6 @@ pub fn find(
         None
     };
 
-    // Short-circuit is disabled: when --limit is active we need to count all
-    // matching results to report the accurate total in the output envelope.
-    // Previously this optimisation stopped scanning after N matches, which
-    // made it impossible to know the true total without a second full pass.
-    let can_short_circuit = false;
-
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
     let original_fields = fields;
@@ -334,11 +328,6 @@ pub fn find(
         }
 
         results.push(obj);
-
-        // Early exit when we have enough results and a full scan is not needed.
-        if can_short_circuit && results.len() >= limit.unwrap() {
-            break;
-        }
     }
 
     // --- Sort ---
@@ -624,10 +613,6 @@ pub fn find_from_index(
         None
     };
 
-    // Short-circuit is disabled: when --limit is active we need to count all
-    // matching results to report the accurate total in the output envelope.
-    let can_short_circuit = false;
-
     // When sorting by a frontmatter property or title, or when --broken-links
     // is active, force the relevant fields on even if not requested via --fields.
     let original_fields = fields;
@@ -867,10 +852,6 @@ pub fn find_from_index(
         }
 
         results.push(obj);
-
-        if can_short_circuit && results.len() >= limit.unwrap() {
-            break;
-        }
     }
 
     // --- Sort ---

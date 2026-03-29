@@ -378,9 +378,9 @@ Research across tools:
 - **Wikipedia/SEO** (older, broader): orphan = no inbound links; dead-end = no outbound links
 - **Obsidian Graph View / Foam / Logseq**: orphan = no links in either direction (isolated)
 
-**Decision:** Keep hyalo's orphan definition as-is (no inbound AND no outbound = fully isolated, consistent with Obsidian). Add a new **dead-end** concept: files with no outbound links, regardless of inbound links.
+**Decision:** Keep hyalo's orphan definition as-is (no inbound AND no outbound = fully isolated, consistent with Obsidian). Add a new **dead-end** concept: files that have inbound links but no outbound links (orphans are excluded and reported separately).
 
-**Why:** Both definitions are useful. Orphans (isolated files) are clearly disconnected. Dead-ends (no outbound links) flag navigation dead-ends where users arrive but have nowhere to go. Note: many dead-ends are not actionable — top-level files in root or well-known directories (e.g. `/iterations/`) are easily accessible by browsing and don't need outbound links.
+**Why:** Both definitions are useful. Orphans (isolated files) are clearly disconnected. Dead-ends (inbound links but no outbound links, excluding orphans) flag navigation dead-ends where users arrive but have nowhere to go. Note: many dead-ends are not actionable — top-level files in root or well-known directories (e.g. `/iterations/`) are easily accessible by browsing and don't need outbound links.
 
 **Consequences:**
 - `summary` gains a `dead_ends` section alongside `orphans`

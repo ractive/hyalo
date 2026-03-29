@@ -22,7 +22,7 @@ the v0.6.0 tidy round (tested on 3 external repos: docs/content 3520 files, vsco
 
 ### Dead-end detection in summary
 
-- [x] Add dead-end detection: files with no outbound links (regardless of inbound)
+- [x] Add dead-end detection: files that have inbound links and no outbound links (excluding orphans)
 - [x] Add `dead_ends` section to summary JSON output: `{"total": N, "files": [...]}`
 - [x] Add dead-end line to summary text output
 - [x] Add unit tests for dead-end detection
