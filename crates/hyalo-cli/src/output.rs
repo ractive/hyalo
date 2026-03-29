@@ -529,11 +529,8 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
             // Detect the find results envelope: {"total": N, "results": [...]}
             // Format each result element normally; append "showing N of M matches"
             // only when limit actually truncated results.
-            if map.len() == 2
-                && map.contains_key("total")
-                && map.contains_key("results")
-                && let (Some(total), Some(results)) =
-                    (map["total"].as_u64(), map["results"].as_array())
+            if let (Some(total_val), Some(results_val)) = (map.get("total"), map.get("results"))
+                && let (Some(total), Some(results)) = (total_val.as_u64(), results_val.as_array())
             {
                 let shown = results.len();
                 let mut parts: Vec<String> = results

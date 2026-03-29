@@ -382,8 +382,8 @@ pub fn find(
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
         .into_iter()
-        .map(|obj| serde_json::to_value(obj).expect("derived Serialize impl should not fail"))
-        .collect();
+        .map(|obj| serde_json::to_value(obj).context("failed to serialize find result"))
+        .collect::<Result<_>>()?;
 
     // In text mode, an empty result set produces no stdout output, which an
     // LLM (or script) cannot distinguish from a silent failure.  Emit an

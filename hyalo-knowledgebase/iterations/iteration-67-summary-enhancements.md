@@ -33,11 +33,10 @@ See [[backlog/summary-dead-ends]]
 
 ### Show total count when --limit truncates
 
-- [x] When `--limit` is active on `find`, compute total match count before truncating
-- [x] JSON output: wrap in `{"total": N, "results": [...]}` envelope when `--limit` is used
-- [x] Text output: append `showing N of M matches` line when `--limit` is used
-- [x] When `--limit` is not used, output stays unchanged (no envelope)
-- [x] Add e2e tests for `--limit` with total count in both formats
+- [x] Compute total match count; when `--limit` is active, compute before truncating
+- [x] JSON output: always wrap in `{"total": N, "results": [...]}` envelope (stable schema)
+- [x] Text output: append `showing N of M matches` line when `--limit` truncates
+- [x] Add e2e tests for find JSON envelope (both limited and unlimited) and text --limit total count
 - [x] Verify `--limit` + `--jq` interaction works correctly (jq operates on the envelope)
 
 See [[backlog/find-limit-total-count]]

@@ -727,7 +727,7 @@ fn find_limit_truncated_json_envelope() {
 
 /// When --limit equals or exceeds the match count, output is an envelope where total == results.len().
 #[test]
-fn find_limit_no_truncation_plain_array() {
+fn find_limit_no_truncation_returns_envelope() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["--limit", "10"]);
     assert!(status.success(), "stderr: {stderr}");
