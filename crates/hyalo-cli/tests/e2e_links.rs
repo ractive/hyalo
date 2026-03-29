@@ -241,7 +241,9 @@ fn find_broken_links_filter() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let results = json.as_array().expect("find output should be a JSON array");
+    let results = json["results"]
+        .as_array()
+        .expect("find output should have a results array");
 
     // b.md and d.md have broken links; they must appear
     let files: Vec<&str> = results
@@ -294,7 +296,9 @@ fn find_broken_links_entries_have_null_path() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let results = json.as_array().expect("find output should be a JSON array");
+    let results = json["results"]
+        .as_array()
+        .expect("find output should have a results array");
 
     // Each returned file should have at least one link entry with path = null
     for result in results {
@@ -339,7 +343,9 @@ fn find_broken_links_combined_with_glob_filter() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let results = json.as_array().expect("find output should be a JSON array");
+    let results = json["results"]
+        .as_array()
+        .expect("find output should have a results array");
     let files: Vec<&str> = results
         .iter()
         .map(|r| r["file"].as_str().unwrap_or(""))

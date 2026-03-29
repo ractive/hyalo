@@ -54,7 +54,7 @@ scanning all files to build the link graph. Each backlink entry contains `source
 
 ```bash
 hyalo find --fields backlinks --file my-note.md       # see who links to this note
-hyalo find --fields backlinks --jq 'map(select(.backlinks | length == 0))' # find orphan notes
+hyalo find --fields backlinks --jq '.results | map(select(.backlinks | length == 0))' # find orphan notes
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
 
@@ -63,7 +63,7 @@ Pipe through `--jq` to reshape output into anything — dashboards, burndowns, r
 
 ```bash
 hyalo find --property status=in-progress --fields tasks \
-  --jq 'map({file, done: ([.tasks[] | select(.status == "x")] | length), total: (.tasks | length)})'
+  --jq '.results | map({file, done: ([.tasks[] | select(.status == "x")] | length), total: (.tasks | length)})'
 ```
 
 **Run `hyalo --help` and `hyalo <command> --help` to learn the full API.**

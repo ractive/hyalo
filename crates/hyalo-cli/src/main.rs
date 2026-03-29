@@ -160,7 +160,7 @@ COOKBOOK:
   hyalo find --section '## Sprint' --task todo
 
   # Find broken [[wikilinks]] (fields=links, then filter in jq)
-  hyalo find --fields links --jq '[.[] | select(.links | map(select(.path == null)) | length > 0)]'
+  hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'
 
   # Exclude draft files with glob negation
   hyalo find --glob '!**/draft-*'
@@ -187,10 +187,10 @@ COOKBOOK:
   hyalo properties summary --jq '[.[].name] | join(\", \")'
 
   # Get just file paths (no metadata)
-  hyalo find --property status=draft --jq '[.[].file]'
+  hyalo find --property status=draft --jq '[.results[].file]'
 
   # Pipe file paths for scripting (Unix)
-  hyalo find --tag research --jq '.[].file' | xargs -I{} hyalo set --property reviewed=true --file {}
+  hyalo find --tag research --jq '.results[].file' | xargs -I{} hyalo set --property reviewed=true --file {}
 
   # Find all files that link to a given note
   hyalo backlinks --file decision-log.md
@@ -236,9 +236,9 @@ COOKBOOK:
 
 OUTPUT SHAPES (JSON, default):
   # find
-  [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
+  {\"total\": N, \"results\": [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
    \"properties\": {\"status\": \"draft\", \"title\": \"My Note\"},
-   \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]
+   \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]}
 
   # read
   {\"file\": \"notes/todo.md\", \"content\": \"...body text...\"}
@@ -265,7 +265,7 @@ OUTPUT SHAPES (JSON, default):
   # summary
   {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},
   \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},
-  \"orphans\": [\"orphan.md\", ...],
+  \"orphans\": {\"total\": N, \"files\": [...]}, \"dead_ends\": {\"total\": N, \"files\": [...]},
   \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}
 
   # backlinks

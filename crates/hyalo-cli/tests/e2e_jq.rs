@@ -90,7 +90,7 @@ fn jq_works_on_find_property_filter() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".[].file"])
+        .args(["--jq", ".results[].file"])
         .args(["find", "--property", "status=draft"])
         .output()
         .unwrap();
@@ -117,7 +117,7 @@ fn jq_works_on_find_links() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".[0].links | length"])
+        .args(["--jq", ".results[0].links | length"])
         .args(["find", "--file", "source.md", "--fields", "links"])
         .output()
         .unwrap();
@@ -142,7 +142,7 @@ fn jq_works_on_find_sections() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".[0].sections | length"])
+        .args(["--jq", ".results[0].sections | length"])
         .args(["find", "--file", "doc.md", "--fields", "sections"])
         .output()
         .unwrap();

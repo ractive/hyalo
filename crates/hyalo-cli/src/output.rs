@@ -201,8 +201,8 @@ const TASK_INFO_FILTER: &str =
 const TASK_READ_RESULT_FILTER: &str =
     r#""\"\(.file)\":\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
 
-/// `VaultSummary`: `{files, links, orphans, properties, recent_files, status, tags, tasks}`
-const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then "\n\(.files.by_directory | map("  \"\(.directory)\": \(.count)") | join("\n"))" else "" end)\nLinks: \(.links.total) total, \(.links.broken) broken\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nOrphans: \(.orphans.total)\(if (.orphans.files | length) > 0 then "\n\(.orphans.files | map("  \"\(.)\"") | join("\n"))" else "" end)\nRecent:\(if (.recent_files | length) > 0 then "\n\(.recent_files | map("  \"\(.path)\"") | join("\n"))" else " (none)" end)""#;
+/// `VaultSummary`: `{dead_ends, files, links, orphans, properties, recent_files, status, tags, tasks}`
+const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total) total\(if (.files.by_directory | length) > 0 then "\n\(.files.by_directory | map("  \"\(.directory)\": \(.count)") | join("\n"))" else "" end)\nLinks: \(.links.total) total, \(.links.broken) broken\nProperties: \(.properties | length) unique\nTags: \(.tags.total) unique\nStatus: \(if (.status | length) > 0 then (.status | map("\(.value) (\(.files | length))") | join(", ")) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nOrphans: \(.orphans.total)\(if (.orphans.files | length) > 0 then "\n\(.orphans.files | map("  \"\(.)\"") | join("\n"))" else "" end)\nDead-ends: \(.dead_ends.total)\(if (.dead_ends.files | length) > 0 then "\n\(.dead_ends.files | map("  \"\(.)\"") | join("\n"))" else "" end)\nRecent:\(if (.recent_files | length) > 0 then "\n\(.recent_files | map("  \"\(.path)\"") | join("\n"))" else " (none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -277,7 +277,7 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // TaskReadResult
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
         // VaultSummary
-        "files,links,orphans,properties,recent_files,status,tags,tasks" => {
+        "dead_ends,files,links,orphans,properties,recent_files,status,tags,tasks" => {
             Some(VAULT_SUMMARY_FILTER)
         }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
@@ -526,6 +526,29 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 .join(sep)
         }
         serde_json::Value::Object(map) => {
+            // Detect the find results envelope: {"total": N, "results": [...]}
+            // Format each result element normally; append "showing N of M matches"
+            // only when limit actually truncated results.
+            if let (Some(total_val), Some(results_val)) = (map.get("total"), map.get("results"))
+                && let (Some(total), Some(results)) = (total_val.as_u64(), results_val.as_array())
+            {
+                let shown = results.len();
+                let mut parts: Vec<String> = results
+                    .iter()
+                    .map(|v| format_value_as_text(v, cache))
+                    .collect();
+                if (shown as u64) < total {
+                    parts.push(format!("showing {shown} of {total} matches"));
+                }
+                // Preserve blank-line separation when results are FileObjects.
+                let is_file_objects = results
+                    .first()
+                    .and_then(|v| v.as_object())
+                    .is_some_and(|m| m.contains_key("file") && m.contains_key("modified"));
+                let sep = if is_file_objects { "\n\n" } else { "\n" };
+                return parts.join(sep);
+            }
+
             let sig = key_signature(map);
             if let Some(filter) = lookup_filter(&sig)
                 && let Some(output) = apply_jq_filter(filter, value, cache)

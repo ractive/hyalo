@@ -15,8 +15,9 @@ use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
 use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
-    DirectoryCount, FileCounts, LinkHealthSummary, OrphanSummary, PropertySummaryEntry, RecentFile,
-    StatusGroup, TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
+    DeadEndSummary, DirectoryCount, FileCounts, LinkHealthSummary, OrphanSummary,
+    PropertySummaryEntry, RecentFile, StatusGroup, TagSummary, TagSummaryEntry, TaskCount,
+    VaultSummary,
 };
 
 /// Show a high-level vault summary.
@@ -257,10 +258,10 @@ pub fn summary(
         }
     };
 
-    // Build orphan list: files with no inbound AND no outbound links (fully isolated).
+    // Build orphan and dead-end lists using the vault-wide link graph.
     // When no glob: use pre-collected link data (single pass, no re-read).
     // When glob: build vault-wide link graph so links from outside the glob count.
-    let orphans = {
+    let (orphans, dead_ends) = {
         let build = if collect_links {
             LinkGraph::from_file_links(collected_links, site_prefix)
         } else {
@@ -269,6 +270,8 @@ pub fn summary(
         };
         let targets = build.graph.all_targets();
         let sources = build.graph.all_sources();
+
+        // Orphans: no inbound AND no outbound (fully isolated)
         let mut orphan_files: Vec<String> = good_files
             .iter()
             .map(|(_, rel)| rel.to_string_lossy())
@@ -282,11 +285,32 @@ pub fn summary(
             .map(|rel| rel.into_owned())
             .collect();
         orphan_files.sort();
-        let total = orphan_files.len();
-        OrphanSummary {
-            total,
-            files: orphan_files,
-        }
+
+        // Dead-ends: has inbound links but no outbound links
+        let mut dead_end_files: Vec<String> = good_files
+            .iter()
+            .map(|(_, rel)| rel.to_string_lossy())
+            .filter(|rel| {
+                let rel_str: &str = rel.as_ref();
+                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
+                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+                let has_outbound = sources.contains(rel_str);
+                has_inbound && !has_outbound
+            })
+            .map(|rel| rel.into_owned())
+            .collect();
+        dead_end_files.sort();
+
+        (
+            OrphanSummary {
+                total: orphan_files.len(),
+                files: orphan_files,
+            },
+            DeadEndSummary {
+                total: dead_end_files.len(),
+                files: dead_end_files,
+            },
+        )
     };
 
     // Emit warnings for any property value that looks like a typo of a dominant value.
@@ -295,6 +319,7 @@ pub fn summary(
     let vault_summary = VaultSummary {
         files: file_counts,
         orphans,
+        dead_ends,
         links: link_health,
         properties,
         tags,
@@ -589,26 +614,51 @@ pub fn summary_from_index(
         .map(|(modified, path)| RecentFile { path, modified })
         .collect();
 
-    // Build orphan list using the pre-built link graph from the index.
+    // Build orphan and dead-end lists using the pre-built link graph from the index.
     // The link graph is vault-wide so links from outside the scoped set still count.
-    let graph = index.link_graph();
-    let targets = graph.all_targets();
-    let sources = graph.all_sources();
-    let mut orphan_files: Vec<String> = entries
-        .iter()
-        .filter(|entry| {
-            let rel_str: &str = &entry.rel_path;
-            let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
-            let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
-            let has_outbound = sources.contains(rel_str);
-            !has_inbound && !has_outbound
-        })
-        .map(|entry| entry.rel_path.clone())
-        .collect();
-    orphan_files.sort();
-    let orphans = OrphanSummary {
-        total: orphan_files.len(),
-        files: orphan_files,
+    let (orphans, dead_ends) = {
+        let graph = index.link_graph();
+        let targets = graph.all_targets();
+        let sources = graph.all_sources();
+
+        // Orphans: no inbound AND no outbound (fully isolated)
+        let mut orphan_files: Vec<String> = entries
+            .iter()
+            .filter(|entry| {
+                let rel_str: &str = &entry.rel_path;
+                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
+                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+                let has_outbound = sources.contains(rel_str);
+                !has_inbound && !has_outbound
+            })
+            .map(|entry| entry.rel_path.clone())
+            .collect();
+        orphan_files.sort();
+
+        // Dead-ends: has inbound links but no outbound links
+        let mut dead_end_files: Vec<String> = entries
+            .iter()
+            .filter(|entry| {
+                let rel_str: &str = &entry.rel_path;
+                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
+                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+                let has_outbound = sources.contains(rel_str);
+                has_inbound && !has_outbound
+            })
+            .map(|entry| entry.rel_path.clone())
+            .collect();
+        dead_end_files.sort();
+
+        (
+            OrphanSummary {
+                total: orphan_files.len(),
+                files: orphan_files,
+            },
+            DeadEndSummary {
+                total: dead_end_files.len(),
+                files: dead_end_files,
+            },
+        )
     };
 
     // Emit warnings for any property value that looks like a typo of a dominant value.
@@ -630,6 +680,7 @@ pub fn summary_from_index(
     let vault_summary = VaultSummary {
         files: file_counts,
         orphans,
+        dead_ends,
         links: link_health,
         properties,
         tags,
@@ -1102,6 +1153,50 @@ No tasks here.
         );
         // orphan.md should be the only orphan
         assert_eq!(disk_orphans, vec!["orphan.md"]);
+    }
+
+    /// Dead-end detection:
+    /// - a.md links to b.md and c.md (has outbound, no inbound → not a dead-end, not an orphan)
+    /// - b.md links to c.md (has inbound from a, has outbound to c → not a dead-end)
+    /// - c.md has no links (has inbound from a and b, no outbound → dead-end)
+    /// - d.md has no links and nothing links to it → orphan
+    #[test]
+    fn summary_dead_end_detection() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("a.md"),
+            "---\ntitle: A\n---\n[[b]]\n[[c]]\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("b.md"), "---\ntitle: B\n---\n[[c]]\n").unwrap();
+        fs::write(tmp.path().join("c.md"), "---\ntitle: C\n---\nNo links.\n").unwrap();
+        fs::write(tmp.path().join("d.md"), "---\ntitle: D\n---\nNo links.\n").unwrap();
+
+        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+
+        // c.md is the only dead-end
+        assert_eq!(val["dead_ends"]["total"], 1, "expected 1 dead-end");
+        let dead_end_files: Vec<&str> = val["dead_ends"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            dead_end_files,
+            vec!["c.md"],
+            "dead-ends: {dead_end_files:?}"
+        );
+
+        // d.md is the only orphan
+        assert_eq!(val["orphans"]["total"], 1, "expected 1 orphan");
+        let orphan_files: Vec<&str> = val["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(orphan_files, vec!["d.md"], "orphans: {orphan_files:?}");
     }
 
     #[test]
