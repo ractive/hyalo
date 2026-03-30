@@ -1461,3 +1461,54 @@ fn find_fields_backlinks_empty_when_no_incoming() {
     let backlinks = gamma["backlinks"].as_array().unwrap();
     assert!(backlinks.is_empty());
 }
+
+// --- find: content search with frontmatter-only index ---
+
+/// Verifies that content search works correctly when the index was built with
+/// `scan_body: false` (frontmatter only). This is the key scenario for the
+/// optimisation that decouples content search from the body-scan predicate.
+#[test]
+fn content_search_works_with_frontmatter_only_index() {
+    let tmp = setup_vault();
+    let all = hyalo_core::discovery::discover_files(tmp.path()).unwrap();
+    let file_pairs: Vec<(std::path::PathBuf, String)> = all
+        .into_iter()
+        .map(|p| {
+            let rel = hyalo_core::discovery::relative_path(tmp.path(), &p);
+            (p, rel)
+        })
+        .collect();
+    let build = ScannedIndex::build(&file_pairs, None, &ScanOptions { scan_body: false }).unwrap();
+
+    let fields = Fields::default();
+    let out = unwrap_success(
+        find(
+            &build.index,
+            tmp.path(),
+            None,
+            Some("Rust programming"),
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &fields,
+            None,
+            false,
+            None,
+            false,
+            None,
+            Format::Json,
+        )
+        .unwrap(),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "should find beta.md via content search");
+    assert!(arr[0]["file"].as_str().unwrap().contains("beta"));
+    // Verify content match details are present
+    let matches = arr[0]["matches"].as_array().unwrap();
+    assert!(!matches.is_empty(), "should include match details");
+}
