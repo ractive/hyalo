@@ -1,6 +1,12 @@
 # hyalo
 
-Query, filter, and mutate YAML frontmatter across markdown file collections. Compatible with [Obsidian](https://obsidian.md/) vaults, Zettelkasten systems, and any directory of `.md` files with YAML frontmatter — no running Obsidian instance required.
+A high-performance CLI to query, filter, and mutate YAML frontmatter across markdown file collections. Compatible with [Obsidian](https://obsidian.md/) vaults, Zettelkasten systems, and any directory of `.md` files with YAML frontmatter.
+
+Hyalo lets you (or your AI agent) manage a markdown-based knowledgebase or second brain. Find files by frontmatter metadata or body content, bulk-update properties across matching files, move files while preserving all links, and detect and auto-repair broken links. All output is structured JSON with `--jq` support, making it easy to integrate into scripts and automation. Set up integration with Claude Code in one command: `hyalo init --claude`.
+
+An optional ephemeral snapshot index (`hyalo create-index`) speeds up repeated queries by caching metadata in memory. The index stays valid as long as all mutations go through hyalo — drop it when you're done (`hyalo drop-index`).
+
+"Hyalo" — like "obsidian" — is a volcanic glass. The project started as a high-performance CLI for Claude Code to maintain knowledgebase directories built to be consumed by [Obsidian](https://obsidian.md/).
 
 ## Installation
 
