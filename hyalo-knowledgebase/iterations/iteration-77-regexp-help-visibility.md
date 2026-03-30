@@ -27,5 +27,5 @@ Found during v0.6.0 dogfooding (iteration 74). Several powerful features are har
 - [x] Add a regex body search example to the short help in `HELP_EXAMPLES` (e.g. `Regex body search: hyalo find -e 'perf(ormance)?'`)
 - [x] Add 1–2 `--regexp` examples to the cookbook in `HELP_LONG` (standalone + combined with other filters)
 - [x] Add a `--jq '.total'` counting example to the cookbook (e.g. `# Count matching files` / `hyalo find --property status=draft --jq '.total'`)
-- [x] Add a `(?i)` case-insensitive property regex example to the cookbook — already present as `/pattern/i` syntax at line 113-114
+- [x] Add a `(?i)` case-insensitive property regex example to the cookbook — already present as `/pattern/i` syntax in the cookbook
 - [x] Mention `-e`/`--regexp` in `CLAUDE.md` body search bullet
