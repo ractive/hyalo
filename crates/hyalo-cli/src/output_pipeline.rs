@@ -5,6 +5,9 @@ use crate::output::{
     CommandOutcome, Format, apply_jq_filter_result, build_envelope_value, format_envelope,
 };
 
+/// Error message for `--count` on non-list commands (shared across match arms).
+pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)";
+
 /// Encapsulates the post-command output pipeline: jq filtering, hint generation,
 /// and envelope wrapping.
 pub(crate) struct OutputPipeline<'a> {
@@ -14,6 +17,8 @@ pub(crate) struct OutputPipeline<'a> {
     pub jq_filter: Option<&'a str>,
     /// Optional hint context for drill-down commands.
     pub hint_ctx: Option<&'a HintContext>,
+    /// Print only the total count as a bare integer.
+    pub count: bool,
 }
 
 impl OutputPipeline<'_> {
@@ -22,6 +27,16 @@ impl OutputPipeline<'_> {
     pub fn finalize(&self, result: Result<CommandOutcome>) -> i32 {
         match result {
             Ok(CommandOutcome::Success { output, total }) => {
+                // --count: print bare total and exit early.
+                if self.count {
+                    if let Some(n) = total {
+                        println!("{n}");
+                        return 0;
+                    }
+                    eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+                    return 2;
+                }
+
                 // Commands always produce JSON internally.
                 let value: serde_json::Value = match serde_json::from_str(&output) {
                     Ok(v) => v,
@@ -78,6 +93,10 @@ impl OutputPipeline<'_> {
                 0
             }
             Ok(CommandOutcome::RawOutput(output)) => {
+                if self.count {
+                    eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+                    return 2;
+                }
                 // Raw output bypasses the JSON pipeline — print directly to stdout.
                 // Used by the `read` command for text-format content output.
                 // println! matches pre-refactor behavior: the content string already ends

@@ -9,7 +9,7 @@ use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
 use crate::hints::{HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
-use crate::output_pipeline::OutputPipeline;
+use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
 use hyalo_core::index::SnapshotIndex;
 
 #[allow(clippy::too_many_lines)]
@@ -156,6 +156,11 @@ fn run_inner() -> Result<(), AppError> {
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
+    // Reject --count early — init is not a list command.
+    if cli.count && matches!(cli.command, Commands::Init { .. }) {
+        eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+        return Err(AppError::Exit(2));
+    }
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
         match init_commands::run_init(init_dir, claude) {
@@ -249,6 +254,14 @@ fn run_inner() -> Result<(), AppError> {
     } else {
         format
     };
+    // --count replaces the entire output pipeline, so check its conflicts first.
+    if cli.count && jq_filter.is_some() {
+        eprintln!("Error: --count cannot be combined with --jq");
+        eprintln!(
+            "  --count prints the bare total; --jq applies a custom filter — use one or the other"
+        );
+        return Err(AppError::Exit(2));
+    }
     if jq_filter.is_some() && format != Format::Json {
         eprintln!("Error: --jq cannot be combined with --format {format}");
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
@@ -528,6 +541,7 @@ fn run_inner() -> Result<(), AppError> {
         user_format: format,
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
+        count: cli.count,
     };
     let code = pipeline.finalize(result);
     if code == 0 {

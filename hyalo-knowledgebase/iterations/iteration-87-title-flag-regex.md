@@ -6,7 +6,7 @@ tags:
   - cli
   - ux
   - find
-status: in-progress
+status: completed
 branch: iter-87/title-flag-regex-warning
 ---
 
