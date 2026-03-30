@@ -61,9 +61,8 @@ impl TitleMatcher {
                         // Detect by checking if the regex already matches
                         // case-insensitively — simplest: rebuild with (?i) if
                         // the flags section is empty.
-                        let flags_section = regex_pat
-                            .rfind('/')
-                            .map_or("", |pos| &regex_pat[pos + 1..]);
+                        let flags_section =
+                            regex_pat.rfind('/').map_or("", |pos| &regex_pat[pos + 1..]);
                         if flags_section.contains('i') {
                             Ok(Self::Regex(re))
                         } else {
