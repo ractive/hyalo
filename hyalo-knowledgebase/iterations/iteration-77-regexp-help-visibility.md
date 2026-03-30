@@ -6,7 +6,7 @@ tags:
   - ux
   - docs
   - dogfood
-status: planned
+status: completed
 priority: 3
 branch: iter-77/regexp-help-visibility
 ---
@@ -24,8 +24,8 @@ Found during v0.6.0 dogfooding (iteration 74). Several powerful features are har
 
 ## Tasks
 
-- [ ] Add a regex body search example to the short help in `HELP_EXAMPLES` (e.g. `Regex body search: hyalo find -e 'perf(ormance)?'`)
-- [ ] Add 1–2 `--regexp` examples to the cookbook in `HELP_LONG` (standalone + combined with other filters)
-- [ ] Add a `--jq '.total'` counting example to the cookbook (e.g. `# Count matching files` / `hyalo find --property status=draft --jq '.total'`)
-- [ ] Add a `(?i)` case-insensitive property regex example to the cookbook
-- [ ] Mention `-e`/`--regexp` in `CLAUDE.md` body search bullet
+- [x] Add a regex body search example to the short help in `HELP_EXAMPLES` (e.g. `Regex body search: hyalo find -e 'perf(ormance)?'`)
+- [x] Add 1–2 `--regexp` examples to the cookbook in `HELP_LONG` (standalone + combined with other filters)
+- [x] Add a `--jq '.total'` counting example to the cookbook (e.g. `# Count matching files` / `hyalo find --property status=draft --jq '.total'`)
+- [x] Add a `(?i)` case-insensitive property regex example to the cookbook — already present as `/pattern/i` syntax in the cookbook
+- [x] Mention `-e`/`--regexp` in `CLAUDE.md` body search bullet
