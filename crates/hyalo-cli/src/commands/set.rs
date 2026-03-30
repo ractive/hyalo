@@ -23,6 +23,7 @@ pub struct SetPropertyResult {
     pub skipped: Vec<String>,
     pub total: usize,
     pub scanned: usize,
+    pub dry_run: bool,
 }
 
 /// Result of a `set --tag T` operation across files.
@@ -33,6 +34,7 @@ pub struct SetTagResult {
     pub skipped: Vec<String>,
     pub total: usize,
     pub scanned: usize,
+    pub dry_run: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +147,7 @@ pub fn set(
     format: Format,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
+    dry_run: bool,
 ) -> Result<CommandOutcome> {
     // At least one mutation target required
     if property_args.is_empty() && tag_args.is_empty() {
@@ -279,7 +282,7 @@ pub fn set(
             }
         }
 
-        if file_changed {
+        if file_changed && !dry_run {
             frontmatter::write_frontmatter(full_path, &props)?;
             mutation::update_index_entry(
                 snapshot_index,
@@ -291,7 +294,9 @@ pub fn set(
         }
     }
 
-    mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+    if !dry_run {
+        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+    }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
@@ -306,6 +311,7 @@ pub fn set(
             skipped,
             total,
             scanned,
+            dry_run,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -319,6 +325,7 @@ pub fn set(
             skipped,
             total,
             scanned,
+            dry_run,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -405,6 +412,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let out = match outcome {
@@ -446,6 +454,7 @@ status: draft
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
 
@@ -478,6 +487,7 @@ status: done
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -513,6 +523,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -551,6 +562,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -584,6 +596,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -608,6 +621,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -627,6 +641,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -647,6 +662,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -667,6 +683,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -693,6 +710,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
 
@@ -726,6 +744,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -769,6 +788,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -806,6 +826,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -842,6 +863,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -876,6 +898,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         match outcome {
@@ -901,6 +924,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -921,6 +945,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -941,6 +966,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));

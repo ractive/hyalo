@@ -586,3 +586,77 @@ fn remove_accepts_kv_property() {
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(json["property"], "status");
 }
+
+// ---------------------------------------------------------------------------
+// --dry-run: preview without modifying
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_dry_run_does_not_modify() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+status: draft
+---
+"),
+    );
+
+    let (status, json, stderr) = remove_json(
+        &tmp,
+        &["--property", "status", "--file", "note.md", "--dry-run"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    // File must NOT have been modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("status"),
+        "file was modified despite --dry-run:\n{content}"
+    );
+}
+
+#[test]
+fn remove_dry_run_tag_does_not_modify() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntags:\n  - rust\n  - cli\n---\n",
+    );
+
+    let (status, json, stderr) =
+        remove_json(&tmp, &["--tag", "rust", "--file", "note.md", "--dry-run"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    // File must NOT have been modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("rust"),
+        "tag was removed despite --dry-run:\n{content}"
+    );
+}
+
+#[test]
+fn remove_without_dry_run_has_dry_run_false() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\nstatus: draft\n---\n");
+
+    let (status, json, stderr) = remove_json(&tmp, &["--property", "status", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["dry_run"], false);
+
+    // File should actually be modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        !content.contains("status"),
+        "file was not written:\n{content}"
+    );
+}

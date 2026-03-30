@@ -581,3 +581,62 @@ fn append_accepts_list_property() {
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(json["property"], "tags");
 }
+
+// ---------------------------------------------------------------------------
+// --dry-run: preview without modifying
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_dry_run_does_not_modify() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+"),
+    );
+
+    let (status, json, stderr) = append_json(
+        &tmp,
+        &[
+            "--property",
+            "aliases=my-note",
+            "--file",
+            "note.md",
+            "--dry-run",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    // File must NOT have been modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        !content.contains("aliases"),
+        "file was modified despite --dry-run:\n{content}"
+    );
+}
+
+#[test]
+fn append_without_dry_run_has_dry_run_false() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) = append_json(
+        &tmp,
+        &["--property", "aliases=my-note", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["dry_run"], false);
+
+    // File should actually be modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("my-note"),
+        "file was not written:\n{content}"
+    );
+}

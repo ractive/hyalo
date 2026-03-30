@@ -26,6 +26,7 @@ pub struct RemovePropertyResult {
     pub skipped: Vec<String>,
     pub total: usize,
     pub scanned: usize,
+    pub dry_run: bool,
 }
 
 /// Result of a `remove --tag T` operation across files.
@@ -36,6 +37,7 @@ pub struct RemoveTagResult {
     pub skipped: Vec<String>,
     pub total: usize,
     pub scanned: usize,
+    pub dry_run: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +173,7 @@ pub fn remove(
     format: Format,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
+    dry_run: bool,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() && tag_args.is_empty() {
         let out = crate::output::format_error(
@@ -284,7 +287,7 @@ pub fn remove(
             }
         }
 
-        if file_changed {
+        if file_changed && !dry_run {
             frontmatter::write_frontmatter(full_path, &props)?;
             mutation::update_index_entry(
                 snapshot_index,
@@ -296,7 +299,9 @@ pub fn remove(
         }
     }
 
-    mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+    if !dry_run {
+        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+    }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
@@ -312,6 +317,7 @@ pub fn remove(
             skipped,
             total,
             scanned,
+            dry_run,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -326,6 +332,7 @@ pub fn remove(
             skipped,
             total,
             scanned,
+            dry_run,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
@@ -412,6 +419,7 @@ status: draft
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -451,6 +459,7 @@ title: Note
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -487,6 +496,7 @@ status: draft
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -523,6 +533,7 @@ status: published
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -563,6 +574,7 @@ aliases:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -604,6 +616,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -643,6 +656,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -666,6 +680,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -685,6 +700,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -716,6 +732,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -747,6 +764,7 @@ tags:
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
 
@@ -781,6 +799,7 @@ priority: low
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -826,6 +845,7 @@ priority: low
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -865,6 +885,7 @@ priority: low
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         let CommandOutcome::Success(out) = outcome else {
@@ -899,6 +920,7 @@ priority: low
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         match outcome {
@@ -924,6 +946,7 @@ priority: low
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -944,6 +967,7 @@ priority: low
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
