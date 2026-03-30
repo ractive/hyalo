@@ -114,7 +114,7 @@ All queries below use `--index .hyalo-index` — no additional disk scans needed
 ### Broken links
 ```bash
 # Dry-run shows broken links with proposed fixes and confidence scores
-hyalo links fix --format text
+hyalo links fix --index .hyalo-index --format text
 ```
 This categorizes links as **fixable** (fuzzy match found) vs **unfixable** (no match).
 Note the counts for the health dashboard. Actual fixes happen in Phase 4.
@@ -186,10 +186,10 @@ correct target (handles moves to `done/`, case changes, extension mismatches, et
 
 ```bash
 # Preview what will be fixed
-hyalo links fix --format text
+hyalo links fix --format text --index .hyalo-index
 
 # Apply fixes
-hyalo links fix --apply --format text
+hyalo links fix --apply --format text --index .hyalo-index
 ```
 
 Review the dry-run output first. For any links it can't resolve (reported as unfixable),

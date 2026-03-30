@@ -301,7 +301,7 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         let remaining = MAX_HINTS.saturating_sub(hints.len());
         if remaining > 0 {
             hints.push(Hint::new(
-                format!("List {broken_links} files with broken links"),
+                "List files with broken links",
                 build_command_with_glob(ctx, &["find", "--broken-links"]),
             ));
         }
