@@ -135,6 +135,75 @@ pub fn total_suppressed() -> usize {
         .unwrap_or(0)
 }
 
+/// Emit a "did you mean…" warning when globs matched zero files and the glob
+/// pattern appears to redundantly include the configured `--dir` path.
+///
+/// Example: if `dir` is `files/en-us` and a glob is `files/en-us/web/css/**`,
+/// the user probably meant `web/css/**` (since globs are relative to `--dir`).
+///
+/// Only warns when `matched_count` is 0, at least one glob is provided, and
+/// at least one glob starts with a path component matching the dir or its last
+/// segment.
+pub fn warn_glob_dir_overlap(dir: &std::path::Path, globs: &[String], matched_count: usize) {
+    if matched_count > 0 || globs.is_empty() {
+        return;
+    }
+
+    // Normalise dir to forward slashes, strip leading "./" and trailing "/"
+    // so comparisons work on Windows and with `--dir ./docs/` style inputs.
+    let dir_str = dir.to_string_lossy().replace('\\', "/");
+    let dir_str = dir_str
+        .strip_prefix("./")
+        .unwrap_or(&dir_str)
+        .trim_end_matches('/');
+
+    // Only consider non-trivial dir values (not ".")
+    if dir_str == "." || dir_str.is_empty() {
+        return;
+    }
+
+    for glob in globs {
+        // Skip negation patterns
+        if glob.starts_with('!') {
+            continue;
+        }
+
+        // Normalise glob the same way for consistent comparison
+        let glob_norm = glob.replace('\\', "/");
+
+        // Check if the glob starts with the full dir path followed by a '/'
+        // (e.g. "files/en-us/web/css/**" when dir is "files/en-us").
+        // Require a '/' boundary to avoid matching partial prefixes like
+        // "files/en-us-old/**".
+        let full_prefix = format!("{dir_str}/");
+        if let Some(rest) = glob_norm.strip_prefix(full_prefix.as_str())
+            && !rest.is_empty()
+        {
+            warn(format!(
+                "glob '{glob}' matched 0 files. Globs are relative to --dir '{dir_str}'. \
+                 Did you mean '{rest}'?"
+            ));
+            return;
+        }
+
+        // Also check if the glob starts with the last path component of dir
+        // followed by a '/' (e.g. "en-us/web/**" when dir is "files/en-us").
+        // Again require the '/' boundary to avoid "notes" matching "notes-archive/**".
+        if let Some(last_component) = dir.file_name().and_then(|n| n.to_str()) {
+            let component_prefix = format!("{last_component}/");
+            if let Some(rest) = glob_norm.strip_prefix(component_prefix.as_str())
+                && !rest.is_empty()
+            {
+                warn(format!(
+                    "glob '{glob}' matched 0 files. Globs are relative to --dir '{dir_str}'. \
+                     Did you mean '{rest}'?"
+                ));
+                return;
+            }
+        }
+    }
+}
+
 /// Print a summary of suppressed duplicate warnings, if any.
 ///
 /// Should be called just before the process exits. Prints to stderr.
@@ -237,5 +306,100 @@ mod tests {
             warn("msg-total-y");
         }
         assert_eq!(total_suppressed(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // warn_glob_dir_overlap tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn glob_overlap_no_warning_when_results_found() {
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("files/en-us");
+        warn_glob_dir_overlap(dir, &["files/en-us/web/**".to_owned()], 5);
+        assert!(!was_emitted(
+            "glob 'files/en-us/web/**' matched 0 files. Globs are relative to --dir 'files/en-us'. Did you mean 'web/**'?"
+        ));
+    }
+
+    #[test]
+    fn glob_overlap_no_warning_when_dir_is_dot() {
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new(".");
+        warn_glob_dir_overlap(dir, &["web/**".to_owned()], 0);
+        // No warning should be tracked at all
+        assert_eq!(total_suppressed(), 0);
+    }
+
+    #[test]
+    fn glob_overlap_warns_on_full_dir_prefix() {
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("files/en-us");
+        warn_glob_dir_overlap(dir, &["files/en-us/web/css/**".to_owned()], 0);
+        assert!(was_emitted(
+            "glob 'files/en-us/web/css/**' matched 0 files. Globs are relative to --dir 'files/en-us'. Did you mean 'web/css/**'?"
+        ));
+    }
+
+    #[test]
+    fn glob_overlap_warns_on_last_component() {
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("files/en-us");
+        warn_glob_dir_overlap(dir, &["en-us/web/**".to_owned()], 0);
+        assert!(was_emitted(
+            "glob 'en-us/web/**' matched 0 files. Globs are relative to --dir 'files/en-us'. Did you mean 'web/**'?"
+        ));
+    }
+
+    #[test]
+    fn glob_overlap_no_false_positive_on_partial_prefix() {
+        // "notes" should NOT match "notes-archive/**"
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("vault/notes");
+        warn_glob_dir_overlap(dir, &["notes-archive/**".to_owned()], 0);
+        // Should not emit any glob-overlap warning
+        assert_eq!(total_suppressed(), 0);
+    }
+
+    #[test]
+    fn glob_overlap_no_false_positive_on_partial_dir_prefix() {
+        // "files/en-us" should NOT match "files/en-us-old/**"
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("files/en-us");
+        warn_glob_dir_overlap(dir, &["files/en-us-old/**".to_owned()], 0);
+        // Should not emit any glob-overlap warning
+        assert_eq!(total_suppressed(), 0);
+    }
+
+    #[test]
+    fn glob_overlap_skips_negation_patterns() {
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("docs");
+        warn_glob_dir_overlap(dir, &["!docs/drafts/**".to_owned()], 0);
+        assert_eq!(total_suppressed(), 0);
+    }
+
+    #[test]
+    fn glob_overlap_no_warning_when_globs_empty() {
+        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
+        reset_for_test();
+        init(false);
+        let dir = std::path::Path::new("docs");
+        warn_glob_dir_overlap(dir, &[], 0);
+        assert_eq!(total_suppressed(), 0);
     }
 }

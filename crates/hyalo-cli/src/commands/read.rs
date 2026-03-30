@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
-use crate::output::{CommandOutcome, Format, format_error, format_success};
+use crate::output::{CommandOutcome, Format, format_error};
 use anyhow::{Context, Result};
 use hyalo_core::discovery;
 use hyalo_core::frontmatter;
@@ -199,6 +199,7 @@ pub fn run(
     lines: Option<&str>,
     frontmatter_flag: bool,
     format: Format,
+    user_format: Format,
 ) -> Result<CommandOutcome> {
     // Resolve file
     let (full_path, rel_path) = match discovery::resolve_file(dir, file) {
@@ -303,44 +304,48 @@ pub fn run(
     // Format output
     let content_str = content_lines.join("\n");
 
-    match format {
-        Format::Text => {
-            let mut out = String::new();
-            if let Some(ref props) = fm_value {
-                // Render frontmatter as YAML
-                out.push_str("---\n");
-                if !props.is_empty() {
-                    let yaml = serde_saphyr::to_string(props)
-                        .context("failed to serialize frontmatter as YAML")?;
-                    out.push_str(&yaml);
-                }
-                out.push_str("---\n");
-                if need_body && !content_str.is_empty() {
-                    out.push('\n');
-                }
-            }
-            if need_body {
-                out.push_str(&content_str);
-                // Ensure trailing newline for pipe-friendliness
-                if !out.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-            Ok(CommandOutcome::Success(out))
+    // Build the JSON representation (used for both JSON output and the internal pipeline).
+    let mut obj = serde_json::json!({ "file": rel_path });
+    if let Some(ref props) = fm_value {
+        let json_val =
+            serde_json::to_value(props).context("failed to serialize frontmatter as JSON")?;
+        obj["frontmatter"] = json_val;
+    }
+    if need_body {
+        obj["content"] = serde_json::json!(content_str);
+    }
+
+    // For JSON user format: return structured JSON (pipeline wraps in envelope).
+    // For text user format: return raw text (bypasses pipeline).
+    if user_format == Format::Json {
+        return Ok(CommandOutcome::success(
+            serde_json::to_string_pretty(&obj).unwrap_or_default(),
+        ));
+    }
+
+    // Text format: raw output — frontmatter as YAML, body as plain text.
+    let mut out = String::new();
+    if let Some(ref props) = fm_value {
+        // Render frontmatter as YAML
+        out.push_str("---\n");
+        if !props.is_empty() {
+            let yaml = serde_saphyr::to_string(props)
+                .context("failed to serialize frontmatter as YAML")?;
+            out.push_str(&yaml);
         }
-        Format::Json => {
-            let mut obj = serde_json::json!({ "file": rel_path });
-            if let Some(props) = fm_value {
-                let json_val = serde_json::to_value(&props)
-                    .context("failed to serialize frontmatter as JSON")?;
-                obj["frontmatter"] = json_val;
-            }
-            if need_body {
-                obj["content"] = serde_json::json!(content_str);
-            }
-            Ok(CommandOutcome::Success(format_success(format, &obj)))
+        out.push_str("---\n");
+        if need_body && !content_str.is_empty() {
+            out.push('\n');
         }
     }
+    if need_body {
+        out.push_str(&content_str);
+        // Ensure trailing newline for pipe-friendliness
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    Ok(CommandOutcome::RawOutput(out))
 }
 
 // ---------------------------------------------------------------------------

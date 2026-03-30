@@ -46,10 +46,10 @@ Content.
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["from"], "b.md");
-    assert_eq!(json["to"], "archive/b.md");
-    assert_eq!(json["dry_run"], false);
-    assert_eq!(json["total_links_updated"], 0);
+    assert_eq!(json["results"]["from"], "b.md");
+    assert_eq!(json["results"]["to"], "archive/b.md");
+    assert_eq!(json["results"]["dry_run"], false);
+    assert_eq!(json["results"]["total_links_updated"], 0);
 
     // Verify file was moved
     assert!(!tmp.path().join("b.md").exists());
@@ -82,7 +82,7 @@ fn mv_updates_wikilink_with_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total_links_updated"], 1);
+    assert_eq!(json["results"]["total_links_updated"], 1);
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(
@@ -240,7 +240,7 @@ Real [[sub/b]] here.
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total_links_updated"], 1);
+    assert_eq!(json["results"]["total_links_updated"], 1);
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     // The code block should still have [[sub/b]], not [[archive/b]]
@@ -311,8 +311,8 @@ fn mv_dry_run_does_not_modify() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["dry_run"], true);
-    assert_eq!(json["total_links_updated"], 1);
+    assert_eq!(json["results"]["dry_run"], true);
+    assert_eq!(json["results"]["total_links_updated"], 1);
 
     // File should NOT have been moved
     assert!(tmp.path().join("sub/b.md").exists());
@@ -422,8 +422,8 @@ fn mv_no_links_to_update() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total_links_updated"], 0);
-    assert_eq!(json["total_files_updated"], 0);
+    assert_eq!(json["results"]["total_links_updated"], 0);
+    assert_eq!(json["results"]["total_files_updated"], 0);
 
     assert!(!tmp.path().join("a.md").exists());
     assert!(tmp.path().join("sub/a.md").exists());
@@ -451,7 +451,7 @@ fn mv_multiple_links_same_file() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total_links_updated"], 2);
+    assert_eq!(json["results"]["total_links_updated"], 2);
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(content.contains("[[archive/b]]"), "a.md content: {content}");
@@ -549,7 +549,7 @@ fn mv_updates_wikilink_with_path_separator() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total_links_updated"], 1, "json: {json}");
+    assert_eq!(json["results"]["total_links_updated"], 1, "json: {json}");
 
     let content = fs::read_to_string(tmp.path().join("iterations/iter-1.md")).unwrap();
     assert!(
@@ -590,7 +590,7 @@ fn mv_wikilink_with_path_from_subdirectory_not_false_positive() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json["total_links_updated"], 0,
+        json["results"]["total_links_updated"], 0,
         "no links should be updated: {json}"
     );
 
@@ -682,7 +682,7 @@ fn mv_absolute_links_bare_subdir() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json["total_links_updated"], 2,
+        json["results"]["total_links_updated"], 2,
         "absolute path --dir: json={json}"
     );
 }
@@ -715,7 +715,7 @@ fn mv_absolute_links_absolute_subdir_path() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json["total_links_updated"], 2,
+        json["results"]["total_links_updated"], 2,
         "absolute subdir --dir: json={json}"
     );
 }
@@ -790,7 +790,7 @@ fn mv_site_prefix_cli_flag_overrides_auto_derive() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json["total_links_updated"], 2,
+        json["results"]["total_links_updated"], 2,
         "--site-prefix=docs: json={json}"
     );
 }
@@ -825,7 +825,7 @@ fn mv_site_prefix_cli_empty_disables_prefix() {
     // With no prefix, `/docs/pages/about.md` is not resolved as `pages/about.md`
     // so the inbound links from absolute paths won't match.
     assert_eq!(
-        json["total_links_updated"], 0,
+        json["results"]["total_links_updated"], 0,
         "--site-prefix='': expected 0 links updated, json={json}"
     );
 }
@@ -859,10 +859,10 @@ See [me](a.md) for details.
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["from"], "a.md");
-    assert_eq!(json["to"], "archive/a.md");
+    assert_eq!(json["results"]["from"], "a.md");
+    assert_eq!(json["results"]["to"], "archive/a.md");
     assert!(
-        json["total_links_updated"].as_u64().unwrap() >= 1,
+        json["results"]["total_links_updated"].as_u64().unwrap() >= 1,
         "self-link must be counted as rewritten: {json}"
     );
 

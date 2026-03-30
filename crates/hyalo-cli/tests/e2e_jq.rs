@@ -45,7 +45,7 @@ fn jq_maps_tag_names_to_array() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", "[.tags[].name] | sort | join(\", \")"])
+        .args(["--jq", "[.results[].name] | sort | join(\", \")"])
         .args(["tags", "summary"])
         .output()
         .unwrap();
@@ -68,7 +68,7 @@ fn jq_works_on_properties_command() {
     // Extract just the property names and sort them.
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", "[.[].name] | sort | join(\", \")"])
+        .args(["--jq", "[.results[].name] | sort | join(\", \")"])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -297,7 +297,7 @@ fn jq_works_on_set_command() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".modified | length"])
+        .args(["--jq", ".results.modified | length"])
         .args(["set", "--property", "status=done", "--file", "note.md"])
         .output()
         .unwrap();
@@ -326,7 +326,7 @@ fn jq_works_on_remove_command() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".modified | length"])
+        .args(["--jq", ".results.modified | length"])
         .args(["remove", "--property", "status", "--file", "note.md"])
         .output()
         .unwrap();
@@ -355,7 +355,7 @@ fn jq_works_on_append_command() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".modified | length"])
+        .args(["--jq", ".results.modified | length"])
         .args(["append", "--property", "aliases=new", "--file", "note.md"])
         .output()
         .unwrap();
@@ -383,7 +383,7 @@ fn jq_multiple_outputs_joined_by_newline() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--jq", ".tags[].name"])
+        .args(["--jq", ".results[].name"])
         .args(["tags", "summary"])
         .output()
         .unwrap();

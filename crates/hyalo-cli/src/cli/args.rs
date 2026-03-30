@@ -40,7 +40,12 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         properties, tags, tasks, and links.\n\n\
         PATH RESOLUTION: All --file and --glob paths are relative to --dir (defaults to \".\"). \
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
-        OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
+        OUTPUT: Returns JSON by default (--format json). All JSON is wrapped in a consistent envelope:\n\
+        \u{00a0} {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
+        total is present for list commands (find, tags, properties, backlinks). \
+        hints is always present (empty [] when --no-hints). \
+        --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
+        Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
@@ -65,15 +70,16 @@ pub(crate) struct Cli {
     pub format: Option<Format>,
 
     /// Apply a jq filter expression to the JSON output of any command.
-    /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
-    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'.
+    /// Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
+    /// The filtered result is printed as plain text. Incompatible with --format text.
+    /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
     /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 
     /// Force hints on (already the default).
     /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.
-    /// JSON mode: wraps in {"data": ..., "hints": [{"description": "...", "cmd": "hyalo ..."}]}.
+    /// JSON mode: populates the "hints" array in the envelope (always present, empty when suppressed).
     /// Suppressed when --jq is active.
     #[arg(long, global = true)]
     pub hints: bool,
@@ -134,9 +140,10 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Search and filter markdown files — returns an array of file objects with metadata, structure, tasks, and links
+    /// Search and filter markdown files — returns file objects with metadata, structure, tasks, and links
     #[command(long_about = "Search and filter markdown files.\n\n\
-            Returns an array of file objects. Each object contains the file path, modified time, \
+            Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
+            Each item in results contains the file path, modified time, \
             and optionally: frontmatter properties, tags, document sections, tasks, and links.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - PATTERN (positional): case-insensitive body text search\n\
@@ -149,9 +156,9 @@ pub(crate) enum Commands {
             substring (contains) match by default, e.g. 'Tasks' matches 'Tasks [4/4]'; use leading '#' \
             to pin heading level, e.g. '## Tasks'; use '~=/regex/' for regex matching). Repeatable (OR). \
             Nested subsections are included.\n\n\
-            OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
+            JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)
@@ -176,7 +183,7 @@ pub(crate) enum Commands {
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) to select files (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
+        /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
@@ -271,7 +278,7 @@ pub(crate) enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
     Summary {
-        /// Glob pattern(s) to filter which files to include (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
+        /// Glob pattern(s) to filter which files to include, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]
         glob: Vec<String>,
         /// Number of recent files to show (default: 10)
@@ -352,7 +359,7 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
+        /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
@@ -399,7 +406,7 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
+        /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
@@ -497,7 +504,7 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
+        /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
@@ -550,7 +557,7 @@ pub(crate) enum LinksAction {
         /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
         #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
-        /// Glob pattern(s) to filter which files to check (repeatable); prefix '!' to negate
+        /// Glob pattern(s) to filter which files to check, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
         /// Ignore broken links whose target contains any of these substrings (repeatable).
@@ -657,7 +664,7 @@ pub(crate) enum TagsAction {
         SIDE EFFECTS: None (read-only).\n\
         USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
     Summary {
-        /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
+        /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
     },

@@ -134,25 +134,25 @@ fn summary_json_has_all_fields() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     // files
-    assert!(json["files"]["total"].as_u64().unwrap() >= 4);
-    assert!(json["files"]["by_directory"].is_array());
+    assert!(json["results"]["files"]["total"].as_u64().unwrap() >= 4);
+    assert!(json["results"]["files"]["by_directory"].is_array());
 
     // properties
-    assert!(json["properties"].is_array());
+    assert!(json["results"]["properties"].is_array());
 
     // tags
-    assert!(json["tags"]["total"].is_number());
-    assert!(json["tags"]["tags"].is_array());
+    assert!(json["results"]["tags"]["total"].is_number());
+    assert!(json["results"]["tags"]["tags"].is_array());
 
     // status
-    assert!(json["status"].is_array());
+    assert!(json["results"]["status"].is_array());
 
     // tasks
-    assert!(json["tasks"]["total"].is_number());
-    assert!(json["tasks"]["done"].is_number());
+    assert!(json["results"]["tasks"]["total"].is_number());
+    assert!(json["results"]["tasks"]["done"].is_number());
 
     // recent_files
-    assert!(json["recent_files"].is_array());
+    assert!(json["results"]["recent_files"].is_array());
 }
 
 #[test]
@@ -170,10 +170,10 @@ fn summary_file_counts_by_directory() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let total = json["files"]["total"].as_u64().unwrap();
+    let total = json["results"]["files"]["total"].as_u64().unwrap();
     assert_eq!(total, 4);
 
-    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
     // Should have entries for ".", "notes", "docs"
     let dir_names: Vec<&str> = by_dir
         .iter()
@@ -204,8 +204,8 @@ fn summary_task_counts() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     // alpha: 1 open + 1 done, beta: 1 done, plain: 1 open => total 4, done 2
-    let total = json["tasks"]["total"].as_u64().unwrap();
-    let done = json["tasks"]["done"].as_u64().unwrap();
+    let total = json["results"]["tasks"]["total"].as_u64().unwrap();
+    let done = json["results"]["tasks"]["done"].as_u64().unwrap();
     assert_eq!(total, 4);
     assert_eq!(done, 2);
 }
@@ -225,7 +225,7 @@ fn summary_status_groups() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let status = json["status"]
+    let status = json["results"]["status"]
         .as_array()
         .expect("field 'status' should be an array");
     let draft_group = status
@@ -262,7 +262,7 @@ fn summary_tag_counts() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let tags = &json["tags"];
+    let tags = &json["results"]["tags"];
     let total = tags["total"].as_u64().unwrap();
     assert_eq!(total, 3); // rust, cli, docs
 
@@ -296,7 +296,7 @@ fn summary_property_summary() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let props = json["properties"]
+    let props = json["results"]["properties"]
         .as_array()
         .expect("field 'properties' should be an array");
     let title_prop = props
@@ -329,7 +329,7 @@ fn summary_recent_files_limited() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    let recent = json["recent_files"].as_array().unwrap();
+    let recent = json["results"]["recent_files"].as_array().unwrap();
     assert_eq!(recent.len(), 2);
     // Each entry should have path and modified
     assert!(recent[0]["path"].is_string());
@@ -379,8 +379,8 @@ fn summary_glob_filter() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     // Only notes/alpha.md and notes/beta.md
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 2);
-    assert_eq!(json["tasks"]["total"].as_u64().unwrap(), 3); // 2 in alpha + 1 in beta
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 2);
+    assert_eq!(json["results"]["tasks"]["total"].as_u64().unwrap(), 3); // 2 in alpha + 1 in beta
 }
 
 #[test]
@@ -392,7 +392,7 @@ fn summary_jq_filter() {
             tmp.path().to_str().unwrap(),
             "summary",
             "--jq",
-            ".tasks.total",
+            ".results.tasks.total",
         ])
         .output()
         .unwrap();
@@ -417,11 +417,16 @@ fn summary_empty_vault() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 0);
-    assert_eq!(json["tasks"]["total"].as_u64().unwrap(), 0);
-    assert_eq!(json["tasks"]["done"].as_u64().unwrap(), 0);
-    assert!(json["status"].as_array().unwrap().is_empty());
-    assert!(json["recent_files"].as_array().unwrap().is_empty());
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 0);
+    assert_eq!(json["results"]["tasks"]["total"].as_u64().unwrap(), 0);
+    assert_eq!(json["results"]["tasks"]["done"].as_u64().unwrap(), 0);
+    assert!(json["results"]["status"].as_array().unwrap().is_empty());
+    assert!(
+        json["results"]["recent_files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -442,12 +447,12 @@ fn summary_depth_zero_collapses_all_dirs() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
     assert_eq!(by_dir.len(), 1);
     assert_eq!(by_dir[0]["directory"], ".");
     assert_eq!(by_dir[0]["count"], 3);
     // Stats are unaffected — all 3 files are still counted
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 3);
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 3);
 }
 
 #[test]
@@ -468,7 +473,7 @@ fn summary_depth_one_collapses_sub_into_parent() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
     // "." and "notes" (notes/sub collapsed into notes)
     assert_eq!(by_dir.len(), 2);
 
@@ -498,7 +503,7 @@ fn summary_depth_no_flag_shows_all_directories() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
     let dirs: Vec<&str> = by_dir
         .iter()
         .map(|d| d["directory"].as_str().unwrap())
@@ -524,7 +529,12 @@ fn summary_recent_zero() {
         .output()
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["recent_files"].as_array().unwrap().is_empty());
+    assert!(
+        json["results"]["recent_files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -547,8 +557,8 @@ fn summary_json_has_orphans_field() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["orphans"]["total"].is_number());
-    assert!(json["orphans"]["files"].is_array());
+    assert!(json["results"]["orphans"]["total"].is_number());
+    assert!(json["results"]["orphans"]["files"].is_array());
 }
 
 #[test]
@@ -601,7 +611,7 @@ No links to me
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let orphans = json["orphans"]["files"].as_array().unwrap();
+    let orphans = json["results"]["orphans"]["files"].as_array().unwrap();
     let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
 
     // c.md is the only orphan: no inbound AND no outbound links
@@ -616,7 +626,7 @@ No links to me
         !orphan_paths.contains(&"b.md"),
         "b.md should NOT be orphan (has inbound)"
     );
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 1);
+    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -657,8 +667,13 @@ See [[a]]
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 0);
-    assert!(json["orphans"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 0);
+    assert!(
+        json["results"]["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -699,8 +714,14 @@ No links
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     // Both files are orphans
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 2);
-    assert_eq!(json["orphans"]["files"].as_array().unwrap().len(), 2);
+    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 2);
+    assert_eq!(
+        json["results"]["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]
@@ -757,8 +778,13 @@ fn summary_orphans_empty_vault() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 0);
-    assert!(json["orphans"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 0);
+    assert!(
+        json["results"]["orphans"]["files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -818,9 +844,9 @@ No links
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     // Summary only counts glob-matched files
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 2);
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 2);
 
-    let orphans = json["orphans"]["files"].as_array().unwrap();
+    let orphans = json["results"]["orphans"]["files"].as_array().unwrap();
     let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
 
     // notes/a.md is linked from root.md (outside glob) — NOT an orphan
@@ -857,11 +883,11 @@ fn summary_glob_negation_excludes_files() {
         .unwrap();
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let total = json["files"]["total"].as_u64().unwrap();
+    let total = json["results"]["files"]["total"].as_u64().unwrap();
     // The vault has files in notes/ — after excluding them, total should be smaller
     assert!(total > 0, "should still have some files: {total}");
     // Verify no notes/ paths appear in recent files
-    for entry in json["recent_files"].as_array().unwrap() {
+    for entry in json["results"]["recent_files"].as_array().unwrap() {
         let path = entry["path"].as_str().unwrap_or("");
         assert!(
             !path.starts_with("notes/"),
@@ -941,7 +967,7 @@ No links.
         String::from_utf8_lossy(&disk_out.stderr)
     );
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
-    let disk_orphans: Vec<&str> = disk_json["orphans"]["files"]
+    let disk_orphans: Vec<&str> = disk_json["results"]["orphans"]["files"]
         .as_array()
         .unwrap()
         .iter()
@@ -982,7 +1008,7 @@ No links.
         String::from_utf8_lossy(&idx_out.stderr)
     );
     let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
-    let idx_orphans: Vec<&str> = idx_json["orphans"]["files"]
+    let idx_orphans: Vec<&str> = idx_json["results"]["orphans"]["files"]
         .as_array()
         .unwrap()
         .iter()
@@ -1076,20 +1102,20 @@ fn summary_dead_ends_json() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     assert!(
-        json["dead_ends"]["total"].is_number(),
+        json["results"]["dead_ends"]["total"].is_number(),
         "dead_ends.total should be a number"
     );
     assert!(
-        json["dead_ends"]["files"].is_array(),
+        json["results"]["dead_ends"]["files"].is_array(),
         "dead_ends.files should be an array"
     );
 
     assert_eq!(
-        json["dead_ends"]["total"].as_u64().unwrap(),
+        json["results"]["dead_ends"]["total"].as_u64().unwrap(),
         1,
         "expected 1 dead-end"
     );
-    let dead_end_files: Vec<&str> = json["dead_ends"]["files"]
+    let dead_end_files: Vec<&str> = json["results"]["dead_ends"]["files"]
         .as_array()
         .unwrap()
         .iter()
@@ -1098,8 +1124,8 @@ fn summary_dead_ends_json() {
     assert_eq!(dead_end_files, vec!["c.md"]);
 
     // d.md is the orphan, not a dead-end
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 1);
-    let orphan_files: Vec<&str> = json["orphans"]["files"]
+    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 1);
+    let orphan_files: Vec<&str> = json["results"]["orphans"]["files"]
         .as_array()
         .unwrap()
         .iter()
@@ -1173,9 +1199,14 @@ No links.
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["dead_ends"]["total"].as_u64().unwrap(), 0);
-    assert!(json["dead_ends"]["files"].as_array().unwrap().is_empty());
-    assert_eq!(json["orphans"]["total"].as_u64().unwrap(), 2);
+    assert_eq!(json["results"]["dead_ends"]["total"].as_u64().unwrap(), 0);
+    assert!(
+        json["results"]["dead_ends"]["files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 2);
 }
 
 /// Dead-end results must be identical between disk-scan and index-based summary.
@@ -1195,7 +1226,7 @@ fn summary_dead_end_parity_disk_vs_index() {
         String::from_utf8_lossy(&disk_out.stderr)
     );
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
-    let disk_dead_ends: Vec<&str> = disk_json["dead_ends"]["files"]
+    let disk_dead_ends: Vec<&str> = disk_json["results"]["dead_ends"]["files"]
         .as_array()
         .unwrap()
         .iter()
@@ -1233,7 +1264,7 @@ fn summary_dead_end_parity_disk_vs_index() {
         String::from_utf8_lossy(&idx_out.stderr)
     );
     let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
-    let idx_dead_ends: Vec<&str> = idx_json["dead_ends"]["files"]
+    let idx_dead_ends: Vec<&str> = idx_json["results"]["dead_ends"]["files"]
         .as_array()
         .unwrap()
         .iter()

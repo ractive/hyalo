@@ -46,7 +46,7 @@ pub fn task_read(
                 text: info.text,
                 done: info.done,
             };
-            Ok(CommandOutcome::Success(crate::output::format_output(
+            Ok(CommandOutcome::success(crate::output::format_output(
                 format, &result,
             )))
         }
@@ -81,7 +81,7 @@ pub fn task_toggle(
                 text: info.text,
                 done: info.done,
             };
-            Ok(CommandOutcome::Success(crate::output::format_output(
+            Ok(CommandOutcome::success(crate::output::format_output(
                 format, &result,
             )))
         }
@@ -127,7 +127,7 @@ pub fn task_set_status(
                 text: info.text,
                 done: info.done,
             };
-            Ok(CommandOutcome::Success(crate::output::format_output(
+            Ok(CommandOutcome::success(crate::output::format_output(
                 format, &result,
             )))
         }
@@ -201,7 +201,7 @@ mod tests {
 
     fn unwrap_success(outcome: CommandOutcome) -> String {
         match outcome {
-            CommandOutcome::Success(s) => s,
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
             CommandOutcome::UserError(s) => panic!("expected success, got user error: {s}"),
         }
     }

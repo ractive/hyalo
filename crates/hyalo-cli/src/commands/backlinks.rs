@@ -9,13 +9,6 @@ use hyalo_core::index::VaultIndex;
 use hyalo_core::link_graph::is_self_link;
 
 #[derive(Serialize)]
-struct BacklinkResult {
-    file: String,
-    backlinks: Vec<BacklinkItem>,
-    total: usize,
-}
-
-#[derive(Serialize)]
 struct BacklinkItem {
     source: String,
     line: usize,
@@ -60,46 +53,10 @@ pub fn backlinks(
         })
         .collect();
 
-    let total = items.len();
-    let result = BacklinkResult {
-        file: rel,
-        backlinks: items,
+    let total = items.len() as u64;
+    let result = serde_json::json!({ "file": rel, "backlinks": items });
+    Ok(CommandOutcome::success_with_total(
+        serde_json::to_string_pretty(&result).unwrap_or_default(),
         total,
-    };
-
-    let output = match format {
-        Format::Json => serde_json::to_string_pretty(&result)?,
-        Format::Text => format_text(&result),
-    };
-
-    Ok(CommandOutcome::Success(output))
-}
-
-fn format_text(result: &BacklinkResult) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-
-    if result.backlinks.is_empty() {
-        write!(out, "No backlinks found for {}", result.file).unwrap();
-        return out;
-    }
-
-    writeln!(
-        out,
-        "{} backlink{} to {}:",
-        result.total,
-        if result.total == 1 { "" } else { "s" },
-        result.file
-    )
-    .unwrap();
-
-    for item in &result.backlinks {
-        write!(out, "  {}:{}", item.source, item.line).unwrap();
-        if let Some(label) = &item.label {
-            write!(out, " (\"{label}\")").unwrap();
-        }
-        writeln!(out).unwrap();
-    }
-
-    out.trim_end().to_owned()
+    ))
 }

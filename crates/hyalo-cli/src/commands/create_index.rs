@@ -99,5 +99,5 @@ pub fn create_index(
         "warnings": build.warnings.len(),
     });
 
-    Ok(CommandOutcome::Success(format_success(format, &result)))
+    Ok(CommandOutcome::success(format_success(format, &result)))
 }

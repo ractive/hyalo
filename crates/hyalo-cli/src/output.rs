@@ -44,12 +44,58 @@ impl std::fmt::Display for Format {
 
 /// Result of a command execution: either success (exit 0) or a user-facing error (exit 1).
 /// Internal/unexpected errors are represented by `anyhow::Error` at the call site.
+///
+/// **Invariant**: `Success.output` must always be a valid JSON string — the pipeline handles
+/// format conversion. Commands must never store pre-formatted text here.
+///
+/// For commands like `read` whose text output is raw file content (not structured data),
+/// use `RawOutput` to bypass the JSON pipeline entirely.
 #[derive(Debug)]
 pub enum CommandOutcome {
-    /// Successful operation — output goes to stdout.
-    Success(String),
+    /// Successful operation — JSON output goes to stdout via the pipeline.
+    Success {
+        /// Always-valid JSON string (bare array, object, etc.). Never pre-formatted text.
+        output: String,
+        /// Optional total item count for pagination display.
+        total: Option<u64>,
+    },
+    /// Raw text output, bypasses the JSON pipeline — printed directly to stdout as-is.
+    /// Used by `read` command for text-format content output.
+    RawOutput(String),
     /// User error (file not found, property missing, etc.) — output goes to stderr.
     UserError(String),
+}
+
+impl CommandOutcome {
+    /// Construct a successful outcome carrying a JSON string with no total count.
+    #[must_use]
+    pub fn success(output: String) -> Self {
+        Self::Success {
+            output,
+            total: None,
+        }
+    }
+
+    /// Construct a successful outcome carrying a JSON string with a total item count.
+    #[must_use]
+    pub fn success_with_total(output: String, total: u64) -> Self {
+        Self::Success {
+            output,
+            total: Some(total),
+        }
+    }
+
+    /// Extract the output string from `Success` or `RawOutput`, or panic.
+    ///
+    /// Intended for use in unit tests where the command is expected to succeed.
+    #[cfg(test)]
+    #[must_use]
+    pub fn unwrap_output(self) -> String {
+        match self {
+            Self::Success { output, .. } | Self::RawOutput(output) => output,
+            Self::UserError(msg) => panic!("expected success, got UserError: {msg}"),
+        }
+    }
 }
 
 impl Format {
@@ -85,46 +131,104 @@ pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
     format_success(format, &json)
 }
 
-/// Format output with drill-down hints appended.
+/// Build the JSON envelope value: `{"results": ..., "total": <optional>, "hints": [...]}`.
 ///
-/// - **JSON**: wraps the original value in `{"data": ..., "hints": [{"description": "...", "cmd": "..."}]}`
-/// - **Text**: appends `  -> <command>  # <description>` lines after the formatted output
-///
-/// If `hints` is empty, produces the same output as [`format_success`].
+/// The envelope is always present even when hints is empty (hints becomes `[]`).
+/// `total` is included only when `Some`.
 #[must_use]
-pub fn format_with_hints(
+pub fn build_envelope_value(
+    value: &serde_json::Value,
+    total: Option<u64>,
+    hints: &[crate::hints::Hint],
+) -> serde_json::Value {
+    let hints_json: Vec<serde_json::Value> = hints
+        .iter()
+        .map(|h| serde_json::json!({"description": &h.description, "cmd": &h.cmd}))
+        .collect();
+    let mut envelope = serde_json::json!({
+        "results": value,
+        "hints": hints_json,
+    });
+    if let Some(t) = total {
+        envelope["total"] = serde_json::json!(t);
+    }
+    envelope
+}
+
+/// Format the output envelope for the user.
+///
+/// - **JSON**: serializes `{"results": ..., "total": <optional>, "hints": [...]}`
+/// - **Text**: formats `results` as text, appends hint lines if any, adds pagination notice if needed
+#[must_use]
+pub fn format_envelope(
     format: Format,
     value: &serde_json::Value,
+    total: Option<u64>,
     hints: &[crate::hints::Hint],
 ) -> String {
-    if hints.is_empty() {
-        return format_success(format, value);
-    }
     match format {
         Format::Json => {
-            let hints_json: Vec<serde_json::Value> = hints
-                .iter()
-                .map(|h| serde_json::json!({"description": &h.description, "cmd": &h.cmd}))
-                .collect();
-            let envelope = serde_json::json!({
-                "data": value,
-                "hints": hints_json,
-            });
+            let envelope = build_envelope_value(value, total, hints);
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
         }
         Format::Text => {
             let mut cache = JaqFilterCache::new();
-            let mut text = format_value_as_text(value, &mut cache);
-            text.push('\n');
-            for hint in hints {
-                text.push_str("\n  -> ");
-                text.push_str(&hint.cmd);
-                text.push_str("  # ");
-                text.push_str(&hint.description);
+            let mut text = format_results_as_text(value, total, &mut cache);
+            if !hints.is_empty() {
+                text.push('\n');
+                for hint in hints {
+                    text.push_str("\n  -> ");
+                    text.push_str(&hint.cmd);
+                    text.push_str("  # ");
+                    text.push_str(&hint.description);
+                }
             }
             text
         }
     }
+}
+
+/// Format results for text output, applying pagination notice and tag-summary header.
+///
+/// Called by [`format_envelope`] when producing text output. The `total` is the
+/// count stored in the envelope (may exceed the number of items in `results`).
+fn format_results_as_text(
+    results: &serde_json::Value,
+    total: Option<u64>,
+    cache: &mut JaqFilterCache,
+) -> String {
+    // Special case: array of tag summary entries ({count, name}) — reconstruct
+    // the "N unique tags" header that was previously part of the TAG_SUMMARY_FILTER.
+    if let (Some(total), serde_json::Value::Array(arr)) = (total, results) {
+        let is_tag_array = !arr.is_empty()
+            && arr.iter().all(|v| {
+                v.as_object().is_some_and(|m| {
+                    m.contains_key("count") && m.contains_key("name") && m.len() == 2
+                })
+            });
+        if is_tag_array {
+            let tag_label = if total == 1 { "tag" } else { "tags" };
+            let header = format!("{total} unique {tag_label}");
+            let entries = format_value_as_text(results, cache);
+            return if entries.is_empty() {
+                header
+            } else {
+                format!("{header}\n{entries}")
+            };
+        }
+    }
+
+    let text = format_value_as_text(results, cache);
+    if let Some(total) = total {
+        let shown = match results {
+            serde_json::Value::Array(arr) => arr.len() as u64,
+            _ => return text,
+        };
+        if shown < total {
+            return format!("{text}\nshowing {shown} of {total} matches");
+        }
+    }
+    text
 }
 
 /// Format an error for output to stderr.
@@ -251,6 +355,19 @@ const PROPERTY_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else 
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
+/// `BacklinksResult`: `{file, backlinks: [...]}`
+/// Format: `N backlink(s) for "file"` with each backlink listed as `  source.md: line N`.
+/// Empty case: `No backlinks found for "file"`.
+const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
+
+/// `LinksFix result`: `{applied, broken, fixable, fixes, ignored, unfixable, unfixable_links}`
+/// Format: summary line with fix status.
+const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\nApplied: \(if .applied then "yes" else "no" end)\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)""#;
+
+/// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
+/// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
+const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.from) → \(.to)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)""#;
+
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
 // ---------------------------------------------------------------------------
@@ -306,6 +423,14 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "dry_run,modified,property,scanned,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
         // Mutation results with tag (SetTagResult, RemoveTagResult)
         "dry_run,modified,scanned,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
+        // BacklinksResult
+        "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
+        // LinksFix result
+        "applied,broken,fixable,fixes,ignored,unfixable,unfixable_links" => Some(LINKS_FIX_FILTER),
+        // MvResult
+        "dry_run,from,to,total_files_updated,total_links_updated,updated_files" => {
+            Some(MV_RESULT_FILTER)
+        }
         _ => None,
     }
 }
@@ -563,32 +688,6 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 .join(sep)
         }
         serde_json::Value::Object(map) => {
-            // Detect the find results envelope: {"total": N, "results": [...]}
-            // This is duck-typed — any object with both keys triggers this path.
-            // Currently only `find` produces this shape; if another command does
-            // in the future, add an explicit tag or dedicated serialisation path.
-            // Format each result element normally; append "showing N of M matches"
-            // only when limit actually truncated results.
-            if let (Some(total_val), Some(results_val)) = (map.get("total"), map.get("results"))
-                && let (Some(total), Some(results)) = (total_val.as_u64(), results_val.as_array())
-            {
-                let shown = results.len();
-                let mut parts: Vec<String> = results
-                    .iter()
-                    .map(|v| format_value_as_text(v, cache))
-                    .collect();
-                if (shown as u64) < total {
-                    parts.push(format!("showing {shown} of {total} matches"));
-                }
-                // Preserve blank-line separation when results are FileObjects.
-                let is_file_objects = results
-                    .first()
-                    .and_then(|v| v.as_object())
-                    .is_some_and(|m| m.contains_key("file") && m.contains_key("modified"));
-                let sep = if is_file_objects { "\n\n" } else { "\n" };
-                return parts.join(sep);
-            }
-
             let sig = key_signature(map);
             if let Some(filter) = lookup_filter(&sig)
                 && let Some(output) = apply_jq_filter(filter, value, cache)
@@ -1354,6 +1453,57 @@ mod tests {
         let out = fmt(&val);
         // Generic fallback: key: value
         assert!(out.contains("foo: bar") || out.contains("baz: 42"));
+    }
+
+    #[test]
+    fn mv_result_filter_applied() {
+        let val = json!({
+            "dry_run": false,
+            "from": "sub/b.md",
+            "to": "archive/b.md",
+            "total_files_updated": 1,
+            "total_links_updated": 1,
+            "updated_files": [
+                {
+                    "file": "a.md",
+                    "replacements": [
+                        {"old_text": "[[sub/b]]", "new_text": "[[archive/b]]", "line": 1}
+                    ]
+                }
+            ]
+        });
+        // Verify key signature matches expected
+        let sig = {
+            let map = val.as_object().unwrap();
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            keys.join(",")
+        };
+        assert_eq!(
+            sig,
+            "dry_run,from,to,total_files_updated,total_links_updated,updated_files"
+        );
+        // Verify the jq filter itself works
+        let filter_result = apply_jq_filter_result(MV_RESULT_FILTER, &val);
+        assert!(filter_result.is_ok(), "filter error: {filter_result:?}");
+        let out = filter_result.unwrap();
+        assert!(out.contains("Moved sub/b.md"), "out: {out}");
+        assert!(out.contains("archive/b.md"), "out: {out}");
+        assert!(out.contains("[[sub/b]]"), "out: {out}");
+        assert!(out.contains("[[archive/b]]"), "out: {out}");
+        // Verify lookup_filter finds the filter for this shape
+        let found_filter =
+            lookup_filter("dry_run,from,to,total_files_updated,total_links_updated,updated_files");
+        assert!(
+            found_filter.is_some(),
+            "lookup_filter returned None for MvResult shape"
+        );
+        // format_value_as_text should pick up the filter
+        let formatted = fmt(&val);
+        assert!(
+            formatted.contains("Moved sub/b.md"),
+            "formatted: {formatted}"
+        );
     }
 
     #[test]

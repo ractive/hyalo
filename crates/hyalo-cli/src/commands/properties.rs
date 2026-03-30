@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
-use crate::output::{CommandOutcome, Format, format_output};
+use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
@@ -50,7 +50,12 @@ pub fn properties_summary(
         .collect();
     result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
 
-    Ok(CommandOutcome::Success(format_output(format, &result)))
+    let total = result.len() as u64;
+    let _ = format;
+    Ok(CommandOutcome::success_with_total(
+        serde_json::to_string_pretty(&result).unwrap_or_default(),
+        total,
+    ))
 }
 
 /// Result of a `properties rename` operation.
@@ -154,9 +159,10 @@ pub fn properties_rename(
         scanned,
     };
 
-    Ok(CommandOutcome::Success(crate::output::format_output(
-        format, &result,
-    )))
+    let _ = format;
+    Ok(CommandOutcome::success(
+        serde_json::to_string_pretty(&result).unwrap_or_default(),
+    ))
 }
 
 #[cfg(test)]
@@ -215,7 +221,7 @@ tags:
     /// Extract the output string from a `CommandOutcome`.
     fn unwrap_output(outcome: CommandOutcome) -> (String, bool) {
         match outcome {
-            CommandOutcome::Success(s) => (s, true),
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => (s, true),
             CommandOutcome::UserError(s) => (s, false),
         }
     }
@@ -257,7 +263,7 @@ keywords: test
             None,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -293,7 +299,7 @@ title: Note
             None,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -326,7 +332,7 @@ Keywords: other
             None,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();

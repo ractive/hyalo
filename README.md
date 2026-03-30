@@ -46,6 +46,8 @@ cargo build --release
 
 All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--hints` (append executable drill-down command suggestions), `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links), and `--index <PATH>` (use a pre-built snapshot index instead of scanning files from disk — read-only commands use it; mutation commands ignore it; falls back to disk scan if the index is incompatible).
 
+All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`.
+
 Most flags have short aliases for quick interactive use:
 
 | Short | Long | Available in |
@@ -130,7 +132,7 @@ All steps are idempotent — existing files are skipped, and duplicate hints are
 
 ### find
 
-Search and filter files. Returns an array of file objects, each containing frontmatter properties, tags, sections, tasks, and links.
+Search and filter files. Returns a JSON envelope `{"results": [...], "total": N, "hints": [...]}` where each item in `results` contains frontmatter properties, tags, sections, tasks, and links.
 
 ```sh
 # All files
@@ -215,7 +217,7 @@ hyalo read --file path/to/note.md --frontmatter
 
 # JSON output
 hyalo read --file path/to/note.md --format json
-hyalo read --file path/to/note.md --format json --jq '.content'
+hyalo read --file path/to/note.md --format json --jq '.results.content'
 ```
 
 ### properties
@@ -256,8 +258,8 @@ hyalo summary --glob "notes/*.md"
 hyalo summary --recent 5          # control how many recent files to show (default: 10)
 hyalo summary --depth 1           # collapse subdirectories beyond depth 1
 hyalo summary --format text
-hyalo summary --jq '.tasks.total'
-hyalo summary --jq '.orphans.files'  # list fully isolated files (no links in or out)
+hyalo summary --jq '.results.tasks.total'
+hyalo summary --jq '.results.orphans.files'  # list fully isolated files (no links in or out)
 hyalo summary --format text --hints
 ```
 
@@ -336,21 +338,24 @@ hyalo backlinks --file path/to/note.md
 
 ```json
 {
-  "file": "path/to/note.md",
-  "backlinks": [
-    {
-      "source": "index.md",
-      "line": 5,
-      "target": "note"
-    },
-    {
-      "source": "journal/2026-03-20.md",
-      "line": 12,
-      "target": "note",
-      "label": "project notes"
-    }
-  ],
-  "total": 2
+  "results": {
+    "file": "path/to/note.md",
+    "backlinks": [
+      {
+        "source": "index.md",
+        "line": 5,
+        "target": "note"
+      },
+      {
+        "source": "journal/2026-03-20.md",
+        "line": 12,
+        "target": "note",
+        "label": "project notes"
+      }
+    ]
+  },
+  "total": 2,
+  "hints": []
 }
 ```
 
@@ -377,19 +382,22 @@ hyalo mv --file note.md --to archive/note.md --dry-run   # preview without writi
 
 ```json
 {
-  "from": "old/path.md",
-  "to": "new/path.md",
-  "dry_run": false,
-  "updated_files": [
-    {
-      "file": "index.md",
-      "replacements": [
-        { "line": 5, "old_text": "[[old/path]]", "new_text": "[[new/path]]" }
-      ]
-    }
-  ],
-  "total_files_updated": 1,
-  "total_links_updated": 1
+  "results": {
+    "from": "old/path.md",
+    "to": "new/path.md",
+    "dry_run": false,
+    "updated_files": [
+      {
+        "file": "index.md",
+        "replacements": [
+          { "line": 5, "old_text": "[[old/path]]", "new_text": "[[new/path]]" }
+        ]
+      }
+    ],
+    "total_files_updated": 1,
+    "total_links_updated": 1
+  },
+  "hints": []
 }
 ```
 
@@ -456,7 +464,7 @@ Orphans: 3
   -> hyalo --dir . find --property status=in-progress
 ```
 
-In JSON mode, `--hints` wraps the output in `{"data": ..., "hints": [{"description": "...", "cmd": "hyalo ..."}]}`. Each hint has a short description and a concrete, copy-pasteable command. Suppressed when combined with `--jq`.
+In JSON mode, hints populate the `"hints"` array in the standard envelope: `{"results": ..., "hints": [{"description": "...", "cmd": "hyalo ..."}]}`. The envelope shape is always the same regardless of `--hints`/`--no-hints` — only the array contents change. Each hint has a short description and a concrete, copy-pasteable command. Suppressed when combined with `--jq`.
 
 ## Snapshot Index
 

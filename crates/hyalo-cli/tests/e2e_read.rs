@@ -94,12 +94,12 @@ fn read_full_body_json() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["file"], "note.md");
-    let content = json["content"].as_str().unwrap();
+    assert_eq!(json["results"]["file"], "note.md");
+    let content = json["results"]["content"].as_str().unwrap();
     assert!(content.contains("# Heading One"));
     assert!(content.contains("Problem text"));
     // No frontmatter key unless --frontmatter
-    assert!(json.get("frontmatter").is_none());
+    assert!(json["results"].get("frontmatter").is_none());
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn read_lines_range() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let content = json["content"].as_str().unwrap();
+    let content = json["results"]["content"].as_str().unwrap();
     let lines: Vec<&str> = content.lines().collect();
     assert_eq!(lines[0], "# Heading One");
     assert_eq!(lines[2], "First paragraph.");
@@ -293,7 +293,7 @@ fn read_lines_single() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let content = json["content"].as_str().unwrap();
+    let content = json["results"]["content"].as_str().unwrap();
     assert_eq!(content, "# Heading One");
 }
 
@@ -401,8 +401,8 @@ fn read_frontmatter_json() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["frontmatter"]["title"], "Test Note");
-    assert_eq!(json["frontmatter"]["status"], "draft");
+    assert_eq!(json["results"]["frontmatter"]["title"], "Test Note");
+    assert_eq!(json["results"]["frontmatter"]["status"], "draft");
 }
 
 #[test]
@@ -527,7 +527,7 @@ fn read_frontmatter_only_file_returns_empty_body() {
             String::from_utf8_lossy(&output.stdout)
         )
     });
-    let content = json["content"]
+    let content = json["results"]["content"]
         .as_str()
         .expect("field 'content' should be a string");
     assert!(
@@ -542,7 +542,13 @@ fn read_with_jq_explicit_json() {
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "read", "--file", "note.md", "--format", "json", "--jq", ".file",
+            "read",
+            "--file",
+            "note.md",
+            "--format",
+            "json",
+            "--jq",
+            ".results.file",
         ])
         .output()
         .unwrap();
@@ -558,7 +564,7 @@ fn read_with_jq_auto_promotes_to_json() {
     // --jq without --format json should auto-promote to JSON (not error)
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["read", "--file", "note.md", "--jq", ".file"])
+        .args(["read", "--file", "note.md", "--jq", ".results.file"])
         .output()
         .unwrap();
 
@@ -586,7 +592,7 @@ fn read_section_json_output() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let content = json["content"].as_str().unwrap();
+    let content = json["results"]["content"].as_str().unwrap();
     assert!(content.contains("Solution text."));
     assert!(content.contains("Nested details."));
 }

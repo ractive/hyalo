@@ -79,12 +79,12 @@ fn summary_hints_json_has_data_and_hints() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    // Envelope must have "data" and "hints"
-    assert!(parsed.get("data").is_some(), "missing 'data' key");
+    // Envelope must have "results" and "hints"
+    assert!(parsed.get("results").is_some(), "missing 'results' key");
     assert!(parsed.get("hints").is_some(), "missing 'hints' key");
 
     // Data must be the vault summary
-    assert!(parsed["data"]["files"]["total"].as_u64().unwrap() > 0);
+    assert!(parsed["results"]["files"]["total"].as_u64().unwrap() > 0);
 
     // Hints must be an array of {description, cmd} objects
     let hints = parsed["hints"].as_array().unwrap();
@@ -234,7 +234,7 @@ fn find_hints_active_by_default_json() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert!(
-        parsed.get("data").is_some(),
+        parsed.get("results").is_some(),
         "JSON should have hints envelope by default: {stdout}"
     );
     assert!(
@@ -271,13 +271,12 @@ fn summary_without_hints_json_no_envelope() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    // With --no-hints, should NOT have envelope
-    assert!(
-        parsed.get("data").is_none(),
-        "should not have 'data' envelope with --no-hints"
-    );
-    // Should have direct summary fields
-    assert!(parsed.get("files").is_some());
+    // With --no-hints, the envelope is still present but hints array should be empty
+    assert!(parsed.get("results").is_some(), "should have 'results' key");
+    let hints = parsed["hints"].as_array().expect("hints should be array");
+    assert!(hints.is_empty(), "hints should be empty with --no-hints");
+    // Summary fields should be accessible under results
+    assert!(parsed["results"].get("files").is_some());
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +288,7 @@ fn hints_suppressed_with_jq() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["summary", "--hints", "--jq", ".tasks.total"])
+        .args(["summary", "--hints", "--jq", ".results.tasks.total"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -467,11 +466,11 @@ fn set_hints_accepted_produces_valid_json() {
         .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
     // Output should be wrapped in a hints envelope
     assert!(
-        parsed.get("data").is_some(),
-        "should have data envelope: {parsed}"
+        parsed.get("results").is_some(),
+        "should have results envelope: {parsed}"
     );
     assert!(
-        parsed["data"].get("modified").is_some(),
+        parsed["results"].get("modified").is_some(),
         "data should have modified field: {parsed}"
     );
     // Mutation commands generate verify/read hints
@@ -504,11 +503,11 @@ fn remove_hints_accepted_produces_valid_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
     assert!(
-        parsed.get("data").is_some(),
-        "should have data envelope: {parsed}"
+        parsed.get("results").is_some(),
+        "should have results envelope: {parsed}"
     );
     assert!(
-        parsed["data"].get("modified").is_some(),
+        parsed["results"].get("modified").is_some(),
         "data should have modified field: {parsed}"
     );
     assert!(
@@ -546,11 +545,11 @@ fn append_hints_accepted_produces_valid_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
     assert!(
-        parsed.get("data").is_some(),
-        "should have data envelope: {parsed}"
+        parsed.get("results").is_some(),
+        "should have results envelope: {parsed}"
     );
     assert!(
-        parsed["data"].get("modified").is_some(),
+        parsed["results"].get("modified").is_some(),
         "data should have modified field: {parsed}"
     );
     assert!(
@@ -610,7 +609,7 @@ fn find_with_hints_json_envelope() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert!(parsed.get("data").is_some(), "should have 'data' key");
+    assert!(parsed.get("results").is_some(), "should have 'results' key");
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty(), "should have at least one hint");
     for hint in hints {
@@ -995,8 +994,8 @@ Body content here.
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     assert_hints_present(&parsed);
 }
@@ -1048,8 +1047,8 @@ See [[target]].
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     assert_hints_present(&parsed);
 }
@@ -1098,8 +1097,8 @@ title: Original
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     // dry-run hint should suggest applying (without --dry-run)
     let hints = parsed["hints"].as_array().unwrap();
@@ -1158,8 +1157,8 @@ title: Tasks
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     assert_hints_present(&parsed);
 }
@@ -1212,8 +1211,8 @@ title: ActualNote
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     assert_hints_present(&parsed);
 }
@@ -1253,8 +1252,8 @@ title: Note
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     let hints = parsed["hints"].as_array().unwrap();
     assert!(
@@ -1318,8 +1317,8 @@ title: Note
         )
     });
     assert!(
-        parsed.get("data").is_some(),
-        "expected 'data' key: {parsed}"
+        parsed.get("results").is_some(),
+        "expected 'results' key: {parsed}"
     );
     let hints = parsed["hints"].as_array().unwrap();
     assert!(
@@ -1352,7 +1351,7 @@ fn properties_summary_hints_json_envelope() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert!(parsed.get("data").is_some(), "should have 'data' key");
+    assert!(parsed.get("results").is_some(), "should have 'results' key");
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty(), "should have hints");
     for hint in hints {
@@ -1397,7 +1396,7 @@ fn tags_summary_hints_json_envelope() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert!(parsed.get("data").is_some(), "should have 'data' key");
+    assert!(parsed.get("results").is_some(), "should have 'results' key");
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty(), "should have hints");
     for hint in hints {

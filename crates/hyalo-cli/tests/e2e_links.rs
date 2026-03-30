@@ -103,19 +103,19 @@ fn summary_includes_link_health() {
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
     // links.total counts all links across the vault
-    let total = json["links"]["total"]
+    let total = json["results"]["links"]["total"]
         .as_u64()
         .expect("links.total should be a number");
     assert!(total > 0, "expected at least one link, got {total}");
 
     // links.broken >= 1 because b.md has [[nonexistent]] and d.md has [[Authnticaton]]
-    let broken = json["links"]["broken"]
+    let broken = json["results"]["links"]["broken"]
         .as_u64()
         .expect("links.broken should be a number");
     assert!(broken >= 1, "expected at least 1 broken link, got {broken}");
 
     // links.broken_links is an array of broken link entries
-    let broken_links = json["links"]["broken_links"]
+    let broken_links = json["results"]["links"]["broken_links"]
         .as_array()
         .expect("links.broken_links should be an array");
     assert!(
@@ -159,7 +159,7 @@ fn summary_broken_links_includes_nonexistent_target() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let broken_links = json["links"]["broken_links"]
+    let broken_links = json["results"]["links"]["broken_links"]
         .as_array()
         .expect("links.broken_links should be an array");
 
@@ -389,7 +389,7 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
     // broken >= 1 (at minimum [[nonexistent]] and [[Authnticaton]])
-    let broken_count = json["broken"]
+    let broken_count = json["results"]["broken"]
         .as_u64()
         .expect("'broken' should be a number");
     assert!(
@@ -398,7 +398,7 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
     );
 
     // fixable >= 1 because [[Authnticaton]] fuzzy-matches authentication.md
-    let fixable_count = json["fixable"]
+    let fixable_count = json["results"]["fixable"]
         .as_u64()
         .expect("'fixable' should be a number");
     assert!(
@@ -408,14 +408,14 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
 
     // By default (no --apply), applied must be false
     assert!(
-        !json["applied"]
+        !json["results"]["applied"]
             .as_bool()
             .expect("'applied' should be a bool"),
         "dry-run should report applied=false"
     );
 
     // fixes is an array with entries having source, line, old_target, new_target
-    let fixes = json["fixes"]
+    let fixes = json["results"]["fixes"]
         .as_array()
         .expect("'fixes' should be an array");
     assert!(
@@ -460,7 +460,7 @@ fn links_fix_dry_run_detects_fuzzy_match() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let fixes = json["fixes"]
+    let fixes = json["results"]["fixes"]
         .as_array()
         .expect("'fixes' should be an array");
 
@@ -516,19 +516,19 @@ fn links_fix_apply_reduces_broken_links() {
 
     // applied must be true
     assert!(
-        apply_json["applied"]
+        apply_json["results"]["applied"]
             .as_bool()
             .expect("'applied' should be a bool"),
         "links fix --apply should report applied=true"
     );
 
-    let fixed_count = apply_json["fixable"]
+    let fixed_count = apply_json["results"]["fixable"]
         .as_u64()
         .expect("'fixable' should be a number");
     assert!(fixed_count >= 1, "should have applied at least 1 fix");
 
     // Capture the broken link count reported by the apply run (before fixes were written).
-    let before_broken = apply_json["broken"]
+    let before_broken = apply_json["results"]["broken"]
         .as_u64()
         .expect("'broken' should be a number");
 
@@ -556,7 +556,7 @@ fn links_fix_apply_reduces_broken_links() {
     let after_json: serde_json::Value = serde_json::from_slice(&after_output.stdout)
         .expect("after dry-run stdout should be valid JSON");
 
-    let after_broken = after_json["broken"]
+    let after_broken = after_json["results"]["broken"]
         .as_u64()
         .expect("'broken' should be a number in after dry-run output");
 
@@ -647,7 +647,7 @@ fn links_fix_high_threshold_suppresses_fuzzy_fixes() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let fixes = json["fixes"]
+    let fixes = json["results"]["fixes"]
         .as_array()
         .expect("'fixes' should be an array");
 
@@ -688,7 +688,7 @@ fn links_fix_default_threshold_finds_fuzzy_match() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let fixable = json["fixable"]
+    let fixable = json["results"]["fixable"]
         .as_u64()
         .expect("'fixable' should be a number");
     let high_threshold_output = hyalo_no_hints()
@@ -710,7 +710,7 @@ fn links_fix_default_threshold_finds_fuzzy_match() {
 
     let high_json: serde_json::Value = serde_json::from_slice(&high_threshold_output.stdout)
         .expect("high threshold stdout should be valid JSON");
-    let high_fixable = high_json["fixable"]
+    let high_fixable = high_json["results"]["fixable"]
         .as_u64()
         .expect("'fixable' should be a number");
 
@@ -762,7 +762,7 @@ See [[sort-reverse]] for reverse sorting.
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
     // The broken link should be unfixable, not matched to itself.
-    let fixes = json["fixes"]
+    let fixes = json["results"]["fixes"]
         .as_array()
         .expect("'fixes' should be an array");
     assert!(
@@ -770,7 +770,7 @@ See [[sort-reverse]] for reverse sorting.
         "self-link should not appear in fixes: {fixes:?}"
     );
     assert_eq!(
-        json["unfixable"]
+        json["results"]["unfixable"]
             .as_u64()
             .expect("'unfixable' should be a number"),
         1,
@@ -825,7 +825,7 @@ Some text.
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     // The Hugo template link should be ignored
     assert_eq!(
-        json["ignored"]
+        json["results"]["ignored"]
             .as_u64()
             .expect("'ignored' should be a number"),
         1,
@@ -872,7 +872,7 @@ See [[missing]] and [hugo]({{ .RelPermalink }}) and [hugo2]({{ .Site.BaseURL }})
     );
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
-        json["ignored"].as_u64().unwrap_or(0),
+        json["results"]["ignored"].as_u64().unwrap_or(0),
         2,
         "expected 2 ignored links (one per pattern): {json}"
     );
@@ -902,7 +902,7 @@ fn links_fix_ignore_target_absent() {
     );
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
-        json["ignored"]
+        json["results"]["ignored"]
             .as_u64()
             .expect("'ignored' should be a number"),
         0,

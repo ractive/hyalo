@@ -171,8 +171,8 @@ fn create_index_produces_file() {
 
     // Output should be JSON with path and files_indexed
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["path"].is_string());
-    assert_eq!(json["files_indexed"].as_u64().unwrap(), 4);
+    assert!(json["results"]["path"].is_string());
+    assert_eq!(json["results"]["files_indexed"].as_u64().unwrap(), 4);
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn create_index_custom_output_path() {
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json["path"].as_str().unwrap(),
+        json["results"]["path"].as_str().unwrap(),
         custom_path.to_str().unwrap()
     );
 }
@@ -230,7 +230,7 @@ fn drop_index_deletes_file() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["deleted"].is_string());
+    assert!(json["results"]["deleted"].is_string());
 }
 
 #[test]
@@ -410,15 +410,15 @@ fn summary_with_index_matches_disk_scan() {
     let index_json: serde_json::Value = serde_json::from_slice(&index_output.stdout).unwrap();
 
     assert_eq!(
-        disk_json["files"]["total"], index_json["files"]["total"],
+        disk_json["results"]["files"]["total"], index_json["results"]["files"]["total"],
         "file count mismatch between disk scan and index"
     );
     assert_eq!(
-        disk_json["tasks"]["total"], index_json["tasks"]["total"],
+        disk_json["results"]["tasks"]["total"], index_json["results"]["tasks"]["total"],
         "task total mismatch between disk scan and index"
     );
     assert_eq!(
-        disk_json["tasks"]["done"], index_json["tasks"]["done"],
+        disk_json["results"]["tasks"]["done"], index_json["results"]["tasks"]["done"],
         "tasks done mismatch between disk scan and index"
     );
 }
@@ -442,7 +442,7 @@ fn summary_with_index_file_count() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 4);
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -479,14 +479,14 @@ fn tags_summary_with_index_matches_disk_scan() {
         "tags total mismatch"
     );
 
-    // Both should have the same set of tags.
-    let mut disk_tags: Vec<&str> = disk_json["tags"]
+    // Both should have the same set of tags (bare array under "results").
+    let mut disk_tags: Vec<&str> = disk_json["results"]
         .as_array()
         .unwrap()
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    let mut index_tags: Vec<&str> = index_json["tags"]
+    let mut index_tags: Vec<&str> = index_json["results"]
         .as_array()
         .unwrap()
         .iter()
@@ -534,14 +534,14 @@ fn properties_summary_with_index_matches_disk_scan() {
     );
     let index_json: serde_json::Value = serde_json::from_slice(&index_output.stdout).unwrap();
 
-    // Both should return arrays with the same property names.
-    let mut disk_props: Vec<&str> = disk_json
+    // Both should return arrays with the same property names (under "results").
+    let mut disk_props: Vec<&str> = disk_json["results"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| p["name"].as_str().unwrap())
         .collect();
-    let mut index_props: Vec<&str> = index_json
+    let mut index_props: Vec<&str> = index_json["results"]
         .as_array()
         .unwrap()
         .iter()
@@ -583,10 +583,10 @@ fn backlinks_with_index_finds_wikilinks() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["file"], "alpha.md");
+    assert_eq!(json["results"]["file"], "alpha.md");
     assert!(json["total"].as_u64().unwrap() >= 1);
 
-    let backlinks = json["backlinks"].as_array().unwrap();
+    let backlinks = json["results"]["backlinks"].as_array().unwrap();
     let sources: Vec<&str> = backlinks
         .iter()
         .map(|b| b["source"].as_str().unwrap())
@@ -625,8 +625,9 @@ fn backlinks_with_index_matches_disk_scan() {
     let index_json: serde_json::Value = serde_json::from_slice(&index_output.stdout).unwrap();
 
     assert_eq!(
-        disk_json["total"], index_json["total"],
-        "backlinks total mismatch between disk and index"
+        disk_json["results"]["backlinks"].as_array().map(Vec::len),
+        index_json["results"]["backlinks"].as_array().map(Vec::len),
+        "backlinks count mismatch between disk and index"
     );
 }
 
@@ -697,7 +698,7 @@ fn incompatible_index_falls_back_for_summary() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 4);
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,6 +1095,158 @@ fn chained_mutations_with_index_keep_index_consistent() {
     assert_eq!(
         tags, disk_tags,
         "index and disk scan should agree after chained mutations"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Regression: --property regex filter with YAML array values
+// ---------------------------------------------------------------------------
+
+/// Set up a vault where `status` is stored as a block-style YAML array
+/// (e.g. `status:\n  - deprecated`) rather than a scalar string.
+/// This mirrors real-world MDN-style frontmatter.
+fn setup_array_status_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    // deprecated-1.md  — status: [deprecated]
+    write_md(
+        tmp.path(),
+        "deprecated-1.md",
+        md!(r"
+---
+title: Deprecated One
+status:
+  - deprecated
+---
+# Deprecated One
+"),
+    );
+
+    // deprecated-2.md  — status: [deprecated]
+    write_md(
+        tmp.path(),
+        "deprecated-2.md",
+        md!(r"
+---
+title: Deprecated Two
+status:
+  - deprecated
+---
+# Deprecated Two
+"),
+    );
+
+    // experimental-1.md — status: [experimental]
+    write_md(
+        tmp.path(),
+        "experimental-1.md",
+        md!(r"
+---
+title: Experimental One
+status:
+  - experimental
+---
+# Experimental One
+"),
+    );
+
+    // experimental-2.md — status: [experimental]
+    write_md(
+        tmp.path(),
+        "experimental-2.md",
+        md!(r"
+---
+title: Experimental Two
+status:
+  - experimental
+---
+# Experimental Two
+"),
+    );
+
+    tmp
+}
+
+/// Helper: run `hyalo --jq '<filter>' find <extra_args>` and return stdout trimmed.
+fn run_find_jq(tmp: &TempDir, jq_filter: &str, extra_args: &[&str]) -> String {
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--jq", jq_filter]);
+    cmd.arg("find");
+    cmd.args(extra_args);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "find failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Regression: `--property 'status~=deprecated'` must return the same count
+/// when querying via disk scan vs. index, where `status` is a YAML array.
+#[test]
+fn find_property_regex_yaml_array_disk_and_index_agree() {
+    let tmp = setup_array_status_vault();
+
+    // Disk scan (no index).
+    let disk_total = run_find_jq(&tmp, ".total", &["--property", "status~=deprecated"]);
+
+    // Build index, then query via it.
+    let index_path = create_default_index(&tmp);
+    let index_total = run_find_jq(
+        &tmp,
+        ".total",
+        &[
+            "--property",
+            "status~=deprecated",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        disk_total, index_total,
+        "disk scan and index returned different totals for --property 'status~=deprecated' \
+         with YAML array values (disk={disk_total}, index={index_total})"
+    );
+
+    // Both should find exactly the 2 deprecated files.
+    assert_eq!(
+        disk_total, "2",
+        "expected 2 deprecated files from disk scan, got {disk_total}"
+    );
+}
+
+/// Complementary: exact-match `--property 'status=deprecated'` via index
+/// should also find the same 2 files (array element equality).
+#[test]
+fn find_property_exact_yaml_array_index_returns_correct_count() {
+    let tmp = setup_array_status_vault();
+    let index_path = create_default_index(&tmp);
+
+    let disk_total = run_find_jq(&tmp, ".total", &["--property", "status=deprecated"]);
+    let index_total = run_find_jq(
+        &tmp,
+        ".total",
+        &[
+            "--property",
+            "status=deprecated",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        disk_total, index_total,
+        "disk scan and index returned different totals for --property 'status=deprecated' \
+         with YAML array values (disk={disk_total}, index={index_total})"
+    );
+
+    // Both should find exactly the 2 deprecated files.
+    assert_eq!(
+        disk_total, "2",
+        "expected 2 deprecated files from exact match, got {disk_total}"
     );
 }
 

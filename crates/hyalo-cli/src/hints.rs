@@ -370,8 +370,8 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
 }
 
 fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
-    // find always returns a {total, results} envelope.
-    let Some(results) = data["results"].as_array() else {
+    // find returns a bare array as the raw command output (the envelope is built later).
+    let Some(results) = data.as_array() else {
         return vec![];
     };
 
@@ -553,7 +553,8 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
 }
 
 fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
-    let Some(tags_arr) = data.get("tags").and_then(|t| t.as_array()) else {
+    // tags summary returns a bare array [{name, count}, ...].
+    let Some(tags_arr) = data.as_array() else {
         return vec![];
     };
 
@@ -1075,7 +1076,7 @@ mod tests {
     fn find_single_result_suggests_read_and_backlinks() {
         let c = ctx(HintSource::Find);
         let items = vec![make_find_item("notes/alpha.md", None, &[])];
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -1103,7 +1104,7 @@ mod tests {
             make_find_item("e.md", Some("completed"), &["cli"]),
             make_find_item("f.md", Some("completed"), &[]),
         ];
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -1125,7 +1126,7 @@ mod tests {
             make_find_item("e.md", Some("completed"), &[]),
             make_find_item("f.md", Some("completed"), &[]),
         ];
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -1147,7 +1148,7 @@ mod tests {
             make_find_item("e.md", Some("planned"), &[]),
             make_find_item("f.md", Some("planned"), &[]),
         ];
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(
             hints
@@ -1169,7 +1170,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..10)
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
             .collect();
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(hints.len() <= MAX_HINTS);
     }
@@ -1183,7 +1184,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..6)
             .map(|i| make_find_item(&format!("{i}.md"), Some("draft"), &["research"]))
             .collect();
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         let sort_hint = hints.iter().find(|h| h.cmd.contains("--sort"));
         assert!(sort_hint.is_some(), "should include a sort hint: {hints:?}");
@@ -1205,7 +1206,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..6)
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["iteration"]))
             .collect();
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         let limit_hint = hints.iter().find(|h| h.cmd.contains("--limit"));
         assert!(
@@ -1224,10 +1225,8 @@ mod tests {
     #[test]
     fn dir_flag_propagated_to_all_hints() {
         let c = ctx_with_dir(HintSource::TagsSummary, "/vault");
-        let data = json!({
-            "tags": [{"name": "rust", "count": 5}],
-            "total": 1
-        });
+        // tags summary returns a bare array [{name, count}, ...]
+        let data = json!([{"name": "rust", "count": 5}]);
         let hints = generate_hints(&c, &data);
         assert!(hints[0].cmd.contains("--dir"));
         assert!(hints[0].cmd.contains("/vault"));
@@ -1446,7 +1445,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..15)
             .map(|i| make_find_item(&format!("{i}.md"), Some("completed"), &[]))
             .collect();
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(
             hints.iter().any(|h| h.cmd.contains("summary")),
@@ -1461,7 +1460,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..15)
             .map(|i| make_find_item(&format!("{i}.md"), Some("completed"), &["rust"]))
             .collect();
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         assert!(
             !hints.iter().any(|h| h.cmd.contains("summary")),
@@ -1476,7 +1475,7 @@ mod tests {
         let items: Vec<serde_json::Value> = (0..10)
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
             .collect();
-        let data = json!({"total": items.len(), "results": items});
+        let data = json!(items);
         let hints = generate_hints(&c, &data);
         // Should NOT suggest narrowing by --tag rust (already filtered).
         // Sort/limit hints may legitimately include --tag rust as a preserved filter,
@@ -1550,7 +1549,7 @@ mod tests {
             ],
             "modified": "2026-01-01T00:00:00Z"
         });
-        let data = json!({"total": 1, "results": [item]});
+        let data = json!([item]);
         let hints = generate_hints(&c, &data);
         assert!(
             hints.iter().any(|h| h.cmd.contains("links fix")),
@@ -1572,7 +1571,7 @@ mod tests {
             ],
             "modified": "2026-01-01T00:00:00Z"
         });
-        let data = json!({"total": 1, "results": [item]});
+        let data = json!([item]);
         let hints = generate_hints(&c, &data);
         assert!(
             !hints.iter().any(|h| h.cmd.contains("links fix")),
