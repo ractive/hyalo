@@ -1,9 +1,25 @@
 #![allow(clippy::missing_errors_doc)]
+
+mod fence;
+mod frontmatter;
+mod strip;
+mod visitor;
+
+pub use fence::{FenceTracker, extract_fence_language};
+pub use strip::{strip_inline_code, strip_inline_comments};
+pub use visitor::FileVisitor;
+
+pub(crate) use fence::{detect_opening_fence, is_closing_fence};
+pub(crate) use frontmatter::FrontmatterCollector;
+pub(crate) use strip::is_comment_fence;
+
+#[cfg(test)]
+pub(crate) use visitor::{scan_file, scan_reader};
+
 use crate::frontmatter::hyalo_options;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde_json::Value;
-use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -13,346 +29,6 @@ use std::path::Path;
 pub enum ScanAction {
     Continue,
     Stop,
-}
-
-/// Wraps a closure as a [`FileVisitor`].
-///
-/// [`dispatch_body_line`] strips both inline code spans and inline comments
-/// before calling visitors, so this wrapper is a trivial passthrough.
-#[cfg(test)]
-struct ClosureVisitor<F: FnMut(&str, usize) -> ScanAction> {
-    visitor: F,
-}
-
-#[cfg(test)]
-impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
-    fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
-        // Legacy closure-based API receives cleaned text for backward compatibility.
-        (self.visitor)(cleaned, line_num)
-    }
-}
-
-/// Callback-based scanner that streams through a markdown file.
-/// Skips frontmatter, fenced code blocks, and inline code spans.
-/// Calls the visitor function for each text segment with its 1-based line number.
-#[cfg(test)]
-pub(crate) fn scan_file<F>(path: &Path, visitor: F) -> Result<()>
-where
-    F: FnMut(&str, usize) -> ScanAction,
-{
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let reader = BufReader::new(file);
-    scan_reader(reader, visitor)
-}
-
-/// Scan from any buffered reader (useful for testing without file I/O).
-#[cfg(test)]
-pub(crate) fn scan_reader<R: BufRead, F>(reader: R, visitor: F) -> Result<()>
-where
-    F: FnMut(&str, usize) -> ScanAction,
-{
-    let mut wrapper = ClosureVisitor { visitor };
-    scan_reader_multi(reader, &mut [&mut wrapper])
-}
-
-/// Tracks fenced code block state while iterating over lines.
-///
-/// Call [`process_line`](Self::process_line) for each line. It returns `true`
-/// when the line is inside (or opens/closes) a fenced code block, meaning it
-/// should typically be skipped for heading or content analysis.
-#[derive(Debug, Default)]
-pub struct FenceTracker {
-    fence: Option<(char, usize)>,
-}
-
-impl FenceTracker {
-    /// Create a new tracker with no active fence.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns `true` if currently inside a fenced code block.
-    #[must_use]
-    pub fn in_fence(&self) -> bool {
-        self.fence.is_some()
-    }
-
-    /// Process a line and update fence state.
-    ///
-    /// Returns `true` if the line is part of a fenced code block (opening,
-    /// body, or closing fence line). The caller should typically skip such
-    /// lines for heading/content analysis.
-    pub fn process_line(&mut self, line: &str) -> bool {
-        if let Some((fence_char, fence_count)) = self.fence {
-            if is_closing_fence(line, fence_char, fence_count) {
-                self.fence = None;
-            }
-            return true;
-        }
-        if let Some(f) = detect_opening_fence(line) {
-            self.fence = Some(f);
-            return true;
-        }
-        false
-    }
-}
-
-/// Detect an opening fence (triple backtick or `~~~`) at the start of a line.
-/// Returns the fence character and count if found.
-pub(crate) fn detect_opening_fence(line: &str) -> Option<(char, usize)> {
-    let trimmed = line.trim_start();
-    let fence_char = trimmed.as_bytes().first().copied()?;
-    if fence_char != b'`' && fence_char != b'~' {
-        return None;
-    }
-    let fence_char = fence_char as char;
-    let count = trimmed.chars().take_while(|&c| c == fence_char).count();
-    if count >= 3 {
-        Some((fence_char, count))
-    } else {
-        None
-    }
-}
-
-/// Check if a line is a closing fence matching the opening fence.
-pub(crate) fn is_closing_fence(line: &str, fence_char: char, min_count: usize) -> bool {
-    let trimmed = line.trim_start();
-    let count = trimmed.chars().take_while(|&c| c == fence_char).count();
-    if count < min_count {
-        return false;
-    }
-    // After the fence chars, only whitespace is allowed
-    trimmed[count * fence_char.len_utf8()..].trim().is_empty()
-}
-
-/// Strip inline code spans from a line, replacing their content with spaces
-/// to preserve byte positions for link parsing.
-/// Returns a borrowed reference when no backticks are present (zero allocation).
-///
-/// # Safety constraint
-///
-/// The `unsafe` block at the end of this function relies on the fact that
-/// backtick (0x60) and space (0x20) are both single-byte ASCII characters.
-/// Any future change to the delimiter or replacement byte must preserve this
-/// single-byte-ASCII invariant to keep the UTF-8 validity proof sound.
-pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
-    if !line.contains('`') {
-        return Cow::Borrowed(line);
-    }
-
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut result = line.as_bytes().to_vec();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == b'`' {
-            // Count backticks for the opening delimiter
-            let start = i;
-            let mut backtick_count = 0;
-            while i < len && bytes[i] == b'`' {
-                backtick_count += 1;
-                i += 1;
-            }
-
-            // Find matching closing delimiter (same number of backticks)
-            let content_start = i;
-            let mut found_close = false;
-            while i < len {
-                if bytes[i] == b'`' {
-                    let mut close_count = 0;
-                    while i < len && bytes[i] == b'`' {
-                        close_count += 1;
-                        i += 1;
-                    }
-                    if close_count == backtick_count {
-                        for b in &mut result[start..i] {
-                            *b = b' ';
-                        }
-                        found_close = true;
-                        break;
-                    }
-                    // Not a match, continue searching
-                } else {
-                    i += 1;
-                }
-            }
-
-            if !found_close {
-                // No closing backticks found — treat opening backticks as literal
-                i = content_start;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    // SAFETY: `result` starts as an exact byte-for-byte copy of the valid UTF-8
-    // input `line`. We only mutate `result` by overwriting contiguous spans
-    // `start..i` with ASCII space bytes (0x20). Both `start` and `i` are
-    // indices of backtick delimiters (0x60), which are single-byte ASCII
-    // characters and therefore always lie on UTF-8 code-point boundaries.
-    // Each modified span is completely replaced by a run of ASCII bytes (valid
-    // single-byte UTF-8 code points), while the prefix and suffix outside the
-    // span remain unchanged valid UTF-8. Concatenating unchanged valid UTF-8
-    // segments with runs of ASCII bytes yields valid UTF-8 overall.
-    Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
-}
-
-/// Check if a line is an Obsidian comment fence (`%%` on its own line).
-///
-/// Returns `true` when the trimmed line is exactly `%%`. Lines containing
-/// `%%` with other content (e.g. inline comments like `%%text%%`) are NOT
-/// comment fences.
-pub(crate) fn is_comment_fence(line: &str) -> bool {
-    line.trim() == "%%"
-}
-
-/// Strip inline Obsidian comments (`%%text%%`) from a line, replacing them
-/// (markers inclusive) with spaces to preserve byte positions for downstream
-/// parsing.
-///
-/// Returns a borrowed reference when no `%%` is present (zero allocation).
-/// Unmatched opening `%%` is treated as literal text.
-///
-/// # Safety constraint
-///
-/// The `unsafe` block at the end of this function relies on the fact that
-/// percent (0x25) and space (0x20) are both single-byte ASCII characters.
-/// Any future change to the delimiter or replacement byte must preserve this
-/// single-byte-ASCII invariant to keep the UTF-8 validity proof sound.
-pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
-    if !line.contains("%%") {
-        return Cow::Borrowed(line);
-    }
-
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut result = bytes.to_vec();
-    let mut i = 0;
-
-    while i + 1 < len {
-        if bytes[i] == b'%' && bytes[i + 1] == b'%' {
-            let open = i;
-            i += 2; // skip opening %%
-
-            // If the rest of the line is only whitespace, this is a block fence
-            // marker, not an inline comment — leave it alone.
-            if line[i..].trim().is_empty() {
-                break;
-            }
-
-            // Scan for closing %%
-            let mut found_close = false;
-            while i + 1 < len {
-                if bytes[i] == b'%' && bytes[i + 1] == b'%' {
-                    // Replace open..=i+1 with spaces
-                    for b in &mut result[open..i + 2] {
-                        *b = b' ';
-                    }
-                    i += 2;
-                    found_close = true;
-                    break;
-                }
-                i += 1;
-            }
-            if !found_close {
-                // No closing %% — treat the opening as literal
-                i = open + 2;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    if result == bytes {
-        Cow::Borrowed(line)
-    } else {
-        // SAFETY: `result` starts as an exact byte-for-byte copy of the valid
-        // UTF-8 input `line`. We only mutate `result` by overwriting contiguous
-        // spans `open..i+2` with ASCII space bytes (0x20). Both `open` and the
-        // closing `%%` position are indices of percent-sign delimiters (0x25),
-        // which are single-byte ASCII characters and therefore always lie on
-        // UTF-8 code-point boundaries. Each modified span is completely replaced
-        // by a run of ASCII bytes (valid single-byte UTF-8 code points), while
-        // the prefix and suffix outside the span remain unchanged valid UTF-8.
-        // Concatenating unchanged valid UTF-8 segments with runs of ASCII bytes
-        // yields valid UTF-8 overall.
-        Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Multi-visitor scanner
-// ---------------------------------------------------------------------------
-
-/// Trait for visitors that receive events from a single-pass file scan.
-///
-/// All methods have default no-op implementations, so visitors only need
-/// to override the events they care about.
-pub trait FileVisitor {
-    /// Called with parsed frontmatter properties (empty `IndexMap` if none).
-    ///
-    /// The scanner passes ownership of the map to avoid a clone in the common
-    /// single-visitor case. When multiple visitors are present, the scanner
-    /// clones for all but the last, so only N-1 allocations occur for N visitors.
-    ///
-    /// Return `ScanAction::Stop` to skip the body scan for this visitor.
-    fn on_frontmatter(&mut self, _props: IndexMap<String, Value>) -> ScanAction {
-        ScanAction::Continue
-    }
-
-    /// Called for each body line outside fenced code blocks and comment blocks.
-    ///
-    /// `raw` is the original line text (code spans and comments intact).
-    /// `cleaned` has inline code spans and `%%comment%%` spans replaced with spaces
-    /// so that `[[links]]` inside backticks or comments are not extracted.
-    ///
-    /// Use `raw` for heading text extraction (to preserve code span content).
-    /// Use `cleaned` for link and task extraction (to skip backtick-escaped markup).
-    fn on_body_line(&mut self, _raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
-        ScanAction::Continue
-    }
-
-    /// Called when a fenced code block opens (e.g. `` ```rust ``).
-    fn on_code_fence_open(&mut self, _raw: &str, _language: &str, _line_num: usize) -> ScanAction {
-        ScanAction::Continue
-    }
-
-    /// Called when a fenced code block closes.
-    fn on_code_fence_close(&mut self, _line_num: usize) -> ScanAction {
-        ScanAction::Continue
-    }
-
-    /// Called for each line inside a fenced code block (between open/close fences).
-    /// Default: no-op. Override this to receive code block content.
-    fn on_code_block_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {
-        ScanAction::Continue
-    }
-
-    /// Whether this visitor needs body events (`on_body_line`, `on_code_block_line`,
-    /// `on_code_fence_*`). If `false`, the visitor only receives `on_frontmatter`
-    /// and is then stopped. Default: `true`.
-    fn needs_body(&self) -> bool {
-        true
-    }
-
-    /// Whether this visitor needs parsed frontmatter properties.
-    /// If **no** visitor needs frontmatter, the scanner skips YAML accumulation
-    /// and `serde_saphyr` parsing (but still reads past the `---` delimiters).
-    /// Default: `true`.
-    fn needs_frontmatter(&self) -> bool {
-        true
-    }
-}
-
-/// Extract the info-string (language tag) from a fenced code block opening line.
-/// E.g. `` ```rust `` → `"rust"`, `~~~` → `""`
-pub fn extract_fence_language(line: &str, fence_char: char, fence_count: usize) -> String {
-    let trimmed = line.trim_start();
-    let after_fence = &trimmed[fence_count * fence_char.len_utf8()..];
-    after_fence.trim().to_owned()
 }
 
 /// Scan a file with multiple visitors in a single pass.
@@ -720,49 +396,6 @@ fn dispatch_body_line(
         if active[i] && v.on_body_line(line, &cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Built-in visitors
-// ---------------------------------------------------------------------------
-
-/// Collects frontmatter properties from a file scan.
-pub(crate) struct FrontmatterCollector {
-    props: IndexMap<String, Value>,
-    body_needed: bool,
-}
-
-impl FrontmatterCollector {
-    /// Create a new collector.
-    /// If `body_needed` is false, signals the scanner to skip the body after frontmatter.
-    #[must_use]
-    pub fn new(body_needed: bool) -> Self {
-        Self {
-            props: IndexMap::new(),
-            body_needed,
-        }
-    }
-
-    /// Consume the collector and return the parsed properties.
-    #[must_use]
-    pub fn into_props(self) -> IndexMap<String, Value> {
-        self.props
-    }
-}
-
-impl FileVisitor for FrontmatterCollector {
-    fn on_frontmatter(&mut self, props: IndexMap<String, Value>) -> ScanAction {
-        self.props = props;
-        if self.body_needed {
-            ScanAction::Continue
-        } else {
-            ScanAction::Stop
-        }
-    }
-
-    fn needs_body(&self) -> bool {
-        self.body_needed
     }
 }
 
@@ -1662,7 +1295,7 @@ code only
     fn strip_inline_comments_no_change() {
         let line = "no comments here";
         let result = strip_inline_comments(line);
-        assert!(matches!(result, Cow::Borrowed(_)));
+        assert!(matches!(result, std::borrow::Cow::Borrowed(_)));
         assert_eq!(result.as_ref(), line);
     }
 
