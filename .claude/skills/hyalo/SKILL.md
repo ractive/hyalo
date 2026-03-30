@@ -64,8 +64,9 @@ hyalo find --fields properties,backlinks              # combine with other field
 `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope:
 
 ```bash
-hyalo find --property status=draft --jq '.total'          # count matching files
-hyalo find --property status=draft --jq '.results[].file' # just file paths
+hyalo find --property status=draft --count                 # count matching files (bare integer)
+hyalo find --property status=draft --jq '.total'           # same, via jq
+hyalo find --property status=draft --jq '.results[].file'  # just file paths
 hyalo summary --jq '.results.tasks.total'                  # tasks count from summary
 ```
 

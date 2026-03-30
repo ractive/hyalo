@@ -45,6 +45,7 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         total is present for list commands (find, tags, properties, backlinks). \
         hints is always present (empty [] when --no-hints). \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
+        --count prints just the total as a bare integer (shortcut for --jq '.total').\n\
         Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
@@ -76,6 +77,12 @@ pub(crate) struct Cli {
     /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
+
+    /// Print only the total count as a bare integer for list commands
+    /// (find, tags summary, properties summary, backlinks).
+    /// Shortcut for --jq '.total'. Incompatible with --jq.
+    #[arg(long, global = true)]
+    pub count: bool,
 
     /// Force hints on (already the default).
     /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.

@@ -254,6 +254,13 @@ fn run_inner() -> Result<(), AppError> {
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         return Err(AppError::Exit(2));
     }
+    if cli.count && jq_filter.is_some() {
+        eprintln!("Error: --count cannot be combined with --jq");
+        eprintln!(
+            "  --count prints the bare total; --jq applies a custom filter — use one or the other"
+        );
+        return Err(AppError::Exit(2));
+    }
     // Always force JSON internally so the output pipeline can wrap results in the
     // envelope.  The user-requested format is applied by the pipeline afterwards.
     let effective_format = Format::Json;
@@ -528,6 +535,7 @@ fn run_inner() -> Result<(), AppError> {
         user_format: format,
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
+        count: cli.count,
     };
     let code = pipeline.finalize(result);
     if code == 0 {

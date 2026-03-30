@@ -50,9 +50,9 @@ cargo build --release
 
 ## Usage
 
-All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--hints` (append executable drill-down command suggestions), `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links), and `--index <PATH>` (use a pre-built snapshot index instead of scanning files from disk — read-only commands use it; mutation commands ignore it; falls back to disk scan if the index is incompatible).
+All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--count` (print only the total count as a bare integer — shortcut for `--jq '.total'`), `--hints` (append executable drill-down command suggestions), `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links), and `--index <PATH>` (use a pre-built snapshot index instead of scanning files from disk — read-only commands use it; mutation commands ignore it; falls back to disk scan if the index is incompatible).
 
-All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`.
+All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`. Use `--count` to print just the total as a bare integer (e.g. `hyalo find --tag rust --count` outputs `7`). Incompatible with `--jq`.
 
 Most flags have short aliases for quick interactive use:
 
