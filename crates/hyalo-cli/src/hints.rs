@@ -432,22 +432,22 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         let mut status_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for item in results {
-            if let Some(status_val) = item.get("properties").and_then(|p| p.get("status")) {
-                let values: Vec<&str> = match status_val {
-                    serde_json::Value::String(s) => vec![s.as_str()],
-                    serde_json::Value::Array(arr) => {
-                        arr.iter().filter_map(|v| v.as_str()).collect()
-                    }
-                    _ => vec![],
-                };
-                for status in values {
-                    let already_filtered = ctx
-                        .property_filters
-                        .iter()
-                        .any(|f| f == &format!("status={status}"));
-                    if !already_filtered {
-                        *status_counts.entry(status).or_insert(0) += 1;
-                    }
+            let Some(status_val) = item.get("properties").and_then(|p| p.get("status")) else {
+                continue;
+            };
+            // Yield individual &str values from scalar or array status.
+            let iter: Box<dyn Iterator<Item = &str>> = match status_val {
+                serde_json::Value::String(s) => Box::new(std::iter::once(s.as_str())),
+                serde_json::Value::Array(arr) => Box::new(arr.iter().filter_map(|v| v.as_str())),
+                _ => Box::new(std::iter::empty()),
+            };
+            for status in iter {
+                let already_filtered = ctx
+                    .property_filters
+                    .iter()
+                    .any(|f| f == &format!("status={status}"));
+                if !already_filtered {
+                    *status_counts.entry(status).or_insert(0) += 1;
                 }
             }
         }

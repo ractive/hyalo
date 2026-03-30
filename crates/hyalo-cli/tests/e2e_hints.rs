@@ -854,45 +854,35 @@ fn find_hints_no_hardcoded_draft() {
 // ---------------------------------------------------------------------------
 
 /// Vault where some files have array-valued status properties.
+/// "deprecated" appears only inside arrays (3 files) — more than "completed" (2 files).
+/// "completed" has the lowest priority so "deprecated" wins on both count and priority,
+/// proving the hint comes from flattening arrays.
 fn setup_array_status_vault() -> TempDir {
     let tmp = TempDir::new().unwrap();
-    // 6 files with status to trigger narrowing hints (>5 results needed).
-    for i in 1..=4 {
+    // 6 files to trigger narrowing hints (>5 results needed).
+    for i in 1..=2 {
         write_md(
             tmp.path(),
             &format!("note-{i}.md"),
-            &format!("---\ntitle: Note {i}\nstatus: active\ntags:\n  - docs\n---\nBody.\n"),
+            &format!(
+                "---\ntitle: Note {i}\nstatus: completed\ntags:\n  - docs\n---\nBody.\n"
+            ),
         );
     }
+    for (i, extra) in [(3, "experimental"), (4, "legacy"), (5, "wip")] {
+        write_md(
+            tmp.path(),
+            &format!("note-{i}.md"),
+            &format!(
+                "---\ntitle: Note {i}\nstatus:\n  - deprecated\n  - {extra}\ntags:\n  - docs\n---\nBody.\n"
+            ),
+        );
+    }
+    // One more file with no status to pad file count.
     write_md(
         tmp.path(),
-        "multi-a.md",
-        md!(r"
----
-title: Multi A
-status:
-  - deprecated
-  - experimental
-tags:
-  - docs
----
-Body.
-"),
-    );
-    write_md(
-        tmp.path(),
-        "multi-b.md",
-        md!(r"
----
-title: Multi B
-status:
-  - deprecated
-  - legacy
-tags:
-  - docs
----
-Body.
-"),
+        "note-6.md",
+        "---\ntitle: Note 6\ntags:\n  - docs\n---\nBody.\n",
     );
     tmp
 }
@@ -940,10 +930,11 @@ fn find_hints_flatten_array_status() {
         "find hints should not contain stringified array syntax: {stdout}"
     );
 
-    // Should suggest a scalar status value (e.g. "active" which appears 4 times).
+    // "deprecated" appears only inside array-valued status (3 files > "active"'s 2),
+    // so the hint must come from flattening arrays — the old code would skip these.
     assert!(
-        stdout.contains("status=active"),
-        "find hints should suggest scalar status value: {stdout}"
+        stdout.contains("status=deprecated"),
+        "find hints should suggest status derived from array-valued fields: {stdout}"
     );
 }
 

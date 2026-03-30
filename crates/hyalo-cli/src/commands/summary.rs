@@ -166,7 +166,18 @@ pub fn summary(
         }
 
         // Status grouping — flatten arrays so each element becomes its own group.
+        // Deduplicate within a single entry to avoid counting the same file twice
+        // when an array contains duplicate values.
         if let Some(status_val) = entry.properties.get("status") {
+            let mut seen = std::collections::HashSet::new();
+            let mut push_status = |s: String| {
+                if seen.insert(s.clone()) {
+                    status_groups
+                        .entry(s)
+                        .or_default()
+                        .push(entry.rel_path.clone());
+                }
+            };
             match status_val {
                 serde_json::Value::Array(arr) => {
                     for item in arr {
@@ -174,24 +185,11 @@ pub fn summary(
                             serde_json::Value::String(s) => s.clone(),
                             other => other.to_string(),
                         };
-                        status_groups
-                            .entry(s)
-                            .or_default()
-                            .push(entry.rel_path.clone());
+                        push_status(s);
                     }
                 }
-                serde_json::Value::String(s) => {
-                    status_groups
-                        .entry(s.clone())
-                        .or_default()
-                        .push(entry.rel_path.clone());
-                }
-                other => {
-                    status_groups
-                        .entry(other.to_string())
-                        .or_default()
-                        .push(entry.rel_path.clone());
-                }
+                serde_json::Value::String(s) => push_status(s.clone()),
+                other => push_status(other.to_string()),
             }
         }
 
