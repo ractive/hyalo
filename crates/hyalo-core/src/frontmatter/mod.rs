@@ -3,7 +3,7 @@
 mod parse;
 mod types;
 
-pub use parse::{Document, hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
+pub use parse::{hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
 pub use types::{infer_type, parse_value};
 
 /// Returns true if the error is a frontmatter parse/structure error (bad YAML, frontmatter
@@ -17,7 +17,7 @@ pub fn is_parse_error(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parse::{detect_list_indent_style, read_frontmatter_from_reader};
+    use parse::{Document, detect_list_indent_style, read_frontmatter_from_reader};
     use serde_json::Value;
     use std::fmt::Write as _;
     use std::path::Path;

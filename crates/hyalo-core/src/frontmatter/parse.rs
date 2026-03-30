@@ -97,7 +97,7 @@ pub(super) fn detect_list_indent_style(yaml: &str) -> bool {
 /// Represents parsed frontmatter and the remaining body content.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Used in tests only
-pub struct Document {
+pub(crate) struct Document {
     properties: IndexMap<String, Value>,
     body: String,
     /// Whether the original YAML used compact list indentation (flush `- item`).

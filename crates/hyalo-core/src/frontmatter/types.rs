@@ -26,7 +26,7 @@ fn infer_string_type(s: &str) -> &'static str {
 }
 
 /// Check if a string matches `YYYY-MM-DD`.
-pub(super) fn is_date(s: &str) -> bool {
+fn is_date(s: &str) -> bool {
     if s.len() != 10 {
         return false;
     }
@@ -39,7 +39,7 @@ pub(super) fn is_date(s: &str) -> bool {
 }
 
 /// Check if a string matches `YYYY-MM-DDThh:mm:ss`.
-pub(super) fn is_datetime(s: &str) -> bool {
+fn is_datetime(s: &str) -> bool {
     if s.len() != 19 {
         return false;
     }
