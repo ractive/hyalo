@@ -20,8 +20,8 @@ use crate::frontmatter::hyalo_options;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde_json::Value;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+#[cfg(test)]
+use std::io::BufRead;
 use std::path::Path;
 
 /// Controls whether the scanner should continue or stop early.
@@ -33,18 +33,220 @@ pub enum ScanAction {
 
 /// Scan a file with multiple visitors in a single pass.
 ///
-/// Opens the file once, parses frontmatter, then streams body lines to all
-/// active visitors. Stops early when all visitors have returned `ScanAction::Stop`.
+/// Reads the file into memory once with `std::fs::read`, then delegates to
+/// `scan_slice_multi` for SIMD-accelerated line splitting via `memchr`.
 ///
 /// **Optimization**: if no visitor needs body events (all return `Stop` from
 /// `on_frontmatter` or have `needs_body() == false`), the body is never read.
 pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let reader = BufReader::new(file);
-    scan_reader_multi(reader, visitors)
+    scan_buffer_multi(path, visitors)
+}
+
+/// Read a file into memory and scan it with multiple visitors.
+///
+/// Combines `std::fs::read` with `scan_slice_multi` for a single-read,
+/// zero-copy scanning path.
+pub fn scan_buffer_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
+    let data = std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    scan_slice_multi(&data, visitors)
+}
+
+/// Scan a UTF-8 byte slice with multiple visitors in a single pass.
+///
+/// Like `scan_reader_multi`, but works on an in-memory `&[u8]` buffer
+/// (e.g. from `std::fs::read`). Uses `memchr` for SIMD-accelerated line
+/// splitting instead of `BufRead::read_line`.
+pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
+    let num = visitors.len();
+    if num == 0 {
+        return Ok(());
+    }
+
+    let text = std::str::from_utf8(data).context("file is not valid UTF-8")?;
+
+    let mut active: Vec<bool> = vec![true; num];
+
+    // Build an iterator of &str lines using memchr for SIMD-accelerated splitting.
+    // Each element is the line content *without* the trailing `\n` (and `\r` if CRLF).
+    // We iterate by tracking byte offsets into `data`/`text`.
+    let mut line_starts: Vec<usize> = Vec::new();
+    line_starts.push(0);
+    for pos in memchr::memchr_iter(b'\n', data) {
+        // Next line starts after the newline.
+        if pos + 1 < data.len() {
+            line_starts.push(pos + 1);
+        }
+    }
+
+    // Produce an iterator of (line_index_0based, &str) pairs.
+    // Each line is the slice from `line_starts[i]` to the next entry (or end),
+    // with trailing `\n` and optional `\r` stripped.
+    let line_count = line_starts.len();
+    let get_line = |i: usize| -> &str {
+        let start = line_starts[i];
+        let end = if i + 1 < line_count {
+            line_starts[i + 1]
+        } else {
+            text.len()
+        };
+        let raw = &text[start..end];
+        raw.trim_end_matches(['\n', '\r'])
+    };
+
+    if line_count == 0 || text.is_empty() {
+        // Empty file — deliver empty frontmatter.
+        let mut empty: IndexMap<String, Value> = IndexMap::new();
+        let last = visitors.len() - 1;
+        for (i, v) in visitors.iter_mut().enumerate() {
+            let props = if i == last {
+                std::mem::take(&mut empty)
+            } else {
+                empty.clone()
+            };
+            if v.on_frontmatter(props) == ScanAction::Stop {
+                active[i] = false;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut line_idx: usize = 0; // 0-based index into `line_starts`
+    let mut line_num: usize = 0; // 1-based line number for visitors
+
+    let first_line = get_line(0);
+    line_idx += 1;
+    line_num += 1;
+
+    let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
+
+    let (mut fm_props, fm_lines) = if first_line.trim() == "---" {
+        const MAX_FRONTMATTER_LINES: usize = 200;
+        const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+
+        let mut yaml = if any_needs_fm {
+            Some(String::new())
+        } else {
+            None
+        };
+        let mut fm_line_count: usize = 1; // the opening `---`
+        let mut found_close = false;
+
+        while line_idx < line_count {
+            let trimmed = get_line(line_idx);
+            line_idx += 1;
+            fm_line_count += 1;
+
+            if trimmed.trim() == "---" {
+                found_close = true;
+                break;
+            }
+
+            // Content line count is fm_line_count - 1 (excludes the opening `---`).
+            if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
+                anyhow::bail!(
+                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                );
+            }
+            if let Some(ref mut y) = yaml {
+                if y.len() + trimmed.len() > MAX_FRONTMATTER_BYTES {
+                    anyhow::bail!(
+                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                    );
+                }
+                y.push_str(trimmed);
+                y.push('\n');
+            }
+        }
+
+        if !found_close {
+            anyhow::bail!("unclosed frontmatter (no closing `---` found)");
+        }
+
+        let props: IndexMap<String, Value> = match yaml {
+            Some(ref y) if !y.trim().is_empty() => {
+                serde_saphyr::from_str_with_options(y, hyalo_options())
+                    .context("failed to parse YAML frontmatter")?
+            }
+            _ => IndexMap::new(),
+        };
+        (props, fm_line_count)
+    } else {
+        (IndexMap::new(), 0usize)
+    };
+
+    // Deliver frontmatter to all visitors.
+    let last = visitors.len() - 1;
+    for (i, v) in visitors.iter_mut().enumerate() {
+        let props = if i == last {
+            std::mem::take(&mut fm_props)
+        } else {
+            fm_props.clone()
+        };
+        if v.on_frontmatter(props) == ScanAction::Stop || !v.needs_body() {
+            active[i] = false;
+        }
+    }
+
+    // If all visitors are done, skip the body.
+    if !active.iter().any(|&a| a) {
+        return Ok(());
+    }
+
+    // --- Phase 2: Body ---
+    let mut fence: Option<(char, usize)> = None;
+    let mut in_comment = false;
+
+    if fm_lines > 0 {
+        line_num = fm_lines;
+    } else {
+        // First line was not frontmatter — process it as a body line.
+        dispatch_body_line(
+            first_line,
+            line_num,
+            visitors,
+            &mut active,
+            &mut fence,
+            &mut in_comment,
+        );
+        if !active.iter().any(|&a| a) {
+            return Ok(());
+        }
+    }
+
+    while line_idx < line_count {
+        let line = get_line(line_idx);
+        line_idx += 1;
+        line_num += 1;
+
+        // Skip lines that exceed the per-line byte cap.
+        let line_start = line_starts[line_idx - 1];
+        let line_end = if line_idx < line_count {
+            line_starts[line_idx]
+        } else {
+            data.len()
+        };
+        if line_end - line_start > MAX_BODY_LINE_BYTES {
+            continue;
+        }
+
+        dispatch_body_line(
+            line,
+            line_num,
+            visitors,
+            &mut active,
+            &mut fence,
+            &mut in_comment,
+        );
+        if !active.iter().any(|&a| a) {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 /// Scan from any buffered reader with multiple visitors.
+#[cfg(test)]
 pub(crate) fn scan_reader_multi<R: BufRead>(
     mut reader: R,
     visitors: &mut [&mut dyn FileVisitor],
@@ -231,6 +433,7 @@ const MAX_BODY_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
 /// reader is positioned just after where the logical line ended (i.e. excess
 /// bytes are drained until the next `\n` or EOF), and the caller should treat
 /// the line as skipped.
+#[cfg(test)]
 fn read_line_capped<R: BufRead>(
     reader: &mut R,
     buf: &mut String,
@@ -312,6 +515,7 @@ fn read_line_capped<R: BufRead>(
 }
 
 /// Consume bytes from `reader` until (and including) a `\n`, or until EOF.
+#[cfg(test)]
 fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
     loop {
         let available = match reader.fill_buf() {

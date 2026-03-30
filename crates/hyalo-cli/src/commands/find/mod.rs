@@ -227,28 +227,63 @@ pub fn find(
         // --- Content search: requires disk I/O ---
         let content_matches: Option<Vec<ContentMatch>> = if has_content_search {
             let full_path = dir.join(&entry.rel_path);
-            let mut content_visitor = if let Some(ref re) = compiled_regex {
-                ContentSearchVisitor::from_compiled(re.clone())
-            } else {
-                // pattern is Some at this point since has_content_search is true
-                ContentSearchVisitor::new(pattern.unwrap())
-            };
-            // Re-scan just this file for content (frontmatter already in index)
-            let scan_result =
-                hyalo_core::scanner::scan_file_multi(&full_path, &mut [&mut content_visitor]);
-            match scan_result {
-                Ok(()) => {}
-                Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
-                    crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
-                    continue;
+
+            if let Some(re) = &compiled_regex {
+                // Regex mode: no fast-reject possible; scan the file directly.
+                let mut content_visitor = ContentSearchVisitor::from_compiled(re.clone());
+                let scan_result =
+                    hyalo_core::scanner::scan_file_multi(&full_path, &mut [&mut content_visitor]);
+                match scan_result {
+                    Ok(()) => {}
+                    Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
+                        crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+                let mut matches = content_visitor.into_matches();
+                if has_section_filter {
+                    matches.retain(|m| in_scope(&scope_ranges, m.line));
+                }
+                Some(matches)
+            } else {
+                // Substring mode: read once, fast-reject via memchr, then scan the buffer.
+                let file_data = match std::fs::read(&full_path) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                        continue;
+                    }
+                };
+                // pattern is Some at this point: has_content_search is true and
+                // compiled_regex is None, so pattern must have been provided.
+                let pat = pattern.unwrap();
+                let lowered_pattern = pat.to_ascii_lowercase();
+                if hyalo_core::content_search::fast_reject(&file_data, lowered_pattern.as_bytes()) {
+                    // File definitely does not contain the pattern — return an empty
+                    // match list so the downstream is_empty check filters this entry.
+                    Some(vec![])
+                } else {
+                    let mut content_visitor = ContentSearchVisitor::new(pat);
+                    let scan_result = hyalo_core::scanner::scan_slice_multi(
+                        &file_data,
+                        &mut [&mut content_visitor],
+                    );
+                    match scan_result {
+                        Ok(()) => {}
+                        Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
+                            crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                    let mut matches = content_visitor.into_matches();
+                    if has_section_filter {
+                        matches.retain(|m| in_scope(&scope_ranges, m.line));
+                    }
+                    Some(matches)
+                }
             }
-            let mut matches = content_visitor.into_matches();
-            if has_section_filter {
-                matches.retain(|m| in_scope(&scope_ranges, m.line));
-            }
-            Some(matches)
         } else {
             None
         };

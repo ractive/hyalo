@@ -22,11 +22,13 @@ dunce = "1"
 globset = "0.4"
 ignore = "0.4"
 indexmap = { version = "2", features = ["serde"] }
+memchr = "2"
 libc = "0.2"
 jaq-core = "3.0.0"
 jaq-json = { version = "2.0.0", features = ["serde"] }
 jaq-std = "3.0.0"
 predicates = "3"
+rayon = "1"
 regex = "1"
 rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }

@@ -509,6 +509,8 @@ dependencies = [
  "ignore",
  "indexmap",
  "libc",
+ "memchr",
+ "rayon",
  "regex",
  "rmp-serde",
  "serde",
