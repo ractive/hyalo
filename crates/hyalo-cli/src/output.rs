@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use jaq_core::load::{self, Arena, File, Loader};
-use jaq_core::{Compiler, Ctx, Native, RcIter};
+use jaq_core::{Compiler, Ctx, Native, Vars, data};
 use jaq_json::Val;
 use serde::Serialize;
 use serde_json::json;
@@ -11,13 +11,20 @@ use serde_json::json;
 // Filter cache
 // ---------------------------------------------------------------------------
 
+/// The `DataT` implementation used for jaq filter compilation and execution.
+///
+/// `JustLut<Val>` is a minimal wrapper that only provides the compiled lookup
+/// table — sufficient because we don't use lifetime-dependent filters like
+/// `inputs`.
+type D = data::JustLut<Val>;
+
 /// Cache of compiled jaq filters, keyed by filter source string.
 ///
-/// `Filter<Native<Val>>` is fully owned (no lifetime parameters) and `Clone`,
+/// The compiled `Filter` is fully owned (no lifetime parameters) and `Clone`,
 /// so it can be stored directly in a `HashMap`. The `Arena` used during
 /// `Loader::load` is a temporary scratch pad — once `compile` returns, the
 /// `Filter` no longer borrows from it.
-type JaqFilterCache = HashMap<String, jaq_core::Filter<Native<Val>>>;
+type JaqFilterCache = HashMap<String, jaq_core::compile::Filter<Native<D>>>;
 
 /// Output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -371,21 +378,27 @@ fn format_load_errors(errs: &load::Errors<&str, ()>) -> String {
 /// Compile a jq filter string into a reusable `Filter`.
 ///
 /// The `Arena` used during loading is a temporary scratch pad and is dropped
-/// after this function returns — `Filter<Native<Val>>` owns all its data.
-fn compile_jq_filter(filter_code: &str) -> Result<jaq_core::Filter<Native<Val>>, String> {
+/// after this function returns — the compiled `Filter` owns all its data.
+fn compile_jq_filter(filter_code: &str) -> Result<jaq_core::compile::Filter<Native<D>>, String> {
     let program = File {
         code: filter_code,
         path: (),
     };
-    let loader = Loader::new(jaq_std::defs().chain(jaq_json::defs()));
+    let defs = jaq_core::defs()
+        .chain(jaq_std::defs())
+        .chain(jaq_json::defs());
+    let loader = Loader::new(defs);
     let arena = Arena::default();
 
     let modules = loader
         .load(&arena, program)
         .map_err(|errs| format_load_errors(&errs))?;
 
+    let funs = jaq_core::funs::<D>()
+        .chain(jaq_std::funs::<D>())
+        .chain(jaq_json::funs::<D>());
     Compiler::default()
-        .with_funs(jaq_std::funs().chain(jaq_json::funs()))
+        .with_funs(funs)
         .compile(modules)
         .map_err(|errs| {
             // compile::Errors = Vec<(File<S,P>, Vec<(S, Undefined)>)>
@@ -401,20 +414,22 @@ fn compile_jq_filter(filter_code: &str) -> Result<jaq_core::Filter<Native<Val>>,
 
 /// Execute a pre-compiled jq filter against a JSON value and return the text output.
 fn execute_jq_filter(
-    filter: &jaq_core::Filter<Native<Val>>,
+    filter: &jaq_core::compile::Filter<Native<D>>,
     value: &serde_json::Value,
 ) -> Result<String, String> {
-    let input = Val::from(value.clone());
-    let inputs = RcIter::new(core::iter::empty());
-    let ctx = Ctx::new([], &inputs);
+    let input: Val = serde_json::from_value(value.clone())
+        .map_err(|e| format!("jq input conversion error: {e}"))?;
+    let ctx = Ctx::<D>::new(&filter.lut, Vars::new([]));
 
     let mut parts = Vec::new();
-    for result in filter.run((ctx, input)) {
+    for result in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
         match result {
             Ok(val) => {
                 let s = match val {
-                    Val::Str(s) => (*s).clone(),
-                    other => serde_json::Value::from(other).to_string(),
+                    Val::TStr(ref s) => String::from_utf8_lossy(s).into_owned(),
+                    // For non-string values, `Display` produces valid JSON
+                    // (numbers, booleans, null, arrays, objects).
+                    other => other.to_string(),
                 };
                 parts.push(s);
             }
@@ -431,7 +446,7 @@ fn run_jq_filter_cached(
     value: &serde_json::Value,
     cache: &mut JaqFilterCache,
 ) -> Result<String, String> {
-    if let Some(filter) = cache.get_mut(filter_code) {
+    if let Some(filter) = cache.get(filter_code) {
         return execute_jq_filter(filter, value);
     }
     let compiled = compile_jq_filter(filter_code)?;

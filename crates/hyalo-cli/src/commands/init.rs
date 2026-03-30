@@ -65,22 +65,12 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
             // If the file is malformed, fall back to overwriting with just `dir`.
             let existing_raw = fs::read_to_string(&toml_path)
                 .with_context(|| format!("failed to read {}", toml_path.display()))?;
-            if let Ok(mut table) = existing_raw.parse::<TomlValue>() {
-                if let Some(map) = table.as_table_mut() {
-                    map.insert("dir".to_owned(), TomlValue::String(dir_value.clone()));
-                    // Serialise back; toml::to_string always produces valid TOML.
-                    if let Ok(s) = toml::to_string(&table) {
-                        s
-                    } else {
-                        writeln!(
-                            summary,
-                            "warning  .hyalo.toml was malformed; existing content replaced"
-                        )
-                        .unwrap();
-                        minimal_toml_dir(&dir_value)
-                    }
+            if let Ok(mut table) = toml::from_str::<toml::Table>(&existing_raw) {
+                table.insert("dir".to_owned(), TomlValue::String(dir_value.clone()));
+                // Serialise back; toml::to_string always produces valid TOML.
+                if let Ok(s) = toml::to_string(&table) {
+                    s
                 } else {
-                    // Valid TOML but not a table (e.g. bare string) — overwrite.
                     writeln!(
                         summary,
                         "warning  .hyalo.toml was malformed; existing content replaced"
@@ -937,7 +927,7 @@ mod tests {
         // A directory name with a non-ASCII character.
         let output = minimal_toml_dir("my\u{1F4C1}notes");
         // Must parse back as valid TOML with the correct value.
-        let parsed: toml::Value = output.parse().expect("must be valid TOML");
+        let parsed: toml::Table = toml::from_str(&output).expect("must be valid TOML");
         assert_eq!(
             parsed.get("dir").and_then(|v| v.as_str()),
             Some("my\u{1F4C1}notes"),
@@ -949,7 +939,7 @@ mod tests {
     fn minimal_toml_dir_produces_valid_toml_for_backslash() {
         // Windows-style path — backslashes must be escaped in TOML strings.
         let output = minimal_toml_dir("C:\\Users\\me\\notes");
-        let parsed: toml::Value = output.parse().expect("must be valid TOML");
+        let parsed: toml::Table = toml::from_str(&output).expect("must be valid TOML");
         assert_eq!(
             parsed.get("dir").and_then(|v| v.as_str()),
             Some("C:\\Users\\me\\notes"),
@@ -994,9 +984,8 @@ mod tests {
         );
         // File overwritten with a valid table.
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
-        let parsed: toml::Value = content
-            .parse()
-            .expect("overwritten content must be valid TOML");
+        let parsed: toml::Table =
+            toml::from_str(&content).expect("overwritten content must be valid TOML");
         assert_eq!(
             parsed.get("dir").and_then(|v| v.as_str()),
             Some("docs"),
