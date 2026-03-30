@@ -6,7 +6,7 @@ tags:
   - ux
   - feature
   - dogfood
-status: in-progress
+status: completed
 priority: 2
 branch: iter-80/smarter-hints
 ---
