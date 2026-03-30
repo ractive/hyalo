@@ -202,7 +202,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         broken_links: bool,
         /// Filter by title: case-insensitive substring match against the displayed title
-        /// (frontmatter 'title' property or first H1 heading). Prefix with '~=' for regex.
+        /// (frontmatter 'title' property or first H1 heading). Prefix with '~=' for regex
+        /// (e.g. '~=^The' or '~=/^The/i').
         #[arg(long)]
         title: Option<String>,
     },

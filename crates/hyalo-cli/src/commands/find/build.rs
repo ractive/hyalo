@@ -1,7 +1,8 @@
-use hyalo_core::filter::FindTaskFilter;
+use hyalo_core::filter::{FindTaskFilter, parse_regex_pattern};
 use hyalo_core::types::{FindTaskInfo, OutlineSection};
 
 use crate::output::CommandOutcome;
+use crate::warn;
 
 /// Extract the title value for `--fields title`.
 ///
@@ -42,20 +43,70 @@ pub(super) enum TitleMatcher {
 impl TitleMatcher {
     /// Parse a `--title` value into a compiled matcher.
     ///
+    /// Supports:
+    /// - Plain text: case-insensitive substring match
+    /// - `~=pattern`: bare regex (always case-insensitive)
+    /// - `~=/pattern/`: delimited regex (case-insensitive by default)
+    /// - `~=/pattern/i`: delimited regex with explicit flags
+    ///
     /// Returns `Err(CommandOutcome::UserError(...))` on invalid regex.
     pub(super) fn parse(pattern: &str) -> Result<Self, CommandOutcome> {
         if let Some(regex_pat) = pattern.strip_prefix("~=") {
-            let effective = format!("(?i){regex_pat}");
-            match regex::RegexBuilder::new(&effective)
-                .size_limit(1 << 20)
-                .build()
-            {
-                Ok(re) => Ok(Self::Regex(re)),
-                Err(e) => Err(CommandOutcome::UserError(format!(
-                    "invalid --title regex: {regex_pat}\n{e}"
-                ))),
+            if regex_pat.starts_with('/') {
+                // Delimited form: reuse the same /pattern/flags parser as
+                // --property filters, but default to case-insensitive.
+                match parse_regex_pattern(regex_pat) {
+                    Ok(re) => {
+                        // If no explicit 'i' flag was given, wrap with (?i).
+                        // Detect by checking if the regex already matches
+                        // case-insensitively — simplest: rebuild with (?i) if
+                        // the flags section is empty.
+                        let flags_section = regex_pat
+                            .rfind('/')
+                            .map_or("", |pos| &regex_pat[pos + 1..]);
+                        if flags_section.contains('i') {
+                            Ok(Self::Regex(re))
+                        } else {
+                            // Re-parse with case-insensitive default
+                            let inner_pattern = re.as_str();
+                            let effective = format!("(?i){inner_pattern}");
+                            match regex::RegexBuilder::new(&effective)
+                                .size_limit(1 << 20)
+                                .build()
+                            {
+                                Ok(ci_re) => Ok(Self::Regex(ci_re)),
+                                Err(e) => Err(CommandOutcome::UserError(format!(
+                                    "invalid --title regex: {regex_pat}\n{e}"
+                                ))),
+                            }
+                        }
+                    }
+                    Err(e) => Err(CommandOutcome::UserError(format!(
+                        "invalid --title regex: {regex_pat}\n{e}"
+                    ))),
+                }
+            } else {
+                // Bare form: always case-insensitive
+                let effective = format!("(?i){regex_pat}");
+                match regex::RegexBuilder::new(&effective)
+                    .size_limit(1 << 20)
+                    .build()
+                {
+                    Ok(re) => Ok(Self::Regex(re)),
+                    Err(e) => Err(CommandOutcome::UserError(format!(
+                        "invalid --title regex: {regex_pat}\n{e}"
+                    ))),
+                }
             }
         } else {
+            // Emit a warning if the pattern looks like it was meant to be
+            // a regex or property filter expression.
+            if looks_like_misused_regex(pattern) {
+                warn::warn(format!(
+                    "--title does substring matching by default; \
+                     prefix with '~=' for regex: --title '~={pattern}'"
+                ));
+            }
             Ok(Self::Substring(pattern.to_lowercase()))
         }
     }
@@ -71,6 +122,27 @@ impl TitleMatcher {
             Self::Regex(re) => re.is_match(title_str),
         }
     }
+}
+
+/// Heuristic: does a plain `--title` value look like the user intended regex
+/// or property-filter syntax?
+///
+/// Catches patterns like `/^foo/`, `^foo$`, `.*bar`, etc. that would silently
+/// match nothing as a literal substring.
+fn looks_like_misused_regex(pattern: &str) -> bool {
+    // Starts with `/` and contains another `/` → likely /regex/ or /regex/i
+    if pattern.starts_with('/') && pattern[1..].contains('/') {
+        return true;
+    }
+    // Contains regex anchors or common metacharacters unlikely in titles
+    if pattern.starts_with('^') || pattern.ends_with('$') {
+        return true;
+    }
+    // Contains `.*` or `.+` — almost certainly regex
+    if pattern.contains(".*") || pattern.contains(".+") {
+        return true;
+    }
+    false
 }
 
 /// Return true if `tasks` satisfy `filter`.
