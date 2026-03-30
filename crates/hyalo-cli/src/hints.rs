@@ -10,8 +10,8 @@ const MAX_HINTS: usize = 5;
 /// A single drill-down hint: a concrete command plus a short human-readable description.
 #[derive(Debug, Clone)]
 pub struct Hint {
-    pub description: String,
-    pub cmd: String,
+    pub(crate) description: String,
+    pub(crate) cmd: String,
 }
 
 impl Hint {
@@ -150,6 +150,38 @@ fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
 fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
     for arg in args {
+        parts.push(shell_quote(arg));
+    }
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    parts.join(" ")
+}
+
+/// Build a `find` command that preserves the caller's existing filters (property,
+/// tag, task, file targets) plus `--glob`, then appends `extra_args`.  Use this for
+/// hints like sort and limit that refine the current query without changing its scope.
+fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
+    for pf in &ctx.property_filters {
+        parts.push("--property".to_owned());
+        parts.push(shell_quote(pf));
+    }
+    for tf in &ctx.tag_filters {
+        parts.push("--tag".to_owned());
+        parts.push(shell_quote(tf));
+    }
+    if let Some(task) = &ctx.task_filter {
+        parts.push("--task".to_owned());
+        parts.push(shell_quote(task));
+    }
+    for ft in &ctx.file_targets {
+        parts.push("--file".to_owned());
+        parts.push(shell_quote(ft));
+    }
+    for arg in extra_args {
         parts.push(shell_quote(arg));
     }
     push_global_flags(&mut parts, ctx);
@@ -453,7 +485,10 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             if remaining > 0 {
                 hints.push(Hint::new(
                     "Sort by most recently modified",
-                    build_command_with_glob(ctx, &["find", "--sort", "modified", "--reverse"]),
+                    build_find_command_preserving_filters(
+                        ctx,
+                        &["--sort", "modified", "--reverse"],
+                    ),
                 ));
             }
         }
@@ -464,22 +499,15 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             if remaining > 0 {
                 hints.push(Hint::new(
                     "Limit to 10 results",
-                    build_command_with_glob(ctx, &["find", "--limit", "10"]),
+                    build_find_command_preserving_filters(ctx, &["--limit", "10"]),
                 ));
             }
         }
     }
 
-    // --- Body search → regex suggestion ---
-    if ctx.has_body_search && result_count > 10 {
-        let remaining = MAX_HINTS.saturating_sub(hints.len());
-        if remaining > 0 {
-            hints.push(Hint::new(
-                "Narrow with regex pattern",
-                build_command_with_glob(ctx, &["find", "-e", "'pattern'"]),
-            ));
-        }
-    }
+    // Body search → regex suggestion is intentionally omitted.
+    // We cannot produce a concrete regex without knowing the user's intent,
+    // and a placeholder like `'pattern'` would violate our no-templates contract.
 
     hints
 }
@@ -602,11 +630,12 @@ fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
 
     if let Some(to_path) = to_path {
         if is_dry_run {
-            let from_path = data.get("from").and_then(|f| f.as_str()).unwrap_or("");
-            hints.push(Hint::new(
-                "Apply this move",
-                build_command_no_glob(ctx, &["mv", "--file", from_path, "--to", to_path]),
-            ));
+            if let Some(from_path) = data.get("from").and_then(|f| f.as_str()) {
+                hints.push(Hint::new(
+                    "Apply this move",
+                    build_command_no_glob(ctx, &["mv", "--file", from_path, "--to", to_path]),
+                ));
+            }
         } else {
             hints.push(Hint::new(
                 "Read the moved file",
@@ -1069,6 +1098,51 @@ mod tests {
         assert!(hints.len() <= MAX_HINTS);
     }
 
+    #[test]
+    fn find_sort_hint_preserves_existing_filters() {
+        let mut c = ctx(HintSource::Find);
+        c.property_filters = vec!["status=draft".to_owned()];
+        c.tag_filters = vec!["research".to_owned()];
+        // 6 results to trigger sort/limit hints.
+        let items: Vec<serde_json::Value> = (0..6)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("draft"), &["research"]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        let sort_hint = hints.iter().find(|h| h.cmd.contains("--sort"));
+        assert!(sort_hint.is_some(), "should include a sort hint: {hints:?}");
+        let cmd = &sort_hint.unwrap().cmd;
+        assert!(
+            cmd.contains("--property status=draft"),
+            "sort hint should preserve --property filter: {cmd}"
+        );
+        assert!(
+            cmd.contains("--tag research"),
+            "sort hint should preserve --tag filter: {cmd}"
+        );
+    }
+
+    #[test]
+    fn find_limit_hint_preserves_existing_filters() {
+        let mut c = ctx(HintSource::Find);
+        c.tag_filters = vec!["iteration".to_owned()];
+        let items: Vec<serde_json::Value> = (0..6)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["iteration"]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        let limit_hint = hints.iter().find(|h| h.cmd.contains("--limit"));
+        assert!(
+            limit_hint.is_some(),
+            "should include a limit hint: {hints:?}"
+        );
+        let cmd = &limit_hint.unwrap().cmd;
+        assert!(
+            cmd.contains("--tag iteration"),
+            "limit hint should preserve --tag filter: {cmd}"
+        );
+    }
+
     // --- flag propagation ---
 
     #[test]
@@ -1300,10 +1374,14 @@ mod tests {
             .collect();
         let data = json!({"total": items.len(), "results": items});
         let hints = generate_hints(&c, &data);
-        // Should NOT suggest --tag rust (already filtered), but should suggest --tag cli
+        // Should NOT suggest narrowing by --tag rust (already filtered).
+        // Sort/limit hints may legitimately include --tag rust as a preserved filter,
+        // so only check narrowing hints (those whose description starts with "Narrow").
         assert!(
-            !hints.iter().any(|h| h.cmd.contains("--tag rust")),
-            "should not suggest already-filtered tag: {hints:?}"
+            !hints
+                .iter()
+                .any(|h| h.description.starts_with("Narrow") && h.cmd.contains("--tag rust")),
+            "should not suggest narrowing by already-filtered tag: {hints:?}"
         );
         assert!(
             hints.iter().any(|h| h.cmd.contains("--tag cli")),
