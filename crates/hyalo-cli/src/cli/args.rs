@@ -48,7 +48,7 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
         \u{00a0} format = \"text\"       # default --format (CLI default is json)\n\
-        \u{00a0} hints = true           # default --hints on (CLI default is off)\n\
+        \u{00a0} hints = false          # disable hints (CLI default is on)\n\
         \u{00a0} site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
         CLI flags always take precedence.\n\n\
         See COMMAND REFERENCE below for full syntax of each command."
@@ -71,15 +71,15 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 
-    /// Append drill-down command hints to the output.
+    /// Force hints on (already the default).
     /// Text mode: '-> hyalo ...' lines — concrete, copy-pasteable commands.
     /// JSON mode: wraps in {"data": ..., "hints": [...]}.
     /// Suppressed when --jq is active.
-    /// Override via .hyalo.toml
     #[arg(long, global = true)]
     pub hints: bool,
 
-    /// Disable hints even when enabled in .hyalo.toml
+    /// Disable drill-down command hints (enabled by default).
+    /// Override via .hyalo.toml: hints = false
     #[arg(long, global = true, conflicts_with = "hints")]
     pub no_hints: bool,
 
@@ -178,7 +178,7 @@ pub(crate) enum Commands {
         /// Glob pattern(s) to select files (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
-        /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: all standard fields except properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
+        /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
         #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
         fields: Vec<String>,
         /// Sort order: 'file' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property

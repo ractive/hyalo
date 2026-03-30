@@ -386,7 +386,7 @@ fn mv_text_format() {
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["--format", "text"])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()

@@ -19,7 +19,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Aggregate tag summary:        hyalo tags summary
   Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag
   Vault overview:               hyalo summary --format text
-  Overview with drill-down:     hyalo summary --format text --hints
+  Overview (hints are default):  hyalo summary --format text
   Toggle a task:                hyalo task toggle --file todo.md --line 5
   Find backlinks:               hyalo backlinks --file decision-log.md
   Move a file (update links):   hyalo mv --file old.md --to new.md
@@ -84,8 +84,8 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)
     --format json|text      Output format (default: json, override via .hyalo.toml)
     --jq <FILTER>           Apply a jq expression to JSON output
-    --hints                 Append drill-down hints (default: off, override via .hyalo.toml)
-    --no-hints              Disable hints (overrides .hyalo.toml)
+    --hints                 Force hints on (already the default; suppressed by --jq)
+    --no-hints              Disable drill-down hints (enabled by default, override via .hyalo.toml)
     --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
 
 COOKBOOK:
@@ -100,7 +100,7 @@ COOKBOOK:
   hyalo tags rename --from old-tag --to new-tag
 
   # Get a vault overview with drill-down hints
-  hyalo summary --format text --hints
+  hyalo summary --format text
 
   # Find all files with status=draft
   hyalo find --property status=draft

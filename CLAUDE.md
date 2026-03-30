@@ -22,6 +22,7 @@ Then use target/release/hyalo to work with the documentation in `./hyalo-knowled
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set --property status=completed --file iterations/iteration-16-robustness.md`)
 - Only fall back to Edit for body content changes (markdown prose, task checkboxes) that hyalo can't handle
 - **Do NOT pass `--dir hyalo-knowledgebase/`** — `.hyalo.toml` already sets it as the default
+- **Follow hints**: hyalo outputs drill-down hints by default — read and follow them to navigate deeper into the knowledgebase. Use `--no-hints` only when you need raw output.
 
 **Iteration file rules:**
 - Always name `iteration-NN-slug.md` — no standalone plan files

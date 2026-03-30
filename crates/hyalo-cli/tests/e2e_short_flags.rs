@@ -132,7 +132,14 @@ fn find_short_g_for_glob() {
 fn find_short_n_for_limit() {
     let dir = setup();
     let output = hyalo()
-        .args(["find", "-n", "1", "-d", dir.path().to_str().unwrap()])
+        .args([
+            "--no-hints",
+            "find",
+            "-n",
+            "1",
+            "-d",
+            dir.path().to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(output.status.success());

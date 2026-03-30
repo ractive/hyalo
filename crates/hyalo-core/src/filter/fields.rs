@@ -22,7 +22,7 @@ impl Default for Fields {
             properties_typed: false,
             tags: true,
             sections: true,
-            tasks: true,
+            tasks: false,
             links: true,
             backlinks: false,
             title: false,
@@ -34,8 +34,8 @@ impl Fields {
     /// Parse a fields selection from a list of `--fields` argument values.
     ///
     /// Each element may be a comma-separated list of field names. An empty
-    /// slice returns the default (all standard fields enabled; `properties-typed` and `backlinks`
-    /// are opt-in).
+    /// slice returns the default (properties, tags, sections, links;
+    /// `tasks`, `properties-typed`, `backlinks`, and `title` are opt-in).
     pub fn parse(input: &[String]) -> Result<Fields> {
         if input.is_empty() {
             return Ok(Fields::default());

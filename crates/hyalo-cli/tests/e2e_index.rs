@@ -112,7 +112,7 @@ fn create_default_index(tmp: &TempDir) -> std::path::PathBuf {
 /// Run `hyalo find` with extra args and return parsed JSON.
 fn run_find(tmp: &TempDir, extra_args: &[&str]) -> serde_json::Value {
     let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
     cmd.arg("find");
     cmd.args(extra_args);
     let output = cmd.output().unwrap();
@@ -384,7 +384,7 @@ fn summary_with_index_matches_disk_scan() {
     let index_path = create_default_index(&tmp);
 
     let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["summary", "--format", "json"])
         .output()
         .unwrap();
@@ -396,6 +396,7 @@ fn summary_with_index_matches_disk_scan() {
         .args([
             "--index",
             index_path.to_str().unwrap(),
+            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -433,6 +434,7 @@ fn summary_with_index_file_count() {
         .args([
             "--index",
             index_path.to_str().unwrap(),
+            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -455,7 +457,7 @@ fn tags_summary_with_index_matches_disk_scan() {
     let index_path = create_default_index(&tmp);
 
     let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["tags", "summary"])
         .output()
         .unwrap();
@@ -463,7 +465,7 @@ fn tags_summary_with_index_matches_disk_scan() {
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_output.stdout).unwrap();
 
     let index_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["--index", index_path.to_str().unwrap(), "tags", "summary"])
         .output()
         .unwrap();
@@ -510,7 +512,7 @@ fn properties_summary_with_index_matches_disk_scan() {
     let index_path = create_default_index(&tmp);
 
     let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -518,7 +520,7 @@ fn properties_summary_with_index_matches_disk_scan() {
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_output.stdout).unwrap();
 
     let index_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args([
             "--index",
             index_path.to_str().unwrap(),
@@ -568,6 +570,7 @@ fn backlinks_with_index_finds_wikilinks() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
+            "--no-hints",
             "--index",
             index_path.to_str().unwrap(),
             "backlinks",
@@ -603,7 +606,7 @@ fn backlinks_with_index_matches_disk_scan() {
     let index_path = create_default_index(&tmp);
 
     let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["backlinks", "--file", "beta.md"])
         .output()
         .unwrap();
@@ -613,6 +616,7 @@ fn backlinks_with_index_matches_disk_scan() {
     let index_output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
+            "--no-hints",
             "--index",
             index_path.to_str().unwrap(),
             "backlinks",
@@ -644,7 +648,12 @@ fn incompatible_index_falls_back_to_disk_scan() {
 
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", garbage_path.to_str().unwrap(), "find"])
+        .args([
+            "--no-hints",
+            "--index",
+            garbage_path.to_str().unwrap(),
+            "find",
+        ])
         .output()
         .unwrap();
 
@@ -681,6 +690,7 @@ fn incompatible_index_falls_back_for_summary() {
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
+            "--no-hints",
             "--index",
             garbage_path.to_str().unwrap(),
             "summary",
@@ -849,6 +859,8 @@ fn task_toggle_with_index_updates_index() {
             "todo",
             "--file",
             "alpha.md",
+            "--fields",
+            "tasks",
             "--index",
             index_path.to_str().unwrap(),
         ],
@@ -1289,7 +1301,7 @@ Content
     unix_fs::symlink(&outside_file, vault.path().join("evil.md")).unwrap();
 
     let output = hyalo()
-        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["--dir", vault.path().to_str().unwrap(), "--no-hints"])
         .arg("find")
         .output()
         .unwrap();
@@ -1356,7 +1368,7 @@ Target content
     .unwrap();
 
     let output = hyalo()
-        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["--dir", vault.path().to_str().unwrap(), "--no-hints"])
         .arg("find")
         .output()
         .unwrap();

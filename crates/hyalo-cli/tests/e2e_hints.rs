@@ -198,6 +198,45 @@ fn tags_hints_text() {
 }
 
 // ---------------------------------------------------------------------------
+// Hints active by default (no flag needed)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summary_hints_active_by_default_text() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["summary", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("  -> hyalo"),
+        "hints should appear by default without --hints flag: {stdout}"
+    );
+}
+
+#[test]
+fn find_hints_active_by_default_json() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(
+        parsed.get("data").is_some(),
+        "JSON should have hints envelope by default: {stdout}"
+    );
+    assert!(
+        parsed.get("hints").is_some(),
+        "JSON should have hints array by default: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Without --hints: output unchanged (regression)
 // ---------------------------------------------------------------------------
 
@@ -206,7 +245,7 @@ fn summary_without_hints_no_arrows() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["summary", "--format", "text"])
+        .args(["summary", "--no-hints", "--format", "text"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -219,16 +258,16 @@ fn summary_without_hints_json_no_envelope() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["summary", "--format", "json"])
+        .args(["summary", "--no-hints", "--format", "json"])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    // Without --hints, should NOT have envelope
+    // With --no-hints, should NOT have envelope
     assert!(
         parsed.get("data").is_none(),
-        "should not have 'data' envelope without --hints"
+        "should not have 'data' envelope with --no-hints"
     );
     // Should have direct summary fields
     assert!(parsed.get("files").is_some());

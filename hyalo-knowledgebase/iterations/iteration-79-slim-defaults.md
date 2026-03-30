@@ -1,12 +1,12 @@
 ---
-title: "Slim default fields and make --hints the default"
+title: Slim default fields and make --hints the default
 type: iteration
 date: 2026-03-30
 tags:
   - ux
   - dogfood
   - breaking-change
-status: planned
+status: in-progress
 priority: 2
 branch: iter-79/slim-defaults
 ---
@@ -27,16 +27,16 @@ See also: [[iteration-80-smarter-hints]] for making hints context-aware.
 
 ## Tasks
 
-- [ ] Make `--hints` the default (flip the default in the hints logic)
-- [ ] Keep `--no-hints` as opt-out
-- [ ] Keep `--jq` suppressing hints (already the case)
-- [ ] Remove `tasks` from default `--fields` (require `--fields tasks` or `--fields all` to include)
-- [ ] Update `Fields::default()` in `hyalo-core/src/filter/fields.rs`
-- [ ] Update `.hyalo.toml` schema/docs if hints default is stored there
-- [ ] Update help text in `args.rs` to reflect new defaults
-- [ ] Update `SKILL.md` to instruct LLMs to read and follow hints
-- [ ] Update `CLAUDE.md` to mention hints as a navigation aid
-- [ ] Update e2e tests that depend on default field/hint output
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [x] Make `--hints` the default (flip the default in the hints logic)
+- [x] Keep `--no-hints` as opt-out
+- [x] Keep `--jq` suppressing hints (already the case)
+- [x] Remove `tasks` from default `--fields` (require `--fields tasks` or `--fields all` to include)
+- [x] Update `Fields::default()` in `hyalo-core/src/filter/fields.rs`
+- [x] Update `.hyalo.toml` schema/docs if hints default is stored there
+- [x] Update help text in `args.rs` to reflect new defaults
+- [x] Update `SKILL.md` to instruct LLMs to read and follow hints
+- [x] Update `CLAUDE.md` to mention hints as a navigation aid
+- [x] Update e2e tests that depend on default field/hint output
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`

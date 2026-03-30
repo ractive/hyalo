@@ -42,7 +42,7 @@ priority: 1
     );
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -74,7 +74,7 @@ fn properties_empty_dir() {
     let tmp = TempDir::new().unwrap();
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -108,7 +108,7 @@ only_in_sub: yes
     );
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["properties", "summary", "--glob", "sub/*.md"])
         .output()
         .unwrap();
@@ -171,7 +171,7 @@ fn properties_glob_no_match() {
     write_md(tmp.path(), "note.md", sample_frontmatter());
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["properties", "summary", "--glob", "nonexistent/*.md"])
         .output()
         .unwrap();
@@ -202,7 +202,7 @@ fn find_properties_single_file() {
     write_md(tmp.path(), "file.md", sample_frontmatter());
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["find", "--file", "file.md", "--fields", "properties"])
         .output()
         .unwrap();
@@ -266,7 +266,7 @@ title: Sub B
     );
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["find", "--glob", "sub/*.md", "--fields", "properties"])
         .output()
         .unwrap();
@@ -289,7 +289,7 @@ fn find_properties_file_without_frontmatter() {
     write_md(tmp.path(), "plain.md", "Just a plain markdown file.\n");
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["find", "--file", "plain.md", "--fields", "properties"])
         .output()
         .unwrap();
@@ -331,7 +331,7 @@ status: draft
     );
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -479,6 +479,7 @@ fn properties_glob_negation_excludes_files() {
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
+            "--no-hints",
             "properties",
             "summary",
             "--glob",

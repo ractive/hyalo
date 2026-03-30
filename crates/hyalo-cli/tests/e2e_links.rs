@@ -87,6 +87,7 @@ fn summary_includes_link_health() {
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
+            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -148,6 +149,7 @@ fn summary_broken_links_includes_nonexistent_target() {
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
+            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -225,6 +227,7 @@ fn find_broken_links_filter() {
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
+            "--no-hints",
             "find",
             "--broken-links",
             "--format",
@@ -284,6 +287,7 @@ fn find_broken_links_entries_have_null_path() {
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
+            "--no-hints",
             "find",
             "--broken-links",
             "--format",
@@ -325,6 +329,7 @@ fn find_broken_links_combined_with_glob_filter() {
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
+            "--no-hints",
             "find",
             "--broken-links",
             "--glob",
@@ -581,6 +586,7 @@ fn links_fix_text_format() {
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
+            "--no-hints",
             "links",
             "fix",
             "--format",

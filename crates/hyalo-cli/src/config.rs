@@ -34,7 +34,7 @@ impl ResolvedDefaults {
         Self {
             dir: PathBuf::from("."),
             format: "json".to_owned(),
-            hints: false,
+            hints: true,
             site_prefix: None,
         }
     }
@@ -151,13 +151,16 @@ site_prefix = "docs"
     #[test]
     fn partial_config_merges_with_defaults() {
         let dir = make_temp();
-        fs::write(dir.path().join(".hyalo.toml"), "hints = true\n").unwrap();
+        fs::write(dir.path().join(".hyalo.toml"), "hints = false\n").unwrap();
 
         let resolved = load_config_from(dir.path());
         // Only hints overridden; dir and format stay at defaults.
         assert_eq!(resolved.dir, PathBuf::from("."));
         assert_eq!(resolved.format, "json");
-        assert!(resolved.hints);
+        assert!(
+            !resolved.hints,
+            "config should override the default (true) to false"
+        );
     }
 
     #[test]
@@ -187,6 +190,6 @@ site_prefix = "docs"
         let resolved = load_config_from(dir.path());
         assert_eq!(resolved.format, "xml");
         assert_eq!(resolved.dir, PathBuf::from("."));
-        assert!(!resolved.hints);
+        assert!(resolved.hints);
     }
 }

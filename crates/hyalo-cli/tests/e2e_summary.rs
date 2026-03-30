@@ -124,6 +124,7 @@ fn summary_json_has_all_fields() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -163,6 +164,7 @@ fn summary_file_counts_by_directory() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -196,6 +198,7 @@ fn summary_task_counts() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -218,6 +221,7 @@ fn summary_status_groups() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -255,6 +259,7 @@ fn summary_tag_counts() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -289,6 +294,7 @@ fn summary_property_summary() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -320,6 +326,7 @@ fn summary_recent_files_limited() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--recent",
             "2",
             "--format",
@@ -344,6 +351,7 @@ fn summary_text_format() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "text",
         ])
@@ -369,6 +377,7 @@ fn summary_glob_filter() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--glob",
             "notes/*.md",
             "--format",
@@ -391,6 +400,7 @@ fn summary_jq_filter() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--jq",
             ".tasks.total",
         ])
@@ -409,6 +419,7 @@ fn summary_empty_vault() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -432,6 +443,7 @@ fn summary_depth_zero_collapses_all_dirs() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--depth",
             "0",
             "--format",
@@ -458,6 +470,7 @@ fn summary_depth_one_collapses_sub_into_parent() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--depth",
             "1",
             "--format",
@@ -490,6 +503,7 @@ fn summary_depth_no_flag_shows_all_directories() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -516,6 +530,7 @@ fn summary_recent_zero() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--recent",
             "0",
             "--format",
@@ -539,6 +554,7 @@ fn summary_json_has_orphans_field() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -593,6 +609,7 @@ No links to me
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -650,6 +667,7 @@ See [[a]]
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -691,6 +709,7 @@ No links
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -723,6 +742,7 @@ No links
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "text",
         ])
@@ -749,6 +769,7 @@ fn summary_orphans_empty_vault() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -807,6 +828,7 @@ No links
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--glob",
             "notes/*.md",
             "--format",
@@ -848,6 +870,7 @@ fn summary_glob_negation_excludes_files() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--glob",
             "!notes/**/*.md",
             "--format",
@@ -933,6 +956,7 @@ No links.
             "json",
         ])
         .arg("summary")
+        .arg("--no-hints")
         .output()
         .unwrap();
     assert!(
@@ -974,6 +998,7 @@ No links.
             "json",
         ])
         .arg("summary")
+        .arg("--no-hints")
         .output()
         .unwrap();
     assert!(
@@ -1066,6 +1091,7 @@ fn summary_dead_ends_json() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -1116,6 +1142,7 @@ fn summary_dead_ends_text_format() {
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "text",
         ])
@@ -1165,6 +1192,7 @@ No links.
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])
@@ -1186,7 +1214,14 @@ fn summary_dead_end_parity_disk_vs_index() {
 
     // Disk scan
     let disk_out = hyalo()
-        .args(["--dir", dir_str, "summary", "--format", "json"])
+        .args([
+            "--dir",
+            dir_str,
+            "--no-hints",
+            "summary",
+            "--format",
+            "json",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -1222,6 +1257,7 @@ fn summary_dead_end_parity_disk_vs_index() {
             "--index",
             index_path.to_str().unwrap(),
             "summary",
+            "--no-hints",
             "--format",
             "json",
         ])

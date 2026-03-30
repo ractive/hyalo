@@ -81,7 +81,7 @@ fn config_sets_default_dir() {
     let output = hyalo()
         .current_dir(tmp.path())
         // No --dir flag: relies on config's dir = "vault"
-        .args(["summary", "--format", "json"])
+        .args(["summary", "--format", "json", "--no-hints"])
         .output()
         .unwrap();
 
@@ -113,6 +113,7 @@ fn cli_dir_overrides_config() {
         .args([
             "--dir",
             vault_path.to_str().unwrap(),
+            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -141,7 +142,7 @@ fn cli_dir_overrides_config() {
 #[test]
 fn missing_config_uses_defaults() {
     let tmp = TempDir::new().unwrap();
-    // No .hyalo.toml written — hardcoded defaults apply (format=json, dir=., hints=false)
+    // No .hyalo.toml written — hardcoded defaults apply (format=json, dir=., hints=true)
     write_note(tmp.path(), "note.md");
 
     let output = hyalo()
