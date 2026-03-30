@@ -1,5 +1,5 @@
 ---
-title: Add --dry-run to set, remove, and append commands
+title: "Add --dry-run to set, remove, and append commands"
 type: iteration
 date: 2026-03-30
 tags:

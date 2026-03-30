@@ -632,4 +632,11 @@ fn append_without_dry_run_has_dry_run_false() {
     );
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(json["dry_run"], false);
+
+    // File should actually be modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("my-note"),
+        "file was not written:\n{content}"
+    );
 }

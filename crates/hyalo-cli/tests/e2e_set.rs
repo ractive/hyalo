@@ -1083,6 +1083,25 @@ title: Note
 }
 
 #[test]
+fn set_dry_run_tag_does_not_modify() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--tag", "rust", "--file", "note.md", "--dry-run"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    // File must NOT have been modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        !content.contains("rust"),
+        "file was modified despite --dry-run:\n{content}"
+    );
+}
+
+#[test]
 fn set_without_dry_run_has_dry_run_false() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
@@ -1091,4 +1110,11 @@ fn set_without_dry_run_has_dry_run_false() {
         set_json(&tmp, &["--property", "status=done", "--file", "note.md"]);
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(json["dry_run"], false);
+
+    // File should actually be modified
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("status: done"),
+        "file was not written:\n{content}"
+    );
 }

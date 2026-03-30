@@ -215,24 +215,24 @@ const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""
 
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
-/// Key signature: `modified,property,scanned,skipped,total,value`
-/// Format: `property=value: N/T modified (S scanned)` when not all scanned files were
-/// processed (e.g. where-filters or parse errors), or `property=value: N/T modified` otherwise.
-const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Key signature: `dry_run,modified,property,scanned,skipped,total,value`
+/// Format: `[dry-run] property=value: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
+/// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
+const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `property` only (no value field):
 /// covers `RemovePropertyResult` (without value).
-/// Key signature: `modified,property,scanned,skipped,total`
-/// Format: `property: N/T modified (S scanned)` when not all scanned files were
-/// processed (e.g. where-filters or parse errors), or `property: N/T modified` otherwise.
-const PROPERTY_MUTATION_FILTER: &str = r#""\(.property): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Key signature: `dry_run,modified,property,scanned,skipped,total`
+/// Format: `[dry-run] property: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
+/// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
+const PROPERTY_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.property): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `tag` field:
 /// covers `SetTagResult` and `RemoveTagResult`.
-/// Key signature: `modified,scanned,skipped,tag,total`
-/// Format: `tag: N/T modified (S scanned)` when not all scanned files were
-/// processed (e.g. where-filters or parse errors), or `tag: N/T modified` otherwise.
-const TAG_MUTATION_FILTER: &str = r#""\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Key signature: `dry_run,modified,scanned,skipped,tag,total`
+/// Format: `[dry-run] tag: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
+/// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
+const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
@@ -943,6 +943,7 @@ mod tests {
     fn property_mutation_filter_no_value() {
         // RemovePropertyResult without value; scanned == total
         let val = json!({
+            "dry_run": false,
             "modified": ["note.md"],
             "property": "draft",
             "scanned": 1,
@@ -963,6 +964,7 @@ mod tests {
     fn property_mutation_filter_no_value_with_where_filter() {
         // RemovePropertyResult without value; scanned > total
         let val = json!({
+            "dry_run": false,
             "modified": ["note.md"],
             "property": "draft",
             "scanned": 7,
@@ -979,6 +981,7 @@ mod tests {
     fn tag_mutation_filter_with_modified() {
         // SetTagResult / RemoveTagResult; scanned == total
         let val = json!({
+            "dry_run": false,
             "modified": ["a.md", "b.md"],
             "scanned": 3,
             "skipped": ["c.md"],
@@ -1001,6 +1004,7 @@ mod tests {
     fn tag_mutation_filter_with_where_filter() {
         // scanned > total: "(N scanned)" suffix
         let val = json!({
+            "dry_run": false,
             "modified": ["a.md"],
             "scanned": 10,
             "skipped": [],
@@ -1026,6 +1030,61 @@ mod tests {
         let out = fmt(&val);
         assert!(out.contains("cli"));
         assert!(!out.contains("tag: cli"), "should not use generic fallback");
+    }
+
+    // --- dry-run prefix in text output ---
+
+    #[test]
+    fn property_value_mutation_dry_run_prefix() {
+        let val = json!({
+            "dry_run": true,
+            "modified": ["note.md"],
+            "property": "status",
+            "scanned": 1,
+            "skipped": [],
+            "total": 1,
+            "value": "done"
+        });
+        let out = fmt(&val);
+        assert!(
+            out.contains("[dry-run] status=done"),
+            "dry-run prefix missing: {out}"
+        );
+    }
+
+    #[test]
+    fn tag_mutation_dry_run_prefix() {
+        let val = json!({
+            "dry_run": true,
+            "modified": ["note.md"],
+            "scanned": 1,
+            "skipped": [],
+            "tag": "rust",
+            "total": 1
+        });
+        let out = fmt(&val);
+        assert!(
+            out.contains("[dry-run] rust"),
+            "dry-run prefix missing: {out}"
+        );
+    }
+
+    #[test]
+    fn property_value_mutation_no_dry_run_prefix() {
+        let val = json!({
+            "dry_run": false,
+            "modified": ["note.md"],
+            "property": "status",
+            "scanned": 1,
+            "skipped": [],
+            "total": 1,
+            "value": "done"
+        });
+        let out = fmt(&val);
+        assert!(
+            !out.contains("[dry-run]"),
+            "should not have dry-run prefix: {out}"
+        );
     }
 
     // --- build_file_object_filter ---
