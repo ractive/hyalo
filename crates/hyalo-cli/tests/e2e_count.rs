@@ -61,7 +61,12 @@ fn count_find_filtered_by_tag() {
 
 #[test]
 fn count_tags_summary() {
-    let tmp = setup_vault();
+    // 4 files but only 2 unique tags — ensures we count tags, not files.
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "a.md", &["rust"]);
+    write_tagged(tmp.path(), "b.md", &["rust"]);
+    write_tagged(tmp.path(), "c.md", &["cli"]);
+    write_tagged(tmp.path(), "d.md", &["cli"]);
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -76,7 +81,7 @@ fn count_tags_summary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(stdout.trim(), "3");
+    assert_eq!(stdout.trim(), "2");
 }
 
 #[test]
@@ -146,6 +151,64 @@ fn count_with_format_json() {
 }
 
 // ---------------------------------------------------------------------------
+// --count with properties summary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn count_properties_summary() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Hello\nstatus: draft\npriority: 1\n---\n# Body\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--count"])
+        .args(["properties", "summary"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 3 unique properties: title, status, priority
+    assert_eq!(stdout.trim(), "3");
+}
+
+// ---------------------------------------------------------------------------
+// --count with zero results and --format text (no spurious stderr)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn count_zero_results_format_text_no_stderr_notice() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "text"])
+        .args(["--count"])
+        .args(["find", "--tag", "nonexistent"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "0");
+    // --count short-circuits before the "No files matched" notice
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.is_empty(), "expected no stderr, got: {stderr}");
+}
+
+// ---------------------------------------------------------------------------
 // Conflict: --count + --jq
 // ---------------------------------------------------------------------------
 
@@ -193,8 +256,8 @@ fn count_on_read_command_errors() {
     assert!(!output.status.success());
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "expected exit code 1 (user error)"
+        Some(2),
+        "expected exit code 2 (usage error)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

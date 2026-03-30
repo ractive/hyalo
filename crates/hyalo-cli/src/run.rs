@@ -249,16 +249,17 @@ fn run_inner() -> Result<(), AppError> {
     } else {
         format
     };
-    if jq_filter.is_some() && format != Format::Json {
-        eprintln!("Error: --jq cannot be combined with --format {format}");
-        eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
-        return Err(AppError::Exit(2));
-    }
+    // --count replaces the entire output pipeline, so check its conflicts first.
     if cli.count && jq_filter.is_some() {
         eprintln!("Error: --count cannot be combined with --jq");
         eprintln!(
             "  --count prints the bare total; --jq applies a custom filter — use one or the other"
         );
+        return Err(AppError::Exit(2));
+    }
+    if jq_filter.is_some() && format != Format::Json {
+        eprintln!("Error: --jq cannot be combined with --format {format}");
+        eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         return Err(AppError::Exit(2));
     }
     // Always force JSON internally so the output pipeline can wrap results in the

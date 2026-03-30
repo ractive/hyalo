@@ -33,7 +33,7 @@ impl OutputPipeline<'_> {
                     eprintln!(
                         "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)"
                     );
-                    return 1;
+                    return 2;
                 }
 
                 // Commands always produce JSON internally.
@@ -96,7 +96,7 @@ impl OutputPipeline<'_> {
                     eprintln!(
                         "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)"
                     );
-                    return 1;
+                    return 2;
                 }
                 // Raw output bypasses the JSON pipeline — print directly to stdout.
                 // Used by the `read` command for text-format content output.
