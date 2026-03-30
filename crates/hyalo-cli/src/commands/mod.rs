@@ -118,13 +118,13 @@ pub enum ScannedIndexOutcome {
 }
 
 /// Resolved index — either a borrowed snapshot or an owned scanned build.
-pub enum ResolvedIndex<'a> {
+pub(crate) enum ResolvedIndex<'a> {
     Snapshot(&'a SnapshotIndex),
     Scanned(ScannedIndexBuild),
 }
 
 impl ResolvedIndex<'_> {
-    pub fn as_index(&self) -> &dyn VaultIndex {
+    pub(crate) fn as_index(&self) -> &dyn VaultIndex {
         match self {
             ResolvedIndex::Snapshot(idx) => *idx,
             ResolvedIndex::Scanned(build) => &build.index,
@@ -138,7 +138,7 @@ impl ResolvedIndex<'_> {
 /// Returns `Ok(Err(CommandOutcome))` when file resolution produced a user-facing error.
 /// Returns `Err(e)` for unexpected I/O or parse errors.
 #[allow(clippy::too_many_arguments)]
-pub fn resolve_index<'a>(
+pub(crate) fn resolve_index<'a>(
     snapshot: Option<&'a SnapshotIndex>,
     dir: &Path,
     files: &[String],
@@ -146,7 +146,7 @@ pub fn resolve_index<'a>(
     format: Format,
     site_prefix: Option<&str>,
     needs_full_vault: bool,
-    options: &ScanOptions,
+    options: ScanOptions,
 ) -> Result<Result<ResolvedIndex<'a>, CommandOutcome>> {
     if let Some(idx) = snapshot {
         return Ok(Ok(ResolvedIndex::Snapshot(idx)));
@@ -158,7 +158,7 @@ pub fn resolve_index<'a>(
         format,
         site_prefix,
         needs_full_vault,
-        options,
+        &options,
     )?;
     match outcome {
         ScannedIndexOutcome::Index(build) => Ok(Ok(ResolvedIndex::Scanned(build))),

@@ -12,7 +12,7 @@ use crate::commands::{
 };
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter;
-use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex};
+use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
 
 /// Shared context for command dispatch.
 pub(crate) struct CommandContext<'a> {
@@ -72,18 +72,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             {
                 Ok(f) => f,
                 Err(e) => {
-                    let msg = format!("Error: {e}");
-                    eprintln!("{msg}");
-                    return Ok(CommandOutcome::UserError(msg));
+                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
             // Parse task filter
             let task_filter = match task.as_deref().map(filter::parse_task_filter) {
                 Some(Ok(f)) => Some(f),
                 Some(Err(e)) => {
-                    let msg = format!("Error: {e}");
-                    eprintln!("{msg}");
-                    return Ok(CommandOutcome::UserError(msg));
+                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
                 None => None,
             };
@@ -91,18 +87,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let parsed_fields = match filter::Fields::parse(&fields) {
                 Ok(f) => f,
                 Err(e) => {
-                    let msg = format!("Error: {e}");
-                    eprintln!("{msg}");
-                    return Ok(CommandOutcome::UserError(msg));
+                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
             // Parse sort
             let sort_field = match sort.as_deref().map(filter::parse_sort) {
                 Some(Ok(f)) => Some(f),
                 Some(Err(e)) => {
-                    let msg = format!("Error: {e}");
-                    eprintln!("{msg}");
-                    return Ok(CommandOutcome::UserError(msg));
+                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
                 None => None,
             };
@@ -114,15 +106,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             {
                 Ok(f) => f,
                 Err(e) => {
-                    let msg = format!("Error: {e}");
-                    eprintln!("{msg}");
-                    return Ok(CommandOutcome::UserError(msg));
+                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
 
             for t in &tag {
                 if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                    eprintln!("Error: {msg}");
                     return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
                 }
             }
@@ -157,7 +146,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 needs_full_vault,
-                &ScanOptions { scan_body },
+                ScanOptions { scan_body },
             ) {
                 Ok(Ok(resolved)) => find_commands::find(
                     resolved.as_index(),
@@ -207,7 +196,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     site_prefix,
                     false,
-                    &ScanOptions { scan_body: false },
+                    ScanOptions { scan_body: false },
                 ) {
                     Ok(Ok(ResolvedIndex::Snapshot(idx))) => {
                         let filtered =
@@ -254,7 +243,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     site_prefix,
                     false,
-                    &ScanOptions { scan_body: false },
+                    ScanOptions { scan_body: false },
                 ) {
                     Ok(Ok(ResolvedIndex::Snapshot(idx))) => {
                         let filtered =
@@ -311,7 +300,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         Some("example: --status '?' or --status '-'"),
                         None,
                     );
-                    eprintln!("{out}");
                     return Ok(CommandOutcome::UserError(out));
                 }
                 // SAFETY: we checked chars().count() == 1 above.
@@ -342,7 +330,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             effective_format,
             site_prefix,
             true,
-            &ScanOptions { scan_body: true },
+            ScanOptions { scan_body: true },
         ) {
             Ok(Ok(resolved)) => summary_commands::summary(
                 dir,
@@ -367,7 +355,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("Error: {e}");
                     return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
@@ -395,7 +382,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("Error: {e}");
                     return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
@@ -422,7 +408,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("Error: {e}");
                     return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
@@ -446,7 +431,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             effective_format,
             site_prefix,
             true,
-            &ScanOptions { scan_body: true },
+            ScanOptions { scan_body: true },
         ) {
             Ok(Ok(resolved)) => {
                 backlinks_commands::backlinks(resolved.as_index(), &file, dir, effective_format)
@@ -498,7 +483,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 true,
-                &ScanOptions { scan_body: true },
+                ScanOptions { scan_body: true },
             ) {
                 Ok(Ok(resolved)) => links_commands::links_fix(
                     resolved.as_index(),
