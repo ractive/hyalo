@@ -122,7 +122,7 @@ fn validate_target(
     to_arg: &str,
     src_rel: &str,
     format: Format,
-) -> Result<String, CommandOutcome> {
+) -> std::result::Result<String, CommandOutcome> {
     // Normalize forward slashes and strip leading "./" for consistent comparison
     let normalized = to_arg.replace('\\', "/");
     let normalized = normalized
@@ -130,11 +130,10 @@ fn validate_target(
         .unwrap_or(&normalized)
         .to_owned();
 
-    // Must end with .md
-    if !std::path::Path::new(&normalized)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-    {
+    // Must end with .md — intentionally case-sensitive because discover_files
+    // only picks up lowercase .md extensions.
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+    if !normalized.ends_with(".md") {
         let out = crate::output::format_error(
             format,
             "target path must end with .md",
