@@ -428,20 +428,26 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         }
 
         // Collect status property frequencies — skip statuses already filtered on.
+        // Handles both scalar and array-valued status properties.
         let mut status_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for item in results {
-            if let Some(status) = item
-                .get("properties")
-                .and_then(|p| p.get("status"))
-                .and_then(|s| s.as_str())
-            {
-                let already_filtered = ctx
-                    .property_filters
-                    .iter()
-                    .any(|f| f == &format!("status={status}"));
-                if !already_filtered {
-                    *status_counts.entry(status).or_insert(0) += 1;
+            if let Some(status_val) = item.get("properties").and_then(|p| p.get("status")) {
+                let values: Vec<&str> = match status_val {
+                    serde_json::Value::String(s) => vec![s.as_str()],
+                    serde_json::Value::Array(arr) => {
+                        arr.iter().filter_map(|v| v.as_str()).collect()
+                    }
+                    _ => vec![],
+                };
+                for status in values {
+                    let already_filtered = ctx
+                        .property_filters
+                        .iter()
+                        .any(|f| f == &format!("status={status}"));
+                    if !already_filtered {
+                        *status_counts.entry(status).or_insert(0) += 1;
+                    }
                 }
             }
         }

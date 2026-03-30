@@ -165,16 +165,34 @@ pub fn summary(
                 .or_insert_with(|| (tag.clone(), 1));
         }
 
-        // Status grouping
+        // Status grouping — flatten arrays so each element becomes its own group.
         if let Some(status_val) = entry.properties.get("status") {
-            let status_str = match status_val.clone() {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            status_groups
-                .entry(status_str)
-                .or_default()
-                .push(entry.rel_path.clone());
+            match status_val {
+                serde_json::Value::Array(arr) => {
+                    for item in arr {
+                        let s = match item {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        status_groups
+                            .entry(s)
+                            .or_default()
+                            .push(entry.rel_path.clone());
+                    }
+                }
+                serde_json::Value::String(s) => {
+                    status_groups
+                        .entry(s.clone())
+                        .or_default()
+                        .push(entry.rel_path.clone());
+                }
+                other => {
+                    status_groups
+                        .entry(other.to_string())
+                        .or_default()
+                        .push(entry.rel_path.clone());
+                }
+            }
         }
 
         // Task counts from pre-indexed tasks
@@ -533,6 +551,60 @@ No tasks here.
         assert_eq!(draft["files"].as_array().unwrap().len(), 2);
         let done = status_groups.iter().find(|g| g["value"] == "done").unwrap();
         assert_eq!(done["files"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn summary_status_grouping_flattens_arrays() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("a.md"),
+            md!(r"
+---
+title: A
+status:
+  - deprecated
+  - non-standard
+---
+Body.
+"),
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join("b.md"),
+            md!(r"
+---
+title: B
+status: deprecated
+---
+Body.
+"),
+        )
+        .unwrap();
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let status_groups = val["status"].as_array().unwrap();
+
+        // "deprecated" should appear as its own group with 2 files (a.md array + b.md scalar).
+        let deprecated = status_groups
+            .iter()
+            .find(|g| g["value"] == "deprecated")
+            .expect("expected 'deprecated' status group");
+        assert_eq!(deprecated["files"].as_array().unwrap().len(), 2);
+
+        // "non-standard" should appear as its own group with 1 file.
+        let non_standard = status_groups
+            .iter()
+            .find(|g| g["value"] == "non-standard")
+            .expect("expected 'non-standard' status group");
+        assert_eq!(non_standard["files"].as_array().unwrap().len(), 1);
+
+        // No stringified array group should exist.
+        assert!(
+            !status_groups
+                .iter()
+                .any(|g| g["value"].as_str().unwrap_or("").starts_with('[')),
+            "should not have a stringified array as a status group"
+        );
     }
 
     #[test]

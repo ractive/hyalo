@@ -850,6 +850,104 @@ fn find_hints_no_hardcoded_draft() {
 }
 
 // ---------------------------------------------------------------------------
+// Array-valued status: hints must flatten, not stringify
+// ---------------------------------------------------------------------------
+
+/// Vault where some files have array-valued status properties.
+fn setup_array_status_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    // 6 files with status to trigger narrowing hints (>5 results needed).
+    for i in 1..=4 {
+        write_md(
+            tmp.path(),
+            &format!("note-{i}.md"),
+            &format!("---\ntitle: Note {i}\nstatus: active\ntags:\n  - docs\n---\nBody.\n"),
+        );
+    }
+    write_md(
+        tmp.path(),
+        "multi-a.md",
+        md!(r"
+---
+title: Multi A
+status:
+  - deprecated
+  - experimental
+tags:
+  - docs
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "multi-b.md",
+        md!(r"
+---
+title: Multi B
+status:
+  - deprecated
+  - legacy
+tags:
+  - docs
+---
+Body.
+"),
+    );
+    tmp
+}
+
+#[test]
+fn summary_hints_flatten_array_status() {
+    let tmp = setup_array_status_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["summary", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Must NOT suggest a stringified array like status=["deprecated","experimental"].
+    assert!(
+        !stdout.contains("status=["),
+        "hints should not contain stringified array syntax: {stdout}"
+    );
+}
+
+#[test]
+fn find_hints_flatten_array_status() {
+    let tmp = setup_array_status_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Must NOT suggest a stringified array.
+    assert!(
+        !stdout.contains("status=["),
+        "find hints should not contain stringified array syntax: {stdout}"
+    );
+
+    // Should suggest a scalar status value (e.g. "active" which appears 4 times).
+    assert!(
+        stdout.contains("status=active"),
+        "find hints should suggest scalar status value: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Helper: assert a JSON value has a non-empty hints array where every element
 // has both "description" and "cmd" string fields.
 // ---------------------------------------------------------------------------
