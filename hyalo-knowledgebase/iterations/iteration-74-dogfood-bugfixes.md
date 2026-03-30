@@ -5,7 +5,7 @@ date: 2026-03-30
 tags:
   - bugfix
   - dogfood
-status: in-progress
+status: completed
 branch: iter-74/dogfood-bugfixes
 ---
 

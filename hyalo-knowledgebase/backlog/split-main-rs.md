@@ -1,8 +1,8 @@
 ---
-title: "Split main.rs (1906 lines) into smaller modules"
+title: Split main.rs (1906 lines) into smaller modules
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: medium
 tags:

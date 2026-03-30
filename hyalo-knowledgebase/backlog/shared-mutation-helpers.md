@@ -1,8 +1,8 @@
 ---
-title: "Extract shared mutation loop for set/remove/append"
+title: Extract shared mutation loop for set/remove/append
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:

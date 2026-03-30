@@ -1,8 +1,8 @@
 ---
-title: "filter_index_entries O(n×m) for files_arg — use HashSet"
+title: filter_index_entries O(n×m) for files_arg — use HashSet
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:

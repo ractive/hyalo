@@ -1,8 +1,8 @@
 ---
-title: "Use include_str!() for embedded templates in init.rs"
+title: Use include_str!() for embedded templates in init.rs
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:

@@ -1,8 +1,8 @@
 ---
-title: "write_snapshot clones entire entries Vec for serialization"
+title: write_snapshot clones entire entries Vec for serialization
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:

@@ -1,8 +1,8 @@
 ---
-title: "Panic on empty --status value"
+title: Panic on empty --status value
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: high
 tags:

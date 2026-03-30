@@ -1,10 +1,10 @@
 ---
-title: "Skip body scan for --fields title when frontmatter has title"
+title: Skip body scan for --fields title when frontmatter has title
 type: backlog
 date: 2026-03-28
-status: planned
+status: completed
 priority: low
-origin: Copilot review on PR #68 (iter-58)
+origin: Copilot review on PR
 tags:
   - performance
   - find

@@ -1,8 +1,8 @@
 ---
-title: "ContentSearchVisitor triggers unnecessary YAML parse in index re-scan"
+title: ContentSearchVisitor triggers unnecessary YAML parse in index re-scan
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:

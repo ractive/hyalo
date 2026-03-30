@@ -1,8 +1,8 @@
 ---
-title: "Avoidable props.clone() in mutation commands"
+title: Avoidable props.clone() in mutation commands
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: medium
 tags:
