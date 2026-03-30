@@ -187,16 +187,23 @@ hyalo backlinks --file iterations/iteration-37-bulk-mutations.md --format json
 Supports `--format text` (default, compact) and `--format json`. Useful for impact analysis
 (what depends on this file?), finding orphan pages, and navigating link structure.
 
-## Snapshot index for batch queries
+## Snapshot index — ALWAYS create for vaults with 500+ files
 
-When running many queries (e.g., during a tidy/consolidation pass or any multi-step
-analysis), create a snapshot index first to avoid repeated disk scans:
+**For any vault with more than ~500 files, ALWAYS create a snapshot index before running
+queries.** The index makes property/tag queries 10-15x faster (e.g. ~80ms vs ~1.5s on a
+14K-file vault). Without it, every query scans every file from disk.
+
+**Rule of thumb:** run `hyalo summary --format text` first. If it reports more than 500 files,
+immediately create an index before proceeding with any analysis.
 
 ```bash
-# Create the index (one scan, reused by all subsequent queries)
+# Step 1: Check vault size
+hyalo summary --format text
+
+# Step 2: Create index if >500 files (one scan, reused by all subsequent queries)
 hyalo create-index
 
-# Read-only queries use the index — no disk scan
+# Step 3: Use --index on ALL subsequent commands
 hyalo find --property status=in-progress --index .hyalo-index
 hyalo summary --index .hyalo-index
 hyalo tags summary --index .hyalo-index
