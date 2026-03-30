@@ -298,14 +298,20 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     if broken_links > 0 {
-        hints.push(Hint::new(
-            format!("List {broken_links} files with broken links"),
-            build_command_with_glob(ctx, &["find", "--broken-links"]),
-        ));
-        hints.push(Hint::new(
-            "Auto-fix broken links (dry run)",
-            build_command_with_glob(ctx, &["links", "fix"]),
-        ));
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(Hint::new(
+                format!("List {broken_links} files with broken links"),
+                build_command_with_glob(ctx, &["find", "--broken-links"]),
+            ));
+        }
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(Hint::new(
+                "Auto-fix broken links (dry run)",
+                build_command_with_glob(ctx, &["links", "fix"]),
+            ));
+        }
     }
 
     // Pick 1-2 most interesting status values.
@@ -523,6 +529,7 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     // and a placeholder like `'pattern'` would violate our no-templates contract.
 
     // Suggest `links fix` when results contain broken links (e.g. from --broken-links).
+    // Broken links are serialised with `"path": null` (never omitted) by find's output.
     let has_broken_links = results.iter().any(|item| {
         item.get("links")
             .and_then(|l| l.as_array())
@@ -1491,7 +1498,7 @@ mod tests {
         let c = ctx(HintSource::Summary);
         let data = json!({
             "files": 10,
-            "links": {"total": 20, "broken": 3, "broken_links": []},
+            "links": {"total": 20, "broken": 3},
             "properties": [],
             "tags": [],
             "status": [],
