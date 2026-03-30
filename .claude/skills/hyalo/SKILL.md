@@ -41,7 +41,7 @@ hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
 ```
 
 `--section` uses case-insensitive **substring** matching by default — `"Tasks"` matches
-`"Tasks [4/4]"`, `"My Tasks"`, etc. Use `"~=/regex/"` for regex. Prefix `##` to pin heading level.
+`"Tasks [4/4]"`, `"My Tasks"`, etc. Use `"/regex/"` for regex. Prefix `##` to pin heading level.
 
 `--glob` supports negation with `!` prefix to exclude files: `--glob '!**/draft-*'`.
 

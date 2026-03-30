@@ -72,20 +72,46 @@ impl SectionFilter {
     /// Parse a `--section` value into a `SectionFilter`.
     ///
     /// Parsing rules:
-    /// - If the value starts with `~=`, parse the rest as a regex (bare or `/pattern/flags`).
+    /// - If the value starts with `/` and contains a closing `/`, parse as regex.
     /// - If the value starts with `#`, parse as a level-pinned substring filter.
     /// - Otherwise, use case-insensitive substring matching.
     ///
     /// Returns an error if the `#` prefix doesn't form a valid ATX heading or the
     /// regex pattern fails to compile.
     pub fn parse(input: &str) -> Result<Self, String> {
-        if let Some(regex_part) = input.strip_prefix("~=") {
-            // Regex mode: ~=/pattern/flags or ~=pattern
-            let compiled = parse_section_regex(regex_part)?;
-            return Ok(Self {
-                level: None,
-                mode: SectionMatchMode::Regex(compiled),
-            });
+        if let Some(rest) = input.strip_prefix('/') {
+            // Slash-delimited regex: /pattern/ or /pattern/i
+            if let Some(close) = rest.rfind('/') {
+                let pattern = &rest[..close];
+                let flags = &rest[close + 1..];
+
+                // Validate flags — only 'i' is supported
+                for ch in flags.chars() {
+                    if ch != 'i' {
+                        return Err(format!(
+                            "unsupported section regex flag {ch:?}: only 'i' is supported"
+                        ));
+                    }
+                }
+
+                if pattern.is_empty() {
+                    return Err("section regex pattern must not be empty".to_owned());
+                }
+
+                // Default to case-insensitive (section matching is case-insensitive by convention).
+                let case_insensitive = flags.contains('i') || !pattern.contains("(?-i)");
+                let compiled = regex::RegexBuilder::new(pattern)
+                    .case_insensitive(case_insensitive)
+                    .size_limit(1 << 20)
+                    .build()
+                    .map_err(|e| format!("invalid section regex {input:?}: {e}"))?;
+
+                return Ok(Self {
+                    level: None,
+                    mode: SectionMatchMode::Regex(compiled),
+                });
+            }
+            // Single `/` with no closing slash — fall through to substring
         }
 
         if input.starts_with('#') {
@@ -158,57 +184,6 @@ fn ascii_contains_ignore_case(haystack: &str, needle: &str) -> bool {
         return true;
     }
     false
-}
-
-/// Parse the part after `~=` as a regex, supporting `/pattern/flags` notation.
-///
-/// Compiled with a 1 MiB size limit to prevent pathological regex compilation.
-/// Default is case-insensitive (section headings are case-insensitive by convention).
-///
-/// Supported flags:
-/// - `i` — case-insensitive (default, explicit for clarity)
-///
-/// Examples:
-/// - `~=foo` → `(?i)foo` (always case-insensitive by default)
-/// - `~=/foo/` → `(?i)foo`
-/// - `~=/foo/i` → `(?i)foo`
-/// - `~=/^Tasks$/` → `(?i)^Tasks$`
-fn parse_section_regex(input: &str) -> Result<Regex, String> {
-    const SIZE_LIMIT: usize = 1 << 20; // 1 MiB
-
-    let (pattern, flags) = if let Some(rest) = input.strip_prefix('/') {
-        // Delimited form: `/pattern/flags`
-        let close = rest
-            .rfind('/')
-            .ok_or_else(|| format!("section regex starting with '/' must have a closing '/' (e.g. /pattern/ or /pattern/i), got: /{rest}"))?;
-        (&rest[..close], &rest[close + 1..])
-    } else {
-        // Bare form
-        (input, "")
-    };
-
-    if pattern.is_empty() {
-        return Err("section regex pattern must not be empty".to_owned());
-    }
-
-    // Validate flags — only 'i' is supported
-    for ch in flags.chars() {
-        if ch != 'i' {
-            return Err(format!(
-                "unsupported section regex flag {ch:?}: only 'i' is supported"
-            ));
-        }
-    }
-
-    // Default to case-insensitive (section matching is case-insensitive by convention).
-    // Explicit `i` flag overrides even `(?-i)` in the pattern body.
-    let case_insensitive = flags.contains('i') || !pattern.contains("(?-i)");
-
-    regex::RegexBuilder::new(pattern)
-        .case_insensitive(case_insensitive)
-        .size_limit(SIZE_LIMIT)
-        .build()
-        .map_err(|e| format!("invalid section regex {input:?}: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -398,7 +373,7 @@ mod tests {
 
     #[test]
     fn parse_regex_bare() {
-        let f = SectionFilter::parse("~=Tasks").unwrap();
+        let f = SectionFilter::parse("/Tasks/").unwrap();
         assert!(f.matches(1, "Tasks"));
         assert!(f.matches(2, "My Tasks"));
         assert!(!f.matches(1, "Notes"));
@@ -406,27 +381,27 @@ mod tests {
 
     #[test]
     fn parse_regex_slash_delimited() {
-        let f = SectionFilter::parse("~=/Tasks/").unwrap();
+        let f = SectionFilter::parse("/Tasks/").unwrap();
         assert!(f.matches(1, "Tasks"));
         assert!(f.matches(2, "My Tasks [4/4]"));
     }
 
     #[test]
     fn parse_regex_with_anchors() {
-        let f = SectionFilter::parse("~=/^Tasks$/").unwrap();
+        let f = SectionFilter::parse("/^Tasks$/").unwrap();
         assert!(f.matches(1, "Tasks"));
         assert!(!f.matches(2, "My Tasks"));
     }
 
     #[test]
     fn parse_regex_with_i_flag() {
-        let f = SectionFilter::parse("~=/tasks/i").unwrap();
+        let f = SectionFilter::parse("/tasks/i").unwrap();
         assert!(f.matches(1, "TASKS"));
     }
 
     #[test]
     fn parse_regex_character_class() {
-        let f = SectionFilter::parse("~=/DEC-03[12]/").unwrap();
+        let f = SectionFilter::parse("/DEC-03[12]/").unwrap();
         assert!(f.matches(1, "DEC-031: Some Title"));
         assert!(f.matches(1, "DEC-032: Another"));
         assert!(!f.matches(1, "DEC-033: Nope"));
@@ -434,8 +409,8 @@ mod tests {
 
     #[test]
     fn parse_regex_empty_pattern_errors() {
-        assert!(SectionFilter::parse("~=").is_err());
-        assert!(SectionFilter::parse("~=/./").is_ok()); // valid
+        assert!(SectionFilter::parse("//").is_err());
+        assert!(SectionFilter::parse("/./").is_ok()); // valid
     }
 
     // --- SectionFilter::matches ---

@@ -1,12 +1,12 @@
 ---
-title: "Global --count flag for list commands"
+title: Global --count flag for list commands
 type: iteration
 date: 2026-03-31
 tags:
   - iteration
   - cli
   - ux
-status: in-progress
+status: completed
 branch: iter-88/count-flag
 ---
 
