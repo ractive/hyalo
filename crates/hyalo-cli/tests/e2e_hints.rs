@@ -850,6 +850,406 @@ fn find_hints_no_hardcoded_draft() {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: assert a JSON value has a non-empty hints array where every element
+// has both "description" and "cmd" string fields.
+// ---------------------------------------------------------------------------
+
+fn assert_hints_present(parsed: &serde_json::Value) {
+    let hints = parsed["hints"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected 'hints' array in: {parsed}"));
+    assert!(!hints.is_empty(), "expected at least one hint in: {parsed}");
+    for hint in hints {
+        assert!(
+            hint.get("description").and_then(|d| d.as_str()).is_some(),
+            "hint missing 'description': {hint}"
+        );
+        assert!(
+            hint.get("cmd").and_then(|c| c.as_str()).is_some(),
+            "hint missing 'cmd': {hint}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// read --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_hints() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+# Note
+
+Body content here.
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "note.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    assert_hints_present(&parsed);
+}
+
+// ---------------------------------------------------------------------------
+// backlinks --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn backlinks_hints() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+# Target
+"),
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+# Source
+
+See [[target]].
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "target.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    assert_hints_present(&parsed);
+}
+
+// ---------------------------------------------------------------------------
+// mv --dry-run --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_dry_run_hints() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "original.md",
+        md!(r"
+---
+title: Original
+---
+# Original
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "--file",
+            "original.md",
+            "--to",
+            "renamed.md",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    // dry-run hint should suggest applying (without --dry-run)
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(
+        !hints.is_empty(),
+        "expected hints for mv --dry-run: {parsed}"
+    );
+    let apply_hint = hints.iter().find(|h| {
+        h.get("cmd")
+            .and_then(|c| c.as_str())
+            .is_some_and(|s| s.contains("mv") && !s.contains("--dry-run"))
+    });
+    assert!(
+        apply_hint.is_some(),
+        "expected a hint suggesting mv without --dry-run: {parsed}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// task toggle --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_hints() {
+    let tmp = TempDir::new().unwrap();
+    // Task is on line 6: frontmatter(3) + heading(1) + blank(1) + task(1)
+    write_md(
+        tmp.path(),
+        "tasks.md",
+        md!(r"
+---
+title: Tasks
+---
+# Tasks
+
+- [ ] task one
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "task", "toggle", "--file", "tasks.md", "--line", "6", "--format", "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    assert_hints_present(&parsed);
+}
+
+// ---------------------------------------------------------------------------
+// links fix --hints (with a fixable broken link)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_hints() {
+    let tmp = TempDir::new().unwrap();
+    // "ActualNote" is a wikilink that can be fuzzy-matched to actual-note.md
+    write_md(
+        tmp.path(),
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+# Source
+
+See [[ActualNote]] for details.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "actual-note.md",
+        md!(r"
+---
+title: ActualNote
+---
+# ActualNote
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["links", "fix", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    assert_hints_present(&parsed);
+}
+
+// ---------------------------------------------------------------------------
+// create-index --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_index_hints() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+# Note
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(
+        !hints.is_empty(),
+        "expected hints after create-index: {parsed}"
+    );
+    // Should suggest using the index and dropping it
+    let cmds: Vec<&str> = hints
+        .iter()
+        .filter_map(|h| h.get("cmd").and_then(|c| c.as_str()))
+        .collect();
+    assert!(
+        cmds.iter().any(|c| c.contains("--index")),
+        "expected a hint suggesting --index flag: {parsed}"
+    );
+    assert!(
+        cmds.iter().any(|c| c.contains("drop-index")),
+        "expected a hint suggesting drop-index: {parsed}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// drop-index --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn drop_index_hints() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+# Note
+"),
+    );
+
+    // First create the index, then drop it and check the hints.
+    hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--no-hints"])
+        .output()
+        .unwrap();
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["drop-index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    assert!(
+        parsed.get("data").is_some(),
+        "expected 'data' key: {parsed}"
+    );
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(
+        !hints.is_empty(),
+        "expected hints after drop-index: {parsed}"
+    );
+    let cmds: Vec<&str> = hints
+        .iter()
+        .filter_map(|h| h.get("cmd").and_then(|c| c.as_str()))
+        .collect();
+    assert!(
+        cmds.iter().any(|c| c.contains("create-index")),
+        "expected a hint suggesting create-index: {parsed}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // properties summary --hints: verify data-driven suggestions
 // ---------------------------------------------------------------------------
 
