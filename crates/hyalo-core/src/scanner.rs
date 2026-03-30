@@ -19,11 +19,12 @@ pub enum ScanAction {
 ///
 /// [`dispatch_body_line`] strips both inline code spans and inline comments
 /// before calling visitors, so this wrapper is a trivial passthrough.
-#[allow(dead_code)] // Only constructed by scan_reader, which is used in tests
+#[cfg(test)]
 struct ClosureVisitor<F: FnMut(&str, usize) -> ScanAction> {
     visitor: F,
 }
 
+#[cfg(test)]
 impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
     fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
         // Legacy closure-based API receives cleaned text for backward compatibility.
@@ -34,7 +35,7 @@ impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
 /// Callback-based scanner that streams through a markdown file.
 /// Skips frontmatter, fenced code blocks, and inline code spans.
 /// Calls the visitor function for each text segment with its 1-based line number.
-#[allow(dead_code)] // Used by links::extract_links_from_file, which is test-only
+#[cfg(test)]
 pub(crate) fn scan_file<F>(path: &Path, visitor: F) -> Result<()>
 where
     F: FnMut(&str, usize) -> ScanAction,
@@ -45,7 +46,7 @@ where
 }
 
 /// Scan from any buffered reader (useful for testing without file I/O).
-#[allow(dead_code)] // Used in scanner tests only
+#[cfg(test)]
 pub(crate) fn scan_reader<R: BufRead, F>(reader: R, visitor: F) -> Result<()>
 where
     F: FnMut(&str, usize) -> ScanAction,

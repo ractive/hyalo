@@ -1,9 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
-
-use crate::scanner::{self, ScanAction};
 
 /// A parsed link extracted from a markdown file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,17 +39,6 @@ pub(crate) struct LinkSpan {
     pub full_start: usize,
     /// Byte offset one past the closing `]]` or `)`.
     pub full_end: usize,
-}
-
-/// Extract all internal links from a markdown file.
-#[allow(dead_code)] // Used in tests only
-pub(crate) fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
-    let mut links = Vec::new();
-    scanner::scan_file(path, |text, _line| {
-        extract_links_from_text(text, &mut links);
-        ScanAction::Continue
-    })?;
-    Ok(links)
 }
 
 /// Extract links from a text segment and append them to `out`.
