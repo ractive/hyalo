@@ -471,10 +471,6 @@ pub fn find(
         .map(|obj| serde_json::to_value(obj).context("failed to serialize find result"))
         .collect::<Result<_>>()?;
 
-    if format == crate::output::Format::Text && json_array.is_empty() {
-        crate::warn::warn("No files matched.");
-    }
-
     let json_output = serde_json::Value::Array(json_array);
     Ok(CommandOutcome::success_with_total(
         crate::output::format_success(format, &json_output),

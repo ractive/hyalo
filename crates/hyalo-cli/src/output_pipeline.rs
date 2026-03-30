@@ -67,7 +67,7 @@ impl OutputPipeline<'_> {
                     // In text mode, when the result is an empty array, emit a notice on stderr
                     // so the user knows the command ran but produced no matches.
                     if self.user_format == Format::Text
-                        && value.as_array().is_some_and(std::vec::Vec::is_empty)
+                        && value.as_array().is_some_and(Vec::is_empty)
                     {
                         eprintln!("No files matched");
                     } else {

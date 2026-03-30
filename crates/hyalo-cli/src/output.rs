@@ -188,21 +188,6 @@ pub fn format_envelope(
     }
 }
 
-/// Format output with drill-down hints appended.
-///
-/// - **JSON**: wraps the original value in `{"results": ..., "hints": [...]}`
-/// - **Text**: appends `  -> <command>  # <description>` lines after the formatted output
-///
-/// If `hints` is empty, produces the same output as [`format_success`].
-#[must_use]
-pub fn format_with_hints(
-    format: Format,
-    value: &serde_json::Value,
-    hints: &[crate::hints::Hint],
-) -> String {
-    format_envelope(format, value, None, hints)
-}
-
 /// Format results for text output, applying pagination notice and tag-summary header.
 ///
 /// Called by [`format_envelope`] when producing text output. The `total` is the
