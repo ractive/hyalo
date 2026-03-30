@@ -12,3 +12,4 @@ pub mod links;
 pub mod scanner;
 pub mod tasks;
 pub mod types;
+pub mod util;

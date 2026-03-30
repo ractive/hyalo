@@ -5,9 +5,9 @@ date: 2026-03-30
 tags:
   - ux
   - dogfood
-status: planned
+status: in-progress
 priority: 4
-branch: iter-78/path-traversal-error-msg
+branch: iter-76/file-resolve-suggestions
 ---
 
 ## Goal
@@ -20,9 +20,9 @@ Found during v0.6.0 dogfooding (iteration 74). `--file ../Cargo.toml` returns `E
 
 ## Tasks
 
-- [ ] In `resolve_file`, return `OutsideVault` (or a new variant) when `..` segments are detected, instead of falling through to `NotFound`
-- [ ] Update error message to clearly state the path resolves outside the vault
-- [ ] Add/update test for `..` traversal error variant
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [x] In `resolve_file`, return `OutsideVault` (or a new variant) when `..` segments are detected, instead of falling through to `NotFound`
+- [x] Update error message to clearly state the path resolves outside the vault
+- [x] Add/update test for `..` traversal error variant
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`

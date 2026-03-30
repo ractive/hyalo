@@ -66,11 +66,17 @@ pub fn collect_files(
             for (path, err) in &errors {
                 let msg = match err {
                     FileResolveError::NotFound { .. } => format!("file not found: {path}"),
+                    FileResolveError::NotFoundSuggestion { suggestion, .. } => {
+                        format!("file not found: {path} (did you mean {suggestion}?)")
+                    }
                     FileResolveError::MissingExtension { hint, .. } => {
                         format!("file not found: {path} (did you mean {hint}?)")
                     }
+                    FileResolveError::IsDirectory { hint, .. } => {
+                        format!("path is a directory, not a file: {path} (try {hint})")
+                    }
                     FileResolveError::OutsideVault { .. } => {
-                        format!("file resolves outside vault: {path}")
+                        format!("file resolves outside vault boundary: {path}")
                     }
                     FileResolveError::InvalidPath { reason, .. } => {
                         format!("invalid path ({reason}): {path}")
@@ -314,6 +320,24 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
         FileResolveError::NotFound { path } => CommandOutcome::UserError(
             crate::output::format_error(format, "file not found", Some(&path), None, None),
         ),
+        FileResolveError::NotFoundSuggestion { path, suggestion } => {
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                "file not found",
+                Some(&path),
+                Some(&format!("did you mean {suggestion}?")),
+                None,
+            ))
+        }
+        FileResolveError::IsDirectory { path, hint } => {
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                "path is a directory, not a file",
+                Some(&path),
+                Some(&hint),
+                None,
+            ))
+        }
         FileResolveError::OutsideVault { path } => {
             CommandOutcome::UserError(crate::output::format_error(
                 format,

@@ -5,6 +5,7 @@ use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 
 use crate::link_graph::strip_site_prefix;
+use crate::util::levenshtein;
 
 /// Collect all `.md` files under the given directory, respecting `.gitignore` and skipping hidden dirs.
 pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -81,18 +82,30 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
     let normalized = normalize_path(path_arg);
 
-    // Reject path traversal attempts
+    // Reject path traversal attempts — use `OutsideVault` so the user
+    // understands the path was rejected because it escapes the vault, not
+    // because the file doesn't exist.
     if normalized.starts_with('/')
         || has_parent_traversal(&normalized)
         || Path::new(&normalized).is_absolute()
     {
-        return Err(FileResolveError::NotFound { path: normalized });
+        return Err(FileResolveError::OutsideVault { path: normalized });
     }
 
     if !std::path::Path::new(&normalized)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
     {
+        // If the path refers to a directory inside the vault, suggest --glob
+        // instead of the misleading "{name}.md" hint.
+        if dir.join(&normalized).is_dir() {
+            let glob_hint = format!("--glob '{normalized}/*'");
+            return Err(FileResolveError::IsDirectory {
+                path: normalized,
+                hint: glob_hint,
+            });
+        }
+
         let hint = format!("{normalized}.md");
         return Err(FileResolveError::MissingExtension {
             path: normalized,
@@ -102,6 +115,21 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 
     let full = dir.join(&normalized);
     if !full.is_file() {
+        // Try fuzzy-matching against .md siblings in the same parent directory.
+        if let Some(sibling_name) = fuzzy_match_sibling(&full) {
+            // Reconstruct the suggestion as a vault-relative path so nested
+            // directories produce e.g. "sub/readme.md", not just "readme.md".
+            let suggestion = match Path::new(&normalized).parent() {
+                Some(p) if p != Path::new("") => {
+                    format!("{}/{sibling_name}", p.display())
+                }
+                _ => sibling_name,
+            };
+            return Err(FileResolveError::NotFoundSuggestion {
+                path: normalized,
+                suggestion,
+            });
+        }
         return Err(FileResolveError::NotFound { path: normalized });
     }
 
@@ -125,6 +153,37 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
     }
 
     Ok((full, normalized))
+}
+
+/// Find the closest `.md` sibling by Levenshtein distance.
+///
+/// Returns the file-name of the best match when the distance is at most 3,
+/// or `None` when nothing is close enough.
+fn fuzzy_match_sibling(full: &Path) -> Option<String> {
+    let parent = full.parent()?;
+    let target_name = full.file_name()?.to_str()?;
+
+    let entries = std::fs::read_dir(parent).ok()?;
+    let mut best: Option<(usize, String)> = None;
+
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let is_md = std::path::Path::new(name_str)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        if !is_md || name_str == target_name {
+            continue;
+        }
+        let dist = levenshtein(target_name, name_str);
+        if dist <= 3 && best.as_ref().is_none_or(|(d, _)| dist < *d) {
+            best = Some((dist, name_str.to_owned()));
+        }
+    }
+
+    best.map(|(_, name)| name)
 }
 
 /// Return true if the path contains any `..` (parent directory) component.
@@ -356,7 +415,9 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
 #[derive(Debug)]
 pub enum FileResolveError {
     NotFound { path: String },
+    NotFoundSuggestion { path: String, suggestion: String },
     MissingExtension { path: String, hint: String },
+    IsDirectory { path: String, hint: String },
     OutsideVault { path: String },
     InvalidPath { path: String, reason: &'static str },
 }
@@ -365,8 +426,14 @@ impl std::fmt::Display for FileResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound { path } => write!(f, "file not found: {path}"),
+            Self::NotFoundSuggestion { path, suggestion } => {
+                write!(f, "file not found: {path} (did you mean {suggestion}?)")
+            }
             Self::MissingExtension { path, hint } => {
                 write!(f, "file not found: {path} (did you mean {hint}?)")
+            }
+            Self::IsDirectory { path, hint } => {
+                write!(f, "path is a directory, not a file: {path} (try {hint})")
             }
             Self::OutsideVault { path } => {
                 write!(f, "file resolves outside vault boundary: {path}")
@@ -571,19 +638,19 @@ mod tests {
         // Absolute path
         assert!(matches!(
             resolve_file(tmp.path(), "/etc/passwd.md"),
-            Err(FileResolveError::NotFound { .. })
+            Err(FileResolveError::OutsideVault { .. })
         ));
 
         // Parent directory traversal
         assert!(matches!(
             resolve_file(tmp.path(), "../secret.md"),
-            Err(FileResolveError::NotFound { .. })
+            Err(FileResolveError::OutsideVault { .. })
         ));
 
         // Embedded traversal
         assert!(matches!(
             resolve_file(tmp.path(), "sub/../../../etc/passwd.md"),
-            Err(FileResolveError::NotFound { .. })
+            Err(FileResolveError::OutsideVault { .. })
         ));
     }
 
@@ -865,12 +932,12 @@ mod tests {
 
         assert!(matches!(
             resolve_file(tmp.path(), "../secret.md"),
-            Err(FileResolveError::NotFound { .. })
+            Err(FileResolveError::OutsideVault { .. })
         ));
 
         assert!(matches!(
             resolve_file(tmp.path(), "sub/../../etc/passwd.md"),
-            Err(FileResolveError::NotFound { .. })
+            Err(FileResolveError::OutsideVault { .. })
         ));
     }
 
@@ -1088,5 +1155,104 @@ mod tests {
             }
         ));
         assert!(err.to_string().contains("contains null byte"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 76 — directory detection hint
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_file_directory_suggests_glob() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("notes")).unwrap();
+
+        let err = resolve_file(tmp.path(), "notes").unwrap_err();
+        match err {
+            FileResolveError::IsDirectory { ref path, ref hint } => {
+                assert_eq!(path, "notes");
+                assert!(hint.contains("--glob"));
+                assert!(hint.contains("notes/*"));
+            }
+            other => panic!("expected IsDirectory, got {other:?}"),
+        }
+        assert!(err.to_string().contains("directory"));
+    }
+
+    #[test]
+    fn resolve_file_non_directory_without_ext_still_hints_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        // "notes" doesn't exist as a dir or file — should get MissingExtension
+        let err = resolve_file(tmp.path(), "notes").unwrap_err();
+        assert!(matches!(err, FileResolveError::MissingExtension { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 76 — fuzzy file name suggestion
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_file_fuzzy_suggests_close_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("readme.md"), "").unwrap();
+
+        // "readem.md" is 1 edit away from "readme.md"
+        let err = resolve_file(tmp.path(), "readem.md").unwrap_err();
+        match err {
+            FileResolveError::NotFoundSuggestion { ref suggestion, .. } => {
+                assert_eq!(suggestion, "readme.md");
+            }
+            other => panic!("expected NotFoundSuggestion, got {other:?}"),
+        }
+        assert!(err.to_string().contains("did you mean"));
+    }
+
+    #[test]
+    fn resolve_file_fuzzy_suggests_with_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/readme.md"), "").unwrap();
+
+        // "sub/readem.md" should suggest "sub/readme.md", not just "readme.md"
+        let err = resolve_file(tmp.path(), "sub/readem.md").unwrap_err();
+        match err {
+            FileResolveError::NotFoundSuggestion { ref suggestion, .. } => {
+                assert_eq!(suggestion, "sub/readme.md");
+            }
+            other => panic!("expected NotFoundSuggestion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_file_no_fuzzy_for_distant_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("readme.md"), "").unwrap();
+
+        // "zzzzz.md" is far from "readme.md" — should get plain NotFound
+        let err = resolve_file(tmp.path(), "zzzzz.md").unwrap_err();
+        assert!(matches!(err, FileResolveError::NotFound { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 78 — path traversal returns OutsideVault
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_file_traversal_says_outside_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let err = resolve_file(tmp.path(), "../Cargo.toml").unwrap_err();
+        assert!(matches!(err, FileResolveError::OutsideVault { .. }));
+        assert!(
+            err.to_string().contains("outside vault"),
+            "message should mention 'outside vault', got: {err}",
+        );
+    }
+
+    #[test]
+    fn resolve_file_absolute_path_says_outside_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let err = resolve_file(tmp.path(), "/etc/passwd.md").unwrap_err();
+        assert!(matches!(err, FileResolveError::OutsideVault { .. }));
     }
 }
