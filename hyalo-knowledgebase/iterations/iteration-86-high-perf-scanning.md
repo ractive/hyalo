@@ -2,7 +2,7 @@
 title: "Iteration 86: High-performance file scanning (memchr + rayon + parallel walk)"
 type: iteration
 date: 2026-03-30
-status: in-progress
+status: completed
 branch: iter-86/high-perf-scanning
 tags:
   - performance

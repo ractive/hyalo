@@ -3372,3 +3372,168 @@ fn find_title_invalid_regex_returns_error() {
         "stderr should mention invalid regex: {stderr}"
     );
 }
+
+#[test]
+fn find_title_delimited_regex() {
+    let tmp = setup_vault();
+    // `~=/^Alpha$/` should match only "Alpha" (case-insensitive by default)
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=/^Alpha$/", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(
+        results.len(),
+        1,
+        "expected exactly 1 match for delimited regex: {results:?}"
+    );
+    assert_eq!(results[0]["file"], "alpha.md");
+}
+
+#[test]
+fn find_title_delimited_regex_case_insensitive_default() {
+    let tmp = setup_vault();
+    // `~=/^alpha$/` without 'i' flag should still match "Alpha"
+    // because --title defaults to case-insensitive
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=/^alpha$/", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(
+        results.len(),
+        1,
+        "delimited regex should be case-insensitive by default: {results:?}"
+    );
+    assert_eq!(results[0]["file"], "alpha.md");
+}
+
+#[test]
+fn find_title_delimited_regex_with_flag() {
+    let tmp = setup_vault();
+    // `~=/^alpha$/i` with explicit 'i' flag should also work
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=/^alpha$/i", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(
+        results.len(),
+        1,
+        "explicit /i flag should match case-insensitively: {results:?}"
+    );
+    assert_eq!(results[0]["file"], "alpha.md");
+}
+
+#[test]
+fn find_title_delimited_regex_missing_closing_slash() {
+    let tmp = setup_vault();
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=/unclosed", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "missing closing slash should exit with error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must end with '/'"),
+        "stderr should mention missing closing slash: {stderr}"
+    );
+}
+
+#[test]
+fn find_title_warns_on_suspicious_pattern() {
+    let tmp = setup_vault();
+    // `/^Alpha/` without ~= prefix looks like the user forgot ~=
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "/^Alpha/", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "should succeed (substring match): stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--title does substring matching"),
+        "should warn about likely misuse: {stderr}"
+    );
+}
+
+#[test]
+fn find_title_warns_on_anchor_pattern() {
+    let tmp = setup_vault();
+    // `^Alpha` looks like regex — should warn
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "^Alpha", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "should succeed: stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--title does substring matching"),
+        "should warn about anchor usage: {stderr}"
+    );
+}
+
+#[test]
+fn find_title_bare_regex_with_anchors() {
+    let tmp = setup_vault();
+    // Bare ~=^Alpha$ should match (case-insensitive)
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=^alpha$", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(
+        results.len(),
+        1,
+        "bare regex with anchors should match: {results:?}"
+    );
+    assert_eq!(results[0]["file"], "alpha.md");
+}
