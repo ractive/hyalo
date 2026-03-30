@@ -6,7 +6,7 @@ tags:
   - refactor
   - architecture
   - ai-friendliness
-status: planned
+status: completed
 branch: iter-72/cli-architecture
 ---
 
@@ -30,49 +30,44 @@ Change 1 (Index Resolution) → Change 2 (Command Trait) → Change 3 (Output Pi
 
 ### Change 1: Index Resolution Consolidation
 
-- [ ] Define `ResolvedIndex<'a>` enum in `commands/mod.rs` with `Snapshot(&'a SnapshotIndex)` and `Scanned(ScannedIndexBuild)` variants
-- [ ] Implement `as_index(&self) -> &dyn VaultIndex` on `ResolvedIndex`
-- [ ] Create `resolve_index()` function accepting snapshot ref, dir, file/glob args, format, site_prefix, needs_full_vault, and ScanOptions
-- [ ] Handle `build_scanned_index` error + `ScannedIndexOutcome` matching inside `resolve_index()`
-- [ ] Replace 6 index-or-scan blocks in `run.rs` (find, properties summary, tags summary, summary, backlinks, links fix) with `resolve_index()` calls
-- [ ] Keep per-command pre-filtering (e.g. `filter_index_entries` for properties/tags summary) in the match arm
-- [ ] Run full test suite, verify identical output
+- [x] Define `ResolvedIndex<'a>` enum in `commands/mod.rs` with `Snapshot(&'a SnapshotIndex)` and `Scanned(ScannedIndexBuild)` variants
+- [x] Implement `as_index(&self) -> &dyn VaultIndex` on `ResolvedIndex`
+- [x] Create `resolve_index()` function accepting snapshot ref, dir, file/glob args, format, site_prefix, needs_full_vault, and ScanOptions
+- [x] Handle `build_scanned_index` error + `ScannedIndexOutcome` matching inside `resolve_index()`
+- [x] Replace 6 index-or-scan blocks in `run.rs` (find, properties summary, tags summary, summary, backlinks, links fix) with `resolve_index()` calls
+- [x] Keep per-command pre-filtering (e.g. `filter_index_entries` for properties/tags summary) in the match arm
+- [x] Run full test suite, verify identical output
 
-### Change 2: Command Trait
+### Change 2: Command Dispatch Extraction
 
-- [ ] Define `CommandContext` struct bundling dir, site_prefix, format, snapshot_index, index_path
-- [ ] Define `Command` trait with `execute(&self, ctx: &mut CommandContext) -> Result<CommandOutcome>`
-- [ ] Add `hint_source()` and `hint_context()` methods to trait with defaults
-- [ ] Create command structs for all 14 commands (Find, Read, Summary, Backlinks, Set, Remove, Append, Mv, Properties, Tags, Task, Links, CreateIndex, DropIndex) — each implements `Command`
-- [ ] Write `prepare()` function: `Commands` enum → validated command struct with parsed filters
-- [ ] Move filter parsing (property filters, task filter, fields, sort, section filters, tag validation) into `prepare()` for FindCommand
-- [ ] Move `parse_where_filters` into `prepare()` for Set/Remove/Append
-- [ ] Move hint_ctx construction into the command structs
-- [ ] Replace run.rs match block with `prepare()` + `cmd.execute()`
-- [ ] Keep `init` as early-return special case
-- [ ] Run full test suite
+- [x] Define `CommandContext` struct bundling dir, site_prefix, format, snapshot_index, index_path
+- [x] Extract command dispatch match block into `dispatch.rs` with `dispatch()` function
+- [x] Move `parse_where_filters` into `dispatch.rs`
+- [x] Convert validation `die()` calls in dispatch to return `Ok(CommandOutcome::UserError(...))` or `Err(e)`
+- [x] Replace run.rs match block with `dispatch()` call
+- [x] Keep `init` as early-return special case in run.rs
+- [x] Run full test suite
 
 ### Change 3: Output Pipeline
 
-- [ ] Define `OutputPipeline` struct in `output.rs` with user_format, effective_format, jq_filter, hint_ctx
-- [ ] Implement `OutputPipeline::new()` encapsulating the effective_format logic
-- [ ] Implement `OutputPipeline::finalize()` encapsulating jq filtering, hint generation, format conversion, error formatting
-- [ ] Replace run.rs output block with `pipeline.finalize(result)`
-- [ ] Run full test suite, especially jq and hints e2e tests
+- [x] Define `OutputPipeline` struct in `output_pipeline.rs` with user_format, jq_filter, hint_ctx, hints_active
+- [x] Implement `OutputPipeline::finalize()` encapsulating jq filtering, hint generation, format conversion, error formatting
+- [x] Replace run.rs output block with `pipeline.finalize(result)`
+- [x] Run full test suite, especially jq and hints e2e tests
 
 ### Change 4: Error Handling Centralization
 
-- [ ] Define `AppError` enum with `User(String)`, `Internal(anyhow::Error)`, `Clap(clap::Error)` variants
-- [ ] Change `run()` to return `Result<(), AppError>`
-- [ ] Convert all `die()` call sites to return `Err(AppError::...)`
-- [ ] Remove `die()` function
-- [ ] Update `main.rs` to match on `run()` result with `warn::flush_summary()` on all paths
-- [ ] Preserve exit codes: User=1, Internal=2, Clap=clap's code
-- [ ] Run full test suite
+- [x] Define `AppError` enum with `User(String)`, `Internal(anyhow::Error)`, `Clap(clap::Error)`, `Exit(i32)` variants
+- [x] Split `run()` into `run()` + `run_inner() -> Result<(), AppError>`
+- [x] Convert all `die()` call sites to return `Err(AppError::...)`
+- [x] Remove `die()` function
+- [x] Handle `AppError` in `run()` with `warn::flush_summary()` on all paths
+- [x] Preserve exit codes: User=1, Internal=2, Clap=clap's code
+- [x] Run full test suite
 
 ### Quality gate
 
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
-- [ ] Verify `run.rs` is under 400 lines
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace` — 498 passed
+- [x] Verify `run.rs` is under 400 lines (398 lines)

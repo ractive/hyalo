@@ -20,7 +20,7 @@ pub mod tasks;
 use crate::output::{CommandOutcome, Format};
 use anyhow::Result;
 use hyalo_core::discovery::{self, FileResolveError};
-use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild};
+use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild, SnapshotIndex, VaultIndex};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,55 @@ pub fn collect_files(
 pub enum ScannedIndexOutcome {
     Index(ScannedIndexBuild),
     Outcome(CommandOutcome),
+}
+
+/// Resolved index — either a borrowed snapshot or an owned scanned build.
+pub enum ResolvedIndex<'a> {
+    Snapshot(&'a SnapshotIndex),
+    Scanned(ScannedIndexBuild),
+}
+
+impl ResolvedIndex<'_> {
+    pub fn as_index(&self) -> &dyn VaultIndex {
+        match self {
+            ResolvedIndex::Snapshot(idx) => *idx,
+            ResolvedIndex::Scanned(build) => &build.index,
+        }
+    }
+}
+
+/// Resolve the vault index: use the snapshot if available, otherwise scan from disk.
+///
+/// Returns `Ok(Ok(ResolvedIndex))` on success.
+/// Returns `Ok(Err(CommandOutcome))` when file resolution produced a user-facing error.
+/// Returns `Err(e)` for unexpected I/O or parse errors.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_index<'a>(
+    snapshot: Option<&'a SnapshotIndex>,
+    dir: &Path,
+    files: &[String],
+    globs: &[String],
+    format: Format,
+    site_prefix: Option<&str>,
+    needs_full_vault: bool,
+    options: &ScanOptions,
+) -> Result<Result<ResolvedIndex<'a>, CommandOutcome>> {
+    if let Some(idx) = snapshot {
+        return Ok(Ok(ResolvedIndex::Snapshot(idx)));
+    }
+    let outcome = build_scanned_index(
+        dir,
+        files,
+        globs,
+        format,
+        site_prefix,
+        needs_full_vault,
+        options,
+    )?;
+    match outcome {
+        ScannedIndexOutcome::Index(build) => Ok(Ok(ResolvedIndex::Scanned(build))),
+        ScannedIndexOutcome::Outcome(o) => Ok(Err(o)),
+    }
 }
 
 /// Build a [`ScannedIndex`] from disk, handling file discovery, warnings, and user errors.
