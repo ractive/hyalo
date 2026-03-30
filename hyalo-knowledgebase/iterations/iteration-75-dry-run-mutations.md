@@ -1,12 +1,12 @@
 ---
-title: "Add --dry-run to set, remove, and append commands"
+title: Add --dry-run to set, remove, and append commands
 type: iteration
 date: 2026-03-30
 tags:
   - feature
   - ux
   - dogfood
-status: planned
+status: completed
 priority: 3
 branch: iter-75/dry-run-mutations
 ---
@@ -21,11 +21,11 @@ Found during v0.6.0 dogfooding (iteration 74). The `mv` command already supports
 
 ## Tasks
 
-- [ ] Add `--dry-run` flag to `set` subcommand
-- [ ] Add `--dry-run` flag to `remove` subcommand
-- [ ] Add `--dry-run` flag to `append` subcommand
-- [ ] When `--dry-run` is active, compute and display changes without writing to disk
-- [ ] Add e2e tests for `--dry-run` on each mutation command
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [x] Add `--dry-run` flag to `set` subcommand
+- [x] Add `--dry-run` flag to `remove` subcommand
+- [x] Add `--dry-run` flag to `append` subcommand
+- [x] When `--dry-run` is active, compute and display changes without writing to disk
+- [x] Add e2e tests for `--dry-run` on each mutation command
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`

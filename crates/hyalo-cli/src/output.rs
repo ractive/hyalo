@@ -282,11 +282,13 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value)
-        "modified,property,scanned,skipped,total,value" => Some(PROPERTY_VALUE_MUTATION_FILTER),
+        "dry_run,modified,property,scanned,skipped,total,value" => {
+            Some(PROPERTY_VALUE_MUTATION_FILTER)
+        }
         // Mutation results with property only (RemovePropertyResult without value)
-        "modified,property,scanned,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
+        "dry_run,modified,property,scanned,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
         // Mutation results with tag (SetTagResult, RemoveTagResult)
-        "modified,scanned,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
+        "dry_run,modified,scanned,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
         _ => None,
     }
 }
@@ -921,6 +923,7 @@ mod tests {
     #[test]
     fn property_value_mutation_via_format_value_as_text() {
         let val = json!({
+            "dry_run": false,
             "modified": ["notes/a.md"],
             "property": "status",
             "scanned": 1,
@@ -1013,6 +1016,7 @@ mod tests {
     #[test]
     fn tag_mutation_via_format_value_as_text() {
         let val = json!({
+            "dry_run": false,
             "modified": [],
             "scanned": 1,
             "skipped": ["note.md"],

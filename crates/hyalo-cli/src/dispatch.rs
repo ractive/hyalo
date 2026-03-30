@@ -351,6 +351,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             glob,
             where_properties,
             where_tags,
+            dry_run,
         } => {
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
@@ -369,6 +370,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 snapshot_index,
                 index_path,
+                dry_run,
             )
         }
         Commands::Remove {
@@ -378,6 +380,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             glob,
             where_properties,
             where_tags,
+            dry_run,
         } => {
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
@@ -396,6 +399,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 snapshot_index,
                 index_path,
+                dry_run,
             )
         }
         Commands::Append {
@@ -404,6 +408,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             glob,
             where_properties,
             where_tags,
+            dry_run,
         } => {
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
@@ -421,6 +426,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 snapshot_index,
                 index_path,
+                dry_run,
             )
         }
         Commands::Backlinks { file } => match resolve_index(

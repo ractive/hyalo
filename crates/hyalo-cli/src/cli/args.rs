@@ -337,7 +337,7 @@ shell redirection (e.g. --where-property 'priority>=3'). If the property is a li
 element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
-            SIDE EFFECTS: Modifies matched files on disk.\n\
+            SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             USE WHEN: You need to create or overwrite frontmatter properties or add tags, \
             possibly across many files at once."
     )]
@@ -360,6 +360,9 @@ Repeatable (AND).\n\
         /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
+        /// Preview changes without modifying any files
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove frontmatter properties and/or tags from file(s)
     #[command(
@@ -382,7 +385,7 @@ shell redirection (e.g. --where-property 'priority>=3'). If the property is a li
 element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
-            SIDE EFFECTS: Modifies matched files on disk.\n\
+            SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files."
     )]
     Remove {
@@ -404,6 +407,9 @@ Repeatable (AND).\n\
         /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
+        /// Preview changes without modifying any files
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Initialize hyalo configuration and optional tool integrations
     #[command(
@@ -479,7 +485,7 @@ shell redirection (e.g. --where-property 'priority>=3'). If the property is a li
 element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
-            SIDE EFFECTS: Modifies matched files on disk.\n\
+            SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \
             without overwriting the existing list."
     )]
@@ -499,6 +505,9 @@ Repeatable (AND).\n\
         /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
+        /// Preview changes without modifying any files
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Detect and repair broken links across the vault
     #[command(
