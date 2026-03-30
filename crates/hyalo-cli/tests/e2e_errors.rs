@@ -163,9 +163,9 @@ title: OK
     // Directory counts must exclude the skipped file
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("valid JSON output");
-    let total = json["files"]["total"].as_u64().unwrap();
+    let total = json["results"]["files"]["total"].as_u64().unwrap();
     assert_eq!(total, 1, "only the good file should be counted");
-    let by_dir = json["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
     let root_count: u64 = by_dir
         .iter()
         .map(|d| d["count"].as_u64().unwrap_or(0))
@@ -231,7 +231,7 @@ title: Target
     // The good link should still be found
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("valid JSON output");
-    let backlinks = json["backlinks"].as_array().unwrap();
+    let backlinks = json["results"]["backlinks"].as_array().unwrap();
     assert_eq!(backlinks.len(), 1, "source.md should link to target.md");
 }
 

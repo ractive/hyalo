@@ -102,13 +102,11 @@ pub fn mv(
         }
     }
 
-    // 6. Format output
-    let output = match format {
-        Format::Json => serde_json::to_string_pretty(&result)?,
-        Format::Text => format_text(&result),
-    };
-
-    Ok(CommandOutcome::Success(output))
+    // 6. Format output (always JSON internally; pipeline handles user-facing format)
+    let _ = format;
+    Ok(CommandOutcome::success(
+        serde_json::to_string_pretty(&result).unwrap_or_default(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -209,57 +207,4 @@ fn execute_mv(dir: &Path, old_rel: &str, new_rel: &str, plans: &[RewritePlan]) -
     link_rewrite::execute_plans(dir, plans)?;
 
     Ok(())
-}
-
-fn format_text(result: &MvResult) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-
-    let prefix = if result.dry_run {
-        "Would move"
-    } else {
-        "Moved"
-    };
-    writeln!(out, "{prefix} {} → {}", result.from, result.to).unwrap();
-
-    if result.updated_files.is_empty() {
-        write!(out, "No links to update.").unwrap();
-        return out;
-    }
-
-    let verb = if result.dry_run {
-        "Would update"
-    } else {
-        "Updated"
-    };
-    writeln!(
-        out,
-        "{verb} {} link{} in {} file{}:",
-        result.total_links_updated,
-        if result.total_links_updated == 1 {
-            ""
-        } else {
-            "s"
-        },
-        result.total_files_updated,
-        if result.total_files_updated == 1 {
-            ""
-        } else {
-            "s"
-        },
-    )
-    .unwrap();
-
-    for file in &result.updated_files {
-        for r in &file.replacements {
-            writeln!(
-                out,
-                "  {}:{}  {} → {}",
-                file.file, r.line, r.old_text, r.new_text
-            )
-            .unwrap();
-        }
-    }
-
-    out.trim_end().to_owned()
 }

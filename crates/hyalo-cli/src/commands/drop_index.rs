@@ -75,5 +75,5 @@ pub fn drop_index(
         "deleted": index_path.display().to_string(),
     });
 
-    Ok(CommandOutcome::Success(format_success(format, &result)))
+    Ok(CommandOutcome::success(format_success(format, &result)))
 }

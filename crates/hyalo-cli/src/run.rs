@@ -159,7 +159,7 @@ fn run_inner() -> Result<(), AppError> {
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
         match init_commands::run_init(init_dir, claude) {
-            Ok(CommandOutcome::Success(output)) => {
+            Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 println!("{output}");
                 return Ok(());
             }
@@ -254,14 +254,9 @@ fn run_inner() -> Result<(), AppError> {
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         return Err(AppError::Exit(2));
     }
-    // When --jq or --hints is active, force JSON internally so we can re-parse the output.
-    // The user-requested format is applied afterwards.
-    let hints_active = hints_flag && jq_filter.is_none();
-    let effective_format = if jq_filter.is_some() || hints_active {
-        Format::Json
-    } else {
-        format
-    };
+    // Always force JSON internally so the output pipeline can wrap results in the
+    // envelope.  The user-requested format is applied by the pipeline afterwards.
+    let effective_format = Format::Json;
 
     // Build hint context before the command dispatch.
     // Only include CLI-explicit flags in hints — config values are inherited
@@ -523,6 +518,7 @@ fn run_inner() -> Result<(), AppError> {
         dir: &dir,
         site_prefix,
         effective_format,
+        user_format: format,
         snapshot_index: &mut snapshot_index,
         index_path: cli.index.as_deref(),
     };
@@ -532,7 +528,6 @@ fn run_inner() -> Result<(), AppError> {
         user_format: format,
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
-        hints_active,
     };
     let code = pipeline.finalize(result);
     if code == 0 {

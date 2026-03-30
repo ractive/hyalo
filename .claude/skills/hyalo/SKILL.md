@@ -59,8 +59,18 @@ hyalo find --fields backlinks --jq '.results | map(select(.backlinks | length ==
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
 
+**All JSON output uses a consistent envelope:** `{"results": <payload>, "total": N, "hints": [...]}`.
+`total` is present for list commands (find, tags summary, properties summary, backlinks).
+`hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope:
+
+```bash
+hyalo find --property status=draft --jq '.total'          # count matching files
+hyalo find --property status=draft --jq '.results[].file' # just file paths
+hyalo summary --jq '.results.tasks.total'                  # tasks count from summary
+```
+
 **Hints are enabled by default.** Every query appends drill-down suggestions (`-> hyalo ...`
-lines in text mode, a `"hints"` array in JSON mode). Read and follow these hints — they show
+lines in text mode, a `"hints"` array in the JSON envelope). Read and follow these hints — they show
 concrete next commands to explore deeper. Use `--no-hints` to suppress them, or `--jq` which
 suppresses hints automatically.
 

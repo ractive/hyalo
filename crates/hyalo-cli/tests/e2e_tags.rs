@@ -30,7 +30,7 @@ fn tags_summary_returns_counts() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 3); // rust, cli, iteration
-    let tags = json["tags"].as_array().unwrap();
+    let tags = json["results"].as_array().unwrap();
     let rust = tags.iter().find(|t| t["name"] == "rust").unwrap();
     assert_eq!(rust["count"], 2);
     let cli = tags.iter().find(|t| t["name"] == "cli").unwrap();
@@ -50,7 +50,7 @@ fn tags_empty_vault() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 0);
-    assert!(json["tags"].as_array().unwrap().is_empty());
+    assert!(json["results"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn tags_with_glob() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 2);
-    let names: Vec<&str> = json["tags"]
+    let names: Vec<&str> = json["results"]
         .as_array()
         .expect("field 'tags' should be an array")
         .iter()
@@ -102,7 +102,9 @@ fn tags_glob_no_match() {
         "non-matching glob should return total 0; got: {json}"
     );
     assert!(
-        json["tags"].as_array().is_some_and(std::vec::Vec::is_empty),
+        json["results"]
+            .as_array()
+            .is_some_and(std::vec::Vec::is_empty),
         "non-matching glob should return empty tags array; got: {json}"
     );
     assert!(
@@ -179,7 +181,7 @@ tags: rust
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1);
-    assert_eq!(json["tags"][0]["name"], "rust");
+    assert_eq!(json["results"][0]["name"], "rust");
 }
 
 // ---------------------------------------------------------------------------
@@ -311,9 +313,9 @@ title: Note
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["tag"], "rust");
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["tag"], "rust");
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 0);
 
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains("rust"));
@@ -333,8 +335,8 @@ fn set_tag_glob_pattern() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
-    assert_eq!(json["total"], 2);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["results"]["total"], 2);
 }
 
 #[test]
@@ -350,8 +352,8 @@ fn set_tag_idempotent() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 0);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -414,7 +416,7 @@ No frontmatter here.
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     let content = std::fs::read_to_string(tmp.path().join("plain.md")).unwrap();
     assert!(content.starts_with("---\n"));
@@ -439,8 +441,8 @@ fn remove_tag_single_file() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 0);
 
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(!content.contains("rust"));
@@ -461,7 +463,7 @@ fn remove_tag_glob_pattern() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -477,8 +479,8 @@ fn remove_tag_absent_tag_idempotent() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 0);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -524,8 +526,8 @@ fn remove_tag_from_file_with_no_frontmatter() {
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
-    assert_eq!(json["modified"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -609,8 +611,8 @@ fn tags_rename_basic() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
 
     let a = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(a.contains("filters"));
@@ -629,7 +631,7 @@ fn tags_rename_already_has_new_tag() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(!content.contains("old-name"));
@@ -670,7 +672,7 @@ fn tags_rename_with_glob_scope() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     let a = std::fs::read_to_string(tmp.path().join("notes/a.md")).unwrap();
     assert!(a.contains("new-tag"));
@@ -705,7 +707,7 @@ fn tags_rename_scalar_tag() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(
@@ -767,7 +769,7 @@ fn tags_glob_negation_excludes_files() {
         .unwrap();
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let tags: Vec<&str> = json["tags"]
+    let tags: Vec<&str> = json["results"]
         .as_array()
         .unwrap()
         .iter()

@@ -171,8 +171,8 @@ fn create_index_produces_file() {
 
     // Output should be JSON with path and files_indexed
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["path"].is_string());
-    assert_eq!(json["files_indexed"].as_u64().unwrap(), 4);
+    assert!(json["results"]["path"].is_string());
+    assert_eq!(json["results"]["files_indexed"].as_u64().unwrap(), 4);
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn create_index_custom_output_path() {
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        json["path"].as_str().unwrap(),
+        json["results"]["path"].as_str().unwrap(),
         custom_path.to_str().unwrap()
     );
 }
@@ -230,7 +230,7 @@ fn drop_index_deletes_file() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["deleted"].is_string());
+    assert!(json["results"]["deleted"].is_string());
 }
 
 #[test]
@@ -410,15 +410,15 @@ fn summary_with_index_matches_disk_scan() {
     let index_json: serde_json::Value = serde_json::from_slice(&index_output.stdout).unwrap();
 
     assert_eq!(
-        disk_json["files"]["total"], index_json["files"]["total"],
+        disk_json["results"]["files"]["total"], index_json["results"]["files"]["total"],
         "file count mismatch between disk scan and index"
     );
     assert_eq!(
-        disk_json["tasks"]["total"], index_json["tasks"]["total"],
+        disk_json["results"]["tasks"]["total"], index_json["results"]["tasks"]["total"],
         "task total mismatch between disk scan and index"
     );
     assert_eq!(
-        disk_json["tasks"]["done"], index_json["tasks"]["done"],
+        disk_json["results"]["tasks"]["done"], index_json["results"]["tasks"]["done"],
         "tasks done mismatch between disk scan and index"
     );
 }
@@ -442,7 +442,7 @@ fn summary_with_index_file_count() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 4);
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -479,14 +479,14 @@ fn tags_summary_with_index_matches_disk_scan() {
         "tags total mismatch"
     );
 
-    // Both should have the same set of tags.
-    let mut disk_tags: Vec<&str> = disk_json["tags"]
+    // Both should have the same set of tags (bare array under "results").
+    let mut disk_tags: Vec<&str> = disk_json["results"]
         .as_array()
         .unwrap()
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    let mut index_tags: Vec<&str> = index_json["tags"]
+    let mut index_tags: Vec<&str> = index_json["results"]
         .as_array()
         .unwrap()
         .iter()
@@ -534,14 +534,14 @@ fn properties_summary_with_index_matches_disk_scan() {
     );
     let index_json: serde_json::Value = serde_json::from_slice(&index_output.stdout).unwrap();
 
-    // Both should return arrays with the same property names.
-    let mut disk_props: Vec<&str> = disk_json
+    // Both should return arrays with the same property names (under "results").
+    let mut disk_props: Vec<&str> = disk_json["results"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| p["name"].as_str().unwrap())
         .collect();
-    let mut index_props: Vec<&str> = index_json
+    let mut index_props: Vec<&str> = index_json["results"]
         .as_array()
         .unwrap()
         .iter()
@@ -583,10 +583,10 @@ fn backlinks_with_index_finds_wikilinks() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["file"], "alpha.md");
+    assert_eq!(json["results"]["file"], "alpha.md");
     assert!(json["total"].as_u64().unwrap() >= 1);
 
-    let backlinks = json["backlinks"].as_array().unwrap();
+    let backlinks = json["results"]["backlinks"].as_array().unwrap();
     let sources: Vec<&str> = backlinks
         .iter()
         .map(|b| b["source"].as_str().unwrap())
@@ -625,8 +625,9 @@ fn backlinks_with_index_matches_disk_scan() {
     let index_json: serde_json::Value = serde_json::from_slice(&index_output.stdout).unwrap();
 
     assert_eq!(
-        disk_json["total"], index_json["total"],
-        "backlinks total mismatch between disk and index"
+        disk_json["results"]["backlinks"].as_array().map(Vec::len),
+        index_json["results"]["backlinks"].as_array().map(Vec::len),
+        "backlinks count mismatch between disk and index"
     );
 }
 
@@ -697,7 +698,7 @@ fn incompatible_index_falls_back_for_summary() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["files"]["total"].as_u64().unwrap(), 4);
+    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 4);
 }
 
 // ---------------------------------------------------------------------------

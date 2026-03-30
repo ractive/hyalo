@@ -349,7 +349,7 @@ pub fn summary(
     };
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::success(crate::output::format_success(
         format,
         &json_value,
     )))
@@ -467,7 +467,9 @@ No tasks here.
 
     fn unwrap_success(outcome: CommandOutcome) -> serde_json::Value {
         match outcome {
-            CommandOutcome::Success(s) => serde_json::from_str(&s).unwrap(),
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => {
+                serde_json::from_str(&s).unwrap()
+            }
             CommandOutcome::UserError(s) => panic!("expected success, got: {s}"),
         }
     }
@@ -656,7 +658,7 @@ Body.
         let tmp = setup_vault();
         let outcome = run_summary(tmp.path(), &[], 10, None, None, Format::Text).unwrap();
         match outcome {
-            CommandOutcome::Success(s) => {
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => {
                 assert!(s.contains("Files:"), "expected 'Files:' in: {s}");
                 assert!(s.contains("Tasks:"), "expected 'Tasks:' in: {s}");
             }

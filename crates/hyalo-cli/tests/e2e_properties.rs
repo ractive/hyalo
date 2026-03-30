@@ -48,9 +48,10 @@ priority: 1
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["results"].as_array().expect("expected results array");
 
-    let names: Vec<&str> = json
+    let names: Vec<&str> = arr
         .iter()
         .map(|v| v["name"].as_str().expect("field 'name' should be a string"))
         .collect();
@@ -58,14 +59,14 @@ priority: 1
     assert!(names.contains(&"status"));
     assert!(names.contains(&"priority"));
 
-    let title_entry = json
+    let title_entry = arr
         .iter()
         .find(|v| v["name"] == "title")
         .expect("'title' property should be present");
     assert_eq!(title_entry["count"], 2);
     assert_eq!(title_entry["type"], "text");
 
-    let status_entry = json.iter().find(|v| v["name"] == "status").unwrap();
+    let status_entry = arr.iter().find(|v| v["name"] == "status").unwrap();
     assert_eq!(status_entry["count"], 1);
 }
 
@@ -80,8 +81,9 @@ fn properties_empty_dir() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["results"].as_array().expect("expected results array");
+    assert!(arr.is_empty());
 }
 
 #[test]
@@ -114,8 +116,9 @@ only_in_sub: yes
         .unwrap();
 
     assert!(output.status.success());
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    let names: Vec<&str> = json
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["results"].as_array().expect("expected results array");
+    let names: Vec<&str> = arr
         .iter()
         .map(|v| v["name"].as_str().expect("field 'name' should be a string"))
         .collect();
@@ -183,8 +186,10 @@ fn properties_glob_no_match() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
-        json.as_array().is_some_and(std::vec::Vec::is_empty),
-        "non-matching glob should return empty array; got: {json}"
+        json["results"]
+            .as_array()
+            .is_some_and(std::vec::Vec::is_empty),
+        "non-matching glob should return empty results array; got: {json}"
     );
     assert!(
         stderr.is_empty(),
@@ -342,8 +347,9 @@ status: draft
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
-    let names: Vec<&str> = json.iter().map(|v| v["name"].as_str().unwrap()).collect();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["results"].as_array().expect("expected results array");
+    let names: Vec<&str> = arr.iter().map(|v| v["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"title"), "missing 'title' in {names:?}");
     assert!(names.contains(&"status"), "missing 'status' in {names:?}");
 
@@ -383,8 +389,8 @@ fn properties_rename_basic() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
 
     let a = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(a.contains("Keywords:"));
@@ -407,8 +413,8 @@ fn properties_rename_conflict_skips() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["conflicts"].as_array().unwrap().len(), 1);
-    assert_eq!(json["modified"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 0);
 
     // File should be unchanged
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -438,7 +444,7 @@ fn properties_rename_with_glob_scope() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     // Only notes/a.md should be renamed
     let a = fs::read_to_string(tmp.path().join("notes/a.md")).unwrap();
@@ -488,9 +494,9 @@ fn properties_glob_negation_excludes_files() {
         .unwrap();
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let names: Vec<&str> = json
+    let names: Vec<&str> = json["results"]
         .as_array()
-        .unwrap()
+        .expect("expected results array")
         .iter()
         .map(|v| v["name"].as_str().unwrap())
         .collect();
@@ -527,9 +533,9 @@ fn properties_bare_defaults_to_summary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    // properties summary returns a JSON array of {name, type, count}
-    let arr = json
+    // properties summary returns a JSON array of {name, type, count} under "results"
+    let arr = json["results"]
         .as_array()
-        .expect("should produce summary array output");
+        .expect("should produce results array in envelope");
     assert!(!arr.is_empty(), "should have properties in summary");
 }

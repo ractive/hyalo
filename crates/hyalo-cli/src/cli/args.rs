@@ -40,7 +40,12 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         properties, tags, tasks, and links.\n\n\
         PATH RESOLUTION: All --file and --glob paths are relative to --dir (defaults to \".\"). \
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
-        OUTPUT: Returns JSON by default (--format json). Use --format text for human-readable output. \
+        OUTPUT: Returns JSON by default (--format json). All JSON is wrapped in a consistent envelope:\n\
+        \u{00a0} {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
+        total is present for list commands (find, tags, properties, backlinks). \
+        hints is always present (empty [] when --no-hints). \
+        --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
+        Use --format text for human-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
@@ -65,15 +70,16 @@ pub(crate) struct Cli {
     pub format: Option<Format>,
 
     /// Apply a jq filter expression to the JSON output of any command.
-    /// The filtered result is printed as plain text. Incompatible with non-JSON formats (--format text).
-    /// Example: --jq '.files[]' or --jq 'map(.name) | join(", ")'.
+    /// Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
+    /// The filtered result is printed as plain text. Incompatible with --format text.
+    /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
     /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 
     /// Force hints on (already the default).
     /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.
-    /// JSON mode: wraps in {"data": ..., "hints": [{"description": "...", "cmd": "hyalo ..."}]}.
+    /// JSON mode: populates the "hints" array in the envelope (always present, empty when suppressed).
     /// Suppressed when --jq is active.
     #[arg(long, global = true)]
     pub hints: bool,
@@ -134,9 +140,10 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Search and filter markdown files — returns an array of file objects with metadata, structure, tasks, and links
+    /// Search and filter markdown files — returns file objects with metadata, structure, tasks, and links
     #[command(long_about = "Search and filter markdown files.\n\n\
-            Returns an array of file objects. Each object contains the file path, modified time, \
+            Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
+            Each item in results contains the file path, modified time, \
             and optionally: frontmatter properties, tags, document sections, tasks, and links.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - PATTERN (positional): case-insensitive body text search\n\
@@ -149,9 +156,9 @@ pub(crate) enum Commands {
             substring (contains) match by default, e.g. 'Tasks' matches 'Tasks [4/4]'; use leading '#' \
             to pin heading level, e.g. '## Tasks'; use '~=/regex/' for regex matching). Repeatable (OR). \
             Nested subsections are included.\n\n\
-            OUTPUT: Always returns a JSON array of file objects, even with --file.\n\
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
+            JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)

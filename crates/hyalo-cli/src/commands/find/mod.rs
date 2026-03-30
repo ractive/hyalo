@@ -475,15 +475,11 @@ pub fn find(
         crate::warn::warn("No files matched.");
     }
 
-    let json_output = serde_json::json!({
-        "total": total,
-        "results": json_array,
-    });
-
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format,
-        &json_output,
-    )))
+    let json_output = serde_json::Value::Array(json_array);
+    Ok(CommandOutcome::success_with_total(
+        crate::output::format_success(format, &json_output),
+        total as u64,
+    ))
 }
 
 // ---------------------------------------------------------------------------

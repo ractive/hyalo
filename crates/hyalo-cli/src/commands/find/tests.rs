@@ -63,7 +63,7 @@ macro_rules! md {
 
 fn unwrap_success(outcome: CommandOutcome) -> String {
     match outcome {
-        CommandOutcome::Success(s) => s,
+        CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
         CommandOutcome::UserError(s) => panic!("expected success, got user error: {s}"),
     }
 }
@@ -151,7 +151,7 @@ fn find_all_files_returns_array() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 3);
 }
 
@@ -182,7 +182,7 @@ fn find_returns_sorted_by_file_by_default() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     let mut sorted = files.clone();
     sorted.sort_unstable();
@@ -216,7 +216,7 @@ fn find_always_includes_file_and_modified() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     for entry in arr {
         assert!(entry["file"].as_str().is_some());
         let modified = entry["modified"].as_str().unwrap();
@@ -256,7 +256,7 @@ fn find_property_filter_eq() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
 }
@@ -289,7 +289,7 @@ fn find_property_filter_exists() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // alpha and beta have frontmatter title; gamma has a derived title
     // from its H1 heading — all three should match the existence filter.
     assert_eq!(arr.len(), 3);
@@ -324,7 +324,7 @@ fn find_tag_filter_matches() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
 }
@@ -356,7 +356,7 @@ fn find_tag_filter_no_match() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert!(arr.is_empty());
 }
 
@@ -389,7 +389,7 @@ fn find_pattern_matches_content() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert!(arr[0]["file"].as_str().unwrap().contains("beta"));
 }
@@ -421,7 +421,7 @@ fn find_pattern_includes_matches_field() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // beta has "Rust programming" in body; alpha has no Rust in body
     // (tags are in frontmatter which is not scanned for content)
     for entry in arr {
@@ -456,7 +456,7 @@ fn find_no_pattern_no_matches_field() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     for entry in arr {
         assert!(entry["matches"].is_null(), "matches should be absent");
     }
@@ -526,7 +526,7 @@ fn find_empty_string_pattern_errors() {
                 "error message should mention empty pattern, got: {msg}"
             );
         }
-        CommandOutcome::Success(_) => panic!("expected user error for empty pattern"),
+        _ => panic!("expected user error for empty pattern"),
     }
 }
 
@@ -564,7 +564,7 @@ fn find_whitespace_only_pattern_errors() {
                 "error message should mention empty pattern, got: {msg}"
             );
         }
-        CommandOutcome::Success(_) => panic!("expected user error for whitespace-only pattern"),
+        _ => panic!("expected user error for whitespace-only pattern"),
     }
 }
 
@@ -597,7 +597,7 @@ fn find_task_filter_todo() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // only alpha.md has an open task
     assert_eq!(arr.len(), 1);
     assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
@@ -630,7 +630,7 @@ fn find_task_filter_any() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert!(arr[0]["file"].as_str().unwrap().contains("alpha"));
 }
@@ -664,7 +664,7 @@ fn find_fields_subset_properties_only() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     for entry in arr {
         assert!(entry["properties"].is_object());
         assert!(entry["tags"].is_null());
@@ -701,7 +701,7 @@ fn find_fields_tasks_included() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let alpha = arr
         .iter()
         .find(|e| e["file"].as_str().unwrap().contains("alpha"))
@@ -742,7 +742,7 @@ fn find_fields_links_resolved() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let alpha = &arr[0];
     let links = alpha["links"].as_array().unwrap();
     assert!(!links.is_empty());
@@ -780,15 +780,9 @@ fn find_limit_truncates_results() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    // When limit truncates results, output is an envelope {total, results}.
-    assert!(parsed.is_object(), "expected envelope, got: {parsed}");
-    let results = parsed["results"].as_array().unwrap();
+    // Raw command output is a bare array; total is carried in CommandOutcome.
+    let results = parsed.as_array().unwrap();
     assert_eq!(results.len(), 1);
-    // total reflects the full vault size (3 files in unit test vault).
-    assert!(
-        parsed["total"].as_u64().unwrap() > 1,
-        "total should exceed the limit"
-    );
 }
 
 // --- find: sort ---
@@ -820,7 +814,7 @@ fn find_sort_by_modified() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let times: Vec<&str> = arr
         .iter()
         .map(|v| v["modified"].as_str().unwrap())
@@ -860,7 +854,7 @@ fn find_no_match_returns_empty_array() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert!(parsed["results"].as_array().unwrap().is_empty());
+    assert!(parsed.as_array().unwrap().is_empty());
 }
 
 // --- find: file not found ---
@@ -893,7 +887,7 @@ fn find_file_not_found_returns_empty_results() {
     .unwrap();
     let out = unwrap_success(result);
     let json: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(json["total"], 0);
+    assert!(json.as_array().unwrap().is_empty());
 }
 
 // --- matches_task_filter ---
@@ -1018,7 +1012,7 @@ fn find_section_filter_restricts_tasks_to_matching_section() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     let tasks = arr[0]["tasks"].as_array().unwrap();
     assert_eq!(tasks.len(), 2, "should have 2 tasks in Tasks section");
@@ -1053,7 +1047,7 @@ fn find_section_filter_no_match_excludes_tasks() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // File has no matching section — it is excluded entirely
     assert!(
         arr.is_empty(),
@@ -1090,7 +1084,7 @@ fn find_section_filter_restricts_content_matches() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // "background" only appears in ## Background section, not in ## Tasks, so no match
     assert!(
         arr.is_empty(),
@@ -1126,7 +1120,7 @@ fn find_section_filter_sections_field_filtered() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     let sections = arr[0]["sections"].as_array().unwrap();
     // Only the "Tasks" section (and its heading line) should be included
@@ -1168,7 +1162,7 @@ fn find_section_filter_empty_no_section_excludes_file() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // empty.md has no Tasks section — it is excluded entirely
     assert!(
         arr.is_empty(),
@@ -1208,7 +1202,7 @@ fn find_skips_broken_frontmatter_file() {
     .unwrap();
     let out = unwrap_success(result);
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     // Should return the 3 good files, skipping the broken one
     assert_eq!(arr.len(), 3);
     assert!(
@@ -1246,7 +1240,7 @@ fn find_fields_properties_typed_is_array() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let entry = &arr[0];
 
     // properties_typed must be an array of {name, type, value} objects
@@ -1307,7 +1301,7 @@ fn find_fields_properties_and_properties_typed_together() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let entry = &arr[0];
 
     // Both fields present simultaneously
@@ -1348,7 +1342,7 @@ fn find_fields_properties_typed_type_values() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let typed = arr[0]["properties_typed"].as_array().unwrap();
 
     // alpha.md has status: planned (text) and title: Alpha Note (text)
@@ -1390,7 +1384,7 @@ fn find_fields_backlinks_shows_incoming_links() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let beta = &arr[0];
     let backlinks = beta["backlinks"].as_array().unwrap();
     assert_eq!(backlinks.len(), 1);
@@ -1425,7 +1419,7 @@ fn find_fields_backlinks_not_included_by_default() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     for entry in arr {
         assert!(
             !entry.as_object().unwrap().contains_key("backlinks"),
@@ -1462,7 +1456,7 @@ fn find_fields_backlinks_empty_when_no_incoming() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let arr = parsed["results"].as_array().unwrap();
+    let arr = parsed.as_array().unwrap();
     let gamma = &arr[0];
     let backlinks = gamma["backlinks"].as_array().unwrap();
     assert!(backlinks.is_empty());

@@ -197,7 +197,7 @@ fn backlinks_absolute_link_indexed_correctly() {
         json["total"], 1,
         "expected 1 backlink from index.md, got: {json}"
     );
-    let source = json["backlinks"][0]["source"].as_str().unwrap();
+    let source = json["results"]["backlinks"][0]["source"].as_str().unwrap();
     assert_eq!(
         source, "index.md",
         "expected backlink source to be 'index.md', got: {source}"

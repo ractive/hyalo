@@ -83,62 +83,10 @@ pub fn links_fix(
         "applied": !dry_run,
     });
 
-    let formatted = match format {
-        Format::Json => serde_json::to_string_pretty(&output)?,
-        Format::Text => format_text_output(&output),
-    };
-
-    Ok(CommandOutcome::Success(formatted))
+    let _ = format;
+    Ok(CommandOutcome::success(
+        serde_json::to_string_pretty(&output).unwrap_or_default(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
-// Text formatter
-// ---------------------------------------------------------------------------
-
-/// Format the links-fix output shape for `--format text`.
-///
-/// Key signature: `applied,broken,fixable,fixes,unfixable,unfixable_links`
-fn format_text_output(value: &serde_json::Value) -> String {
-    use std::fmt::Write as _;
-
-    let broken = value["broken"].as_u64().unwrap_or(0);
-    let fixable = value["fixable"].as_u64().unwrap_or(0);
-    let unfixable = value["unfixable"].as_u64().unwrap_or(0);
-    let applied = value["applied"].as_bool().unwrap_or(false);
-
-    let mut out = String::new();
-
-    let _ = writeln!(out, "Broken links: {broken}");
-    let _ = writeln!(out, "Fixable: {fixable} ({unfixable} unfixable)");
-
-    if let Some(fixes) = value["fixes"].as_array() {
-        for fix in fixes {
-            let source = fix["source"].as_str().unwrap_or("");
-            let line = fix["line"].as_u64().unwrap_or(0);
-            let old_target = fix["old_target"].as_str().unwrap_or("");
-            let new_target = fix["new_target"].as_str().unwrap_or("");
-            let strategy = fix["strategy"].as_str().unwrap_or("");
-            let confidence = fix["confidence"].as_f64().unwrap_or(0.0);
-            let _ = writeln!(
-                out,
-                "  \"{source}\":{line} [[{old_target}]] \u{2192} {new_target} ({strategy}, {confidence:.2})"
-            );
-        }
-    }
-
-    if unfixable > 0 {
-        let _ = writeln!(out, "Unfixable:");
-        if let Some(unfixable_links) = value["unfixable_links"].as_array() {
-            for item in unfixable_links {
-                let source = item["source"].as_str().unwrap_or("");
-                let line = item["line"].as_u64().unwrap_or(0);
-                let target = item["target"].as_str().unwrap_or("");
-                let _ = writeln!(out, "  \"{source}\":{line} [[{target}]]");
-            }
-        }
-    }
-
-    let _ = write!(out, "Applied: {}", if applied { "yes" } else { "no" });
-
-    out
-}

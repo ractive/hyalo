@@ -18,7 +18,11 @@ use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
 pub(crate) struct CommandContext<'a> {
     pub dir: &'a Path,
     pub site_prefix: Option<&'a str>,
+    /// Internal format — always Json; commands build JSON, pipeline handles conversion.
     pub effective_format: Format,
+    /// The user-requested format (Text or Json). Used by `read` to decide between
+    /// `RawOutput` (text mode) and `Success` (JSON mode).
+    pub user_format: Format,
     pub snapshot_index: &'a mut Option<SnapshotIndex>,
     pub index_path: Option<&'a Path>,
 }
@@ -184,6 +188,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             lines.as_deref(),
             frontmatter,
             effective_format,
+            ctx.user_format,
         ),
         Commands::Properties { action } => {
             let action = action.unwrap_or(PropertiesAction::Summary { glob: vec![] });

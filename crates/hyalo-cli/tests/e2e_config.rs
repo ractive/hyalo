@@ -93,7 +93,7 @@ fn config_sets_default_dir() {
         .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
     // Should find the file inside vault/
     assert_eq!(
-        json["files"]["total"].as_u64().unwrap(),
+        json["results"]["files"]["total"].as_u64().unwrap(),
         1,
         "config dir should point at vault/ which contains one file"
     );
@@ -128,7 +128,7 @@ fn cli_dir_overrides_config() {
         .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
     // CLI --dir wins; should scan vault/, not wrong/
     assert_eq!(
-        json["files"]["total"].as_u64().unwrap(),
+        json["results"]["files"]["total"].as_u64().unwrap(),
         1,
         "CLI --dir should override config dir, finding file in vault/"
     );
@@ -216,14 +216,14 @@ fn config_sets_hints_true() {
 
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
-    // hints = true → output wrapped in {"data": ..., "hints": [...]}
+    // hints = true → output wrapped in {"results": ..., "hints": [...]}
     assert!(
         json.get("hints").is_some(),
         "expected hints envelope in output when config sets hints = true; got: {stdout}"
     );
     assert!(
-        json.get("data").is_some(),
-        "expected data envelope in output when config sets hints = true; got: {stdout}"
+        json.get("results").is_some(),
+        "expected results envelope in output when config sets hints = true; got: {stdout}"
     );
 }
 
@@ -246,13 +246,15 @@ fn cli_hints_false_overrides_config() {
 
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
-    // --no-hints → no envelope; direct summary fields
+    // --no-hints → hints array is empty in envelope; results is always present
     assert!(
-        json.get("hints").is_none(),
-        "hints envelope should be absent when --no-hints overrides config; got: {stdout}"
+        json.get("results").is_some(),
+        "expected results envelope in output; got: {stdout}"
     );
+    // hints key is always present but should be an empty array with --no-hints
+    let hints = json["hints"].as_array().expect("hints should be array");
     assert!(
-        json.get("files").is_some(),
-        "expected direct summary fields (no envelope); got: {stdout}"
+        hints.is_empty(),
+        "hints should be empty when --no-hints overrides config; got: {stdout}"
     );
 }

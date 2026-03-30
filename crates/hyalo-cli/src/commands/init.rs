@@ -100,7 +100,7 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
     }
 
     if !claude {
-        return Ok(CommandOutcome::Success(summary.trim_end().to_owned()));
+        return Ok(CommandOutcome::success(summary.trim_end().to_owned()));
     }
 
     // ------------------------------------------------------------------
@@ -197,7 +197,7 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
         writeln!(summary, "created  .claude/CLAUDE.md (with managed section)").unwrap();
     }
 
-    Ok(CommandOutcome::Success(summary.trim_end().to_owned()))
+    Ok(CommandOutcome::success(summary.trim_end().to_owned()))
 }
 
 // ---------------------------------------------------------------------------
@@ -807,7 +807,7 @@ mod tests {
 
         // First run
         let outcome1 = run_init_in(Some("docs"), true, tmp.path()).unwrap();
-        let CommandOutcome::Success(out1) = outcome1 else {
+        let CommandOutcome::Success { output: out1, .. } = outcome1 else {
             panic!("expected success");
         };
         assert!(out1.contains("created  .claude/skills/hyalo/SKILL.md"));
@@ -816,7 +816,7 @@ mod tests {
 
         // Second run — should say "updated", not "created"
         let outcome2 = run_init_in(Some("docs"), true, tmp.path()).unwrap();
-        let CommandOutcome::Success(out2) = outcome2 else {
+        let CommandOutcome::Success { output: out2, .. } = outcome2 else {
             panic!("expected success");
         };
         assert!(out2.contains("updated  .claude/skills/hyalo/SKILL.md"));
@@ -832,7 +832,7 @@ mod tests {
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
         let outcome = run_init_in(Some("newdir"), false, tmp.path()).unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success");
         };
         assert!(out.contains(".hyalo.toml"));
@@ -854,7 +854,7 @@ mod tests {
         .unwrap();
 
         let outcome = run_init_in(Some("newdir"), false, tmp.path()).unwrap();
-        assert!(matches!(outcome, CommandOutcome::Success(_)));
+        assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
         // dir updated, other keys preserved.
@@ -870,7 +870,7 @@ mod tests {
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
         let outcome = run_init_in(None, false, tmp.path()).unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success");
         };
         assert!(out.contains("skipped  .hyalo.toml"));
@@ -885,7 +885,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let outcome = run_init_in(Some("my-notes"), true, tmp.path()).unwrap();
-        assert!(matches!(outcome, CommandOutcome::Success(_)));
+        assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
         let rule_content = fs::read_to_string(
             tmp.path()
@@ -974,7 +974,7 @@ mod tests {
         fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
 
         let outcome = run_init_in(Some("docs"), false, tmp.path()).unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success");
         };
         // Warning emitted.

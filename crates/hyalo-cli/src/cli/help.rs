@@ -157,10 +157,10 @@ COOKBOOK:
   hyalo summary --format text
 
   # Count tasks across all files
-  hyalo summary --jq '.tasks.total'
+  hyalo summary --jq '.results.tasks.total'
 
   # List all property names as a flat list
-  hyalo properties summary --jq '[.[].name] | join(\", \")'
+  hyalo properties summary --jq '[.results[].name] | join(\", \")'
 
   # Get just file paths (no metadata)
   hyalo find --property status=draft --jq '[.results[].file]'
@@ -211,55 +211,59 @@ COOKBOOK:
   hyalo drop-index
 
 OUTPUT SHAPES (JSON, default):
-  # find
-  {\"total\": N, \"results\": [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
+  # All commands wrap output in a consistent envelope:
+  {\"results\": <payload>, \"total\": N, \"hints\": [...]}
+  # total: present for find, tags summary, properties summary, backlinks; omitted elsewhere
+  # hints: always present (empty [] when --no-hints or --jq)
+  # --jq operates on the full envelope: --jq '.results[].file', --jq '.total'
+
+  # find — results is an array of file objects
+  {\"results\": [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
    \"properties\": {\"status\": \"draft\", \"title\": \"My Note\"},
-   \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}]}
+   \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}],
+  \"total\": N, \"hints\": [...]}
 
   # read
-  {\"file\": \"notes/todo.md\", \"content\": \"...body text...\"}
+  {\"results\": {\"file\": \"notes/todo.md\", \"content\": \"...body text...\"}, \"hints\": [...]}
 
   # set / remove / append (mutation result)
-  {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}
-  {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}
+  {\"results\": {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
+  {\"results\": {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
 
-  # properties summary
-  [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...]
+  # properties summary — results is an array
+  {\"results\": [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...], \"total\": N, \"hints\": [...]}
 
   # properties rename
-  {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"conflicts\": [...], \"total\": N}
+  {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"conflicts\": [...], \"total\": N}, \"hints\": [...]}
 
-  # tags summary
-  {\"tags\": [{\"name\": \"backlog\", \"count\": 10}, ...], \"total\": 31}
+  # tags summary — results has tags array
+  {\"results\": {\"tags\": [{\"name\": \"backlog\", \"count\": 10}, ...]}, \"total\": 31, \"hints\": [...]}
 
   # tags rename
-  {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"total\": N}
+  {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
 
   # task read / toggle / set-status
-  {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}
+  {\"results\": {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}, \"hints\": [...]}
 
   # summary
-  {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},
+  {\"results\": {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},
   \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},
-  \"orphans\": {\"total\": N, \"files\": [...]}, \"dead_ends\": {\"total\": N, \"files\": [...]},
-  \"recent_files\": [{\"path\": \"note.md\", \"modified\": \"2026-03-21T...\"}]}
+  \"orphans\": {\"total\": N, \"files\": [...]}, \"recent_files\": [...]}, \"hints\": [...]}
 
   # backlinks
-  {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}], \"total\": 1}
+  {\"results\": {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}]},
+  \"total\": 1, \"hints\": [...]}
 
   # mv
-  {\"from\": \"old.md\", \"to\": \"new.md\", \"dry_run\": false,
+  {\"results\": {\"from\": \"old.md\", \"to\": \"new.md\", \"dry_run\": false,
   \"updated_files\": [{\"file\": \"a.md\", \"replacements\": [{\"line\": 5, \"old_text\": \"[[old]]\", \"new_text\": \"[[new]]\"}]}],
-  \"total_files_updated\": 1, \"total_links_updated\": 1}
+  \"total_files_updated\": 1, \"total_links_updated\": 1}, \"hints\": [...]}
 
   # create-index
-  {\"path\": \".hyalo-index\", \"files_indexed\": 142, \"warnings\": 0}
+  {\"results\": {\"path\": \".hyalo-index\", \"files_indexed\": 142, \"warnings\": 0}, \"hints\": [...]}
 
   # drop-index
-  {\"deleted\": \".hyalo-index\"}
-
-  # --hints wraps JSON output in an envelope with drill-down commands
-  {\"data\": { ... original output ... }, \"hints\": [{\"description\": \"...\", \"cmd\": \"hyalo ...\"}, ...]}
+  {\"results\": {\"deleted\": \".hyalo-index\"}, \"hints\": [...]}
 
   # errors (stderr, exit code 1 for user errors, 2 for internal)
   {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}

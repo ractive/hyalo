@@ -250,7 +250,7 @@ pub fn append(
 
     let output = mutation::unwrap_single_result(results);
 
-    Ok(CommandOutcome::Success(crate::output::format_success(
+    Ok(CommandOutcome::success(crate::output::format_success(
         format, &output,
     )))
 }
@@ -298,7 +298,7 @@ title: Note
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -372,7 +372,7 @@ aliases:
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -442,7 +442,7 @@ author: Alice
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -477,7 +477,7 @@ title: Note
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -620,7 +620,7 @@ title: Note
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -657,7 +657,7 @@ title: Note
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -692,7 +692,7 @@ title: Note
             false,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -730,7 +730,7 @@ title: Note
             CommandOutcome::UserError(msg) => {
                 assert!(msg.contains("--where-property"), "msg: {msg}");
             }
-            other @ CommandOutcome::Success(_) => panic!("expected UserError, got: {other:?}"),
+            other => panic!("expected UserError, got: {other:?}"),
         }
     }
 

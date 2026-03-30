@@ -50,10 +50,10 @@ Also links to [[target|the target page]].
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["file"], "target.md");
+    assert_eq!(json["results"]["file"], "target.md");
     assert_eq!(json["total"], 2);
 
-    let backlinks = json["backlinks"].as_array().unwrap();
+    let backlinks = json["results"]["backlinks"].as_array().unwrap();
     let sources: Vec<&str> = backlinks
         .iter()
         .map(|b| b["source"].as_str().unwrap())
@@ -81,7 +81,7 @@ fn backlinks_finds_markdown_links() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1);
-    assert_eq!(json["backlinks"][0]["source"], "index.md");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "index.md");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn backlinks_empty_result() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 0);
-    assert!(json["backlinks"].as_array().unwrap().is_empty());
+    assert!(json["results"]["backlinks"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -208,7 +208,7 @@ Link is here: [[target]]
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let backlink = &json["backlinks"][0];
+    let backlink = &json["results"]["backlinks"][0];
     assert_eq!(backlink["source"], "source.md");
     // Lines: 1=---, 2=title, 3=---, 4=body, 5=link
     assert_eq!(backlink["line"], 5);
@@ -237,7 +237,7 @@ fn backlinks_cross_directory_relative_link() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1);
-    assert_eq!(json["backlinks"][0]["source"], "sub/source.md");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "sub/source.md");
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn backlinks_wikilink_without_extension_finds_md_file() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1);
-    assert_eq!(json["backlinks"][0]["source"], "source.md");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "source.md");
 }
 
 #[test]
@@ -305,7 +305,10 @@ fn backlinks_wikilink_with_path_separator() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
-    assert_eq!(json["backlinks"][0]["source"], "iterations/iter-1.md");
+    assert_eq!(
+        json["results"]["backlinks"][0]["source"],
+        "iterations/iter-1.md"
+    );
 }
 
 #[test]
@@ -331,7 +334,7 @@ fn backlinks_resolves_absolute_links_with_dir_config() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
-    assert_eq!(json["backlinks"][0]["source"], "source.md");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "source.md");
 }
 
 #[test]
@@ -354,7 +357,7 @@ fn backlinks_excludes_self_links() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1, "self-link must be excluded, got: {json}");
-    assert_eq!(json["backlinks"][0]["source"], "b.md");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "b.md");
 }
 
 #[test]
@@ -378,5 +381,5 @@ fn backlinks_wikilink_with_path_from_subdirectory() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
-    assert_eq!(json["backlinks"][0]["source"], "sub/source.md");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "sub/source.md");
 }

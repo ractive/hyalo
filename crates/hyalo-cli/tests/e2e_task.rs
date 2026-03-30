@@ -59,8 +59,9 @@ fn run_task_read_json(
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
     let (status, stdout, stderr) = run_task_read(tmp, file, line);
     let json: serde_json::Value = if status.success() {
-        serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"))
+        let envelope: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"));
+        envelope["results"].clone()
     } else {
         serde_json::Value::Null
     };
@@ -89,10 +90,12 @@ fn run_task_toggle(
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-        })
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+            });
+        envelope["results"].clone()
     } else {
         serde_json::Value::Null
     };
@@ -124,10 +127,12 @@ fn run_task_set_status(
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let json: serde_json::Value = if output.status.success() {
-        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
-        })
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+            });
+        envelope["results"].clone()
     } else {
         serde_json::Value::Null
     };

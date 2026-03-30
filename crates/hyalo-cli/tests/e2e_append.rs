@@ -52,10 +52,10 @@ title: Note
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    assert_eq!(json["property"], "aliases");
-    assert_eq!(json["value"], "my-note");
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["property"], "aliases");
+    assert_eq!(json["results"]["value"], "my-note");
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 0);
 
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains("my-note"), "value not written:\n{content}");
@@ -87,7 +87,7 @@ aliases:
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(
@@ -124,8 +124,8 @@ aliases:
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    assert_eq!(json["modified"].as_array().unwrap().len(), 0);
-    assert_eq!(json["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 0);
+    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ author: Alice
         append_json(&tmp, &["--property", "author=Bob", "--file", "note.md"]);
     assert!(status.success(), "stderr: {stderr}");
 
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(
@@ -212,12 +212,12 @@ aliases:
     assert!(status.success(), "stderr: {stderr}");
 
     assert_eq!(
-        json["modified"].as_array().unwrap().len(),
+        json["results"]["modified"].as_array().unwrap().len(),
         1,
         "expected 1 modified: {json}"
     );
     assert_eq!(
-        json["skipped"].as_array().unwrap().len(),
+        json["results"]["skipped"].as_array().unwrap().len(),
         0,
         "expected 0 skipped (skip.md was filtered out, not skipped): {json}"
     );
@@ -277,7 +277,7 @@ title: Untagged
     assert!(status.success(), "stderr: {stderr}");
 
     assert_eq!(
-        json["modified"].as_array().unwrap().len(),
+        json["results"]["modified"].as_array().unwrap().len(),
         1,
         "expected only tagged file to be modified: {json}"
     );
@@ -407,7 +407,7 @@ fn append_on_file_with_no_frontmatter_creates_frontmatter() {
     assert!(status.success(), "stderr: {stderr}");
 
     assert_eq!(
-        json["modified"]
+        json["results"]["modified"]
             .as_array()
             .expect("field 'modified' should be an array")
             .len(),
@@ -461,7 +461,7 @@ fn append_multi_file_modifies_all() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["modified"].as_array().unwrap().len(), 2);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,7 +568,7 @@ fn append_accepts_plain_kv_property() {
         &["--property", "aliases=my-note", "--file", "note.md"],
     );
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(json["property"], "aliases");
+    assert_eq!(json["results"]["property"], "aliases");
 }
 
 #[test]
@@ -579,7 +579,7 @@ fn append_accepts_list_property() {
     let (status, json, stderr) =
         append_json(&tmp, &["--property", "tags=[a, b]", "--file", "note.md"]);
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(json["property"], "tags");
+    assert_eq!(json["results"]["property"], "tags");
 }
 
 // ---------------------------------------------------------------------------
@@ -610,8 +610,8 @@ title: Note
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(json["dry_run"], true);
-    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["dry_run"], true);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
 
     // File must NOT have been modified
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -631,7 +631,7 @@ fn append_without_dry_run_has_dry_run_false() {
         &["--property", "aliases=my-note", "--file", "note.md"],
     );
     assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(json["dry_run"], false);
+    assert_eq!(json["results"]["dry_run"], false);
 
     // File should actually be modified
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();

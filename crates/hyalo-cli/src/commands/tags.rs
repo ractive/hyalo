@@ -8,7 +8,7 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
-use hyalo_core::types::{TagSummary, TagSummaryEntry};
+use hyalo_core::types::TagSummaryEntry;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -83,12 +83,12 @@ pub fn tags_summary(
         .map(|(_, (name, count))| TagSummaryEntry { name, count })
         .collect();
 
-    let total = tags.len();
-    let result = TagSummary { tags, total };
-
-    Ok(CommandOutcome::Success(crate::output::format_output(
-        format, &result,
-    )))
+    let total = tags.len() as u64;
+    let _ = format; // format is applied by the output pipeline
+    Ok(CommandOutcome::success_with_total(
+        serde_json::to_string_pretty(&tags).unwrap_or_default(),
+        total,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ pub fn tags_rename(
         scanned,
     };
 
-    Ok(CommandOutcome::Success(crate::output::format_output(
+    Ok(CommandOutcome::success(crate::output::format_output(
         format, &result,
     )))
 }
@@ -424,12 +424,12 @@ tags:
         let tmp = setup_vault();
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
-            CommandOutcome::Success(s) => s,
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let tags = parsed["tags"].as_array().unwrap();
-        assert_eq!(parsed["total"], 3); // rust, cli, iteration
+        let tags = parsed.as_array().unwrap();
+        assert_eq!(tags.len(), 3); // rust, cli, iteration
         let rust = tags.iter().find(|t| t["name"] == "rust").unwrap();
         assert_eq!(rust["count"], 2);
     }
@@ -439,11 +439,11 @@ tags:
         let tmp = setup_vault();
         let outcome = run_tags_summary(tmp.path(), Some("a.md"), Format::Json).unwrap();
         let out = match outcome {
-            CommandOutcome::Success(s) => s,
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["total"], 2);
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
 
     // --- discover_files used by tags_summary (read-only) still works without file/glob ---
@@ -453,7 +453,7 @@ tags:
         let tmp = setup_vault();
         // tags_summary (read-only) still accepts no --file/--glob
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
-        assert!(matches!(outcome, CommandOutcome::Success(_)));
+        assert!(matches!(outcome, CommandOutcome::Success { .. }));
     }
 
     #[test]
@@ -481,7 +481,7 @@ tags:
             None,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -519,7 +519,7 @@ tags:
             None,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -557,7 +557,7 @@ tags:
             None,
         )
         .unwrap();
-        let CommandOutcome::Success(out) = outcome else {
+        let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -613,11 +613,11 @@ tags:
 
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
-            CommandOutcome::Success(s) => s,
+            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected UserError: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        let tags = parsed["tags"].as_array().unwrap();
+        let tags = parsed.as_array().unwrap();
         // The valid file's tag must appear.
         assert!(
             tags.iter().any(|t| t["name"] == "rust"),
