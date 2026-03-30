@@ -78,6 +78,33 @@ Original estimates predicted 4-7x speedup. The actual speedup was 1-2x because:
 
 For truly large vaults, a persistent index (SQLite with mtime-based invalidation) would eliminate scanning entirely. This is fundamentally better than parallelizing the scan — O(1) lookups vs O(n) parallel reads. Parallelization and indexing are complementary: parallel reads for cold index rebuilds, index for warm queries.
 
+## Iteration 86: memchr + rayon + parallel walk (2026-03-30)
+
+Revisited parallelism with a broader approach combining memchr, rayon, and parallel walk. See [[iterations/iteration-86-high-perf-scanning]].
+
+### Changes
+- `memchr::memmem::Finder` for SIMD-accelerated substring search (replaced naive sliding window)
+- `scan_slice_multi`: zero-copy line splitting via `memchr::memchr_iter` on `&[u8]` buffer
+- `WalkBuilder::build_parallel()` for parallel directory traversal
+- `rayon::par_iter` in `ScannedIndex::build` for parallel file scanning
+- Fast-reject: skip files that cannot match before full scanner parse
+
+### Results (configured vault, ~6.5k files, Apple Silicon)
+| Metric | Before | After |
+|--------|--------|-------|
+| Wall time | 2.23s | 0.86s |
+| CPU usage | 86% | 409% |
+| Speedup | — | **2.6x** |
+
+### Key insight
+The combination works where rayon alone didn't (iter-18 gave 1.05x) because:
+1. `scan_slice_multi` replaced `BufRead::read_line` with zero-copy memchr splitting — less per-file overhead makes parallelism profitable
+2. The vault is large enough (~6.5k files) that rayon's scheduling overhead is amortized
+3. Parallel walk + parallel scan compound
+
+### Remaining bottleneck
+`hyalo find "pattern"` still builds a full 4-visitor index (`scan_body: true`) even though content search only needs frontmatter + body text. This redundant work is ~50% of wall time. Tracked in [[backlog/skip-body-index-for-content-search]].
+
 ## Other Performance Notes
 
 - **Streaming reader is already optimal for single-file reads.** `read_frontmatter` stops at the closing `---` and never reads the body
