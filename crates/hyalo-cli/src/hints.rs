@@ -298,10 +298,20 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     if broken_links > 0 {
-        hints.push(Hint::new(
-            format!("List {broken_links} files with broken links"),
-            build_command_with_glob(ctx, &["find", "--broken-links"]),
-        ));
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(Hint::new(
+                "List files with broken links",
+                build_command_with_glob(ctx, &["find", "--broken-links"]),
+            ));
+        }
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(Hint::new(
+                "Auto-fix broken links (dry run)",
+                build_command_with_glob(ctx, &["links", "fix"]),
+            ));
+        }
     }
 
     // Pick 1-2 most interesting status values.
@@ -517,6 +527,27 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     // Body search → regex suggestion is intentionally omitted.
     // We cannot produce a concrete regex without knowing the user's intent,
     // and a placeholder like `'pattern'` would violate our no-templates contract.
+
+    // Suggest `links fix` when results contain broken links (e.g. from --broken-links).
+    // Broken links are serialised with `"path": null` (never omitted) by find's output.
+    let has_broken_links = results.iter().any(|item| {
+        item.get("links")
+            .and_then(|l| l.as_array())
+            .is_some_and(|links| {
+                links
+                    .iter()
+                    .any(|link| link.get("path").is_some_and(serde_json::Value::is_null))
+            })
+    });
+    if has_broken_links {
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(Hint::new(
+                "Auto-fix broken links (dry run)",
+                build_command_with_glob(ctx, &["links", "fix"]),
+            ));
+        }
+    }
 
     hints
 }
@@ -1459,6 +1490,93 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("--tag cli")),
             "should suggest non-filtered tag: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn summary_broken_links_suggests_links_fix() {
+        let c = ctx(HintSource::Summary);
+        let data = json!({
+            "files": 10,
+            "links": {"total": 20, "broken": 3},
+            "properties": [],
+            "tags": [],
+            "status": [],
+            "tasks": {"total": 0, "done": 0},
+            "orphans": 0
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("links fix")),
+            "summary with broken links should suggest links fix: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("--broken-links")),
+            "summary with broken links should also suggest find --broken-links: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn summary_no_broken_links_omits_links_fix() {
+        let c = ctx(HintSource::Summary);
+        let data = json!({
+            "files": 10,
+            "links": {"total": 20, "broken": 0},
+            "properties": [],
+            "tags": [],
+            "status": [],
+            "tasks": {"total": 0, "done": 0},
+            "orphans": 0
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("links fix")),
+            "summary without broken links should not suggest links fix: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_with_broken_links_suggests_links_fix() {
+        let c = ctx(HintSource::Find);
+        let item = json!({
+            "file": "doc.md",
+            "properties": {},
+            "tags": [],
+            "sections": [],
+            "tasks": [],
+            "links": [
+                {"target": "existing.md", "path": "existing.md", "kind": "wiki"},
+                {"target": "gone.md", "path": null, "kind": "wiki"}
+            ],
+            "modified": "2026-01-01T00:00:00Z"
+        });
+        let data = json!({"total": 1, "results": [item]});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("links fix")),
+            "find results with broken links should suggest links fix: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_without_broken_links_omits_links_fix() {
+        let c = ctx(HintSource::Find);
+        let item = json!({
+            "file": "doc.md",
+            "properties": {},
+            "tags": [],
+            "sections": [],
+            "tasks": [],
+            "links": [
+                {"target": "existing.md", "path": "existing.md", "kind": "wiki"}
+            ],
+            "modified": "2026-01-01T00:00:00Z"
+        });
+        let data = json!({"total": 1, "results": [item]});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("links fix")),
+            "find results without broken links should not suggest links fix: {hints:?}"
         );
     }
 }

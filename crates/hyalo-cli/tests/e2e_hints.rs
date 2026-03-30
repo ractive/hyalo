@@ -864,9 +864,7 @@ fn setup_array_status_vault() -> TempDir {
         write_md(
             tmp.path(),
             &format!("note-{i}.md"),
-            &format!(
-                "---\ntitle: Note {i}\nstatus: completed\ntags:\n  - docs\n---\nBody.\n"
-            ),
+            &format!("---\ntitle: Note {i}\nstatus: completed\ntags:\n  - docs\n---\nBody.\n"),
         );
     }
     for (i, extra) in [(3, "experimental"), (4, "legacy"), (5, "wip")] {
@@ -1448,4 +1446,71 @@ fn tags_summary_hints_empty_vault_no_crash() {
             "empty vault should produce no hints: {parsed}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// find --broken-links hints should suggest `links fix`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_broken_links_hints_suggest_links_fix() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+Link to [[nonexistent-page]].
+"),
+    );
+    write_md(
+        tmp.path(),
+        "other.md",
+        md!(r"
+---
+title: Other
+---
+No broken links here.
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "find",
+            "--broken-links",
+            "--fields",
+            "links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+
+    // Should have hints envelope.
+    let hints = parsed["hints"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected 'hints' array: {parsed}"));
+
+    // At least one hint should suggest `links fix`.
+    assert!(
+        hints
+            .iter()
+            .any(|h| h["cmd"].as_str().is_some_and(|c| c.contains("links fix"))),
+        "find --broken-links should hint at 'links fix': {hints:?}"
+    );
 }

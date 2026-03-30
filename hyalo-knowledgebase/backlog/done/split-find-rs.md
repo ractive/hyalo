@@ -1,8 +1,8 @@
 ---
-title: "Split find.rs (2830 lines) into sub-modules"
+title: Split find.rs (2830 lines) into sub-modules
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: medium
 tags:

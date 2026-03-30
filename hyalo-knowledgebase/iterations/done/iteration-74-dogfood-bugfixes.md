@@ -3,8 +3,8 @@ title: "Dogfood bugfixes: derived title regex, text backlinks rendering"
 type: iteration
 date: 2026-03-30
 tags:
-  - bugfix
   - dogfood
+  - bug-fix
 status: completed
 branch: iter-74/dogfood-bugfixes
 ---

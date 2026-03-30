@@ -113,15 +113,11 @@ All queries below use `--index .hyalo-index` — no additional disk scans needed
 
 ### Broken links
 ```bash
-hyalo find --fields links --index .hyalo-index --jq '[.results[] | {file: .file, broken: [.links[] | select(.path == null)] | map(.target)} | select(.broken | length > 0)]'
+# Dry-run shows broken links with proposed fixes and confidence scores
+hyalo links fix --index .hyalo-index --format text
 ```
-For each broken link, try to find the intended target:
-- Search for the filename in `done/` subdirectories (common after archiving)
-- If the target is in the same directory as the source, try with the directory prefix
-- Check if the target exists under a slightly different name
-
-Categorize as: **resolvable** (target exists elsewhere) vs **truly broken** (doesn't
-exist at all).
+This categorizes links as **fixable** (fuzzy match found) vs **unfixable** (no match).
+Note the counts for the health dashboard. Actual fixes happen in Phase 4.
 
 ### Orphan files
 ```bash
@@ -185,11 +181,19 @@ in-place after each file write, so it stays current for subsequent queries. No n
 drop the index before making changes. Only drop it at the very end (Phase 5).
 
 ### Fix broken links
-For resolvable broken links (target moved to `done/` etc.), update the wikilink text
-in the source file. Use the snapshot to confirm the correct path, then Edit the source
-file.
+Use `hyalo links fix` to auto-repair broken links. It uses fuzzy matching to find the
+correct target (handles moves to `done/`, case changes, extension mismatches, etc.).
 
-For truly broken links (target never existed), leave them and report them.
+```bash
+# Preview what will be fixed
+hyalo links fix --format text --index .hyalo-index
+
+# Apply fixes
+hyalo links fix --apply --format text --index .hyalo-index
+```
+
+Review the dry-run output first. For any links it can't resolve (reported as unfixable),
+leave them and report them in Phase 5.
 
 ### Update stale statuses
 If an iteration's branch was merged:

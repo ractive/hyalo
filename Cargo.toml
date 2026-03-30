@@ -4,14 +4,14 @@ members = ["crates/*"]
 default-members = ["crates/hyalo-cli"]
 
 [workspace.package]
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/ractive/hyalo"
 
 [workspace.dependencies]
 # Internal crates
-hyalo-core = { path = "crates/hyalo-core", version = "0.6.1" }
+hyalo-core = { path = "crates/hyalo-core", version = "0.6.2" }
 
 # External dependencies
 anyhow = "1"

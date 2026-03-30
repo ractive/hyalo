@@ -17,7 +17,7 @@ Make hints context-aware so they suggest relevant next queries based on the curr
 
 ## Context
 
-After [[iteration-79-slim-defaults]] makes hints default, the next step is making them actually smart. Current hints are static/generic. Context-aware hints should look at the results and suggest the most useful drill-down based on what's there.
+After [[iterations/done/iteration-79-slim-defaults]] makes hints default, the next step is making them actually smart. Current hints are static/generic. Context-aware hints should look at the results and suggest the most useful drill-down based on what's there.
 
 This is an ongoing effort — hint quality should be iterated on over time.
 

@@ -1,8 +1,8 @@
 ---
-title: "Address ~150 clippy pedantic warnings"
+title: Address ~150 clippy pedantic warnings
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:
