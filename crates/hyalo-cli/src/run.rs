@@ -433,7 +433,14 @@ fn run_inner() -> Result<(), AppError> {
                     ctx.file_targets = vec![file.clone()];
                     Some(ctx)
                 }
-                crate::cli::args::TaskAction::Read { .. } => None,
+                crate::cli::args::TaskAction::Read { file, .. } => {
+                    let mut ctx = HintContext::new(HintSource::TaskRead);
+                    ctx.dir = dir_hint;
+                    ctx.format = format_hint;
+                    ctx.hints = hints_from_cli;
+                    ctx.file_targets = vec![file.clone()];
+                    Some(ctx)
+                }
             },
             Commands::Links { action } => match action {
                 crate::cli::args::LinksAction::Fix { apply, glob, .. } => {

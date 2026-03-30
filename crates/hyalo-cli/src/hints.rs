@@ -35,6 +35,7 @@ pub enum HintSource {
     Read,
     Backlinks,
     Mv,
+    TaskRead,
     TaskToggle,
     TaskSetStatus,
     LinksFix,
@@ -97,7 +98,8 @@ impl HintContext {
 
 /// Generate concrete drill-down hints from a command's JSON output.
 ///
-/// Returns at most [`MAX_HINTS`] executable `hyalo` command strings.
+/// Returns at most [`MAX_HINTS`] [`Hint`]s, each with a human-readable description
+/// and an executable `hyalo` command (`cmd`).
 #[must_use]
 pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let hints = match &ctx.source {
@@ -109,6 +111,7 @@ pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> 
         HintSource::Read => hints_for_read(ctx, data),
         HintSource::Backlinks => hints_for_backlinks(ctx, data),
         HintSource::Mv => hints_for_mv(ctx, data),
+        HintSource::TaskRead => hints_for_task_read(ctx, data),
         HintSource::TaskToggle | HintSource::TaskSetStatus => hints_for_task_mutation(ctx, data),
         HintSource::LinksFix => hints_for_links_fix(ctx, data),
         HintSource::CreateIndex => hints_for_create_index(ctx, data),
@@ -646,6 +649,42 @@ fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
                 build_command_no_glob(ctx, &["backlinks", "--file", to_path]),
             ));
         }
+    }
+
+    hints
+}
+
+/// Hints for `task read` — suggest toggling or viewing remaining tasks.
+fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let file = data.get("file").and_then(|f| f.as_str());
+    let line = data.get("line").and_then(serde_json::Value::as_u64);
+    let done = data
+        .get("done")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    if let (Some(file), Some(line)) = (file, line) {
+        let line_str = line.to_string();
+        if !done {
+            hints.push(Hint::new(
+                "Toggle this task to done",
+                build_command_no_glob(
+                    ctx,
+                    &["task", "toggle", "--file", file, "--line", &line_str],
+                ),
+            ));
+        }
+        hints.push(Hint::new(
+            "See all open tasks in this file",
+            build_command_no_glob(
+                ctx,
+                &[
+                    "find", "--file", file, "--task", "todo", "--fields", "tasks",
+                ],
+            ),
+        ));
     }
 
     hints
@@ -1297,6 +1336,34 @@ mod tests {
                 .iter()
                 .any(|h| h.cmd.contains("backlinks") && h.cmd.contains("new.md")),
             "should suggest checking backlinks: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn task_read_undone_suggests_toggle() {
+        let c = ctx(HintSource::TaskRead);
+        let data =
+            json!({"file": "todo.md", "line": 5, "status": " ", "text": "Fix bug", "done": false});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("task toggle")),
+            "should suggest toggling undone task: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn task_read_done_omits_toggle() {
+        let c = ctx(HintSource::TaskRead);
+        let data =
+            json!({"file": "todo.md", "line": 5, "status": "x", "text": "Fix bug", "done": true});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("task toggle")),
+            "should not suggest toggling already-done task: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("--task todo")),
+            "should suggest viewing open tasks: {hints:?}"
         );
     }
 
