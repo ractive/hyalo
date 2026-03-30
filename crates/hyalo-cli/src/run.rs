@@ -2,59 +2,52 @@ use std::process;
 
 use clap::{CommandFactory, FromArgMatches};
 
-use crate::cli::args::{Cli, Commands, LinksAction, PropertiesAction, TagsAction, TaskAction};
+use crate::cli::args::{Cli, Commands};
 use crate::cli::help::{filter_examples, filter_long_help};
-use crate::commands::{
-    ScannedIndexOutcome, append as append_commands, backlinks as backlinks_commands,
-    build_scanned_index, create_index as create_index_commands, drop_index as drop_index_commands,
-    find as find_commands, init as init_commands, links as links_commands, mv as mv_commands,
-    properties, read as read_commands, remove as remove_commands, set as set_commands,
-    summary as summary_commands, tags as tag_commands, tasks as task_commands,
-};
-use crate::hints::{HintContext, HintSource, generate_hints};
-use crate::output::{
-    CommandOutcome, Format, apply_jq_filter_result, format_success, format_with_hints,
-};
-use hyalo_core::filter;
-use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex};
-
-/// Parse `--where-property` filters and validate `--where-tag` names.
-/// Exits with code 1 on invalid input.
-fn parse_where_filters(
-    where_properties: &[String],
-    where_tags: &[String],
-) -> Vec<filter::PropertyFilter> {
-    let filters = match where_properties
-        .iter()
-        .map(|s| filter::parse_property_filter(s))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            die(1);
-        }
-    };
-    for tag in where_tags {
-        if let Err(msg) = crate::commands::tags::validate_tag(tag) {
-            eprintln!("Error: {msg}");
-            die(1);
-        }
-    }
-    filters
-}
-
-/// Exit the process, flushing any pending warning summary first.
-///
-/// Use this in place of `process::exit` after `warn::init` has been called so
-/// that duplicate-warning counts are always reported before the process ends.
-fn die(code: i32) -> ! {
-    crate::warn::flush_summary();
-    process::exit(code)
-}
+use crate::commands::init as init_commands;
+use crate::dispatch::{CommandContext, dispatch};
+use crate::error::AppError;
+use crate::hints::{HintContext, HintSource};
+use crate::output::{CommandOutcome, Format};
+use crate::output_pipeline::OutputPipeline;
+use hyalo_core::index::SnapshotIndex;
 
 #[allow(clippy::too_many_lines)]
 pub fn run() {
+    match run_inner() {
+        Ok(()) => {
+            crate::warn::flush_summary();
+        }
+        Err(e) => {
+            crate::warn::flush_summary();
+            let code = match e {
+                AppError::User(msg) => {
+                    if !msg.is_empty() {
+                        eprintln!("{msg}");
+                    }
+                    1
+                }
+                AppError::Internal(err) => {
+                    let s = err.to_string();
+                    if !s.is_empty() {
+                        eprintln!("Error: {err}");
+                    }
+                    2
+                }
+                AppError::Clap(err) => {
+                    let code = err.exit_code();
+                    let _ = err.print();
+                    code
+                }
+                AppError::Exit(code) => code,
+            };
+            process::exit(code);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_inner() -> Result<(), AppError> {
     // Pre-scan for --quiet / -q so config-loading warnings are also suppressed.
     let early_quiet = std::env::args().any(|a| a == "--quiet" || a == "-q");
     crate::warn::init(early_quiet);
@@ -109,7 +102,7 @@ pub fn run() {
                      tip: did you mean '--property'?\n\n\
                      Example: hyalo find --property status=planned\n"
                 );
-                die(2);
+                return Err(AppError::Exit(2));
             }
 
             // Only attempt subcommand suggestions when clap couldn't recognise a
@@ -121,7 +114,7 @@ pub fn run() {
                 crate::suggest::suggest_subcommand_correction(&raw_args, &Cli::command())
             {
                 eprintln!("{e}\n  tip: did you mean:\n\n    {suggestion}\n");
-                die(2);
+                return Err(AppError::Exit(2));
             }
 
             // Suggest --version / --help when the user types a close misspelling
@@ -142,24 +135,18 @@ pub fn run() {
                     for (target, suggestion) in [("version", "--version"), ("help", "--help")] {
                         if strsim::damerau_levenshtein(invalid, target) <= 2 {
                             eprintln!("{e}\n  tip: did you mean `hyalo {suggestion}`?\n");
-                            die(2);
+                            return Err(AppError::Exit(2));
                         }
                     }
                 }
             }
 
-            let code = e.exit_code();
-            let _ = e.print();
-            die(code);
+            return Err(AppError::Clap(e));
         }
     };
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
-        Err(e) => {
-            let code = e.exit_code();
-            let _ = e.print();
-            die(code);
-        }
+        Err(e) => return Err(AppError::Clap(e)),
     };
 
     // Re-apply quiet flag from the fully-parsed CLI (the early pre-scan
@@ -171,21 +158,14 @@ pub fn run() {
     // The global --dir flag is used as the dir value for .hyalo.toml.
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        let code = match init_commands::run_init(init_dir, claude) {
+        match init_commands::run_init(init_dir, claude) {
             Ok(CommandOutcome::Success(output)) => {
                 println!("{output}");
-                0
+                return Ok(());
             }
-            Ok(CommandOutcome::UserError(output)) => {
-                eprintln!("{output}");
-                1
-            }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                2
-            }
-        };
-        die(code);
+            Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
+            Err(e) => return Err(AppError::Internal(e)),
+        }
     }
 
     // Merge: CLI args override config, config overrides hardcoded defaults.
@@ -198,11 +178,10 @@ pub fn run() {
 
     // Validate that --dir is not a file path
     if dir.is_file() {
-        eprintln!(
+        return Err(AppError::User(format!(
             "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
             dir.display()
-        );
-        die(1);
+        )));
     }
 
     // Derive site_prefix with tri-state precedence:
@@ -247,7 +226,7 @@ pub fn run() {
             "Invalid output format '{}' in .hyalo.toml; supported formats are: json, text",
             config.format
         );
-        die(2);
+        return Err(AppError::Exit(2));
     };
     let hints_flag = if cli.hints {
         true
@@ -273,7 +252,7 @@ pub fn run() {
     if jq_filter.is_some() && format != Format::Json {
         eprintln!("Error: --jq cannot be combined with --format {format}");
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
-        die(2);
+        return Err(AppError::Exit(2));
     }
     // When --jq or --hints is active, force JSON internally so we can re-parse the output.
     // The user-requested format is applied afterwards.
@@ -310,7 +289,7 @@ pub fn run() {
                 hints: hints_from_cli,
             }),
             Commands::Properties {
-                action: Some(PropertiesAction::Summary { glob }),
+                action: Some(crate::cli::args::PropertiesAction::Summary { glob }),
             } => Some(HintContext {
                 source: HintSource::PropertiesSummary,
                 dir: dir_hint,
@@ -319,7 +298,7 @@ pub fn run() {
                 hints: hints_from_cli,
             }),
             Commands::Tags {
-                action: Some(TagsAction::Summary { glob }),
+                action: Some(crate::cli::args::TagsAction::Summary { glob }),
             } => Some(HintContext {
                 source: HintSource::TagsSummary,
                 dir: dir_hint,
@@ -395,638 +374,25 @@ pub fn run() {
         None
     };
 
-    let result = match cli.command {
-        Commands::Find {
-            ref pattern,
-            ref regexp,
-            ref properties,
-            ref tag,
-            ref task,
-            ref sections,
-            ref file,
-            ref glob,
-            ref fields,
-            ref sort,
-            reverse,
-            limit,
-            broken_links,
-            ref title,
-        } => {
-            // Parse property filters
-            let prop_filters: Vec<filter::PropertyFilter> = match properties
-                .iter()
-                .map(|s| filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    die(1);
-                }
-            };
-            // Parse task filter
-            let task_filter = match task.as_deref().map(filter::parse_task_filter) {
-                Some(Ok(f)) => Some(f),
-                Some(Err(e)) => {
-                    eprintln!("Error: {e}");
-                    die(1);
-                }
-                None => None,
-            };
-            // Parse fields
-            let parsed_fields = match filter::Fields::parse(fields) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    die(1);
-                }
-            };
-            // Parse sort
-            let sort_field = match sort.as_deref().map(filter::parse_sort) {
-                Some(Ok(f)) => Some(f),
-                Some(Err(e)) => {
-                    eprintln!("Error: {e}");
-                    die(1);
-                }
-                None => None,
-            };
-            // Parse section filters
-            let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
-                .iter()
-                .map(|s| hyalo_core::heading::SectionFilter::parse(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    die(1);
-                }
-            };
-
-            for t in tag {
-                if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                    eprintln!("Error: {msg}");
-                    die(1);
-                }
-            }
-
-            if let Some(ref idx) = snapshot_index {
-                find_commands::find(
-                    idx,
-                    &dir,
-                    site_prefix,
-                    pattern.as_deref(),
-                    regexp.as_deref(),
-                    &prop_filters,
-                    tag,
-                    task_filter.as_ref(),
-                    &section_filters,
-                    file,
-                    glob,
-                    &parsed_fields,
-                    sort_field.as_ref(),
-                    reverse,
-                    limit,
-                    broken_links,
-                    title.as_deref(),
-                    effective_format,
-                )
-            } else {
-                let sort_needs_backlinks =
-                    matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
-                let sort_needs_links =
-                    matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
-                let sort_needs_title =
-                    matches!(sort_field.as_ref(), Some(filter::SortField::Title));
-                let has_content_search = pattern.is_some() || regexp.is_some();
-                let has_task_filter = task_filter.is_some();
-                let has_section_filter = !section_filters.is_empty();
-                let has_title_filter = title.is_some();
-                let needs_body = find_commands::needs_body(
-                    &parsed_fields,
-                    has_content_search,
-                    has_task_filter,
-                    has_section_filter,
-                ) || sort_needs_links
-                    || sort_needs_title
-                    || broken_links
-                    || has_title_filter;
-                let needs_full_vault = parsed_fields.backlinks || sort_needs_backlinks;
-                // The link graph is only built when scan_body is true, so
-                // backlinks / backlink-sort always require body scanning.
-                let scan_body = needs_body || needs_full_vault;
-                let build = match build_scanned_index(
-                    &dir,
-                    file,
-                    glob,
-                    effective_format,
-                    site_prefix,
-                    needs_full_vault,
-                    &ScanOptions { scan_body },
-                ) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        die(2);
-                    }
-                };
-                match build {
-                    ScannedIndexOutcome::Index(build) => find_commands::find(
-                        &build.index,
-                        &dir,
-                        site_prefix,
-                        pattern.as_deref(),
-                        regexp.as_deref(),
-                        &prop_filters,
-                        tag,
-                        task_filter.as_ref(),
-                        &section_filters,
-                        file,
-                        glob,
-                        &parsed_fields,
-                        sort_field.as_ref(),
-                        reverse,
-                        limit,
-                        broken_links,
-                        title.as_deref(),
-                        effective_format,
-                    ),
-                    ScannedIndexOutcome::Outcome(o) => Ok(o),
-                }
-            }
-        }
-        Commands::Read {
-            ref file,
-            ref section,
-            ref lines,
-            frontmatter,
-        } => read_commands::run(
-            &dir,
-            file,
-            section.as_deref(),
-            lines.as_deref(),
-            frontmatter,
-            effective_format,
-        ),
-        Commands::Properties { action } => {
-            let action = action.unwrap_or(PropertiesAction::Summary { glob: vec![] });
-            match action {
-                PropertiesAction::Summary { ref glob } => {
-                    if let Some(ref idx) = snapshot_index {
-                        let filtered =
-                            find_commands::filter_index_entries(idx.entries(), &[], glob);
-                        match filtered {
-                            Err(e) => Err(e),
-                            Ok(filtered) => {
-                                let paths: Vec<String> =
-                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
-                                let file_filter = if glob.is_empty() {
-                                    None
-                                } else {
-                                    Some(paths.as_slice())
-                                };
-                                properties::properties_summary(idx, file_filter, effective_format)
-                            }
-                        }
-                    } else {
-                        let build = match build_scanned_index(
-                            &dir,
-                            &[],
-                            glob,
-                            effective_format,
-                            site_prefix,
-                            false,
-                            &ScanOptions { scan_body: false },
-                        ) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                eprintln!("Error: {e}");
-                                die(2);
-                            }
-                        };
-                        match build {
-                            ScannedIndexOutcome::Index(build) => {
-                                properties::properties_summary(&build.index, None, effective_format)
-                            }
-                            ScannedIndexOutcome::Outcome(o) => Ok(o),
-                        }
-                    }
-                }
-                PropertiesAction::Rename {
-                    ref from,
-                    ref to,
-                    ref glob,
-                } => properties::properties_rename(
-                    &dir,
-                    from,
-                    to,
-                    glob,
-                    effective_format,
-                    &mut snapshot_index,
-                    cli.index.as_deref(),
-                ),
-            }
-        }
-        Commands::Tags { action } => {
-            let action = action.unwrap_or(TagsAction::Summary { glob: vec![] });
-            match action {
-                TagsAction::Summary { ref glob } => {
-                    if let Some(ref idx) = snapshot_index {
-                        let filtered =
-                            find_commands::filter_index_entries(idx.entries(), &[], glob);
-                        match filtered {
-                            Err(e) => Err(e),
-                            Ok(filtered) => {
-                                let paths: Vec<String> =
-                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
-                                let file_filter = if glob.is_empty() {
-                                    None
-                                } else {
-                                    Some(paths.as_slice())
-                                };
-                                tag_commands::tags_summary(idx, file_filter, effective_format)
-                            }
-                        }
-                    } else {
-                        let build = match build_scanned_index(
-                            &dir,
-                            &[],
-                            glob,
-                            effective_format,
-                            site_prefix,
-                            false,
-                            &ScanOptions { scan_body: false },
-                        ) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                eprintln!("Error: {e}");
-                                die(2);
-                            }
-                        };
-                        match build {
-                            ScannedIndexOutcome::Index(build) => {
-                                tag_commands::tags_summary(&build.index, None, effective_format)
-                            }
-                            ScannedIndexOutcome::Outcome(o) => Ok(o),
-                        }
-                    }
-                }
-                TagsAction::Rename {
-                    ref from,
-                    ref to,
-                    ref glob,
-                } => tag_commands::tags_rename(
-                    &dir,
-                    from,
-                    to,
-                    glob,
-                    effective_format,
-                    &mut snapshot_index,
-                    cli.index.as_deref(),
-                ),
-            }
-        }
-        Commands::Task { action } => match action {
-            TaskAction::Read { ref file, line } => {
-                task_commands::task_read(&dir, file, line, effective_format)
-            }
-            TaskAction::Toggle { ref file, line } => task_commands::task_toggle(
-                &dir,
-                file,
-                line,
-                effective_format,
-                &mut snapshot_index,
-                cli.index.as_deref(),
-            ),
-            TaskAction::SetStatus {
-                ref file,
-                line,
-                ref status,
-            } => {
-                if status.chars().count() != 1 {
-                    let out = crate::output::format_error(
-                        effective_format,
-                        "--status must be a single character",
-                        None,
-                        Some("example: --status '?' or --status '-'"),
-                        None,
-                    );
-                    eprintln!("{out}");
-                    die(1);
-                }
-                task_commands::task_set_status(
-                    &dir,
-                    file,
-                    line,
-                    status.chars().next().unwrap(),
-                    effective_format,
-                    &mut snapshot_index,
-                    cli.index.as_deref(),
-                )
-            }
-        },
-        Commands::Summary {
-            ref glob,
-            recent,
-            depth,
-        } => {
-            if let Some(ref idx) = snapshot_index {
-                summary_commands::summary(
-                    &dir,
-                    idx,
-                    glob,
-                    recent,
-                    depth,
-                    site_prefix,
-                    effective_format,
-                )
-            } else {
-                let build = match build_scanned_index(
-                    &dir,
-                    &[],
-                    glob,
-                    effective_format,
-                    site_prefix,
-                    true,
-                    &ScanOptions { scan_body: true },
-                ) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        die(2);
-                    }
-                };
-                match build {
-                    ScannedIndexOutcome::Index(build) => summary_commands::summary(
-                        &dir,
-                        &build.index,
-                        glob,
-                        recent,
-                        depth,
-                        site_prefix,
-                        effective_format,
-                    ),
-                    ScannedIndexOutcome::Outcome(o) => Ok(o),
-                }
-            }
-        }
-        Commands::Set {
-            ref properties,
-            ref tag,
-            ref file,
-            ref glob,
-            ref where_properties,
-            ref where_tags,
-        } => {
-            let where_prop_filters = parse_where_filters(where_properties, where_tags);
-            set_commands::set(
-                &dir,
-                properties,
-                tag,
-                file,
-                glob,
-                &where_prop_filters,
-                where_tags,
-                effective_format,
-                &mut snapshot_index,
-                cli.index.as_deref(),
-            )
-        }
-        Commands::Remove {
-            ref properties,
-            ref tag,
-            ref file,
-            ref glob,
-            ref where_properties,
-            ref where_tags,
-        } => {
-            let where_prop_filters = parse_where_filters(where_properties, where_tags);
-            remove_commands::remove(
-                &dir,
-                properties,
-                tag,
-                file,
-                glob,
-                &where_prop_filters,
-                where_tags,
-                effective_format,
-                &mut snapshot_index,
-                cli.index.as_deref(),
-            )
-        }
-        Commands::Append {
-            ref properties,
-            ref file,
-            ref glob,
-            ref where_properties,
-            ref where_tags,
-        } => {
-            let where_prop_filters = parse_where_filters(where_properties, where_tags);
-            append_commands::append(
-                &dir,
-                properties,
-                file,
-                glob,
-                &where_prop_filters,
-                where_tags,
-                effective_format,
-                &mut snapshot_index,
-                cli.index.as_deref(),
-            )
-        }
-        Commands::Backlinks { ref file } => {
-            if let Some(ref idx) = snapshot_index {
-                backlinks_commands::backlinks(idx, file, &dir, effective_format)
-            } else {
-                let build = match build_scanned_index(
-                    &dir,
-                    &[],
-                    &[],
-                    effective_format,
-                    site_prefix,
-                    true,
-                    &ScanOptions { scan_body: true },
-                ) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        die(2);
-                    }
-                };
-                match build {
-                    ScannedIndexOutcome::Index(build) => {
-                        backlinks_commands::backlinks(&build.index, file, &dir, effective_format)
-                    }
-                    ScannedIndexOutcome::Outcome(o) => Ok(o),
-                }
-            }
-        }
-        Commands::Mv {
-            ref file,
-            ref to,
-            dry_run,
-        } => mv_commands::mv(
-            &dir,
-            file,
-            to,
-            dry_run,
-            effective_format,
-            site_prefix,
-            &mut snapshot_index,
-            cli.index.as_deref(),
-        ),
-        Commands::CreateIndex {
-            ref output,
-            allow_outside_vault,
-        } => create_index_commands::create_index(
-            &dir,
-            site_prefix,
-            output.as_deref(),
-            effective_format,
-            allow_outside_vault,
-        ),
-        Commands::DropIndex {
-            ref path,
-            allow_outside_vault,
-        } => drop_index_commands::drop_index(
-            &dir,
-            path.as_deref(),
-            effective_format,
-            allow_outside_vault,
-        ),
-        Commands::Links { action } => match action {
-            LinksAction::Fix {
-                dry_run: _,
-                apply,
-                threshold,
-                ref glob,
-                ref ignore_target,
-            } => {
-                if let Some(ref idx) = snapshot_index {
-                    links_commands::links_fix(
-                        idx,
-                        &dir,
-                        site_prefix,
-                        glob,
-                        !apply,
-                        threshold,
-                        ignore_target,
-                        effective_format,
-                    )
-                } else {
-                    let build = match build_scanned_index(
-                        &dir,
-                        &[],
-                        &[],
-                        effective_format,
-                        site_prefix,
-                        true,
-                        &ScanOptions { scan_body: true },
-                    ) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            eprintln!("Error: {e}");
-                            die(2);
-                        }
-                    };
-                    match build {
-                        ScannedIndexOutcome::Index(build) => links_commands::links_fix(
-                            &build.index,
-                            &dir,
-                            site_prefix,
-                            glob,
-                            !apply,
-                            threshold,
-                            ignore_target,
-                            effective_format,
-                        ),
-                        ScannedIndexOutcome::Outcome(o) => Ok(o),
-                    }
-                }
-            }
-        },
-        // `Init` is handled as an early return before this match is reached.
-        Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
+    let mut ctx = CommandContext {
+        dir: &dir,
+        site_prefix,
+        effective_format,
+        snapshot_index: &mut snapshot_index,
+        index_path: cli.index.as_deref(),
     };
+    let result = dispatch(cli.command, &mut ctx);
 
-    match result {
-        Ok(CommandOutcome::Success(output)) => {
-            if let Some(filter) = jq_filter {
-                // Parse the JSON output we forced above, then apply the user filter.
-                let value: serde_json::Value = match serde_json::from_str(&output) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let msg = crate::output::format_error(
-                            format,
-                            "internal error: failed to parse command JSON output",
-                            None,
-                            None,
-                            Some(&e.to_string()),
-                        );
-                        eprintln!("{msg}");
-                        die(2);
-                    }
-                };
-                match apply_jq_filter_result(filter, &value) {
-                    Ok(filtered) => println!("{filtered}"),
-                    Err(e) => {
-                        let msg = crate::output::format_error(
-                            format,
-                            "jq filter failed",
-                            None,
-                            None,
-                            Some(&e),
-                        );
-                        eprintln!("{msg}");
-                        die(1);
-                    }
-                }
-            } else if let Some(ctx) = &hint_ctx {
-                // Re-parse the output to generate hints, then format with them.
-                let value: serde_json::Value = if let Ok(v) = serde_json::from_str(&output) {
-                    v
-                } else {
-                    // Should not happen since effective_format is forced to JSON,
-                    // but fall through to plain output if it does.
-                    println!("{output}");
-                    die(0);
-                };
-                let hints = generate_hints(ctx, &value);
-                let formatted = format_with_hints(format, &value, &hints);
-                println!("{formatted}");
-            } else if hints_active {
-                // --hints forced JSON internally but this command has no hint
-                // generator.  Convert back to the user-requested format.
-                match serde_json::from_str::<serde_json::Value>(&output) {
-                    Ok(value) => {
-                        println!("{}", format_success(format, &value));
-                    }
-                    Err(_) => println!("{output}"),
-                }
-            } else {
-                println!("{output}");
-            }
-        }
-        Ok(CommandOutcome::UserError(output)) => {
-            eprintln!("{output}");
-            die(1);
-        }
-        Err(e) => {
-            let msg = crate::output::format_error(
-                format,
-                &e.to_string(),
-                None,
-                None,
-                e.chain()
-                    .nth(1)
-                    .map(std::string::ToString::to_string)
-                    .as_deref(),
-            );
-            eprintln!("{msg}");
-            die(2);
-        }
+    let pipeline = OutputPipeline {
+        user_format: format,
+        jq_filter,
+        hint_ctx: hint_ctx.as_ref(),
+        hints_active,
+    };
+    let code = pipeline.finalize(result);
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(AppError::Exit(code))
     }
-
-    // Flush any dedup summary on the success path (die() handles error paths).
-    crate::warn::flush_summary();
 }
