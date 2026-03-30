@@ -5,6 +5,9 @@ use crate::output::{
     CommandOutcome, Format, apply_jq_filter_result, build_envelope_value, format_envelope,
 };
 
+/// Error message for `--count` on non-list commands (shared across match arms).
+pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)";
+
 /// Encapsulates the post-command output pipeline: jq filtering, hint generation,
 /// and envelope wrapping.
 pub(crate) struct OutputPipeline<'a> {
@@ -30,9 +33,7 @@ impl OutputPipeline<'_> {
                         println!("{n}");
                         return 0;
                     }
-                    eprintln!(
-                        "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)"
-                    );
+                    eprintln!("{COUNT_UNSUPPORTED_ERROR}");
                     return 2;
                 }
 
@@ -93,9 +94,7 @@ impl OutputPipeline<'_> {
             }
             Ok(CommandOutcome::RawOutput(output)) => {
                 if self.count {
-                    eprintln!(
-                        "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)"
-                    );
+                    eprintln!("{COUNT_UNSUPPORTED_ERROR}");
                     return 2;
                 }
                 // Raw output bypasses the JSON pipeline — print directly to stdout.

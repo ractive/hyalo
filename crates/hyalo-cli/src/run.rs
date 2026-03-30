@@ -9,7 +9,7 @@ use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
 use crate::hints::{HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
-use crate::output_pipeline::OutputPipeline;
+use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
 use hyalo_core::index::SnapshotIndex;
 
 #[allow(clippy::too_many_lines)]
@@ -156,6 +156,11 @@ fn run_inner() -> Result<(), AppError> {
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
+    // Reject --count early — init is not a list command.
+    if cli.count && matches!(cli.command, Commands::Init { .. }) {
+        eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+        return Err(AppError::Exit(2));
+    }
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
         match init_commands::run_init(init_dir, claude) {

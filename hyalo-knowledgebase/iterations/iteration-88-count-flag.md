@@ -24,5 +24,5 @@ Add a `--count` global flag that prints only the total count as a bare integer, 
 - [x] Write E2E tests (`e2e_count.rs`)
 - [x] Update README.md
 - [x] Update SKILL.md
-- [ ] Create iteration file
-- [ ] Create PR and review
+- [x] Create iteration file
+- [x] Create PR and review
