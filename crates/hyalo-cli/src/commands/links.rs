@@ -39,6 +39,7 @@ pub fn links_fix(
             .map(|e| dir.join(&e.rel_path))
             .collect();
         let matched = discovery::match_globs(dir, &all_files, globs)?;
+        crate::warn::warn_glob_dir_overlap(dir, globs, matched.len());
         let matched_set: std::collections::HashSet<&str> =
             matched.iter().map(|(_, rel)| rel.as_str()).collect();
         report

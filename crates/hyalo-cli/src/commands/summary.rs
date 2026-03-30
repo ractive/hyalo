@@ -107,6 +107,8 @@ pub fn summary(
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
     let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
+    // Warn if globs matched 0 files and may redundantly include the --dir path
+    crate::warn::warn_glob_dir_overlap(dir, globs, scoped.len());
     // Work with a slice of &IndexEntry references.
     let entries: Vec<_> = scoped;
 

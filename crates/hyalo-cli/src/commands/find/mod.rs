@@ -100,6 +100,9 @@ pub fn find(
     // Filter entries by --file / --glob scoping
     let scoped_entries = filter_index_entries(index.entries(), files_arg, globs)?;
 
+    // Warn if globs matched 0 files and may redundantly include the --dir path
+    crate::warn::warn_glob_dir_overlap(dir, globs, scoped_entries.len());
+
     // Use the index's pre-built link graph for backlinks
     let link_graph_ref = if fields.backlinks || sort_needs_backlinks {
         Some(index.link_graph())

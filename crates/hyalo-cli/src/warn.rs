@@ -135,6 +135,60 @@ pub fn total_suppressed() -> usize {
         .unwrap_or(0)
 }
 
+/// Emit a "did you mean…" warning when globs matched zero files and the glob
+/// pattern appears to redundantly include the configured `--dir` path.
+///
+/// Example: if `dir` is `files/en-us` and a glob is `files/en-us/web/css/**`,
+/// the user probably meant `web/css/**` (since globs are relative to `--dir`).
+///
+/// Only warns when `result_count` is 0, at least one glob is provided, and
+/// at least one glob starts with a component matching the dir's last component.
+pub fn warn_glob_dir_overlap(dir: &std::path::Path, globs: &[String], result_count: usize) {
+    if result_count > 0 || globs.is_empty() {
+        return;
+    }
+
+    let dir_str = dir.to_string_lossy();
+    // Only consider non-trivial dir values (not ".")
+    if dir_str == "." {
+        return;
+    }
+
+    for glob in globs {
+        // Skip negation patterns
+        if glob.starts_with('!') {
+            continue;
+        }
+
+        // Check if the glob starts with the full dir path (e.g. "files/en-us/web/css/**")
+        let stripped = glob.strip_prefix(dir_str.as_ref());
+        if let Some(rest) = stripped {
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if !rest.is_empty() {
+                warn(format!(
+                    "glob '{glob}' matched 0 files. Globs are relative to --dir '{dir_str}'. \
+                     Did you mean '{rest}'?"
+                ));
+                return;
+            }
+        }
+
+        // Also check if the glob starts with the last path component of dir
+        if let Some(last_component) = dir.file_name().and_then(|n| n.to_str())
+            && let Some(rest) = glob.strip_prefix(last_component)
+        {
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if !rest.is_empty() {
+                warn(format!(
+                    "glob '{glob}' matched 0 files. Globs are relative to --dir '{dir_str}'. \
+                     Did you mean '{rest}'?"
+                ));
+                return;
+            }
+        }
+    }
+}
+
 /// Print a summary of suppressed duplicate warnings, if any.
 ///
 /// Should be called just before the process exits. Prints to stderr.

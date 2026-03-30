@@ -89,6 +89,7 @@ pub fn collect_files(
         (true, false) => {
             let all = discovery::discover_files(dir)?;
             let matched = discovery::match_globs(dir, &all, globs)?;
+            crate::warn::warn_glob_dir_overlap(dir, globs, matched.len());
             Ok(FilesOrOutcome::Files(matched))
         }
         (true, true) => {

@@ -1098,6 +1098,152 @@ fn chained_mutations_with_index_keep_index_consistent() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: --property regex filter with YAML array values
+// ---------------------------------------------------------------------------
+
+/// Set up a vault where `status` is stored as a block-style YAML array
+/// (e.g. `status:\n  - deprecated`) rather than a scalar string.
+/// This mirrors real-world MDN-style frontmatter.
+fn setup_array_status_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    // deprecated-1.md  — status: [deprecated]
+    write_md(
+        tmp.path(),
+        "deprecated-1.md",
+        md!(r"
+---
+title: Deprecated One
+status:
+  - deprecated
+---
+# Deprecated One
+"),
+    );
+
+    // deprecated-2.md  — status: [deprecated]
+    write_md(
+        tmp.path(),
+        "deprecated-2.md",
+        md!(r"
+---
+title: Deprecated Two
+status:
+  - deprecated
+---
+# Deprecated Two
+"),
+    );
+
+    // experimental-1.md — status: [experimental]
+    write_md(
+        tmp.path(),
+        "experimental-1.md",
+        md!(r"
+---
+title: Experimental One
+status:
+  - experimental
+---
+# Experimental One
+"),
+    );
+
+    // experimental-2.md — status: [experimental]
+    write_md(
+        tmp.path(),
+        "experimental-2.md",
+        md!(r"
+---
+title: Experimental Two
+status:
+  - experimental
+---
+# Experimental Two
+"),
+    );
+
+    tmp
+}
+
+/// Helper: run `hyalo --jq '<filter>' find <extra_args>` and return stdout trimmed.
+fn run_find_jq(tmp: &TempDir, jq_filter: &str, extra_args: &[&str]) -> String {
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--jq", jq_filter]);
+    cmd.arg("find");
+    cmd.args(extra_args);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "find failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Regression: `--property 'status~=deprecated'` must return the same count
+/// when querying via disk scan vs. index, where `status` is a YAML array.
+#[test]
+fn find_property_regex_yaml_array_disk_and_index_agree() {
+    let tmp = setup_array_status_vault();
+
+    // Disk scan (no index).
+    let disk_total = run_find_jq(&tmp, ".total", &["--property", "status~=deprecated"]);
+
+    // Build index, then query via it.
+    let index_path = create_default_index(&tmp);
+    let index_total = run_find_jq(
+        &tmp,
+        ".total",
+        &[
+            "--property",
+            "status~=deprecated",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        disk_total, index_total,
+        "disk scan and index returned different totals for --property 'status~=deprecated' \
+         with YAML array values (disk={disk_total}, index={index_total})"
+    );
+
+    // Both should find exactly the 2 deprecated files.
+    assert_eq!(
+        disk_total, "2",
+        "expected 2 deprecated files from disk scan, got {disk_total}"
+    );
+}
+
+/// Complementary: exact-match `--property 'status=deprecated'` via index
+/// should also find the same 2 files (array element equality).
+#[test]
+fn find_property_exact_yaml_array_index_returns_correct_count() {
+    let tmp = setup_array_status_vault();
+    let index_path = create_default_index(&tmp);
+
+    let disk_total = run_find_jq(&tmp, ".total", &["--property", "status=deprecated"]);
+    let index_total = run_find_jq(
+        &tmp,
+        ".total",
+        &[
+            "--property",
+            "status=deprecated",
+            "--index",
+            index_path.to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        disk_total, index_total,
+        "disk scan and index returned different totals for --property 'status=deprecated' \
+         with YAML array values (disk={disk_total}, index={index_total})"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Vault boundary checks — create-index
 // ---------------------------------------------------------------------------
 

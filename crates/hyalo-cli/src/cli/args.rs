@@ -176,7 +176,7 @@ pub(crate) enum Commands {
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) to select files (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
+        /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
@@ -271,7 +271,7 @@ pub(crate) enum Commands {
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.")]
     Summary {
-        /// Glob pattern(s) to filter which files to include (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
+        /// Glob pattern(s) to filter which files to include, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]
         glob: Vec<String>,
         /// Number of recent files to show (default: 10)
@@ -352,7 +352,7 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
+        /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
@@ -399,7 +399,7 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
+        /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
@@ -497,7 +497,7 @@ Repeatable (AND).\n\
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with = "glob")]
         file: Vec<String>,
-        /// Glob pattern(s) for multiple files (repeatable); prefix '!' to negate
+        /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
@@ -550,7 +550,7 @@ pub(crate) enum LinksAction {
         /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
         #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
-        /// Glob pattern(s) to filter which files to check (repeatable); prefix '!' to negate
+        /// Glob pattern(s) to filter which files to check, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
         /// Ignore broken links whose target contains any of these substrings (repeatable).
@@ -657,7 +657,7 @@ pub(crate) enum TagsAction {
         SIDE EFFECTS: None (read-only).\n\
         USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
     Summary {
-        /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
+        /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
     },
