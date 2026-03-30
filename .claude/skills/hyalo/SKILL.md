@@ -46,7 +46,7 @@ hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
 `--glob` supports negation with `!` prefix to exclude files: `--glob '!**/draft-*'`.
 
 The `--fields` flag controls which data is returned. Available fields: `properties`,
-`properties-typed`, `tags`, `sections`, `tasks`, `links`, `backlinks`. Default fields are
+`properties-typed`, `tags`, `sections`, `tasks`, `links`, `backlinks`, `title`. Default fields are
 `properties`, `tags`, `sections`, `links`. Opt-in fields: `tasks`, `properties-typed`,
 `backlinks`, `title`. Use `--fields all` or `--fields tasks` to include them. `properties-typed`
 returns a `[{name, type, value}]` array instead of a `{key: value}` map; `backlinks` requires

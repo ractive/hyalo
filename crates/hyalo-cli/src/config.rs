@@ -151,13 +151,16 @@ site_prefix = "docs"
     #[test]
     fn partial_config_merges_with_defaults() {
         let dir = make_temp();
-        fs::write(dir.path().join(".hyalo.toml"), "hints = true\n").unwrap();
+        fs::write(dir.path().join(".hyalo.toml"), "hints = false\n").unwrap();
 
         let resolved = load_config_from(dir.path());
         // Only hints overridden; dir and format stay at defaults.
         assert_eq!(resolved.dir, PathBuf::from("."));
         assert_eq!(resolved.format, "json");
-        assert!(resolved.hints);
+        assert!(
+            !resolved.hints,
+            "config should override the default (true) to false"
+        );
     }
 
     #[test]
