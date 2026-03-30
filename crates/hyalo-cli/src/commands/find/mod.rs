@@ -148,25 +148,31 @@ pub fn find(
     for entry in &scoped_entries {
         // --- Metadata filters using pre-indexed data ---
         // When a property filter targets "title" and the entry has no
-        // frontmatter title, inject the derived title (from H1 heading)
-        // so that `--property 'title~=...'` matches derived titles too.
+        // frontmatter title (or a non-string title), inject the derived
+        // title (from H1 heading) so that `--property 'title~=...'`
+        // matches derived titles too.  The gate mirrors `extract_title()`
+        // which only treats a frontmatter title as authoritative when it
+        // is a String.
         let props_with_derived_title;
-        let effective_props =
-            if has_title_property_filter && !entry.properties.contains_key("title") {
-                let derived = extract_title(&entry.properties, Some(&entry.sections));
-                if derived.is_null() {
-                    &entry.properties
-                } else {
-                    props_with_derived_title = {
-                        let mut p = entry.properties.clone();
-                        p.insert("title".to_owned(), derived);
-                        p
-                    };
-                    &props_with_derived_title
-                }
-            } else {
+        let effective_props = if has_title_property_filter
+            && !matches!(
+                entry.properties.get("title"),
+                Some(serde_json::Value::String(_))
+            ) {
+            let derived = extract_title(&entry.properties, Some(&entry.sections));
+            if derived.is_null() {
                 &entry.properties
-            };
+            } else {
+                props_with_derived_title = {
+                    let mut p = entry.properties.clone();
+                    p.insert("title".to_owned(), derived);
+                    p
+                };
+                &props_with_derived_title
+            }
+        } else {
+            &entry.properties
+        };
 
         if !filter::matches_filters_with_tags(
             effective_props,
