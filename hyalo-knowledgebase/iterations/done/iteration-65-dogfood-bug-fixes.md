@@ -4,8 +4,8 @@ type: iteration
 date: 2026-03-28
 tags:
   - iteration
-  - bugfix
   - dogfooding
+  - bug-fix
 status: completed
 branch: iter-65/dogfood-bug-fixes
 ---

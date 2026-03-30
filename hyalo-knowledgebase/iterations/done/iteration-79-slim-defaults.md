@@ -23,7 +23,7 @@ Found during v0.6.0 dogfooding (iteration 74). Two problems:
 
 2. **Default output is too verbose** — `sections`, `tasks`, and `links` are included by default, making `--format text` output a wall of text for simple filter queries. Tasks in particular are rarely needed in list output and add significant noise.
 
-See also: [[iteration-80-smarter-hints]] for making hints context-aware.
+See also: [[iterations/done/iteration-80-smarter-hints]] for making hints context-aware.
 
 ## Tasks
 

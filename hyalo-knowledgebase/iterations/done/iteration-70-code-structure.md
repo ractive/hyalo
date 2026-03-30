@@ -25,7 +25,7 @@ Split the largest files in the codebase into smaller, well-scoped modules so tha
 
 ### Split find.rs (2830 lines)
 
-- [x] Extract `extract_title`, `TitleMatcher`, `matches_task_filter` into `commands/find/build.rs` — see [[backlog/split-find-rs]]
+- [x] Extract `extract_title`, `TitleMatcher`, `matches_task_filter` into `commands/find/build.rs` — see [[backlog/done/split-find-rs]]
 - [x] Extract sort/limit logic into `commands/find/sort.rs`
 - [x] Extract `filter_index_entries()` and `needs_body()` into `commands/find/filter_index.rs`
 - [x] Keep entry point in `commands/find/mod.rs`

@@ -385,7 +385,7 @@ Research across tools:
 **Consequences:**
 - `summary` gains a `dead_ends` section alongside `orphans`
 - No change to existing orphan behavior
-- See [[iteration-67-summary-enhancements]]
+- See [[iterations/done/iteration-67-summary-enhancements]]
 
 ## DEC-037: Won't Fix — False-Positive Links from Square Brackets in Body Text (2026-03-29)
 
@@ -444,7 +444,7 @@ Research across tools:
 
 ## DEC-040: Context-Aware Hints with Descriptions (2026-03-30)
 
-**Context:** [[iteration-80-smarter-hints]] evolved the hint system introduced in [[backlog/done/discoverable-drill-down-commands]] (DEC-031). Two changes: (1) hints now include a human-readable description alongside the command, and (2) hints are generated for all commands — not just the original four (find, summary, properties summary, tags summary).
+**Context:** [[iterations/done/iteration-80-smarter-hints]] evolved the hint system introduced in [[backlog/done/discoverable-drill-down-commands]] (DEC-031). Two changes: (1) hints now include a human-readable description alongside the command, and (2) hints are generated for all commands — not just the original four (find, summary, properties summary, tags summary).
 
 **Decision:** Change the hint format from a flat string array to an array of `{"description": "...", "cmd": "..."}` objects. Extend hint generation to all 15 command variants including mutations, read, backlinks, mv, task operations, links fix, create-index, and drop-index.
 

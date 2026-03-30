@@ -18,7 +18,7 @@ Clean up code quality issues found in the codebase review. Address clippy pedant
 
 ### Clippy pedantic
 
-- [x] Fix `uninlined_format_args` across both crates — see [[backlog/clippy-pedantic-cleanup]]
+- [x] Fix `uninlined_format_args` across both crates — see [[backlog/done/clippy-pedantic-cleanup]]
 - [x] Fix `assigning_clones` → use `clone_from` where applicable
 - [x] Fix `manual_let_else` → use `let…else` pattern
 - [x] Fix `redundant_closure_for_method_calls`
@@ -31,7 +31,7 @@ Clean up code quality issues found in the codebase review. Address clippy pedant
 
 ### API visibility
 
-- [x] Mark internal helpers as `pub(crate)` in hyalo-core — see [[backlog/pub-crate-visibility]]
+- [x] Mark internal helpers as `pub(crate)` in hyalo-core — see [[backlog/done/pub-crate-visibility]]
 
 ### Scanner optimization
 

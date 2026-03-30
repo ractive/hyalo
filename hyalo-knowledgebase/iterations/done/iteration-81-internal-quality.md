@@ -4,8 +4,8 @@ type: iteration
 date: 2026-03-30
 tags:
   - iteration
-  - refactoring
   - code-quality
+  - refactor
 status: completed
 branch: iter-81/internal-quality-cleanup
 ---

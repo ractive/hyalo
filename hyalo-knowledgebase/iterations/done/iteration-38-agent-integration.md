@@ -20,7 +20,7 @@ Make hyalo a first-class tool for AI agents: the Claude Code skill is polished a
 ## Backlog items
 
 - [[backlog/done/claude-code-skill]] (medium)
-- [[claude-plugin-distribution]] (medium)
+- [[backlog/done/claude-plugin-distribution]] (medium)
 
 ## Tasks
 

@@ -18,7 +18,7 @@ Prevent `set`, `remove`, and `append` from silently accepting filter syntax (com
 
 ## Motivation
 
-During the [[dogfooding-legalize-es]] session, `hyalo set --property 'fecha_publicacion<=1900-01-01' --glob '*.md'` wrote a literal property `fecha_publicacion<: 1900-01-01` to all 8,642 files. The user meant `--where-property` but used `--property` out of habit from `find`. The CLI should reject this rather than silently corrupt files.
+During the [[research/dogfooding-legalize-es]] session, `hyalo set --property 'fecha_publicacion<=1900-01-01' --glob '*.md'` wrote a literal property `fecha_publicacion<: 1900-01-01` to all 8,642 files. The user meant `--where-property` but used `--property` out of habit from `find`. The CLI should reject this rather than silently corrupt files.
 
 ## Design
 
