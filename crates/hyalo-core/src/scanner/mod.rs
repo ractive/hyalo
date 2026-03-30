@@ -45,7 +45,7 @@ pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Re
 }
 
 /// Scan from any buffered reader with multiple visitors.
-pub fn scan_reader_multi<R: BufRead>(
+pub(crate) fn scan_reader_multi<R: BufRead>(
     mut reader: R,
     visitors: &mut [&mut dyn FileVisitor],
 ) -> Result<()> {

@@ -10,7 +10,7 @@ use tempfile::NamedTempFile;
 /// then renames it into place. This ensures that a crash mid-write never leaves
 /// a truncated or corrupted file — the original is either fully replaced or
 /// left untouched.
-pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .context("cannot determine parent directory for atomic write")?;

@@ -8,13 +8,14 @@ pub use fields::Fields;
 pub use match_props::{
     extract_tags, matches_filters_with_tags, matches_frontmatter_filters, tag_matches,
 };
-pub use parse::{FilterOp, PropertyFilter, parse_property_filter};
+pub use parse::{PropertyFilter, parse_property_filter};
 pub use sort::{SortField, compare_property_values, parse_sort};
 pub use tasks::{FindTaskFilter, parse_task_filter};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::parse::FilterOp;
     use indexmap::IndexMap;
     use serde_json::{Value, json};
 
