@@ -144,7 +144,9 @@ pub fn build_scanned_index(
                     Err(_) => {}
                 }
             }
-            if resolved.is_empty() && let Some(e) = first_err {
+            if resolved.is_empty()
+                && let Some(e) = first_err
+            {
                 return Ok(ScannedIndexOutcome::Outcome(resolve_error_to_outcome(
                     e, format,
                 )));

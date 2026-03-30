@@ -385,7 +385,7 @@ Research across tools:
 **Consequences:**
 - `summary` gains a `dead_ends` section alongside `orphans`
 - No change to existing orphan behavior
-- See [[iterations/iteration-67-summary-enhancements]]
+- See [[iteration-67-summary-enhancements]]
 
 ## DEC-037: Won't Fix — False-Positive Links from Square Brackets in Body Text (2026-03-29)
 

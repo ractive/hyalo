@@ -393,12 +393,45 @@ fn task_set_status_multi_char_status_exits_1() {
         "--line",
         &LINE_INCOMPLETE.to_string(),
         "--status",
-        "xx",
+        "ab",
     ]);
     let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr.contains("single character"),
+        "expected 'single character' in stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn task_set_status_empty_string_exits_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "task",
+        "set-status",
+        "--file",
+        "tasks.md",
+        "--line",
+        &LINE_INCOMPLETE.to_string(),
+        "--status",
+        "",
+    ]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr.contains("single character"),
+        "expected 'single character' in stderr, got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

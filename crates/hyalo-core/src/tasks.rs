@@ -470,9 +470,18 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
         .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {}", line))?;
 
     let new_content = {
-        let mut parts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        parts[line - 1] = modified_line;
-        parts.join("\n")
+        let mut buf = String::with_capacity(content.len() + modified_line.len());
+        for (i, l) in lines.iter().enumerate() {
+            if i > 0 {
+                buf.push('\n');
+            }
+            if i == line - 1 {
+                buf.push_str(&modified_line);
+            } else {
+                buf.push_str(l);
+            }
+        }
+        buf
     };
 
     crate::fs_util::atomic_write(path, new_content.as_bytes())
@@ -510,9 +519,18 @@ pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInf
         .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {}", line))?;
 
     let new_content = {
-        let mut parts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-        parts[line - 1] = modified_line;
-        parts.join("\n")
+        let mut buf = String::with_capacity(content.len() + modified_line.len());
+        for (i, l) in lines.iter().enumerate() {
+            if i > 0 {
+                buf.push('\n');
+            }
+            if i == line - 1 {
+                buf.push_str(&modified_line);
+            } else {
+                buf.push_str(l);
+            }
+        }
+        buf
     };
 
     crate::fs_util::atomic_write(path, new_content.as_bytes())
