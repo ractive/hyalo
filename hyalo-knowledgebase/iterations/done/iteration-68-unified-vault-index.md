@@ -6,7 +6,7 @@ tags:
   - performance
   - refactor
   - architecture
-status: in-progress
+status: completed
 branch: iter-68/unified-vault-index
 ---
 
