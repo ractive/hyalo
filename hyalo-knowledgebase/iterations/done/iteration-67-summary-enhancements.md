@@ -2,7 +2,7 @@
 title: "Iteration 67: Summary command enhancements"
 type: iteration
 date: 2026-03-29
-status: in-progress
+status: completed
 branch: iter-67/summary-enhancements
 tags:
   - iteration

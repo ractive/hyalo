@@ -4,11 +4,11 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
 
-use crate::commands::{FilesOrOutcome, collect_files, require_file_or_glob};
+use crate::commands::{FilesOrOutcome, collect_files, mutation, require_file_or_glob};
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::filter::{self, PropertyFilter, extract_tags};
+use hyalo_core::filter::{self, PropertyFilter};
 use hyalo_core::frontmatter;
-use hyalo_core::index::{SnapshotIndex, format_modified};
+use hyalo_core::index::SnapshotIndex;
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -281,21 +281,17 @@ pub fn set(
 
         if file_changed {
             frontmatter::write_frontmatter(full_path, &props)?;
-            if let Some(idx) = snapshot_index.as_mut()
-                && let Some(entry) = idx.get_mut(rel_path)
-            {
-                let new_tags = extract_tags(&props);
-                entry.properties = props;
-                entry.tags = new_tags;
-                entry.modified = format_modified(full_path)?;
-                index_dirty = true;
-            }
+            mutation::update_index_entry(
+                snapshot_index,
+                rel_path,
+                props,
+                full_path,
+                &mut index_dirty,
+            )?;
         }
     }
 
-    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
-        idx.save_to(idx_path)?;
-    }
+    mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
@@ -329,11 +325,7 @@ pub fn set(
     }
 
     // Return array if multiple mutations, single object if one
-    let output = if results.len() == 1 {
-        results.pop().unwrap_or_default()
-    } else {
-        serde_json::json!(results)
-    };
+    let output = mutation::unwrap_single_result(results);
 
     Ok(CommandOutcome::Success(crate::output::format_success(
         format, &output,
