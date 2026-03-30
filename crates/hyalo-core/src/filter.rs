@@ -50,7 +50,7 @@ pub fn tag_matches(tag: &str, query: &str) -> bool {
 }
 
 /// Comparison operator for property filters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterOp {
     /// Property exists (no value specified)
     Exists,
@@ -274,7 +274,7 @@ fn parse_regex_pattern(s: &str) -> Result<Regex> {
                 'i' => {
                     builder.case_insensitive(true);
                 }
-                other => bail!("unsupported regex flag {:?}: only 'i' is supported", other),
+                other => bail!("unsupported regex flag {other:?}: only 'i' is supported"),
             }
         }
         builder
@@ -318,14 +318,14 @@ impl PropertyFilter {
                     }
                     FilterOp::Gte => matches!(
                         yaml_cmp(yaml_val, filter_val),
-                        Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)
+                        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
                     ),
                     FilterOp::Lt => {
                         yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Less)
                     }
                     FilterOp::Lte => matches!(
                         yaml_cmp(yaml_val, filter_val),
-                        Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
                     ),
                     // SAFETY: Exists is handled by the early return above
                     FilterOp::Exists => unreachable!("Exists handled by early return"),
@@ -418,21 +418,14 @@ fn yaml_value_eq(yaml: &Value, filter: &str) -> bool {
         Value::String(s) => str_eq_ignore_case(s, filter),
         Value::Number(n) => {
             if let Ok(fv) = filter.parse::<f64>() {
-                n.as_f64()
-                    .map(|nv| (nv - fv).abs() < f64::EPSILON)
-                    .unwrap_or(false)
+                n.as_f64().is_some_and(|nv| (nv - fv).abs() < f64::EPSILON)
             } else {
                 false
             }
         }
-        Value::Bool(b) => parse_bool_filter(filter)
-            .map(|fv| fv == *b)
-            .unwrap_or(false),
+        Value::Bool(b) => parse_bool_filter(filter).is_some_and(|fv| fv == *b),
         Value::Array(seq) => seq.iter().any(|item| yaml_value_eq(item, filter)),
-        _ => yaml
-            .as_str()
-            .map(|s| str_eq_ignore_case(s, filter))
-            .unwrap_or(false),
+        _ => yaml.as_str().is_some_and(|s| str_eq_ignore_case(s, filter)),
     }
 }
 
@@ -506,8 +499,7 @@ pub fn parse_task_filter(input: &str) -> Result<FindTaskFilter> {
             match (first, second) {
                 (Some(ch), None) => Ok(FindTaskFilter::Status(ch)),
                 _ => bail!(
-                    "invalid task filter {:?}: expected 'todo', 'done', 'any', or a single character",
-                    input
+                    "invalid task filter {input:?}: expected 'todo', 'done', 'any', or a single character"
                 ),
             }
         }
@@ -594,8 +586,7 @@ impl Fields {
                     "backlinks" => fields.backlinks = true,
                     "title" => fields.title = true,
                     unknown => bail!(
-                        "unknown field {:?}: valid fields are all, properties, properties-typed, tags, sections, tasks, links, backlinks, title",
-                        unknown
+                        "unknown field {unknown:?}: valid fields are all, properties, properties-typed, tags, sections, tasks, links, backlinks, title"
                     ),
                 }
             }
@@ -641,9 +632,8 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
                 Ok(SortField::Property(key.to_owned()))
             } else {
                 bail!(
-                    "unknown sort field {:?}: valid values are 'file', 'modified', \
-                     'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>'",
-                    other
+                    "unknown sort field {other:?}: valid values are 'file', 'modified', \
+                     'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>'"
                 )
             }
         }

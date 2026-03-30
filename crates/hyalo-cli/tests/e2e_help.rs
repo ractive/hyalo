@@ -119,8 +119,7 @@ fn options_block(help: &str) -> &str {
     // We search for "\n\n" after our start position.
     let end = help[start..]
         .find("\n\n")
-        .map(|off| start + off)
-        .unwrap_or(help.len());
+        .map_or(help.len(), |off| start + off);
     &help[start..end]
 }
 

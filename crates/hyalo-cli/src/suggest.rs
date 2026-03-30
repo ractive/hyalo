@@ -29,7 +29,7 @@ pub fn suggest_subcommand_correction(args: &[String], cmd: &clap::Command) -> Op
     // Walk args (skipping bin) to find the top-level subcommand and its position.
     // We stop at `--` (end-of-flags marker) and skip tokens that are values of
     // value-taking flags (e.g. the `foo` in `--dir foo`).
-    let top_level_names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
+    let top_level_names: Vec<&str> = cmd.get_subcommands().map(clap::Command::get_name).collect();
 
     let mut parent_name: Option<&str> = None;
     let mut parent_pos: Option<usize> = None; // index into args (0-based, including bin)
@@ -68,7 +68,10 @@ pub fn suggest_subcommand_correction(args: &[String], cmd: &clap::Command) -> Op
         .find(|s| s.get_name() == parent_name)?;
 
     // Collect sub-subcommand names from the parent.
-    let sub_names: Vec<&str> = parent_cmd.get_subcommands().map(|s| s.get_name()).collect();
+    let sub_names: Vec<&str> = parent_cmd
+        .get_subcommands()
+        .map(clap::Command::get_name)
+        .collect();
 
     if sub_names.is_empty() {
         return None;
@@ -103,7 +106,6 @@ pub fn suggest_subcommand_correction(args: &[String], cmd: &clap::Command) -> Op
             if parent_value_flags.contains(&flag_value) {
                 skip_next = true;
             }
-            continue;
         }
     }
 

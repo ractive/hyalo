@@ -11,8 +11,7 @@ use hyalo_core::tasks::TaskCounter;
 
 fn vault_path() -> Option<PathBuf> {
     let path = std::env::var("HYALO_BENCH_VAULT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("../obsidian-hub"));
+        .map_or_else(|_| PathBuf::from("../obsidian-hub"), PathBuf::from);
     if path.is_dir() {
         Some(path)
     } else {
@@ -27,7 +26,7 @@ fn vault_path() -> Option<PathBuf> {
 fn bench_discover_files(c: &mut Criterion) {
     let Some(vault) = vault_path() else { return };
     c.bench_function("discover_files", |b| {
-        b.iter(|| discover_files(black_box(&vault)).unwrap())
+        b.iter(|| discover_files(black_box(&vault)).unwrap());
     });
 }
 
@@ -41,7 +40,7 @@ fn bench_read_frontmatter(c: &mut Criterion) {
     for (i, &idx) in indices.iter().enumerate() {
         if let Some(path) = files.get(idx) {
             group.bench_function(format!("file_{i}"), |b| {
-                b.iter(|| read_frontmatter(black_box(path)).unwrap())
+                b.iter(|| read_frontmatter(black_box(path)).unwrap());
             });
         }
     }
@@ -62,7 +61,7 @@ fn bench_read_all_frontmatter(c: &mut Criterion) {
                 // but still measure the I/O and parsing attempt.
                 let _ = read_frontmatter(black_box(file));
             }
-        })
+        });
     });
     group.finish();
 }
@@ -83,7 +82,7 @@ fn bench_scan_all_files(c: &mut Criterion) {
                 scan_file_multi(black_box(file), visitors)
                     .expect("scan_file_multi failed during benchmark");
             }
-        })
+        });
     });
     group.finish();
 }
@@ -99,7 +98,7 @@ fn bench_link_graph_build(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(30));
     group.bench_function("build", |b| {
-        b.iter(|| LinkGraph::build(black_box(&vault), None).unwrap())
+        b.iter(|| LinkGraph::build(black_box(&vault), None).unwrap());
     });
     group.finish();
 }

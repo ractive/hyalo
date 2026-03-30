@@ -102,7 +102,7 @@ impl LinkGraph {
     ///
     /// Warnings are always empty because callers are expected to handle parse errors
     /// before collecting `FileLinks`.
-    pub fn from_file_links(
+    pub(crate) fn from_file_links(
         file_links: Vec<FileLinks>,
         site_prefix: Option<&str>,
     ) -> LinkGraphBuild {
@@ -189,7 +189,7 @@ pub fn is_self_link(entry: &BacklinkEntry, target: &str) -> bool {
 }
 
 /// Per-file link data produced by scanning a single file.
-pub struct FileLinks {
+pub(crate) struct FileLinks {
     /// Relative path of the source file (vault-relative).
     pub(crate) source: PathBuf,
     /// Links extracted from the file body, with 1-based line numbers.
@@ -234,7 +234,7 @@ fn insert_file_links(
 
 /// Visitor that collects links with their line numbers.
 /// Skips frontmatter parsing for performance.
-pub struct LinkGraphVisitor {
+pub(crate) struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
     scratch: Vec<Link>,
@@ -316,7 +316,6 @@ pub(crate) fn normalize_path_components(path: &Path) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for component in path.components() {
         match component {
-            Component::CurDir => {} // skip `.`
             Component::ParentDir => {
                 // Pop the previous normal component.  If the stack is empty or
                 // its top is already `..`, we would escape the vault root —
@@ -332,9 +331,10 @@ pub(crate) fn normalize_path_components(path: &Path) -> String {
                     parts.push(s);
                 }
             }
+            // CurDir (`.`), Prefix, and RootDir are all skipped: `.` is a no-op,
             // Prefix / RootDir only appear on absolute paths; skip them so we
             // always produce a relative vault path.
-            Component::Prefix(_) | Component::RootDir => {}
+            Component::CurDir | Component::Prefix(_) | Component::RootDir => {}
         }
     }
     parts.join("/")
@@ -384,6 +384,7 @@ pub(crate) fn relative_path_between(from_file: &str, to_file: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use std::fs;
 
     fn create_vault(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -585,7 +586,7 @@ mod tests {
         // MAX_FRONTMATTER_LINES is 200; 201 content lines triggers the error.
         let mut huge_fm = String::from("---\n");
         for i in 0..201 {
-            huge_fm.push_str(&format!("key{i}: value\n"));
+            let _ = writeln!(huge_fm, "key{i}: value");
         }
         // No closing ---, so scanner bails with "frontmatter too large"
         huge_fm.push_str("[[target]]\n");
@@ -900,8 +901,8 @@ mod tests {
                 .iter()
                 .map(|e| e.source.to_str().unwrap())
                 .collect();
-            bl1.sort();
-            bl2.sort();
+            bl1.sort_unstable();
+            bl2.sort_unstable();
             assert_eq!(
                 bl1, bl2,
                 "backlinks mismatch for target '{target}': build={bl1:?} vs from_file_links={bl2:?}"

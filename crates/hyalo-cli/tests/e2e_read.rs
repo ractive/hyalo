@@ -13,7 +13,7 @@ fn setup() -> TempDir {
     write_md(
         tmp.path(),
         "note.md",
-        md!(r#"
+        md!(r"
 ---
 title: Test Note
 status: draft
@@ -41,17 +41,17 @@ Nested details.
 ## Problem
 
 Second problem section.
-"#),
+"),
     );
 
     write_md(
         tmp.path(),
         "no-frontmatter.md",
-        md!(r#"
+        md!(r"
 # Just a file
 
 No frontmatter here.
-"#),
+"),
     );
 
     write_md(tmp.path(), "empty.md", "");

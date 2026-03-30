@@ -224,7 +224,11 @@ pub fn find(
         }
 
         // Filter: content search must have at least one match
-        if has_content_search && content_matches.as_ref().is_some_and(|m| m.is_empty()) {
+        if has_content_search
+            && content_matches
+                .as_ref()
+                .is_some_and(std::vec::Vec::is_empty)
+        {
             continue;
         }
 
@@ -641,7 +645,7 @@ Just some text here.
         let arr = parsed["results"].as_array().unwrap();
         let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
         let mut sorted = files.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         assert_eq!(files, sorted);
     }
 
@@ -1281,7 +1285,7 @@ title: Empty Body
             .map(|v| v["modified"].as_str().unwrap())
             .collect();
         let mut sorted = times.clone();
-        sorted.sort();
+        sorted.sort_unstable();
         assert_eq!(times, sorted);
     }
 

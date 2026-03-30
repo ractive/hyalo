@@ -101,8 +101,7 @@ pub fn suppressed_count_for(msg: &str) -> usize {
         .lock()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(msg).copied()))
-        .map(|seen| seen.saturating_sub(1))
-        .unwrap_or(0)
+        .map_or(0, |seen| seen.saturating_sub(1))
 }
 
 /// Return whether the given message was tracked at least once after `init()`.
@@ -142,16 +141,13 @@ pub fn total_suppressed() -> usize {
 /// If no warnings were suppressed (or `init` was never called) this is a no-op.
 pub fn flush_summary() {
     let total_suppressed: usize = match SUPPRESSED.lock() {
-        Ok(guard) => guard
-            .as_ref()
-            .map(|map| {
-                map.values()
-                    // Each entry counts: first print is not suppressed, so suppress count
-                    // is (total_seen - 1). We stored total_seen in the map entry.
-                    .map(|&seen| seen.saturating_sub(1))
-                    .sum()
-            })
-            .unwrap_or(0),
+        Ok(guard) => guard.as_ref().map_or(0, |map| {
+            map.values()
+                // Each entry counts: first print is not suppressed, so suppress count
+                // is (total_seen - 1). We stored total_seen in the map entry.
+                .map(|&seen| seen.saturating_sub(1))
+                .sum()
+        }),
         Err(_) => return,
     };
 

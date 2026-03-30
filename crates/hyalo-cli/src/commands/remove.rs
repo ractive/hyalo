@@ -113,7 +113,6 @@ fn remove_value_in_memory(
 
     // Scalar arms: clone only the scalar (cheap) to release the borrow on props.
     match props.get(name).cloned() {
-        None => false,
         Some(Value::String(s)) => {
             if s.eq_ignore_ascii_case(target) {
                 props.shift_remove(name);
@@ -138,10 +137,8 @@ fn remove_value_in_memory(
                 false
             }
         }
-        Some(_) => {
-            // Null, Mapping, Tagged, Sequence (already handled above) — no-op
-            false
-        }
+        // None: property absent; Some(_): Null, Mapping, Tagged, Sequence — no-op
+        None | Some(_) => false,
     }
 }
 
@@ -803,6 +800,7 @@ priority: low
 
     #[test]
     fn remove_where_property_filter_skips_nonmatching() {
+        use hyalo_core::filter::parse_property_filter;
         // Only files matching --where-property are mutated.
         let tmp = tempfile::tempdir().unwrap();
         fs::write(
@@ -816,7 +814,6 @@ priority: low
         )
         .unwrap();
 
-        use hyalo_core::filter::parse_property_filter;
         let filter = parse_property_filter("status=draft").unwrap();
         let outcome = remove(
             tmp.path(),
@@ -908,7 +905,7 @@ priority: low
             CommandOutcome::UserError(msg) => {
                 assert!(msg.contains("--where-property"), "msg: {msg}");
             }
-            other => panic!("expected UserError, got: {other:?}"),
+            other @ CommandOutcome::Success(_) => panic!("expected UserError, got: {other:?}"),
         }
     }
 

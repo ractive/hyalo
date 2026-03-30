@@ -96,7 +96,7 @@ fn format_text(result: &BacklinkResult) -> String {
     for item in &result.backlinks {
         write!(out, "  {}:{}", item.source, item.line).unwrap();
         if let Some(label) = &item.label {
-            write!(out, " (\"{}\")", label).unwrap();
+            write!(out, " (\"{label}\")").unwrap();
         }
         writeln!(out).unwrap();
     }

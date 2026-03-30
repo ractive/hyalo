@@ -102,7 +102,7 @@ fn tags_glob_no_match() {
         "non-matching glob should return total 0; got: {json}"
     );
     assert!(
-        json["tags"].as_array().is_some_and(|a| a.is_empty()),
+        json["tags"].as_array().is_some_and(std::vec::Vec::is_empty),
         "non-matching glob should return empty tags array; got: {json}"
     );
     assert!(

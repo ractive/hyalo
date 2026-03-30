@@ -28,7 +28,7 @@ pub enum LinkKind {
 /// All offsets are byte positions into the original `&str` passed to
 /// [`extract_link_spans`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkSpan {
+pub(crate) struct LinkSpan {
     /// The resolved link (target without fragment, plus optional label).
     pub link: Link,
     /// Syntax kind (wikilink or markdown).
@@ -46,7 +46,8 @@ pub struct LinkSpan {
 }
 
 /// Extract all internal links from a markdown file.
-pub fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
+#[allow(dead_code)] // Used in tests only
+pub(crate) fn extract_links_from_file(path: &Path) -> Result<Vec<Link>> {
     let mut links = Vec::new();
     scanner::scan_file(path, |text, _line| {
         extract_links_from_text(text, &mut links);
@@ -81,7 +82,11 @@ pub fn extract_links_from_text(text: &str, out: &mut Vec<Link>) {
 /// `cleaned` and `original` must describe the same line with identical byte
 /// lengths and identical byte positions for all link syntax characters (`[`,
 /// `]`, `(`, `)`).
-pub fn extract_links_from_text_with_original(cleaned: &str, original: &str, out: &mut Vec<Link>) {
+pub(crate) fn extract_links_from_text_with_original(
+    cleaned: &str,
+    original: &str,
+    out: &mut Vec<Link>,
+) {
     let bytes = cleaned.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -133,7 +138,8 @@ pub fn extract_links_from_text_with_original(cleaned: &str, original: &str, out:
 /// version of the same line with the same byte layout, use
 /// [`extract_link_spans_with_original`] to preserve backtick-wrapped label
 /// content.
-pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
+#[allow(dead_code)] // Used in tests only
+pub(crate) fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
     extract_link_spans_with_original(text, text)
 }
 
@@ -148,7 +154,7 @@ pub fn extract_link_spans(text: &str) -> Vec<LinkSpan> {
 /// `cleaned` and `original` must describe the same line with identical byte
 /// lengths and identical byte positions for all link syntax characters (`[`,
 /// `]`, `(`, `)`).
-pub fn extract_link_spans_with_original(cleaned: &str, original: &str) -> Vec<LinkSpan> {
+pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) -> Vec<LinkSpan> {
     let bytes = cleaned.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -315,7 +321,7 @@ fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
 /// Parse the inner content of a wikilink (between [[ and ]]).
 /// Handles: target, target|label, target#heading, target#^block-id
 #[must_use]
-pub fn parse_wikilink(inner: &str) -> Option<Link> {
+pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
     if inner.is_empty() {
         return None;
     }
@@ -386,7 +392,7 @@ fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Optio
 
 /// Parse a markdown link's label text and target into a Link.
 #[must_use]
-pub fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<Link> {
+pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<Link> {
     if target_raw.is_empty() {
         return None;
     }

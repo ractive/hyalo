@@ -126,7 +126,7 @@ fn find_all_files_returns_sorted_array() {
         .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
         .collect();
     let mut sorted = files.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(files, sorted, "results not sorted by file path");
 }
 
@@ -654,7 +654,7 @@ fn find_sort_modified() {
         })
         .collect();
     let mut sorted = times.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(times, sorted, "results not sorted by modified time");
 }
 
@@ -670,7 +670,7 @@ fn find_sort_file_default() {
         .map(|v| v["file"].as_str().expect("field 'file' should be a string"))
         .collect();
     let mut sorted = files.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     assert_eq!(files, sorted);
 }
 
@@ -3124,7 +3124,7 @@ fn find_sort_title_reverse() {
     // Titles should be in reverse alphabetical order
     let titles: Vec<&str> = results.iter().filter_map(|v| v["title"].as_str()).collect();
     let mut sorted = titles.clone();
-    sorted.sort();
+    sorted.sort_unstable();
     sorted.reverse();
     assert_eq!(
         titles, sorted,
@@ -3185,7 +3185,7 @@ fn find_reverse_alone() {
     let results = unwrap_results(&json);
     let files: Vec<&str> = results.iter().filter_map(|v| v["file"].as_str()).collect();
     let mut expected = files.clone();
-    expected.sort();
+    expected.sort_unstable();
     expected.reverse();
     assert_eq!(
         files, expected,

@@ -19,6 +19,7 @@ pub enum ScanAction {
 ///
 /// [`dispatch_body_line`] strips both inline code spans and inline comments
 /// before calling visitors, so this wrapper is a trivial passthrough.
+#[allow(dead_code)] // Only constructed by scan_reader, which is used in tests
 struct ClosureVisitor<F: FnMut(&str, usize) -> ScanAction> {
     visitor: F,
 }
@@ -33,7 +34,8 @@ impl<F: FnMut(&str, usize) -> ScanAction> FileVisitor for ClosureVisitor<F> {
 /// Callback-based scanner that streams through a markdown file.
 /// Skips frontmatter, fenced code blocks, and inline code spans.
 /// Calls the visitor function for each text segment with its 1-based line number.
-pub fn scan_file<F>(path: &Path, visitor: F) -> Result<()>
+#[allow(dead_code)] // Used by links::extract_links_from_file, which is test-only
+pub(crate) fn scan_file<F>(path: &Path, visitor: F) -> Result<()>
 where
     F: FnMut(&str, usize) -> ScanAction,
 {
@@ -43,7 +45,8 @@ where
 }
 
 /// Scan from any buffered reader (useful for testing without file I/O).
-pub fn scan_reader<R: BufRead, F>(reader: R, visitor: F) -> Result<()>
+#[allow(dead_code)] // Used in scanner tests only
+pub(crate) fn scan_reader<R: BufRead, F>(reader: R, visitor: F) -> Result<()>
 where
     F: FnMut(&str, usize) -> ScanAction,
 {
@@ -289,8 +292,13 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
 /// to override the events they care about.
 pub trait FileVisitor {
     /// Called with parsed frontmatter properties (empty `IndexMap` if none).
+    ///
+    /// The scanner passes ownership of the map to avoid a clone in the common
+    /// single-visitor case. When multiple visitors are present, the scanner
+    /// clones for all but the last, so only N-1 allocations occur for N visitors.
+    ///
     /// Return `ScanAction::Stop` to skip the body scan for this visitor.
-    fn on_frontmatter(&mut self, _props: &IndexMap<String, Value>) -> ScanAction {
+    fn on_frontmatter(&mut self, _props: IndexMap<String, Value>) -> ScanAction {
         ScanAction::Continue
     }
 
@@ -377,10 +385,17 @@ pub fn scan_reader_multi<R: BufRead>(
     buf.clear();
     let n = reader.read_line(&mut buf).context("failed to read line")?;
     if n == 0 {
-        // Empty file — deliver empty frontmatter
-        let empty = IndexMap::new();
+        // Empty file — deliver empty frontmatter.
+        // Clone for all but the last visitor; take ownership for the last.
+        let mut empty: IndexMap<String, Value> = IndexMap::new();
+        let last = visitors.len() - 1;
         for (i, v) in visitors.iter_mut().enumerate() {
-            if v.on_frontmatter(&empty) == ScanAction::Stop {
+            let props = if i == last {
+                std::mem::take(&mut empty)
+            } else {
+                empty.clone()
+            };
+            if v.on_frontmatter(props) == ScanAction::Stop {
                 active[i] = false;
             }
         }
@@ -392,7 +407,7 @@ pub fn scan_reader_multi<R: BufRead>(
 
     // Try to parse frontmatter
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
-    let (fm_props, fm_lines) = if first_trimmed.trim() == "---" {
+    let (mut fm_props, fm_lines) = if first_trimmed.trim() == "---" {
         const MAX_FRONTMATTER_LINES: usize = 200;
         const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
 
@@ -449,9 +464,16 @@ pub fn scan_reader_multi<R: BufRead>(
         (IndexMap::new(), 0usize)
     };
 
-    // Deliver frontmatter to all visitors
+    // Deliver frontmatter to all visitors.
+    // Clone for all but the last visitor; take ownership for the last.
+    let last = visitors.len() - 1;
     for (i, v) in visitors.iter_mut().enumerate() {
-        if v.on_frontmatter(&fm_props) == ScanAction::Stop || !v.needs_body() {
+        let props = if i == last {
+            std::mem::take(&mut fm_props)
+        } else {
+            fm_props.clone()
+        };
+        if v.on_frontmatter(props) == ScanAction::Stop || !v.needs_body() {
             active[i] = false;
         }
     }
@@ -550,7 +572,8 @@ fn read_line_capped<R: BufRead>(
                     let len = b.len();
                     break (nl, len);
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+
                 Err(e) => return Err(e),
             }
         };
@@ -587,14 +610,13 @@ fn read_line_capped<R: BufRead>(
         total += consume;
 
         // Validate UTF-8; treat invalid bytes as a truncated/skipped line.
-        match std::str::from_utf8(&chunk) {
-            Ok(s) => buf.push_str(s),
-            Err(_) => {
-                if newline_pos.is_none() {
-                    drain_until_newline(reader)?;
-                }
-                return Ok((total, true));
+        if let Ok(s) = std::str::from_utf8(&chunk) {
+            buf.push_str(s);
+        } else {
+            if newline_pos.is_none() {
+                drain_until_newline(reader)?;
             }
+            return Ok((total, true));
         }
 
         let truncated = to_copy < consume;
@@ -623,16 +645,12 @@ fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
         if available.is_empty() {
             return Ok(());
         }
-        match available.iter().position(|&b| b == b'\n') {
-            Some(pos) => {
-                reader.consume(pos + 1);
-                return Ok(());
-            }
-            None => {
-                let n = available.len();
-                reader.consume(n);
-            }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            reader.consume(pos + 1);
+            return Ok(());
         }
+        let n = available.len();
+        reader.consume(n);
     }
 }
 
@@ -709,7 +727,7 @@ fn dispatch_body_line(
 // ---------------------------------------------------------------------------
 
 /// Collects frontmatter properties from a file scan.
-pub struct FrontmatterCollector {
+pub(crate) struct FrontmatterCollector {
     props: IndexMap<String, Value>,
     body_needed: bool,
 }
@@ -733,8 +751,8 @@ impl FrontmatterCollector {
 }
 
 impl FileVisitor for FrontmatterCollector {
-    fn on_frontmatter(&mut self, props: &IndexMap<String, Value>) -> ScanAction {
-        self.props = props.clone();
+    fn on_frontmatter(&mut self, props: IndexMap<String, Value>) -> ScanAction {
+        self.props = props;
         if self.body_needed {
             ScanAction::Continue
         } else {
@@ -750,6 +768,7 @@ impl FileVisitor for FrontmatterCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     macro_rules! md {
         ($s:expr) => {
@@ -1196,7 +1215,7 @@ Line 2
         // which exceeds the 200-line budget enforced by scan_reader_multi.
         let mut input = String::from("---\n");
         for i in 0..201usize {
-            input.push_str(&format!("k{i}: v\n"));
+            let _ = writeln!(input, "k{i}: v");
         }
         // Deliberately omit the closing `---` so the budget is hit before EOF.
         let mut fm = FrontmatterCollector::new(true);
@@ -1230,7 +1249,7 @@ Line 2
         // 201 content lines, no closing `---` — must exceed the 200-line budget.
         let mut input = String::from("---\n");
         for i in 0..201usize {
-            input.push_str(&format!("k{i}: v\n"));
+            let _ = writeln!(input, "k{i}: v");
         }
         let mut v = BodyOnly { lines: Vec::new() };
         let result = scan_reader_multi(input.as_bytes(), &mut [&mut v]);
@@ -1288,13 +1307,6 @@ Line 2
     #[test]
     fn needs_frontmatter_mixed_visitors() {
         // One visitor needs frontmatter, one doesn't — YAML must still be parsed.
-        let input = md!(r"
----
-title: Hello
----
-Body
-");
-        let mut fm = FrontmatterCollector::new(true);
         struct BodyOnly {
             lines: Vec<String>,
         }
@@ -1307,6 +1319,14 @@ Body
                 false
             }
         }
+
+        let input = md!(r"
+---
+title: Hello
+---
+Body
+");
+        let mut fm = FrontmatterCollector::new(true);
         let mut body = BodyOnly { lines: Vec::new() };
         scan_reader_multi(input.as_bytes(), &mut [&mut fm, &mut body]).unwrap();
 

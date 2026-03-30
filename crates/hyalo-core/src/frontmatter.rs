@@ -96,7 +96,8 @@ fn detect_list_indent_style(yaml: &str) -> bool {
 
 /// Represents parsed frontmatter and the remaining body content.
 #[derive(Debug, Clone)]
-pub struct Document {
+#[allow(dead_code)] // Used in tests only
+pub(crate) struct Document {
     properties: IndexMap<String, Value>,
     body: String,
     /// Whether the original YAML used compact list indentation (flush `- item`).
@@ -105,6 +106,7 @@ pub struct Document {
     compact_list_indent: bool,
 }
 
+#[allow(dead_code)] // All methods used in tests only
 impl Document {
     #[must_use]
     pub fn properties(&self) -> &IndexMap<String, Value> {
@@ -216,6 +218,10 @@ pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result
     let compact_list_indent = if body_offset > 0 {
         file.seek(SeekFrom::Start(0))
             .with_context(|| format!("failed to seek in {}", path.display()))?;
+        // body_offset is the byte position within the file; on 32-bit targets a
+        // frontmatter section larger than 4 GiB would truncate here, but that is
+        // unreachable in practice.
+        #[allow(clippy::cast_possible_truncation)]
         let mut fm_bytes = vec![0u8; body_offset as usize];
         file.read_exact(&mut fm_bytes)
             .with_context(|| format!("failed to read frontmatter of {}", path.display()))?;
@@ -417,6 +423,7 @@ fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<IndexMap<String
 /// Returns `Ok((Some(yaml_content), body))` if frontmatter is found,
 /// `Ok((None, full_content))` if no frontmatter is present, or an error if the file
 /// starts with `---` but has no closing delimiter (which would cause corruption on write).
+#[allow(dead_code)] // Called by Document::parse, which is used in tests only
 fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
     // Frontmatter must start with `---` on the very first line
     if !content.starts_with("---") {
@@ -467,6 +474,7 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
 }
 
 /// Find the position of `---` at the start of a line in the given string.
+#[allow(dead_code)] // Called by extract_frontmatter, which is used in tests only
 fn find_closing_delimiter(s: &str) -> Option<usize> {
     // Check if it starts right at position 0
     if s.starts_with("---")
@@ -635,6 +643,7 @@ fn infer_value(raw: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     macro_rules! md {
         ($s:expr) => {
@@ -942,7 +951,6 @@ Body.
     // --- Budget boundary tests for skip_frontmatter ---
 
     fn make_frontmatter_with_n_lines(n: usize) -> String {
-        use std::fmt::Write as _;
         // Each content line is "k: v\n" (6 bytes). The closing --- is appended.
         let mut s = String::from("---\n");
         for i in 0..n {
@@ -1098,7 +1106,7 @@ Body.
         let mut yaml = String::from("---\n");
         for i in 0..25 {
             yaml.push_str(&"  ".repeat(i));
-            yaml.push_str(&format!("l{i}:\n"));
+            let _ = writeln!(yaml, "l{i}:");
         }
         yaml.push_str(&"  ".repeat(25));
         yaml.push_str("val: 1\n");

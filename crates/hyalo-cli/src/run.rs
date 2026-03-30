@@ -226,13 +226,13 @@ pub fn run() {
             Ok(canonical) => canonical
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map(|s| s.to_owned()),
+                .map(std::borrow::ToOwned::to_owned),
             Err(_) => {
                 // Fallback for non-existent paths: use file_name() on the raw path.
                 dir.file_name()
                     .and_then(|n| n.to_str())
                     .filter(|s| *s != ".")
-                    .map(|s| s.to_owned())
+                    .map(std::borrow::ToOwned::to_owned)
             }
         }
     };
@@ -240,17 +240,14 @@ pub fn run() {
     // CLI --format is already validated by Clap; fall back to config (String) with runtime parse.
     let format = if let Some(f) = cli.format {
         f
+    } else if let Some(fmt) = Format::from_str_opt(&config.format) {
+        fmt
     } else {
-        match Format::from_str_opt(&config.format) {
-            Some(fmt) => fmt,
-            None => {
-                eprintln!(
-                    "Invalid output format '{}' in .hyalo.toml; supported formats are: json, text",
-                    config.format
-                );
-                die(2);
-            }
-        }
+        eprintln!(
+            "Invalid output format '{}' in .hyalo.toml; supported formats are: json, text",
+            config.format
+        );
+        die(2);
     };
     let hints_flag = if cli.hints {
         true
@@ -274,7 +271,7 @@ pub fn run() {
         format
     };
     if jq_filter.is_some() && format != Format::Json {
-        eprintln!("Error: --jq cannot be combined with --format {}", format);
+        eprintln!("Error: --jq cannot be combined with --format {format}");
         eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
         die(2);
     }
@@ -292,7 +289,9 @@ pub fn run() {
     // automatically when the user runs the hint command from the same CWD.
     let hint_ctx = if hints_flag && jq_filter.is_none() {
         let dir_hint = if dir_from_cli {
-            dir.to_str().map(|s| s.to_owned()).filter(|s| s != ".")
+            dir.to_str()
+                .map(std::borrow::ToOwned::to_owned)
+                .filter(|s| s != ".")
         } else {
             None
         };
@@ -370,16 +369,15 @@ pub fn run() {
                     // site-prefix — the index data may not match the current run.
                     let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
                     let vault_dir_str = canonical_dir.to_string_lossy();
-                    if !idx.validate(&vault_dir_str, site_prefix) {
+                    if idx.validate(&vault_dir_str, site_prefix) {
+                        Some(idx)
+                    } else {
                         let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                         crate::warn::warn(format!(
-                            "index was built for vault '{}' (prefix {:?}) but current \
-                             vault is '{}' (prefix {:?}); falling back to disk scan",
-                            hdr_vault, hdr_prefix, vault_dir_str, site_prefix,
+                            "index was built for vault '{hdr_vault}' (prefix {hdr_prefix:?}) but current \
+                             vault is '{vault_dir_str}' (prefix {site_prefix:?}); falling back to disk scan",
                         ));
                         None
-                    } else {
-                        Some(idx)
                     }
                 }
                 Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
@@ -985,14 +983,13 @@ pub fn run() {
                 }
             } else if let Some(ctx) = &hint_ctx {
                 // Re-parse the output to generate hints, then format with them.
-                let value: serde_json::Value = match serde_json::from_str(&output) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        // Should not happen since effective_format is forced to JSON,
-                        // but fall through to plain output if it does.
-                        println!("{output}");
-                        die(0);
-                    }
+                let value: serde_json::Value = if let Ok(v) = serde_json::from_str(&output) {
+                    v
+                } else {
+                    // Should not happen since effective_format is forced to JSON,
+                    // but fall through to plain output if it does.
+                    println!("{output}");
+                    die(0);
                 };
                 let hints = generate_hints(ctx, &value);
                 let formatted = format_with_hints(format, &value, &hints);

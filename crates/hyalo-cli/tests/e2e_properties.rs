@@ -183,7 +183,7 @@ fn properties_glob_no_match() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(
-        json.as_array().is_some_and(|a| a.is_empty()),
+        json.as_array().is_some_and(std::vec::Vec::is_empty),
         "non-matching glob should return empty array; got: {json}"
     );
     assert!(

@@ -53,8 +53,7 @@ pub fn mv(
     };
 
     // 2. Validate target path
-    let new_rel = validate_target(dir, to_arg, &old_rel, format)?;
-    let new_rel = match new_rel {
+    let new_rel = match validate_target(dir, to_arg, &old_rel, format) {
         Ok(rel) => rel,
         Err(outcome) => return Ok(outcome),
     };
@@ -95,7 +94,7 @@ pub fn mv(
             if let Some(old_entry) = old_entry_opt {
                 idx.remove_entry(&old_rel);
                 let mut new_entry = old_entry;
-                new_entry.rel_path = new_rel.clone();
+                new_entry.rel_path.clone_from(&new_rel);
                 new_entry.modified = format_modified(&new_full)?;
                 idx.insert_entry(new_entry);
             }
@@ -123,7 +122,7 @@ fn validate_target(
     to_arg: &str,
     src_rel: &str,
     format: Format,
-) -> Result<Result<String, CommandOutcome>> {
+) -> Result<String, CommandOutcome> {
     // Normalize forward slashes and strip leading "./" for consistent comparison
     let normalized = to_arg.replace('\\', "/");
     let normalized = normalized
@@ -132,7 +131,10 @@ fn validate_target(
         .to_owned();
 
     // Must end with .md
-    if !normalized.ends_with(".md") {
+    if !std::path::Path::new(&normalized)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    {
         let out = crate::output::format_error(
             format,
             "target path must end with .md",
@@ -140,7 +142,7 @@ fn validate_target(
             Some(&format!("did you mean {normalized}.md?")),
             None,
         );
-        return Ok(Err(CommandOutcome::UserError(out)));
+        return Err(CommandOutcome::UserError(out));
     }
 
     // Reject path traversal (component-based, consistent with discovery::resolve_file)
@@ -158,7 +160,7 @@ fn validate_target(
             None,
             None,
         );
-        return Ok(Err(CommandOutcome::UserError(out)));
+        return Err(CommandOutcome::UserError(out));
     }
 
     // Source and destination must differ
@@ -170,7 +172,7 @@ fn validate_target(
             Some("choose a different destination path"),
             None,
         );
-        return Ok(Err(CommandOutcome::UserError(out)));
+        return Err(CommandOutcome::UserError(out));
     }
 
     // Target must not already exist
@@ -183,10 +185,10 @@ fn validate_target(
             None,
             None,
         );
-        return Ok(Err(CommandOutcome::UserError(out)));
+        return Err(CommandOutcome::UserError(out));
     }
 
-    Ok(Ok(normalized))
+    Ok(normalized)
 }
 
 /// Execute the file move and apply all rewrite plans.

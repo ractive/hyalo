@@ -296,7 +296,10 @@ fn plan_inbound_rewrites(
                     // style by re-prepending the site_prefix (or just `/`).
                     if span.link.target.starts_with('/') {
                         // Preserve whether the original used .md or stem style.
-                        let target = if span.link.target.ends_with(".md") {
+                        let target = if std::path::Path::new(&span.link.target)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                        {
                             new_rel
                         } else {
                             new_stem

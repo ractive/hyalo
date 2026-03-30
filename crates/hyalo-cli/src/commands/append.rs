@@ -616,6 +616,7 @@ title: Note
 
     #[test]
     fn append_where_property_filter_skips_nonmatching() {
+        use hyalo_core::filter::parse_property_filter;
         // Only files matching --where-property are mutated.
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("match.md"), "---\nstatus: draft\n---\n").unwrap();
@@ -625,7 +626,6 @@ title: Note
         )
         .unwrap();
 
-        use hyalo_core::filter::parse_property_filter;
         let filter = parse_property_filter("status=draft").unwrap();
         let outcome = append(
             tmp.path(),
@@ -710,7 +710,7 @@ title: Note
             CommandOutcome::UserError(msg) => {
                 assert!(msg.contains("--where-property"), "msg: {msg}");
             }
-            other => panic!("expected UserError, got: {other:?}"),
+            other @ CommandOutcome::Success(_) => panic!("expected UserError, got: {other:?}"),
         }
     }
 

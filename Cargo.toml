@@ -36,6 +36,20 @@ serde_json = "1.0.149"
 tempfile = "3"
 toml = "0.8"
 
+[workspace.lints.clippy]
+# Enable the full pedantic group, then allow lints we intentionally skip.
+pedantic = { level = "warn", priority = -1 }
+
+# Intentionally allowed — not worth the noise/churn:
+must_use_candidate = "allow"          # too many false positives on builder-style APIs
+return_self_not_must_use = "allow"    # same rationale as must_use_candidate
+doc_markdown = "allow"                # backtick suggestions for identifiers in docs
+missing_errors_doc = "allow"          # # Errors sections not required yet
+missing_panics_doc = "allow"          # # Panics sections not required yet
+too_many_lines = "allow"              # function length — addressed structurally, not per-lint
+module_name_repetitions = "allow"     # e.g. filter::FilterOp is fine
+struct_excessive_bools = "allow"      # CLI options structs legitimately need bools
+
 [profile.release]
 codegen-units = 1
 lto = true
