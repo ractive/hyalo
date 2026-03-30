@@ -456,7 +456,7 @@ Orphans: 3
   -> hyalo --dir . find --property status=in-progress
 ```
 
-In JSON mode, `--hints` wraps the output in `{"data": ..., "hints": [...]}`. Hints are concrete, copy-pasteable commands — no templates or placeholders. Suppressed when combined with `--jq`.
+In JSON mode, `--hints` wraps the output in `{"data": ..., "hints": [{"description": "...", "cmd": "hyalo ..."}]}`. Each hint has a short description and a concrete, copy-pasteable command. Suppressed when combined with `--jq`.
 
 ## Snapshot Index
 

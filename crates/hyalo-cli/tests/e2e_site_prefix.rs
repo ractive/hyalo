@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo_no_hints, write_md};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -35,8 +35,8 @@ fn build_vault(root: &std::path::Path) {
 
 /// Run `hyalo --dir <dir_arg> find --fields links` and return the parsed JSON.
 fn find_links(dir_arg: &str) -> serde_json::Value {
-    let output = hyalo()
-        .args(["--dir", dir_arg, "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", dir_arg])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
         .unwrap();
@@ -87,8 +87,8 @@ fn find_links_absolute_path_with_dotslash_dir() {
     // derived prefix must still be "docs", not "".
     let docs = format!("{}/docs/", tmp.path().to_str().unwrap());
 
-    let output = hyalo()
-        .args(["--dir", docs.trim_end_matches('/'), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", docs.trim_end_matches('/')])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
         .unwrap();
@@ -112,8 +112,8 @@ fn find_links_site_prefix_cli_flag() {
     build_vault(tmp.path());
     let docs = tmp.path().join("docs");
 
-    let output = hyalo()
-        .args(["--dir", docs.to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", docs.to_str().unwrap()])
         .args(["--site-prefix", "docs"])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
@@ -152,12 +152,8 @@ fn find_links_site_prefix_config_file() {
     )
     .unwrap();
 
-    let output = hyalo()
-        .args([
-            "--dir",
-            tmp.path().join("docs").to_str().unwrap(),
-            "--no-hints",
-        ])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().join("docs").to_str().unwrap()])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
         .unwrap();
@@ -185,7 +181,7 @@ fn backlinks_absolute_link_indexed_correctly() {
     build_vault(tmp.path());
     let docs = tmp.path().join("docs");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", docs.to_str().unwrap()])
         .args(["backlinks", "--file", "pages/about.md"])
         .output()
@@ -215,7 +211,7 @@ fn backlinks_absolute_link_indexed_correctly() {
 /// Run backlinks and return total count.  Used to verify that all --dir styles
 /// produce the same effective site_prefix.
 fn backlink_count(dir_arg: &str) -> u64 {
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", dir_arg])
         .args(["backlinks", "--file", "pages/about.md"])
         .output()
@@ -249,7 +245,7 @@ fn site_prefix_wrong_prefix_misses_absolute_links() {
     build_vault(tmp.path());
     let docs_abs = tmp.path().join("docs");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", docs_abs.to_str().unwrap()])
         .args(["--site-prefix", "wrong"])
         .args(["backlinks", "--file", "pages/about.md"])

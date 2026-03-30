@@ -80,20 +80,28 @@ pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
 
 /// Format output with drill-down hints appended.
 ///
-/// - **JSON**: wraps the original value in `{"data": ..., "hints": [...]}`
-/// - **Text**: appends `  -> <command>` lines after the formatted output
+/// - **JSON**: wraps the original value in `{"data": ..., "hints": [{"description": "...", "cmd": "..."}]}`
+/// - **Text**: appends `  -> <command>  # <description>` lines after the formatted output
 ///
 /// If `hints` is empty, produces the same output as [`format_success`].
 #[must_use]
-pub fn format_with_hints(format: Format, value: &serde_json::Value, hints: &[String]) -> String {
+pub fn format_with_hints(
+    format: Format,
+    value: &serde_json::Value,
+    hints: &[crate::hints::Hint],
+) -> String {
     if hints.is_empty() {
         return format_success(format, value);
     }
     match format {
         Format::Json => {
+            let hints_json: Vec<serde_json::Value> = hints
+                .iter()
+                .map(|h| serde_json::json!({"description": &h.description, "cmd": &h.cmd}))
+                .collect();
             let envelope = serde_json::json!({
                 "data": value,
-                "hints": hints,
+                "hints": hints_json,
             });
             serde_json::to_string_pretty(&envelope).unwrap_or_default()
         }
@@ -103,7 +111,9 @@ pub fn format_with_hints(format: Format, value: &serde_json::Value, hints: &[Str
             text.push('\n');
             for hint in hints {
                 text.push_str("\n  -> ");
-                text.push_str(hint);
+                text.push_str(&hint.cmd);
+                text.push_str("  # ");
+                text.push_str(&hint.description);
             }
             text
         }

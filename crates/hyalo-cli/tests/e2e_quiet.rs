@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo_no_hints, write_md};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,7 +32,7 @@ fn warning_appears_without_quiet() {
     write_valid(tmp.path(), "good.md");
     write_invalid_frontmatter(tmp.path(), "bad.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path())
         .arg("tags")
@@ -54,7 +54,7 @@ fn warning_suppressed_with_quiet_long() {
     write_valid(tmp.path(), "good.md");
     write_invalid_frontmatter(tmp.path(), "bad.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--quiet")
         .arg("--dir")
         .arg(tmp.path())
@@ -79,7 +79,7 @@ fn warning_suppressed_with_quiet_short() {
     write_valid(tmp.path(), "good.md");
     write_invalid_frontmatter(tmp.path(), "bad.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("-q")
         .arg("--dir")
         .arg(tmp.path())
@@ -102,7 +102,7 @@ fn warning_suppressed_on_find_with_quiet() {
     write_valid(tmp.path(), "good.md");
     write_invalid_frontmatter(tmp.path(), "bad.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("-q")
         .arg("--dir")
         .arg(tmp.path())
@@ -124,7 +124,7 @@ fn warning_suppressed_on_properties_with_quiet() {
     write_valid(tmp.path(), "good.md");
     write_invalid_frontmatter(tmp.path(), "bad.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("-q")
         .arg("--dir")
         .arg(tmp.path())
@@ -165,7 +165,7 @@ fn no_dedup_summary_for_unique_warnings() {
         write_invalid_frontmatter(tmp.path(), &format!("bad{i}.md"));
     }
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path())
         .arg("tags")
@@ -193,7 +193,7 @@ fn no_dedup_summary_when_no_warnings_at_all() {
     let tmp = tempfile::tempdir().unwrap();
     write_valid(tmp.path(), "only.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path())
         .arg("tags")
@@ -208,15 +208,14 @@ fn no_dedup_summary_when_no_warnings_at_all() {
     );
 }
 
-/// The `--hints has no effect` warning is a static string (no per-file info).
-/// It fires exactly once — verify it appears exactly once and is not
-/// duplicated or suppressed.
+/// `--hints` on mutation commands (set/remove/append) now generates hints.
+/// Verify no spurious warning is emitted and the output contains a hints envelope.
 #[test]
 fn hints_warning_appears_exactly_once() {
     let tmp = tempfile::tempdir().unwrap();
     write_valid(tmp.path(), "note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path())
         .arg("--hints")
@@ -228,15 +227,23 @@ fn hints_warning_appears_exactly_once() {
         .output()
         .unwrap();
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(
-        stderr.matches("warning:").count(),
-        1,
-        "expected exactly 1 warning line, got:\n{stderr}"
-    );
     assert!(
-        stderr.contains("--hints has no effect"),
-        "expected --hints warning, got:\n{stderr}"
+        output.status.success(),
+        "set --hints should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("--hints has no effect"),
+        "should not warn about --hints on mutation commands; got:\n{stderr}"
+    );
+    // The output should be a valid hints envelope
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert!(
+        json.get("hints").is_some(),
+        "set --hints should produce hints envelope; got: {stdout}"
     );
 }
 
@@ -250,7 +257,7 @@ fn quiet_suppresses_all_output_including_summary() {
         write_invalid_frontmatter(tmp.path(), &format!("bad{i}.md"));
     }
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--quiet")
         .arg("--dir")
         .arg(tmp.path())

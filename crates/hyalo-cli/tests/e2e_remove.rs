@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -12,7 +12,7 @@ fn remove_json(
     tmp: &TempDir,
     extra_args: &[&str],
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.arg("remove");
     cmd.args(extra_args);
@@ -346,7 +346,7 @@ status: old
 #[test]
 fn remove_requires_file_or_glob() {
     let tmp = TempDir::new().unwrap();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["remove", "--property", "status"]);
     let output = cmd.output().unwrap();
@@ -362,7 +362,7 @@ fn remove_requires_file_or_glob() {
 fn remove_empty_property_name_returns_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["remove", "--property", "=value", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -378,7 +378,7 @@ fn remove_empty_property_name_returns_error() {
 fn remove_requires_at_least_one_mutation() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["remove", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -417,7 +417,7 @@ fn remove_multi_file_modifies_all() {
     write_md(tmp.path(), "a.md", "---\ntitle: A\nstatus: draft\n---\n");
     write_md(tmp.path(), "b.md", "---\ntitle: B\nstatus: draft\n---\n");
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "remove",
@@ -462,7 +462,7 @@ title: B
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["remove", "--property", "status", "--glob", "*.md"])
@@ -497,7 +497,7 @@ tags:
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["remove", "--tag", "rust", "--file", "note.md"])

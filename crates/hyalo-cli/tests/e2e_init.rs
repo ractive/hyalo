@@ -1,6 +1,6 @@
 mod common;
 
-use common::hyalo;
+use common::hyalo_no_hints;
 use std::fs;
 use tempfile::TempDir;
 
@@ -12,7 +12,7 @@ use tempfile::TempDir;
 fn init_creates_hyalo_toml() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()
@@ -38,7 +38,7 @@ fn init_does_not_overwrite_existing_toml() {
     let original = "dir = \"my-vault\"\n";
     fs::write(tmp.path().join(".hyalo.toml"), original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()
@@ -65,7 +65,7 @@ fn init_dir_flag_updates_existing_toml() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--dir", "new-dir"])
         .output()
@@ -90,7 +90,7 @@ fn init_dir_flag_updates_existing_toml() {
 fn init_with_dir_flag() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--dir", "docs"])
         .output()
@@ -113,7 +113,7 @@ fn init_auto_detects_docs_dir() {
     fs::create_dir_all(tmp.path().join("docs")).unwrap();
     fs::write(tmp.path().join("docs").join("note.md"), "# Hello").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()
@@ -133,7 +133,7 @@ fn init_auto_detects_docs_dir() {
 fn init_falls_back_to_dot_when_no_doc_dir() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()
@@ -171,7 +171,7 @@ fn init_smart_detection_picks_dir_with_most_md() {
     )
     .unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()
@@ -195,7 +195,7 @@ fn init_smart_detection_picks_dir_with_most_md() {
 fn init_claude_creates_skill() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -233,7 +233,7 @@ fn init_claude_overwrites_existing_skill() {
     let original = "---\nname: custom\n---\nstale content\n";
     fs::write(&skill_path, original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -267,7 +267,7 @@ fn init_claude_overwrites_existing_skill() {
 fn init_claude_creates_tidy_skill() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -308,7 +308,7 @@ fn init_claude_overwrites_existing_tidy_skill() {
     let original = "---\nname: custom-tidy\n---\nstale content\n";
     fs::write(&tidy_skill_path, original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -341,7 +341,7 @@ fn init_claude_overwrites_existing_tidy_skill() {
 fn init_claude_creates_rule() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -382,7 +382,7 @@ fn init_claude_overwrites_existing_rule() {
     let original = "---\npaths:\n  - \"old-vault/**\"\n---\nold content\n";
     fs::write(&rule_path, original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -410,7 +410,7 @@ fn init_claude_rule_uses_detected_dir() {
     fs::create_dir_all(tmp.path().join("docs")).unwrap();
     fs::write(tmp.path().join("docs").join("note.md"), "# Hello").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -440,7 +440,7 @@ fn init_claude_rule_uses_explicit_dir() {
     // --dir my-vault should be reflected in the rule paths.
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude", "--dir", "my-vault"])
         .output()
@@ -473,7 +473,7 @@ fn init_claude_rule_uses_explicit_dir() {
 fn init_claude_creates_claude_md() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -512,7 +512,7 @@ fn init_claude_appends_to_existing_claude_md() {
     let original = "# Project Instructions\n\nSome existing content.\n";
     fs::write(&claude_md_path, original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -558,7 +558,7 @@ fn init_claude_no_duplicate_in_claude_md() {
     let original = format!("<!-- hyalo:start -->\n{hint}\n<!-- hyalo:end -->\n");
     fs::write(&claude_md_path, &original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -603,7 +603,7 @@ fn init_claude_updates_managed_section_on_rerun() {
     fs::write(&claude_md_path, surrounding).unwrap();
 
     // First run — appends section.
-    let out1 = hyalo()
+    let out1 = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -612,7 +612,7 @@ fn init_claude_updates_managed_section_on_rerun() {
     assert!(out1.status.success(), "first run stderr: {stderr1}");
 
     // Second run — should replace, not duplicate.
-    let out2 = hyalo()
+    let out2 = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -660,7 +660,7 @@ fn init_claude_appends_section_when_no_markers_exist() {
     let original = "# Header\n\nSome existing instructions.\n\n# Footer\n";
     fs::write(&claude_md_path, original).unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -705,7 +705,7 @@ fn init_claude_appends_section_when_no_markers_exist() {
 fn init_prints_summary_of_actions() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -738,7 +738,7 @@ fn init_prints_summary_of_actions() {
 fn init_summary_mentions_rule() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude"])
         .output()
@@ -761,7 +761,7 @@ fn init_summary_mentions_rule() {
 fn init_claude_tidy_skill_parameterized_with_dir() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude", "--dir", "my-kb"])
         .output()
@@ -796,7 +796,7 @@ fn init_claude_hyalo_skill_has_no_sentinel() {
     // that parameterization is a safe no-op (no hyalo-knowledgebase leaks).
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init", "--claude", "--dir", "custom-docs"])
         .output()
@@ -834,7 +834,7 @@ fn init_auto_detects_fuzzy_knowledgebase_dir() {
     )
     .unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()
@@ -858,7 +858,7 @@ fn init_auto_detects_fuzzy_wiki_dir() {
     fs::create_dir_all(tmp.path().join("project-wiki")).unwrap();
     fs::write(tmp.path().join("project-wiki").join("home.md"), "# Home").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["init"])
         .output()

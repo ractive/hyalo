@@ -1,12 +1,12 @@
 ---
-title: "Context-aware smarter hints"
+title: Context-aware smarter hints
 type: iteration
 date: 2026-03-30
 tags:
   - ux
   - feature
   - dogfood
-status: planned
+status: in-progress
 priority: 2
 branch: iter-80/smarter-hints
 ---
@@ -34,10 +34,10 @@ This is an ongoing effort — hint quality should be iterated on over time.
 
 ## Tasks
 
-- [ ] Audit current hint generation — identify what's static vs context-aware
-- [ ] Implement context-aware hint logic based on result shape
-- [ ] Add tests for conditional hint generation
-- [ ] Iterate on hint quality based on dogfooding feedback
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [x] Audit current hint generation — identify what's static vs context-aware
+- [x] Implement context-aware hint logic based on result shape
+- [x] Add tests for conditional hint generation
+- [x] Iterate on hint quality based on dogfooding feedback
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`

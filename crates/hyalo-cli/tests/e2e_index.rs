@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 #[cfg(unix)]
@@ -96,7 +96,7 @@ Some nested content here.
 /// Run `hyalo create-index --dir <dir>` and assert success.
 /// Returns the default index path: `<dir>/.hyalo-index`.
 fn create_default_index(tmp: &TempDir) -> std::path::PathBuf {
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("create-index")
         .output()
@@ -111,8 +111,8 @@ fn create_default_index(tmp: &TempDir) -> std::path::PathBuf {
 
 /// Run `hyalo find` with extra args and return parsed JSON.
 fn run_find(tmp: &TempDir, extra_args: &[&str]) -> serde_json::Value {
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.arg("find");
     cmd.args(extra_args);
     let output = cmd.output().unwrap();
@@ -152,7 +152,7 @@ fn sorted_files(json: &serde_json::Value) -> Vec<String> {
 #[test]
 fn create_index_produces_file() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("create-index")
         .output()
@@ -180,7 +180,7 @@ fn create_index_custom_output_path() {
     let tmp = setup_vault();
     let custom_path = tmp.path().join("my-custom.idx");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["create-index", "--output", custom_path.to_str().unwrap()])
         .output()
@@ -213,7 +213,7 @@ fn drop_index_deletes_file() {
     let index_path = create_default_index(&tmp);
     assert!(index_path.exists());
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("drop-index")
         .output()
@@ -237,7 +237,7 @@ fn drop_index_deletes_file() {
 fn drop_index_nonexistent_returns_error() {
     let tmp = setup_vault();
     // No index created — drop-index should fail.
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("drop-index")
         .output()
@@ -383,20 +383,19 @@ fn summary_with_index_matches_disk_scan() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
-    let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let disk_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["summary", "--format", "json"])
         .output()
         .unwrap();
     assert!(disk_output.status.success());
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_output.stdout).unwrap();
 
-    let index_output = hyalo()
+    let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "--index",
             index_path.to_str().unwrap(),
-            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -429,12 +428,11 @@ fn summary_with_index_file_count() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "--index",
             index_path.to_str().unwrap(),
-            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -456,16 +454,16 @@ fn tags_summary_with_index_matches_disk_scan() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
-    let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let disk_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary"])
         .output()
         .unwrap();
     assert!(disk_output.status.success());
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_output.stdout).unwrap();
 
-    let index_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let index_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--index", index_path.to_str().unwrap(), "tags", "summary"])
         .output()
         .unwrap();
@@ -511,16 +509,16 @@ fn properties_summary_with_index_matches_disk_scan() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
-    let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let disk_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary"])
         .output()
         .unwrap();
     assert!(disk_output.status.success());
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_output.stdout).unwrap();
 
-    let index_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let index_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "--index",
             index_path.to_str().unwrap(),
@@ -567,10 +565,9 @@ fn backlinks_with_index_finds_wikilinks() {
     let index_path = create_default_index(&tmp);
 
     // gamma.md links to alpha.md via [[alpha]]
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "--no-hints",
             "--index",
             index_path.to_str().unwrap(),
             "backlinks",
@@ -605,18 +602,17 @@ fn backlinks_with_index_matches_disk_scan() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
-    let disk_output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let disk_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "beta.md"])
         .output()
         .unwrap();
     assert!(disk_output.status.success());
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_output.stdout).unwrap();
 
-    let index_output = hyalo()
+    let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "--no-hints",
             "--index",
             index_path.to_str().unwrap(),
             "backlinks",
@@ -646,14 +642,9 @@ fn incompatible_index_falls_back_to_disk_scan() {
     let garbage_path = tmp.path().join("garbage.idx");
     std::fs::write(&garbage_path, b"this is not a valid msgpack snapshot").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--no-hints",
-            "--index",
-            garbage_path.to_str().unwrap(),
-            "find",
-        ])
+        .args(["--index", garbage_path.to_str().unwrap(), "find"])
         .output()
         .unwrap();
 
@@ -687,10 +678,9 @@ fn incompatible_index_falls_back_for_summary() {
     let garbage_path = tmp.path().join("bad.idx");
     std::fs::write(&garbage_path, b"NOTBINCODE").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "--no-hints",
             "--index",
             garbage_path.to_str().unwrap(),
             "summary",
@@ -716,7 +706,7 @@ fn incompatible_index_falls_back_for_summary() {
 
 /// Helper: run a hyalo command with --index and assert success.
 fn run_with_index(tmp: &TempDir, index_path: &std::path::Path, args: &[&str]) -> serde_json::Value {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--index", index_path.to_str().unwrap()]);
     cmd.args(args);
@@ -1117,7 +1107,7 @@ fn create_index_rejects_output_outside_vault() {
     let outside = TempDir::new().unwrap();
     let outside_path = outside.path().join("evil.idx");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
         .args(["create-index", "--output", outside_path.to_str().unwrap()])
         .output()
@@ -1147,7 +1137,7 @@ fn create_index_allow_outside_vault_flag() {
     let outside = TempDir::new().unwrap();
     let outside_path = outside.path().join("allowed.idx");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
         .args([
             "create-index",
@@ -1176,7 +1166,7 @@ fn create_index_normal_in_vault_path_works() {
     std::fs::create_dir_all(&in_vault_path).unwrap();
     let index_path = in_vault_path.join("my.idx");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
         .args(["create-index", "--output", index_path.to_str().unwrap()])
         .output()
@@ -1202,7 +1192,7 @@ fn drop_index_rejects_path_outside_vault() {
     let outside_file = outside.path().join("victim.idx");
     std::fs::write(&outside_file, b"fake index").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
         .args(["drop-index", "--path", outside_file.to_str().unwrap()])
         .output()
@@ -1233,7 +1223,7 @@ fn drop_index_allow_outside_vault_flag() {
     let outside_file = outside.path().join("allowed.idx");
     std::fs::write(&outside_file, b"fake index").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
         .args([
             "drop-index",
@@ -1261,7 +1251,7 @@ fn drop_index_normal_in_vault_path_works() {
     let index_path = create_default_index(&vault);
     assert!(index_path.exists());
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
         .args(["drop-index", "--path", index_path.to_str().unwrap()])
         .output()
@@ -1300,8 +1290,8 @@ Content
     std::fs::write(&outside_file, "---\ntitle: Secret\n---\nSecret content\n").unwrap();
     unix_fs::symlink(&outside_file, vault.path().join("evil.md")).unwrap();
 
-    let output = hyalo()
-        .args(["--dir", vault.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
         .arg("find")
         .output()
         .unwrap();
@@ -1367,8 +1357,8 @@ Target content
     )
     .unwrap();
 
-    let output = hyalo()
-        .args(["--dir", vault.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
         .arg("find")
         .output()
         .unwrap();

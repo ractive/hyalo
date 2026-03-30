@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -81,13 +81,12 @@ Auth docs.
 #[test]
 fn summary_includes_link_health() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -143,13 +142,12 @@ fn summary_includes_link_health() {
 #[test]
 fn summary_broken_links_includes_nonexistent_target() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -179,7 +177,7 @@ fn summary_broken_links_includes_nonexistent_target() {
 #[test]
 fn summary_text_includes_links_line() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -221,13 +219,12 @@ fn summary_text_includes_links_line() {
 #[test]
 fn find_broken_links_filter() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "--no-hints",
             "find",
             "--broken-links",
             "--format",
@@ -281,13 +278,12 @@ fn find_broken_links_filter() {
 #[test]
 fn find_broken_links_entries_have_null_path() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "--no-hints",
             "find",
             "--broken-links",
             "--format",
@@ -323,13 +319,12 @@ fn find_broken_links_entries_have_null_path() {
 fn find_broken_links_combined_with_glob_filter() {
     let tmp = setup_vault();
     // Restrict to b.md only via glob — should return just that file
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "--no-hints",
             "find",
             "--broken-links",
             "--glob",
@@ -371,7 +366,7 @@ fn find_broken_links_combined_with_glob_filter() {
 #[test]
 fn links_fix_dry_run_reports_broken_and_fixable() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -447,7 +442,7 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
 #[test]
 fn links_fix_dry_run_detects_fuzzy_match() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -496,7 +491,7 @@ fn links_fix_apply_reduces_broken_links() {
     let tmp = setup_vault();
 
     // Apply fixes
-    let apply_output = hyalo()
+    let apply_output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -539,7 +534,7 @@ fn links_fix_apply_reduces_broken_links() {
 
     // Re-run links fix in dry-run mode to measure the remaining broken link count
     // (same unit: number of broken links, not files).
-    let after_output = hyalo()
+    let after_output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -580,13 +575,12 @@ fn links_fix_apply_reduces_broken_links() {
 #[test]
 fn links_fix_text_format() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
                 .to_str()
                 .expect("temp path should be valid UTF-8"),
-            "--no-hints",
             "links",
             "fix",
             "--format",
@@ -629,7 +623,7 @@ fn links_fix_text_format() {
 fn links_fix_high_threshold_suppresses_fuzzy_fixes() {
     let tmp = setup_vault();
     // With threshold=0.99 the typo "Authnticaton" should not match authentication.md
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -676,7 +670,7 @@ fn links_fix_high_threshold_suppresses_fuzzy_fixes() {
 fn links_fix_default_threshold_finds_fuzzy_match() {
     let tmp = setup_vault();
     // With the default threshold, "Authnticaton" should fuzzy-match authentication.md
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -697,7 +691,7 @@ fn links_fix_default_threshold_finds_fuzzy_match() {
     let fixable = json["fixable"]
         .as_u64()
         .expect("'fixable' should be a number");
-    let high_threshold_output = hyalo()
+    let high_threshold_output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -747,7 +741,7 @@ See [[sort-reverse]] for reverse sorting.
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path()
@@ -817,7 +811,7 @@ Some text.
 "),
     );
 
-    let out = common::hyalo()
+    let out = common::hyalo_no_hints()
         .args(["links", "fix", "--ignore-target", "{{", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
@@ -856,7 +850,7 @@ See [[missing]] and [hugo]({{ .RelPermalink }}) and [hugo2]({{ .Site.BaseURL }})
     );
 
     // Two distinct --ignore-target patterns: one matches RelPermalink, the other BaseURL
-    let out = common::hyalo()
+    let out = common::hyalo_no_hints()
         .args([
             "links",
             "fix",
@@ -888,7 +882,7 @@ See [[missing]] and [hugo]({{ .RelPermalink }}) and [hugo2]({{ .Site.BaseURL }})
 fn links_fix_ignore_target_absent() {
     // With no matching ignore_target, count should be 0
     let tmp = setup_vault();
-    let out = common::hyalo()
+    let out = common::hyalo_no_hints()
         .args([
             "links",
             "fix",

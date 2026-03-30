@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -12,7 +12,7 @@ fn append_json(
     tmp: &TempDir,
     extra_args: &[&str],
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.arg("append");
     cmd.args(extra_args);
@@ -302,7 +302,7 @@ title: Untagged
 #[test]
 fn append_requires_file_or_glob() {
     let tmp = TempDir::new().unwrap();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["append", "--property", "aliases=x"]);
     let output = cmd.output().unwrap();
@@ -320,7 +320,7 @@ fn append_requires_file_or_glob() {
 fn append_requires_at_least_one_property() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["append", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -335,7 +335,7 @@ fn append_requires_at_least_one_property() {
 fn append_invalid_kv_no_equals_returns_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "append",
@@ -357,7 +357,7 @@ fn append_invalid_kv_no_equals_returns_error() {
 fn append_empty_property_name_returns_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["append", "--property", "=value", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -446,7 +446,7 @@ fn append_multi_file_modifies_all() {
     write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
     write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n");
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "append",
@@ -483,7 +483,7 @@ tags:
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["append", "--property", "tags=cli", "--file", "note.md"])

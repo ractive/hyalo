@@ -86,11 +86,18 @@ fn summary_hints_json_has_data_and_hints() {
     // Data must be the vault summary
     assert!(parsed["data"]["files"]["total"].as_u64().unwrap() > 0);
 
-    // Hints must be an array of strings
+    // Hints must be an array of {description, cmd} objects
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty());
     for hint in hints {
-        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+        assert!(
+            hint["cmd"].as_str().unwrap().starts_with("hyalo"),
+            "hint cmd should start with hyalo: {hint}"
+        );
+        assert!(
+            hint.get("description").and_then(|d| d.as_str()).is_some(),
+            "hint should have description: {hint}"
+        );
     }
 }
 
@@ -429,9 +436,9 @@ fn set_format_text_with_hints_outputs_text_not_json() {
 
 // ---------------------------------------------------------------------------
 // Mutation commands with --hints
-// Mutation commands (set, remove, append) accept --hints but do not generate
-// hint suggestions — they produce the same JSON output as without --hints.
-// These tests verify the flag is accepted and output remains valid/correct.
+// Mutation commands (set, remove, append) accept --hints and generate
+// hint suggestions — they produce a hints envelope with verify/read hints.
+// These tests verify the flag is accepted and hints are generated.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -458,15 +465,22 @@ fn set_hints_accepted_produces_valid_json() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
-    // Output should be the mutation result, not wrapped in a hints envelope
+    // Output should be wrapped in a hints envelope
     assert!(
-        parsed.get("modified").is_some(),
-        "should have modified field: {parsed}"
+        parsed.get("data").is_some(),
+        "should have data envelope: {parsed}"
     );
-    // Mutation commands do not generate hints, so no envelope
     assert!(
-        parsed.get("hints").is_none(),
-        "mutation commands should not wrap output in hints envelope: {parsed}"
+        parsed["data"].get("modified").is_some(),
+        "data should have modified field: {parsed}"
+    );
+    // Mutation commands generate verify/read hints
+    assert!(
+        parsed
+            .get("hints")
+            .and_then(|h| h.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "mutation commands should generate hints: {parsed}"
     );
 }
 
@@ -490,12 +504,19 @@ fn remove_hints_accepted_produces_valid_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
     assert!(
-        parsed.get("modified").is_some(),
-        "should have modified field: {parsed}"
+        parsed.get("data").is_some(),
+        "should have data envelope: {parsed}"
     );
     assert!(
-        parsed.get("hints").is_none(),
-        "mutation commands should not wrap output in hints envelope: {parsed}"
+        parsed["data"].get("modified").is_some(),
+        "data should have modified field: {parsed}"
+    );
+    assert!(
+        parsed
+            .get("hints")
+            .and_then(|h| h.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "mutation commands should generate hints: {parsed}"
     );
 }
 
@@ -525,12 +546,19 @@ fn append_hints_accepted_produces_valid_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("expected valid JSON, got: {stdout}\nerr: {e}"));
     assert!(
-        parsed.get("modified").is_some(),
-        "should have modified field: {parsed}"
+        parsed.get("data").is_some(),
+        "should have data envelope: {parsed}"
     );
     assert!(
-        parsed.get("hints").is_none(),
-        "mutation commands should not wrap output in hints envelope: {parsed}"
+        parsed["data"].get("modified").is_some(),
+        "data should have modified field: {parsed}"
+    );
+    assert!(
+        parsed
+            .get("hints")
+            .and_then(|h| h.as_array())
+            .is_some_and(|a| !a.is_empty()),
+        "mutation commands should generate hints: {parsed}"
     );
 }
 
@@ -586,7 +614,10 @@ fn find_with_hints_json_envelope() {
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty(), "should have at least one hint");
     for hint in hints {
-        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+        assert!(
+            hint["cmd"].as_str().unwrap().starts_with("hyalo"),
+            "hint cmd should start with hyalo: {hint}"
+        );
     }
 }
 
@@ -643,10 +674,11 @@ fn mutation_with_hints_warns() {
         "set --hints should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Mutation commands now generate hints — no warning expected
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("warning: --hints has no effect on mutation commands"),
-        "should warn when --hints is passed to set: {stderr}"
+        !stderr.contains("--hints has no effect"),
+        "should not warn about --hints on mutation commands: {stderr}"
     );
 }
 
@@ -670,10 +702,11 @@ fn remove_with_hints_warns() {
         "remove --hints should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Mutation commands now generate hints — no warning expected
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("warning: --hints has no effect on mutation commands"),
-        "should warn when --hints is passed to remove: {stderr}"
+        !stderr.contains("--hints has no effect"),
+        "should not warn about --hints on mutation commands: {stderr}"
     );
 }
 
@@ -697,10 +730,11 @@ fn append_with_hints_warns() {
         "append --hints should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Mutation commands now generate hints — no warning expected
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("warning: --hints has no effect on mutation commands"),
-        "should warn when --hints is passed to append: {stderr}"
+        !stderr.contains("--hints has no effect"),
+        "should not warn about --hints on mutation commands: {stderr}"
     );
 }
 
@@ -835,7 +869,10 @@ fn properties_summary_hints_json_envelope() {
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty(), "should have hints");
     for hint in hints {
-        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+        assert!(
+            hint["cmd"].as_str().unwrap().starts_with("hyalo"),
+            "hint cmd should start with hyalo: {hint}"
+        );
     }
 }
 
@@ -877,7 +914,10 @@ fn tags_summary_hints_json_envelope() {
     let hints = parsed["hints"].as_array().unwrap();
     assert!(!hints.is_empty(), "should have hints");
     for hint in hints {
-        assert!(hint.as_str().unwrap().starts_with("hyalo"));
+        assert!(
+            hint["cmd"].as_str().unwrap().starts_with("hyalo"),
+            "hint cmd should start with hyalo: {hint}"
+        );
     }
 }
 

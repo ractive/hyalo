@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 /// Helper: create a temp dir with a sample file for testing short flags.
@@ -47,7 +47,7 @@ Other body.
 #[test]
 fn short_d_for_dir() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["-d", dir.path().to_str().unwrap(), "find"])
         .output()
         .unwrap();
@@ -61,7 +61,7 @@ fn short_d_for_dir() {
 #[test]
 fn find_short_p_for_property() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "find",
             "-p",
@@ -80,7 +80,7 @@ fn find_short_p_for_property() {
 #[test]
 fn find_short_t_for_tag() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["find", "-t", "research", "-d", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -93,7 +93,7 @@ fn find_short_t_for_tag() {
 #[test]
 fn find_short_s_for_section() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["find", "-s", "Heading", "-d", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -105,7 +105,7 @@ fn find_short_s_for_section() {
 #[test]
 fn find_short_f_for_file() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["find", "-f", "note.md", "-d", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -118,7 +118,7 @@ fn find_short_f_for_file() {
 #[test]
 fn find_short_g_for_glob() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["find", "-g", "other*", "-d", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -131,15 +131,8 @@ fn find_short_g_for_glob() {
 #[test]
 fn find_short_n_for_limit() {
     let dir = setup();
-    let output = hyalo()
-        .args([
-            "--no-hints",
-            "find",
-            "-n",
-            "1",
-            "-d",
-            dir.path().to_str().unwrap(),
-        ])
+    let output = hyalo_no_hints()
+        .args(["find", "-n", "1", "-d", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -156,7 +149,7 @@ fn find_short_n_for_limit() {
 #[test]
 fn read_short_f_for_file() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["read", "-f", "note.md", "-d", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -168,7 +161,7 @@ fn read_short_f_for_file() {
 #[test]
 fn read_short_s_for_section() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "read",
             "-f",
@@ -188,7 +181,7 @@ fn read_short_s_for_section() {
 #[test]
 fn read_short_l_for_lines() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "read",
             "-f",
@@ -210,7 +203,7 @@ fn read_short_l_for_lines() {
 #[test]
 fn properties_short_g_for_glob() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "properties",
             "summary",
@@ -229,7 +222,7 @@ fn properties_short_g_for_glob() {
 #[test]
 fn tags_short_g_for_glob() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "tags",
             "summary",
@@ -248,7 +241,7 @@ fn tags_short_g_for_glob() {
 #[test]
 fn summary_short_g_and_n() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "summary",
             "-g",
@@ -268,7 +261,7 @@ fn summary_short_g_and_n() {
 #[test]
 fn set_short_p_t_f() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "set",
             "-p",
@@ -285,7 +278,7 @@ fn set_short_p_t_f() {
     assert!(output.status.success());
 
     // Verify it took effect
-    let check = hyalo()
+    let check = hyalo_no_hints()
         .args([
             "find",
             "-p",
@@ -305,7 +298,7 @@ fn set_short_p_t_f() {
 fn remove_short_p_t_f() {
     let dir = setup();
     // First set a tag
-    let precondition = hyalo()
+    let precondition = hyalo_no_hints()
         .args([
             "set",
             "-t",
@@ -323,7 +316,7 @@ fn remove_short_p_t_f() {
     );
 
     // Now remove it with short flags
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "remove",
             "-t",
@@ -343,7 +336,7 @@ fn remove_short_p_t_f() {
 #[test]
 fn append_short_p_f() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "append",
             "-p",
@@ -363,7 +356,7 @@ fn append_short_p_f() {
 #[test]
 fn task_read_short_f_l() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "task",
             "read",
@@ -382,7 +375,7 @@ fn task_read_short_f_l() {
 #[test]
 fn task_toggle_short_f_l() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "task",
             "toggle",
@@ -401,7 +394,7 @@ fn task_toggle_short_f_l() {
 #[test]
 fn task_set_status_short_f_l_s() {
     let dir = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "task",
             "set-status",

@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 
-use common::{hyalo, write_md};
+use common::{hyalo, hyalo_no_hints, write_md};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ fn config_sets_default_format() {
     fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
     write_note(tmp.path(), "note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["summary"])
         .output()
@@ -51,7 +51,7 @@ fn cli_format_overrides_config() {
     fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
     write_note(tmp.path(), "note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["summary", "--format", "json"])
         .output()
@@ -78,10 +78,10 @@ fn config_sets_default_dir() {
     fs::write(tmp.path().join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
     write_note(tmp.path(), "vault/note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         // No --dir flag: relies on config's dir = "vault"
-        .args(["summary", "--format", "json", "--no-hints"])
+        .args(["summary", "--format", "json"])
         .output()
         .unwrap();
 
@@ -108,12 +108,11 @@ fn cli_dir_overrides_config() {
     write_note(tmp.path(), "vault/note.md");
 
     let vault_path = tmp.path().join("vault");
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args([
             "--dir",
             vault_path.to_str().unwrap(),
-            "--no-hints",
             "summary",
             "--format",
             "json",
@@ -145,7 +144,7 @@ fn missing_config_uses_defaults() {
     // No .hyalo.toml written — hardcoded defaults apply (format=json, dir=., hints=true)
     write_note(tmp.path(), "note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["summary"])
         .output()
@@ -172,7 +171,7 @@ fn malformed_config_warns_on_stderr() {
     fs::write(tmp.path().join(".hyalo.toml"), "{{invalid\n").unwrap();
     write_note(tmp.path(), "note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["summary", "--format", "json"])
         .output()
@@ -204,6 +203,7 @@ fn config_sets_hints_true() {
     fs::write(tmp.path().join(".hyalo.toml"), "hints = true\n").unwrap();
     write_note(tmp.path(), "note.md");
 
+    // Use plain hyalo() without --no-hints, so the config's hints = true takes effect
     let output = hyalo()
         .current_dir(tmp.path())
         .args(["summary", "--format", "json"])
@@ -234,9 +234,9 @@ fn cli_hints_false_overrides_config() {
     fs::write(tmp.path().join(".hyalo.toml"), "hints = true\n").unwrap();
     write_note(tmp.path(), "note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["summary", "--format", "json", "--no-hints"])
+        .args(["summary", "--format", "json"])
         .output()
         .unwrap();
 

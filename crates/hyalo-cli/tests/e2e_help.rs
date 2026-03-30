@@ -2,12 +2,12 @@ mod common;
 
 use std::fs;
 
-use common::hyalo;
+use common::hyalo_no_hints;
 use tempfile::TempDir;
 
 #[test]
 fn short_help_is_compact() {
-    let output = hyalo().arg("-h").output().unwrap();
+    let output = hyalo_no_hints().arg("-h").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
@@ -34,7 +34,7 @@ fn short_help_is_compact() {
 
 #[test]
 fn long_help_contains_enriched_sections() {
-    let output = hyalo().arg("--help").output().unwrap();
+    let output = hyalo_no_hints().arg("--help").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
@@ -52,7 +52,7 @@ fn long_help_contains_enriched_sections() {
 
 #[test]
 fn long_help_command_reference_lists_all_commands() {
-    let output = hyalo().arg("--help").output().unwrap();
+    let output = hyalo_no_hints().arg("--help").output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     // Verify every command/subcommand appears in the COMMAND REFERENCE
@@ -79,7 +79,7 @@ fn long_help_command_reference_lists_all_commands() {
 #[test]
 fn subcommand_help_unchanged_by_enriched_root() {
     // Subcommand --help should NOT contain root-level enriched sections
-    let output = hyalo().args(["task", "--help"]).output().unwrap();
+    let output = hyalo_no_hints().args(["task", "--help"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
@@ -128,7 +128,7 @@ fn help_hides_dir_when_config_sets_it() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()
@@ -149,7 +149,7 @@ fn help_hides_format_when_config_sets_it() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()
@@ -170,7 +170,7 @@ fn help_shows_dir_without_config() {
     let tmp = TempDir::new().unwrap();
     // No .hyalo.toml — dir defaults to "."
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()
@@ -218,7 +218,11 @@ fn examples_omit_format_when_config_sets_it() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
 
-    let output = hyalo().arg("-h").current_dir(tmp.path()).output().unwrap();
+    let output = hyalo_no_hints()
+        .arg("-h")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -235,7 +239,11 @@ fn examples_show_format_without_config() {
     let tmp = TempDir::new().unwrap();
     // No .hyalo.toml
 
-    let output = hyalo().arg("-h").current_dir(tmp.path()).output().unwrap();
+    let output = hyalo_no_hints()
+        .arg("-h")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -252,7 +260,7 @@ fn cookbook_omits_format_when_config_sets_it() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()
@@ -273,7 +281,7 @@ fn cookbook_shows_format_without_config() {
     let tmp = TempDir::new().unwrap();
     // No .hyalo.toml
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()
@@ -311,7 +319,7 @@ fn command_reference_omits_dir_flag_when_config_sets_it() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()
@@ -333,7 +341,7 @@ fn command_reference_shows_dir_flag_without_config() {
     let tmp = TempDir::new().unwrap();
     // No .hyalo.toml
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .arg("--help")
         .current_dir(tmp.path())
         .output()

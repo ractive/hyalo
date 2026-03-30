@@ -1,13 +1,13 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 #[test]
 fn error_nonexistent_file() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--file", "missing.md"])
         .output()
@@ -25,7 +25,7 @@ fn error_nonexistent_dir() {
     let tmp = TempDir::new().unwrap();
     let nonexistent = tmp.path().join("does_not_exist");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", nonexistent.to_str().unwrap()])
         .args(["properties"])
         .output()
@@ -51,7 +51,7 @@ fn error_invalid_yaml() {
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary", "--glob", "bad.md"])
         .output()
@@ -90,7 +90,7 @@ fn error_find_malformed_yaml_graceful_skip() {
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find"])
         .output()
@@ -139,8 +139,8 @@ title: OK
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["summary"])
         .output()
         .unwrap();
@@ -207,7 +207,7 @@ title: Target
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -256,7 +256,7 @@ title: Good
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--fields", "links,backlinks"])
         .output()
@@ -298,7 +298,7 @@ title: Good
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--fields", "backlinks"])
         .output()
@@ -329,7 +329,7 @@ title: Test
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--file", "note"])
         .output()
@@ -346,7 +346,7 @@ title: Test
 fn error_json_structure() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--file", "nope.md"])
         .output()
@@ -365,13 +365,12 @@ fn error_json_structure() {
 fn error_text_format() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "--format",
             "text",
-            "--no-hints",
             "find",
             "--file",
             "nope.md",
@@ -400,7 +399,7 @@ title: Test
     );
     let file_path = tmp.path().join("note.md");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", file_path.to_str().unwrap()])
         .args(["find"])
         .output()

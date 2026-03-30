@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md, write_tagged};
+use common::{hyalo_no_hints, write_md, write_tagged};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ fn setup_vault() -> TempDir {
 fn jq_extracts_total_from_tags_summary() {
     let tmp = setup_vault();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".total"])
         .args(["tags", "summary"])
@@ -43,7 +43,7 @@ fn jq_extracts_total_from_tags_summary() {
 fn jq_maps_tag_names_to_array() {
     let tmp = setup_vault();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "[.tags[].name] | sort | join(\", \")"])
         .args(["tags", "summary"])
@@ -66,7 +66,7 @@ fn jq_works_on_properties_command() {
 
     // `properties` returns an array of {count, name, type} objects.
     // Extract just the property names and sort them.
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "[.[].name] | sort | join(\", \")"])
         .args(["properties", "summary"])
@@ -88,7 +88,7 @@ fn jq_works_on_find_property_filter() {
     write_md(tmp.path(), "a.md", "---\nstatus: draft\n---\n");
     write_md(tmp.path(), "b.md", "---\nstatus: done\n---\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".results[].file"])
         .args(["find", "--property", "status=draft"])
@@ -115,7 +115,7 @@ fn jq_works_on_find_links() {
     );
     write_md(tmp.path(), "target.md", "# Target\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".results[0].links | length"])
         .args(["find", "--file", "source.md", "--fields", "links"])
@@ -140,7 +140,7 @@ fn jq_works_on_find_sections() {
         "# Introduction\n\nSome text.\n\n## Details\n\nMore text.\n\n### Sub\n\nDeep.\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".results[0].sections | length"])
         .args(["find", "--file", "doc.md", "--fields", "sections"])
@@ -164,7 +164,7 @@ fn jq_works_on_find_sections() {
 fn jq_with_format_text_errors() {
     let tmp = setup_vault();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["--jq", ".total"])
@@ -189,7 +189,7 @@ fn jq_with_format_text_errors() {
 fn jq_with_format_json_works() {
     let tmp = setup_vault();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "json"])
         .args(["--jq", ".total"])
@@ -214,7 +214,7 @@ fn jq_with_format_json_works() {
 fn jq_invalid_filter_exits_nonzero() {
     let tmp = setup_vault();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "this is not %%% valid jq"])
         .args(["tags", "summary"])
@@ -239,7 +239,7 @@ fn jq_runtime_error_exits_nonzero() {
     let tmp = setup_vault();
 
     // Explicit jq runtime error raised via error("deliberate") to verify non-zero exit on runtime failure
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", "error(\"deliberate\")"])
         .args(["tags", "summary"])
@@ -264,7 +264,7 @@ fn jq_filter_error_is_json_when_format_json() {
     let tmp = setup_vault();
 
     // With --format json (the default), jq errors should be emitted as structured JSON
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "json"])
         .args(["--jq", "error(\"structured-error\")"])
@@ -295,7 +295,7 @@ fn jq_works_on_set_command() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n# Body\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".modified | length"])
         .args(["set", "--property", "status=done", "--file", "note.md"])
@@ -324,7 +324,7 @@ fn jq_works_on_remove_command() {
         "---\ntitle: Note\nstatus: draft\n---\n# Body\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".modified | length"])
         .args(["remove", "--property", "status", "--file", "note.md"])
@@ -353,7 +353,7 @@ fn jq_works_on_append_command() {
         "---\ntitle: Note\naliases:\n  - old\n---\n# Body\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".modified | length"])
         .args(["append", "--property", "aliases=new", "--file", "note.md"])
@@ -381,7 +381,7 @@ fn jq_works_on_append_command() {
 fn jq_multiple_outputs_joined_by_newline() {
     let tmp = setup_vault();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".tags[].name"])
         .args(["tags", "summary"])

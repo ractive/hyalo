@@ -281,53 +281,191 @@ fn run_inner() -> Result<(), AppError> {
         };
 
         match &cli.command {
-            Commands::Summary { glob, .. } => Some(HintContext {
-                source: HintSource::Summary,
-                dir: dir_hint,
-                glob: glob.clone(),
-                format: format_hint,
-                hints: hints_from_cli,
-            }),
+            Commands::Summary { glob, .. } => {
+                let mut ctx = HintContext::new(HintSource::Summary);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                Some(ctx)
+            }
             Commands::Properties {
                 action: Some(crate::cli::args::PropertiesAction::Summary { glob }),
-            } => Some(HintContext {
-                source: HintSource::PropertiesSummary,
-                dir: dir_hint,
-                glob: glob.clone(),
-                format: format_hint,
-                hints: hints_from_cli,
-            }),
+            } => {
+                let mut ctx = HintContext::new(HintSource::PropertiesSummary);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                Some(ctx)
+            }
             Commands::Tags {
                 action: Some(crate::cli::args::TagsAction::Summary { glob }),
-            } => Some(HintContext {
-                source: HintSource::TagsSummary,
-                dir: dir_hint,
-                glob: glob.clone(),
-                format: format_hint,
-                hints: hints_from_cli,
-            }),
-            Commands::Find { glob, .. } => Some(HintContext {
-                source: HintSource::Find,
-                dir: dir_hint,
-                glob: glob.clone(),
-                format: format_hint,
-                hints: hints_from_cli,
-            }),
-            _ => None,
+            } => {
+                let mut ctx = HintContext::new(HintSource::TagsSummary);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                Some(ctx)
+            }
+            Commands::Tags { action: None } => {
+                // Bare `hyalo tags` defaults to summary with no glob.
+                let mut ctx = HintContext::new(HintSource::TagsSummary);
+                ctx.dir = dir_hint;
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                Some(ctx)
+            }
+            Commands::Find {
+                glob,
+                pattern,
+                regexp,
+                properties,
+                tag,
+                task,
+                file,
+                fields,
+                sort,
+                limit,
+                ..
+            } => {
+                let mut ctx = HintContext::new(HintSource::Find);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.fields.clone_from(fields);
+                ctx.sort.clone_from(sort);
+                ctx.has_limit = limit.is_some();
+                ctx.has_body_search = pattern.is_some();
+                ctx.has_regex_search = regexp.is_some();
+                ctx.property_filters.clone_from(properties);
+                ctx.tag_filters.clone_from(tag);
+                ctx.task_filter.clone_from(task);
+                ctx.file_targets.clone_from(file);
+                Some(ctx)
+            }
+            Commands::Set {
+                file,
+                glob,
+                dry_run,
+                ..
+            } => {
+                let mut ctx = HintContext::new(HintSource::Set);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.file_targets.clone_from(file);
+                ctx.dry_run = *dry_run;
+                Some(ctx)
+            }
+            Commands::Remove {
+                file,
+                glob,
+                dry_run,
+                ..
+            } => {
+                let mut ctx = HintContext::new(HintSource::Remove);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.file_targets.clone_from(file);
+                ctx.dry_run = *dry_run;
+                Some(ctx)
+            }
+            Commands::Append {
+                file,
+                glob,
+                dry_run,
+                ..
+            } => {
+                let mut ctx = HintContext::new(HintSource::Append);
+                ctx.dir = dir_hint;
+                ctx.glob.clone_from(glob);
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.file_targets.clone_from(file);
+                ctx.dry_run = *dry_run;
+                Some(ctx)
+            }
+            Commands::Read { file, .. } => {
+                let mut ctx = HintContext::new(HintSource::Read);
+                ctx.dir = dir_hint;
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.file_targets = vec![file.clone()];
+                Some(ctx)
+            }
+            Commands::Backlinks { file } => {
+                let mut ctx = HintContext::new(HintSource::Backlinks);
+                ctx.dir = dir_hint;
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.file_targets = vec![file.clone()];
+                Some(ctx)
+            }
+            Commands::Mv { file, dry_run, .. } => {
+                let mut ctx = HintContext::new(HintSource::Mv);
+                ctx.dir = dir_hint;
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.file_targets = vec![file.clone()];
+                ctx.dry_run = *dry_run;
+                Some(ctx)
+            }
+            Commands::Task { action } => match action {
+                crate::cli::args::TaskAction::Toggle { file, .. } => {
+                    let mut ctx = HintContext::new(HintSource::TaskToggle);
+                    ctx.dir = dir_hint;
+                    ctx.format = format_hint;
+                    ctx.hints = hints_from_cli;
+                    ctx.file_targets = vec![file.clone()];
+                    Some(ctx)
+                }
+                crate::cli::args::TaskAction::SetStatus { file, .. } => {
+                    let mut ctx = HintContext::new(HintSource::TaskSetStatus);
+                    ctx.dir = dir_hint;
+                    ctx.format = format_hint;
+                    ctx.hints = hints_from_cli;
+                    ctx.file_targets = vec![file.clone()];
+                    Some(ctx)
+                }
+                crate::cli::args::TaskAction::Read { .. } => None,
+            },
+            Commands::Links { action } => match action {
+                crate::cli::args::LinksAction::Fix { apply, glob, .. } => {
+                    let mut ctx = HintContext::new(HintSource::LinksFix);
+                    ctx.dir = dir_hint;
+                    ctx.glob.clone_from(glob);
+                    ctx.format = format_hint;
+                    ctx.hints = hints_from_cli;
+                    ctx.dry_run = !apply;
+                    Some(ctx)
+                }
+            },
+            Commands::CreateIndex { output, .. } => {
+                let mut ctx = HintContext::new(HintSource::CreateIndex);
+                ctx.dir = dir_hint;
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                ctx.index_path = output.as_ref().map(|p| p.to_string_lossy().into_owned());
+                Some(ctx)
+            }
+            Commands::DropIndex { .. } => {
+                let mut ctx = HintContext::new(HintSource::DropIndex);
+                ctx.dir = dir_hint;
+                ctx.format = format_hint;
+                ctx.hints = hints_from_cli;
+                Some(ctx)
+            }
+            Commands::Properties { .. } | Commands::Tags { .. } | Commands::Init { .. } => None,
         }
     } else {
         None
     };
-
-    // Warn when --hints is passed to mutation commands, which do not generate hints.
-    if hints_from_cli
-        && matches!(
-            &cli.command,
-            Commands::Set { .. } | Commands::Remove { .. } | Commands::Append { .. }
-        )
-    {
-        crate::warn::warn("--hints has no effect on mutation commands");
-    }
 
     // Load snapshot index if --index is provided.
     // Read-only commands use it to skip disk scans. Mutation commands use it to
