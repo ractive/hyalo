@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use memchr::memmem;
 use regex::{Regex, RegexBuilder};
 
 use crate::heading::parse_atx_heading;
@@ -8,8 +9,11 @@ use crate::types::ContentMatch;
 /// How the visitor matches body lines.
 #[derive(Debug)]
 enum SearchMode {
-    /// Case-insensitive substring (lowercased pattern).
-    Substring(String),
+    /// Case-insensitive substring (lowercased pattern + pre-built SIMD finder).
+    Substring {
+        lowered: String,
+        finder: memmem::Finder<'static>,
+    },
     /// Compiled regular expression.
     Regex(Regex),
 }
@@ -23,16 +27,21 @@ pub struct ContentSearchVisitor {
     current_section: String,
     /// Collected matches
     matches: Vec<ContentMatch>,
+    /// Reusable scratch buffer for case-insensitive substring matching.
+    line_scratch: Vec<u8>,
 }
 
 impl ContentSearchVisitor {
     /// Create a visitor that does **case-insensitive substring** search.
     #[must_use]
     pub fn new(pattern: &str) -> Self {
+        let lowered = pattern.to_ascii_lowercase();
+        let finder = memmem::Finder::new(lowered.as_bytes()).into_owned();
         Self {
-            mode: SearchMode::Substring(pattern.to_ascii_lowercase()),
+            mode: SearchMode::Substring { lowered, finder },
             current_section: String::new(),
             matches: Vec::new(),
+            line_scratch: Vec::new(),
         }
     }
 
@@ -52,6 +61,7 @@ impl ContentSearchVisitor {
             mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
+            line_scratch: Vec::new(),
         })
     }
 
@@ -65,6 +75,7 @@ impl ContentSearchVisitor {
             mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
+            line_scratch: Vec::new(),
         }
     }
 
@@ -80,41 +91,38 @@ impl ContentSearchVisitor {
         self.matches
     }
 
-    /// Check whether a line matches the current mode.
-    fn is_match(&self, line: &str) -> bool {
+    /// Returns the lowered pattern bytes for fast-reject, if in substring mode.
+    pub fn pattern_bytes(&self) -> Option<&[u8]> {
         match &self.mode {
-            SearchMode::Substring(pat) => contains_ignore_ascii_case(line, pat),
+            SearchMode::Substring { lowered, .. } => Some(lowered.as_bytes()),
+            SearchMode::Regex(_) => None,
+        }
+    }
+
+    /// Check whether a line matches the current mode.
+    fn is_match(&mut self, line: &str) -> bool {
+        match &self.mode {
+            SearchMode::Substring { finder, .. } => {
+                // Reuse a scratch buffer to avoid per-line heap allocation.
+                self.line_scratch.clear();
+                self.line_scratch
+                    .extend(line.bytes().map(|b| b.to_ascii_lowercase()));
+                finder.find(&self.line_scratch).is_some()
+            }
             SearchMode::Regex(re) => re.is_match(line),
         }
     }
 }
 
-/// Case-insensitive ASCII substring check without allocation.
+/// Returns `true` if `file_data` definitely does NOT contain `pattern` (case-insensitive ASCII).
+/// Used to skip the full scanner for non-matching files.
 ///
-/// Uses ASCII-only case folding (`to_ascii_lowercase`). For Unicode case
-/// folding (e.g. `ß` → `ss`), use the regex search mode instead.
-///
-/// `needle` must already be lowercased. Each byte of the haystack window is
-/// folded to lowercase before comparison, so no temporary `String` is created.
-fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    let needle_bytes = needle.as_bytes();
-    let haystack_bytes = haystack.as_bytes();
-    if haystack_bytes.len() < needle_bytes.len() {
-        return false;
-    }
-    for i in 0..=(haystack_bytes.len() - needle_bytes.len()) {
-        if haystack_bytes[i..i + needle_bytes.len()]
-            .iter()
-            .zip(needle_bytes)
-            .all(|(h, n)| h.to_ascii_lowercase() == *n)
-        {
-            return true;
-        }
-    }
-    false
+/// `scratch` is a reusable buffer to avoid per-file heap allocations on the hot path.
+pub fn fast_reject(file_data: &[u8], pattern: &[u8], scratch: &mut Vec<u8>) -> bool {
+    let finder = memmem::Finder::new(pattern);
+    scratch.clear();
+    scratch.extend(file_data.iter().map(u8::to_ascii_lowercase));
+    finder.find(scratch).is_none()
 }
 
 impl FileVisitor for ContentSearchVisitor {
@@ -449,49 +457,105 @@ mod tests {
         assert!(matches.is_empty());
     }
 
-    // --- contains_ignore_ascii_case ---
+    // --- finder-based substring search ---
 
     #[test]
-    fn ascii_case_empty_needle() {
-        assert!(super::contains_ignore_ascii_case("anything", ""));
-        assert!(super::contains_ignore_ascii_case("", ""));
+    fn finder_empty_needle_matches_everything() {
+        // Empty pattern: lowered is "", finder on empty bytes matches at pos 0
+        assert_eq!(run_visitor("anything", "").len(), 1);
+        assert!(run_visitor("", "").is_empty()); // empty content has no lines
     }
 
     #[test]
-    fn ascii_case_needle_longer_than_haystack() {
-        assert!(!super::contains_ignore_ascii_case("ab", "abc"));
+    fn finder_needle_longer_than_haystack() {
+        let matches = run_visitor("ab", "abc");
+        assert!(matches.is_empty());
     }
 
     #[test]
-    fn ascii_case_exact_match() {
-        assert!(super::contains_ignore_ascii_case("hello", "hello"));
+    fn finder_exact_match() {
+        let matches = run_visitor("hello", "hello");
+        assert_eq!(matches.len(), 1);
     }
 
     #[test]
-    fn ascii_case_mixed_case_match() {
-        assert!(super::contains_ignore_ascii_case("Hello WORLD", "lo wor"));
+    fn finder_mixed_case_match() {
+        let matches = run_visitor("Hello WORLD", "lo wor");
+        assert_eq!(matches.len(), 1);
     }
 
     #[test]
-    fn ascii_case_no_match() {
-        assert!(!super::contains_ignore_ascii_case("hello world", "xyz"));
+    fn finder_no_match() {
+        let matches = run_visitor("hello world", "xyz");
+        assert!(matches.is_empty());
     }
 
     #[test]
-    fn ascii_case_multibyte_utf8_in_haystack() {
+    fn finder_multibyte_utf8_in_haystack() {
         // Multi-byte chars in the haystack should not break the search
-        assert!(super::contains_ignore_ascii_case("café latte", "latte"));
-        assert!(super::contains_ignore_ascii_case("über cool", "cool"));
+        let matches = run_visitor("café latte", "latte");
+        assert_eq!(matches.len(), 1);
+        let matches2 = run_visitor("über cool", "cool");
+        assert_eq!(matches2.len(), 1);
     }
 
     #[test]
-    fn ascii_case_match_at_end() {
-        assert!(super::contains_ignore_ascii_case("say HELLO", "hello"));
+    fn finder_match_at_end() {
+        let matches = run_visitor("say HELLO", "hello");
+        assert_eq!(matches.len(), 1);
     }
 
     #[test]
-    fn ascii_case_single_char() {
-        assert!(super::contains_ignore_ascii_case("A", "a"));
-        assert!(!super::contains_ignore_ascii_case("A", "b"));
+    fn finder_single_char() {
+        assert_eq!(run_visitor("A", "a").len(), 1);
+        assert!(run_visitor("A", "b").is_empty());
+    }
+
+    // --- pattern_bytes ---
+
+    #[test]
+    fn pattern_bytes_substring_mode() {
+        let visitor = ContentSearchVisitor::new("Hello");
+        assert_eq!(visitor.pattern_bytes(), Some(b"hello".as_ref()));
+    }
+
+    #[test]
+    fn pattern_bytes_regex_mode() {
+        let visitor = ContentSearchVisitor::regex("world").unwrap();
+        assert_eq!(visitor.pattern_bytes(), None);
+    }
+
+    // --- fast_reject ---
+
+    #[test]
+    fn fast_reject_no_match_returns_true() {
+        let mut scratch = Vec::new();
+        assert!(fast_reject(b"hello world", b"xyz", &mut scratch));
+    }
+
+    #[test]
+    fn fast_reject_match_returns_false() {
+        let mut scratch = Vec::new();
+        assert!(!fast_reject(b"hello world", b"world", &mut scratch));
+    }
+
+    #[test]
+    fn fast_reject_case_insensitive() {
+        // pattern must already be lowercased by the caller
+        let mut scratch = Vec::new();
+        assert!(!fast_reject(b"Hello WORLD", b"world", &mut scratch));
+        assert!(!fast_reject(b"Hello WORLD", b"hello", &mut scratch));
+    }
+
+    #[test]
+    fn fast_reject_empty_pattern_never_rejects() {
+        let mut scratch = Vec::new();
+        assert!(!fast_reject(b"anything", b"", &mut scratch));
+    }
+
+    #[test]
+    fn fast_reject_empty_data_with_nonempty_pattern() {
+        let mut scratch = Vec::new();
+        assert!(fast_reject(b"", b"abc", &mut scratch));
     }
 }

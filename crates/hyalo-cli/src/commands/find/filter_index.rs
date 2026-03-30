@@ -117,7 +117,10 @@ pub fn filter_index_entries<'a>(
 }
 
 /// Returns `true` when the command needs body content (sections, tasks, links,
-/// title, content search, or structural filters).
+/// title, or structural filters).
+///
+/// Content search is intentionally excluded: it re-reads files from disk
+/// independently and does not use body-scanned index data.
 ///
 /// This is the core body-scan predicate shared between the `find` command
 /// dispatch in `run.rs` and any other caller that needs to decide whether to
@@ -126,17 +129,11 @@ pub fn filter_index_entries<'a>(
 /// Callers may add extra conditions on top (e.g. `sort_needs_links`,
 /// `broken_links`, `has_title_filter`) that are specific to their dispatch
 /// context.
-pub fn needs_body(
-    fields: &Fields,
-    has_content_search: bool,
-    has_task_filter: bool,
-    has_section_filter: bool,
-) -> bool {
+pub fn needs_body(fields: &Fields, has_task_filter: bool, has_section_filter: bool) -> bool {
     fields.sections
         || fields.tasks
         || fields.links
         || fields.title
-        || has_content_search
         || has_task_filter
         || has_section_filter
 }

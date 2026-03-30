@@ -3,29 +3,49 @@ use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSetBuilder};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use crate::link_graph::strip_site_prefix;
 use crate::util::levenshtein;
 
 /// Collect all `.md` files under the given directory, respecting `.gitignore` and skipping hidden dirs.
 pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-
-    let walker = WalkBuilder::new(dir)
+    let (tx, rx) = mpsc::channel();
+    let walk_errors: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    WalkBuilder::new(dir)
         .hidden(true) // skip hidden files/dirs
         .git_ignore(true)
-        .build();
+        .build_parallel()
+        .run(|| {
+            let tx = tx.clone();
+            let errs = walk_errors.clone();
+            Box::new(move |entry| {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        errs.lock().unwrap().push(format!("{e}"));
+                        return ignore::WalkState::Continue;
+                    }
+                };
+                let path = entry.path();
+                if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+                    let _ = tx.send(path.to_path_buf());
+                }
+                ignore::WalkState::Continue
+            })
+        });
+    drop(tx); // close sender so rx iterator terminates
 
-    for entry in walker {
-        let entry = entry.context("error walking directory")?;
-        let path = entry.path();
-        if path.is_file()
-            && let Some(ext) = path.extension()
-            && ext == "md"
-        {
-            files.push(path.to_path_buf());
+    let errors = walk_errors.lock().unwrap();
+    if !errors.is_empty() {
+        for e in errors.iter() {
+            eprintln!("warning: directory walk error: {e}");
         }
     }
+    drop(errors);
+
+    let mut files: Vec<PathBuf> = rx.into_iter().collect();
 
     // Filter out symlinks whose target resolves outside the vault boundary.
     // Only canonicalize paths that are actually symlinks to avoid unnecessary

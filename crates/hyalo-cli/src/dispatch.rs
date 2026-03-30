@@ -125,19 +125,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let sort_needs_links =
                 matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
             let sort_needs_title = matches!(sort_field.as_ref(), Some(filter::SortField::Title));
-            let has_content_search = pattern.is_some() || regexp.is_some();
             let has_task_filter = task_filter.is_some();
             let has_section_filter = !section_filters.is_empty();
             let has_title_filter = title.is_some();
-            let needs_body = find_commands::needs_body(
-                &parsed_fields,
-                has_content_search,
-                has_task_filter,
-                has_section_filter,
-            ) || sort_needs_links
-                || sort_needs_title
-                || broken_links
-                || has_title_filter;
+            let needs_body =
+                find_commands::needs_body(&parsed_fields, has_task_filter, has_section_filter)
+                    || sort_needs_links
+                    || sort_needs_title
+                    || broken_links
+                    || has_title_filter;
             let needs_full_vault = parsed_fields.backlinks || sort_needs_backlinks;
             // The link graph is only built when scan_body is true, so
             // backlinks / backlink-sort always require body scanning.

@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -128,8 +129,13 @@ impl ScannedIndex {
         let mut file_links_vec: Vec<FileLinks> = Vec::with_capacity(files.len());
         let mut warnings: Vec<IndexWarning> = Vec::new();
 
-        for (full_path, rel_path) in files {
-            match scan_one_file(full_path, rel_path, options.scan_body) {
+        let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> = files
+            .par_iter()
+            .map(|(full_path, rel_path)| scan_one_file(full_path, rel_path, options.scan_body))
+            .collect();
+
+        for (i, result) in results.into_iter().enumerate() {
+            match result {
                 Ok((entry, file_links)) => {
                     entries.push(entry);
                     if let Some(fl) = file_links {
@@ -138,7 +144,7 @@ impl ScannedIndex {
                 }
                 Err(e) if frontmatter::is_parse_error(&e) => {
                     warnings.push(IndexWarning {
-                        rel_path: rel_path.clone(),
+                        rel_path: files[i].1.clone(),
                         message: e.to_string(),
                     });
                 }
