@@ -864,9 +864,7 @@ fn setup_array_status_vault() -> TempDir {
         write_md(
             tmp.path(),
             &format!("note-{i}.md"),
-            &format!(
-                "---\ntitle: Note {i}\nstatus: completed\ntags:\n  - docs\n---\nBody.\n"
-            ),
+            &format!("---\ntitle: Note {i}\nstatus: completed\ntags:\n  - docs\n---\nBody.\n"),
         );
     }
     for (i, extra) in [(3, "experimental"), (4, "legacy"), (5, "wip")] {
