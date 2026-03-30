@@ -120,7 +120,7 @@ pub fn filter_index_entries<'a>(
 /// title, content search, or structural filters).
 ///
 /// This is the core body-scan predicate shared between the `find` command
-/// dispatch in `main.rs` and any other caller that needs to decide whether to
+/// dispatch in `run.rs` and any other caller that needs to decide whether to
 /// request a full body scan from [`crate::commands::build_scanned_index`].
 ///
 /// Callers may add extra conditions on top (e.g. `sort_needs_links`,

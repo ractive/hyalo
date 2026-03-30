@@ -148,12 +148,18 @@ pub fn run() {
                 }
             }
 
-            e.exit();
+            let code = e.exit_code();
+            let _ = e.print();
+            die(code);
         }
     };
     let cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
-        Err(e) => e.exit(),
+        Err(e) => {
+            let code = e.exit_code();
+            let _ = e.print();
+            die(code);
+        }
     };
 
     // Re-apply quiet flag from the fully-parsed CLI (the early pre-scan
