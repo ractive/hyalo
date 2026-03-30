@@ -189,7 +189,7 @@ pub fn tags_rename(
                 if has_new {
                     remove_tags_key = true;
                 } else {
-                    *s = to.to_owned();
+                    to.clone_into(s);
                 }
             }
             _ => {}

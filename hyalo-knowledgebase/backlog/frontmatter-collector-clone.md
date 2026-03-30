@@ -1,8 +1,8 @@
 ---
-title: "FrontmatterCollector clones entire IndexMap per file"
+title: FrontmatterCollector clones entire IndexMap per file
 type: backlog
 date: 2026-03-29
-status: planned
+status: done
 origin: codebase review 2026-03-29
 priority: medium
 tags:

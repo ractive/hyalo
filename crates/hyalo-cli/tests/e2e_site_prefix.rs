@@ -59,7 +59,7 @@ fn extract_link_paths(json: &serde_json::Value) -> Vec<String> {
                 .as_array()
                 .unwrap_or(&vec![])
                 .iter()
-                .filter_map(|l| l["path"].as_str().map(|s| s.to_owned()))
+                .filter_map(|l| l["path"].as_str().map(std::borrow::ToOwned::to_owned))
                 .collect::<Vec<_>>()
         })
         .collect()

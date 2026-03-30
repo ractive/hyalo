@@ -14,7 +14,7 @@ fn setup_vault() -> TempDir {
     write_md(
         tmp.path(),
         "notes/alpha.md",
-        md!(r#"
+        md!(r"
 ---
 title: Alpha
 status: in-progress
@@ -26,13 +26,13 @@ tags:
 
 - [ ] Open task
 - [x] Done task
-"#),
+"),
     );
 
     write_md(
         tmp.path(),
         "notes/beta.md",
-        md!(r#"
+        md!(r"
 ---
 title: Beta
 status: completed
@@ -42,13 +42,13 @@ tags:
 # Beta
 
 - [x] Completed
-"#),
+"),
     );
 
     write_md(
         tmp.path(),
         "docs/readme.md",
-        md!(r#"
+        md!(r"
 ---
 title: Readme
 status: planned
@@ -58,7 +58,7 @@ tags:
 # Readme
 
 No tasks here.
-"#),
+"),
     );
 
     tmp
@@ -574,7 +574,7 @@ fn find_with_hints_empty_results_no_hints() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     if let Some(hints) = parsed.get("hints") {
         assert!(
-            hints.as_array().map(|a| a.is_empty()).unwrap_or(false),
+            hints.as_array().is_some_and(std::vec::Vec::is_empty),
             "expected empty hints for empty results: {parsed}"
         );
     }
@@ -876,7 +876,7 @@ fn tags_summary_hints_empty_vault_no_crash() {
     // Either no envelope (no hints) or empty hints array.
     if let Some(hints) = parsed.get("hints") {
         assert!(
-            hints.as_array().map(|a| a.is_empty()).unwrap_or(false),
+            hints.as_array().is_some_and(std::vec::Vec::is_empty),
             "empty vault should produce no hints: {parsed}"
         );
     }

@@ -64,15 +64,13 @@ fn extract_task_text(line: &str) -> &str {
         return "";
     }
     // Find the `]` after `[`
-    let after_bracket = match rest.strip_prefix('[') {
-        Some(s) => s,
-        None => return "",
+    let Some(after_bracket) = rest.strip_prefix('[') else {
+        return "";
     };
     let mut chars = after_bracket.char_indices();
     let _ = chars.next(); // skip status char
-    let (close_idx, close_char) = match chars.next() {
-        Some(pair) => pair,
-        None => return "",
+    let Some((close_idx, close_char)) = chars.next() else {
+        return "";
     };
     if close_char != ']' {
         return "";
@@ -88,7 +86,7 @@ fn extract_task_text(line: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// Visitor that collects all tasks with full detail.
-pub struct TaskCollector {
+pub(crate) struct TaskCollector {
     tasks: Vec<TaskInfo>,
 }
 
@@ -167,7 +165,7 @@ impl FileVisitor for TaskCounter {
 
 /// Visitor that collects tasks with section context for the `find` command.
 /// Tracks the current ATX heading to populate `FindTaskInfo.section`.
-pub struct TaskExtractor {
+pub(crate) struct TaskExtractor {
     current_section: String,
     tasks: Vec<crate::types::FindTaskInfo>,
 }
@@ -191,12 +189,6 @@ impl TaskExtractor {
     #[must_use]
     pub fn into_tasks(self) -> Vec<crate::types::FindTaskInfo> {
         self.tasks
-    }
-
-    /// Whether any tasks were collected.
-    #[must_use]
-    pub fn has_tasks(&self) -> bool {
-        !self.tasks.is_empty()
     }
 }
 
@@ -449,16 +441,12 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
     };
 
     if line == 0 || line > line_count {
-        bail!(
-            "line {} is out of range (file has {} lines)",
-            line,
-            line_count
-        );
+        bail!("line {line} is out of range (file has {line_count} lines)");
     }
 
     let target = lines[line - 1];
     let (current_status, _done) = detect_task_checkbox(target)
-        .ok_or_else(|| anyhow::anyhow!("line {} is not a task checkbox", line))?;
+        .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
 
     let new_status = if current_status == 'x' || current_status == 'X' {
         ' '
@@ -467,7 +455,7 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
     };
 
     let (modified_line, info) = mutate_task_line(target, line, new_status)
-        .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {}", line))?;
+        .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
 
     let new_content = {
         let mut buf = String::with_capacity(content.len() + modified_line.len());
@@ -503,20 +491,16 @@ pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInf
     };
 
     if line == 0 || line > line_count {
-        bail!(
-            "line {} is out of range (file has {} lines)",
-            line,
-            line_count
-        );
+        bail!("line {line} is out of range (file has {line_count} lines)");
     }
 
     let target = lines[line - 1];
     // Validate that the line is a task
     detect_task_checkbox(target)
-        .ok_or_else(|| anyhow::anyhow!("line {} is not a task checkbox", line))?;
+        .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
 
     let (modified_line, info) = mutate_task_line(target, line, status)
-        .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {}", line))?;
+        .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
 
     let new_content = {
         let mut buf = String::with_capacity(content.len() + modified_line.len());

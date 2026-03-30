@@ -65,24 +65,13 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
             // If the file is malformed, fall back to overwriting with just `dir`.
             let existing_raw = fs::read_to_string(&toml_path)
                 .with_context(|| format!("failed to read {}", toml_path.display()))?;
-            match existing_raw.parse::<TomlValue>() {
-                Ok(mut table) => {
-                    if let Some(map) = table.as_table_mut() {
-                        map.insert("dir".to_owned(), TomlValue::String(dir_value.clone()));
-                        // Serialise back; toml::to_string always produces valid TOML.
-                        match toml::to_string(&table) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                writeln!(
-                                    summary,
-                                    "warning  .hyalo.toml was malformed; existing content replaced"
-                                )
-                                .unwrap();
-                                minimal_toml_dir(&dir_value)
-                            }
-                        }
+            if let Ok(mut table) = existing_raw.parse::<TomlValue>() {
+                if let Some(map) = table.as_table_mut() {
+                    map.insert("dir".to_owned(), TomlValue::String(dir_value.clone()));
+                    // Serialise back; toml::to_string always produces valid TOML.
+                    if let Ok(s) = toml::to_string(&table) {
+                        s
                     } else {
-                        // Valid TOML but not a table (e.g. bare string) — overwrite.
                         writeln!(
                             summary,
                             "warning  .hyalo.toml was malformed; existing content replaced"
@@ -90,9 +79,8 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
                         .unwrap();
                         minimal_toml_dir(&dir_value)
                     }
-                }
-                Err(_) => {
-                    // Malformed existing file — overwrite with just dir and note it.
+                } else {
+                    // Valid TOML but not a table (e.g. bare string) — overwrite.
                     writeln!(
                         summary,
                         "warning  .hyalo.toml was malformed; existing content replaced"
@@ -100,6 +88,14 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
                     .unwrap();
                     minimal_toml_dir(&dir_value)
                 }
+            } else {
+                // Malformed existing file — overwrite with just dir and note it.
+                writeln!(
+                    summary,
+                    "warning  .hyalo.toml was malformed; existing content replaced"
+                )
+                .unwrap();
+                minimal_toml_dir(&dir_value)
             }
         } else {
             minimal_toml_dir(&dir_value)

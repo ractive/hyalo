@@ -9,6 +9,9 @@ readme = "../../README.md"
 keywords = ["yaml", "frontmatter", "markdown", "parsing"]
 categories = ["parser-implementations"]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 dunce = { workspace = true }

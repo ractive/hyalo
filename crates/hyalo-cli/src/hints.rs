@@ -146,12 +146,12 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
     let tasks_total = data
         .get("tasks")
         .and_then(|t| t.get("total"))
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     let tasks_done = data
         .get("tasks")
         .and_then(|t| t.get("done"))
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     if tasks_total > tasks_done {
         hints.push(build_command_with_glob(ctx, &["find", "--task", "todo"]));
@@ -179,9 +179,8 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
 }
 
 fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    let arr = match data.as_array() {
-        Some(a) => a,
-        None => return vec![],
+    let Some(arr) = data.as_array() else {
+        return vec![];
     };
 
     // Sort by count descending, take top 3.
@@ -189,7 +188,10 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
         .iter()
         .filter_map(|e| {
             let name = e.get("name").and_then(|n| n.as_str())?;
-            let count = e.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+            let count = e
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             Some((name, count))
         })
         .collect();
@@ -204,9 +206,7 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
 
 fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
     // find always returns a {total, results} envelope.
-    let results = if let Some(arr) = data["results"].as_array() {
-        arr
-    } else {
+    let Some(results) = data["results"].as_array() else {
         return vec![];
     };
 
@@ -230,7 +230,7 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
         // Collect tag frequencies across all results.
         let mut tag_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
-        for item in results.iter() {
+        for item in results {
             if let Some(tags) = item.get("tags").and_then(|t| t.as_array()) {
                 for tag in tags {
                     if let Some(name) = tag.as_str() {
@@ -243,7 +243,7 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
         // Collect status property frequencies — status is the most useful drill-down.
         let mut status_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
-        for item in results.iter() {
+        for item in results {
             if let Some(status) = item
                 .get("properties")
                 .and_then(|p| p.get("status"))
@@ -289,9 +289,8 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
 }
 
 fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
-    let tags_arr = match data.get("tags").and_then(|t| t.as_array()) {
-        Some(a) => a,
-        None => return vec![],
+    let Some(tags_arr) = data.get("tags").and_then(|t| t.as_array()) else {
+        return vec![];
     };
 
     // Sort by count descending, take top 3.
@@ -299,7 +298,10 @@ fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<St
         .iter()
         .filter_map(|entry| {
             let name = entry.get("name").and_then(|n| n.as_str())?;
-            let count = entry.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+            let count = entry
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             Some((name, count))
         })
         .collect();

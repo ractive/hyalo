@@ -319,8 +319,7 @@ impl SnapshotIndex {
             Err(e) => {
                 if warn {
                     eprintln!(
-                        "warning: index file is incompatible ({}); falling back to disk scan",
-                        e
+                        "warning: index file is incompatible ({e}); falling back to disk scan"
                     );
                 }
                 None
@@ -458,7 +457,8 @@ fn is_pid_alive(pid: u32) -> bool {
 
         // SAFETY: kill(pid, 0) sends signal 0, which is a pure existence check —
         // no signal is actually delivered. The only side effect is updating errno.
-        let res = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        // The guard above ensures pid <= i32::MAX, so cast_signed() is lossless.
+        let res = unsafe { libc::kill(pid.cast_signed(), 0) };
         if res == 0 {
             // Process exists and we have permission to signal it.
             true
@@ -484,16 +484,14 @@ fn is_pid_alive(pid: u32) -> bool {
 /// skipped — they are already unreachable by the normal load path.
 pub fn find_stale_indexes(dir: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
     let mut stale = Vec::new();
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(_) => return Ok(stale),
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return Ok(stale);
     };
     for entry in read_dir {
         let entry = entry?;
         let path = entry.path();
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
         };
         if !name.ends_with(".hyalo-index") {
             continue;
@@ -596,11 +594,11 @@ pub fn format_iso8601(secs: u64) -> String {
     let mm = (rem % SECS_PER_HOUR) / SECS_PER_MIN;
     let ss = rem % SECS_PER_MIN;
 
-    let z = days as i64 + 719_468;
+    let z = days.cast_signed() + 719_468_i64;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
+    let doe = (z - era * 146_097).cast_unsigned();
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe.cast_signed() + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;

@@ -88,19 +88,17 @@ pub struct FixReport {
 ///
 /// `file_links` is a slice of [`FileLinks`] (from `link_graph.rs`).
 /// Uses [`resolve_target`] to check if each link target exists.
-pub fn detect_broken_links(
+#[allow(dead_code)] // Used in tests only; CLI uses detect_broken_links_from_index
+pub(crate) fn detect_broken_links(
     dir: &Path,
     file_links: &[FileLinks],
     site_prefix: Option<&str>,
 ) -> BrokenLinkReport {
-    let canonical = match canonicalize_vault_dir(dir) {
-        Ok(p) => p,
-        Err(_) => {
-            return BrokenLinkReport {
-                total_links: 0,
-                broken: Vec::new(),
-            };
-        }
+    let Ok(canonical) = canonicalize_vault_dir(dir) else {
+        return BrokenLinkReport {
+            total_links: 0,
+            broken: Vec::new(),
+        };
     };
 
     let mut total_links = 0usize;
@@ -155,14 +153,11 @@ pub fn detect_broken_links_from_index(
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,
 ) -> BrokenLinkReport {
-    let canonical = match canonicalize_vault_dir(dir) {
-        Ok(p) => p,
-        Err(_) => {
-            return BrokenLinkReport {
-                total_links: 0,
-                broken: Vec::new(),
-            };
-        }
+    let Ok(canonical) = canonicalize_vault_dir(dir) else {
+        return BrokenLinkReport {
+            total_links: 0,
+            broken: Vec::new(),
+        };
     };
 
     let mut total_links = 0usize;
@@ -231,7 +226,7 @@ pub struct LinkMatcher {
 }
 
 /// Result of a single match attempt.
-pub struct MatchResult {
+pub(crate) struct MatchResult {
     /// Vault-relative path of the matched file.
     pub matched_file: String,
     pub strategy: FixStrategy,
@@ -251,7 +246,7 @@ impl LinkMatcher {
             let alt = if f.to_ascii_lowercase().ends_with(".md") {
                 f.strip_suffix(".md")
                     .or_else(|| f.strip_suffix(".MD"))
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
             } else {
                 Some(format!("{f}.md"))
             };
@@ -310,7 +305,10 @@ impl LinkMatcher {
     /// the matcher never proposes a self-referential fix.
     ///
     /// Returns `None` if no match is found above the configured threshold.
-    pub fn find_match(&self, raw_target: &str, source: &str) -> Option<MatchResult> {
+    pub(crate) fn find_match(&self, raw_target: &str, source: &str) -> Option<MatchResult> {
+        // Minimum score difference to avoid ambiguous fuzzy matches.
+        const TIE_DELTA: f64 = 0.01;
+
         let target_filename = raw_target.rsplit('/').next().unwrap_or(raw_target);
         let target_stem = target_filename
             .strip_suffix(".md")
@@ -322,7 +320,10 @@ impl LinkMatcher {
 
         // Precompute the exact-case alt form so strategy 1 doesn't steal strategy 2 hits.
         // Check the .md suffix on the lowercased form to avoid a case-sensitive comparison.
-        let exact_alt = if target_lower.ends_with(".md") {
+        let exact_alt = if std::path::Path::new(&target_lower)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
             // Strip the original suffix (preserving the non-suffix casing).
             raw_target[..raw_target.len() - 3].to_string()
         } else {
@@ -369,9 +370,8 @@ impl LinkMatcher {
 
         // --- Strategy 4: Fuzzy match (Jaro-Winkler on filename stem) ---
         // Track the top-two scores to detect ties: if two candidates score within
-        // 0.01 of each other the match is ambiguous and we return None rather than
-        // silently picking the first.
-        const TIE_DELTA: f64 = 0.01;
+        // TIE_DELTA of each other the match is ambiguous and we return None rather
+        // than silently picking the first.
         let mut best_score = self.threshold;
         let mut second_score = 0.0_f64;
         let mut best_idx: Option<usize> = None;
@@ -632,7 +632,7 @@ mod tests {
     // --- Fuzzy matching helpers ---
 
     fn make_files(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
+        names.iter().map(std::string::ToString::to_string).collect()
     }
 
     fn broken(source: &str, line: usize, target: &str) -> BrokenLinkInfo {
@@ -665,7 +665,7 @@ mod tests {
         let result = matcher.find_match("auth", "__test__").unwrap();
         assert_eq!(result.matched_file, "Auth.md");
         assert!(matches!(result.strategy, FixStrategy::CaseInsensitive));
-        assert_eq!(result.confidence, 1.0);
+        assert!((result.confidence - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -690,7 +690,7 @@ mod tests {
         let result = matcher.find_match("bar", "__test__").unwrap();
         assert_eq!(result.matched_file, "sub/deep/bar.md");
         assert!(matches!(result.strategy, FixStrategy::ShortestPath));
-        assert_eq!(result.confidence, 0.95);
+        assert!((result.confidence - 0.95).abs() < f64::EPSILON);
     }
 
     #[test]

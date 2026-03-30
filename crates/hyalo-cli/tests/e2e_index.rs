@@ -492,8 +492,8 @@ fn tags_summary_with_index_matches_disk_scan() {
         .iter()
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    disk_tags.sort();
-    index_tags.sort();
+    disk_tags.sort_unstable();
+    index_tags.sort_unstable();
     assert_eq!(
         disk_tags, index_tags,
         "tag sets differ between disk and index"
@@ -547,8 +547,8 @@ fn properties_summary_with_index_matches_disk_scan() {
         .iter()
         .map(|p| p["name"].as_str().unwrap())
         .collect();
-    disk_props.sort();
-    index_props.sort();
+    disk_props.sort_unstable();
+    index_props.sort_unstable();
     assert_eq!(
         disk_props, index_props,
         "property sets differ between disk and index"
@@ -719,7 +719,7 @@ fn run_with_index(tmp: &TempDir, index_path: &std::path::Path, args: &[&str]) ->
     );
     serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        panic!("invalid JSON from {:?}: {e}\nstdout: {stdout}", args)
+        panic!("invalid JSON from {args:?}: {e}\nstdout: {stdout}")
     })
 }
 

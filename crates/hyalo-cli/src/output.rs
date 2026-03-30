@@ -750,7 +750,7 @@ mod tests {
             "links": ["[[other]]"]
         });
         let out = jq(OUTLINE_SECTION_FILTER, &val).unwrap();
-        assert!(out.contains("#"));
+        assert!(out.contains('#'));
         assert!(out.contains("Introduction"));
         assert!(out.contains("[[other]]"));
     }

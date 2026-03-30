@@ -156,7 +156,7 @@ pub fn canonicalize_vault_dir(dir: &Path) -> Result<PathBuf> {
 /// - `Ok(true)`  — `full` is within the vault
 /// - `Ok(false)` — `full` resolves outside the vault boundary
 /// - `Err(_)`    — `full` could not be canonicalized (permission error, symlink loop, etc.)
-pub fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
+pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<bool> {
     let canonical_full = dunce::canonicalize(full)
         .with_context(|| format!("failed to canonicalize path: {}", full.display()))?;
     Ok(canonical_full.starts_with(canonical_dir))
@@ -176,7 +176,8 @@ fn normalize_path(path: &str) -> String {
 /// Returns `true` for paths containing `*`, `?`, `[`, or a leading `!`
 /// (negation glob).
 #[must_use]
-pub fn is_glob(path: &str) -> bool {
+#[allow(dead_code)] // Used in tests only
+pub(crate) fn is_glob(path: &str) -> bool {
     path.starts_with('!')
         || path.starts_with("\\!")
         || path.contains('*')
@@ -193,7 +194,12 @@ pub fn is_glob(path: &str) -> bool {
 /// pattern are returned.
 ///
 /// The glob is matched against paths relative to `dir`.
-pub fn match_glob(dir: &Path, files: &[PathBuf], pattern: &str) -> Result<Vec<(PathBuf, String)>> {
+#[allow(dead_code)] // Used in tests only
+pub(crate) fn match_glob(
+    dir: &Path,
+    files: &[PathBuf],
+    pattern: &str,
+) -> Result<Vec<(PathBuf, String)>> {
     // Normalize `\!` → `!` so that shell-escaped negation globs work.
     // Some shells (and Claude Code's Bash tool) escape `!` to `\!` even
     // inside single quotes.

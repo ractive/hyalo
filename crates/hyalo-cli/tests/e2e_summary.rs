@@ -52,7 +52,7 @@ fn setup_vault() -> TempDir {
     write_md(
         tmp.path(),
         "notes/alpha.md",
-        md!(r#"
+        md!(r"
 ---
 title: Alpha
 status: draft
@@ -64,13 +64,13 @@ tags:
 
 - [ ] Open task
 - [x] Done task
-"#),
+"),
     );
 
     write_md(
         tmp.path(),
         "notes/beta.md",
-        md!(r#"
+        md!(r"
 ---
 title: Beta
 status: draft
@@ -80,13 +80,13 @@ tags:
 # Beta
 
 - [x] Completed
-"#),
+"),
     );
 
     write_md(
         tmp.path(),
         "docs/readme.md",
-        md!(r#"
+        md!(r"
 ---
 title: Readme
 status: published
@@ -96,7 +96,7 @@ tags:
 # Readme
 
 No tasks here.
-"#),
+"),
     );
 
     write_md(
