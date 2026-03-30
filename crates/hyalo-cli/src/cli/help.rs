@@ -259,7 +259,7 @@ OUTPUT SHAPES (JSON, default):
   {\"deleted\": \".hyalo-index\"}
 
   # --hints wraps JSON output in an envelope with drill-down commands
-  {\"data\": { ... original output ... }, \"hints\": [\"hyalo properties\", ...]}
+  {\"data\": { ... original output ... }, \"hints\": [{\"description\": \"...\", \"cmd\": \"hyalo ...\"}, ...]}
 
   # errors (stderr, exit code 1 for user errors, 2 for internal)
   {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ Also links to [[target|the target page]].
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -72,7 +72,7 @@ fn backlinks_finds_markdown_links() {
         "See [my note](notes/target.md) for details.\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "notes/target.md"])
         .output()
@@ -90,7 +90,7 @@ fn backlinks_empty_result() {
     write_md(tmp.path(), "lonely.md", "# No one links here\n");
     write_md(tmp.path(), "other.md", "# Other\nNo links.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "lonely.md"])
         .output()
@@ -108,8 +108,8 @@ fn backlinks_text_format() {
     write_md(tmp.path(), "target.md", "# Target\n");
     write_md(tmp.path(), "source.md", "Link to [[target]]\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -126,8 +126,8 @@ fn backlinks_text_format_empty() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "lonely.md", "# Alone\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["backlinks", "--file", "lonely.md"])
         .output()
@@ -142,7 +142,7 @@ fn backlinks_text_format_empty() {
 fn backlinks_file_not_found() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "nonexistent.md"])
         .output()
@@ -163,7 +163,7 @@ fn backlinks_ignores_links_in_code_blocks() {
         "```\n[[target]]\n```\nReal [[target]] link\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -200,7 +200,7 @@ Link is here: [[target]]
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -228,7 +228,7 @@ fn backlinks_cross_directory_relative_link() {
         "See [the target](../target.md) for more.\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -248,7 +248,7 @@ fn backlinks_wikilink_without_extension_finds_md_file() {
     write_md(tmp.path(), "notes.md", "# Notes\n");
     write_md(tmp.path(), "source.md", "See [[notes]] for details.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "notes.md"])
         .output()
@@ -267,7 +267,7 @@ fn backlinks_with_jq_filter() {
     write_md(tmp.path(), "a.md", "[[target]]\n");
     write_md(tmp.path(), "b.md", "[[target]]\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--jq", ".total"])
         .args(["backlinks", "--file", "target.md"])
@@ -292,7 +292,7 @@ fn backlinks_wikilink_with_path_separator() {
         "See [[backlog/item]] for context.\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "backlog/item.md"])
         .output()
@@ -318,7 +318,7 @@ fn backlinks_resolves_absolute_links_with_dir_config() {
     write_md(tmp.path(), "docs/target.md", "# Target\n");
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \"docs\"\n").unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -341,7 +341,7 @@ fn backlinks_excludes_self_links() {
     write_md(tmp.path(), "a.md", "Self-ref: [[a]]\n");
     write_md(tmp.path(), "b.md", "Link to [[a]]\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "a.md"])
         .output()
@@ -365,7 +365,7 @@ fn backlinks_wikilink_with_path_from_subdirectory() {
     write_md(tmp.path(), "other/target.md", "# Target\n");
     write_md(tmp.path(), "sub/source.md", "See [[other/target]] here.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["backlinks", "--file", "other/target.md"])
         .output()

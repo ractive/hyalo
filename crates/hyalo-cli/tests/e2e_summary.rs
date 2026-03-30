@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 fn setup_vault_nested() -> TempDir {
@@ -119,12 +119,11 @@ No tasks here.
 #[test]
 fn summary_json_has_all_fields() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -159,12 +158,11 @@ fn summary_json_has_all_fields() {
 #[test]
 fn summary_file_counts_by_directory() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -193,12 +191,11 @@ fn summary_file_counts_by_directory() {
 #[test]
 fn summary_task_counts() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -216,12 +213,11 @@ fn summary_task_counts() {
 #[test]
 fn summary_status_groups() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -254,12 +250,11 @@ fn summary_status_groups() {
 #[test]
 fn summary_tag_counts() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -289,12 +284,11 @@ fn summary_tag_counts() {
 #[test]
 fn summary_property_summary() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -321,12 +315,11 @@ fn summary_property_summary() {
 #[test]
 fn summary_recent_files_limited() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--recent",
             "2",
             "--format",
@@ -346,12 +339,11 @@ fn summary_recent_files_limited() {
 #[test]
 fn summary_text_format() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "text",
         ])
@@ -372,12 +364,11 @@ fn summary_text_format() {
 #[test]
 fn summary_glob_filter() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--glob",
             "notes/*.md",
             "--format",
@@ -395,12 +386,11 @@ fn summary_glob_filter() {
 #[test]
 fn summary_jq_filter() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--jq",
             ".tasks.total",
         ])
@@ -414,12 +404,11 @@ fn summary_jq_filter() {
 #[test]
 fn summary_empty_vault() {
     let tmp = TempDir::new().unwrap();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -438,12 +427,11 @@ fn summary_empty_vault() {
 #[test]
 fn summary_depth_zero_collapses_all_dirs() {
     let tmp = setup_vault_nested();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--depth",
             "0",
             "--format",
@@ -465,12 +453,11 @@ fn summary_depth_zero_collapses_all_dirs() {
 #[test]
 fn summary_depth_one_collapses_sub_into_parent() {
     let tmp = setup_vault_nested();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--depth",
             "1",
             "--format",
@@ -498,12 +485,11 @@ fn summary_depth_one_collapses_sub_into_parent() {
 #[test]
 fn summary_depth_no_flag_shows_all_directories() {
     let tmp = setup_vault_nested();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -525,12 +511,11 @@ fn summary_depth_no_flag_shows_all_directories() {
 #[test]
 fn summary_recent_zero() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--recent",
             "0",
             "--format",
@@ -549,12 +534,11 @@ fn summary_recent_zero() {
 #[test]
 fn summary_json_has_orphans_field() {
     let tmp = setup_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -604,12 +588,11 @@ No links to me
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -662,12 +645,11 @@ See [[a]]
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -704,12 +686,11 @@ No links
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -737,12 +718,11 @@ No links
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "text",
         ])
@@ -764,12 +744,11 @@ No links
 #[test]
 fn summary_orphans_empty_vault() {
     let tmp = TempDir::new().unwrap();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -823,12 +802,11 @@ No links
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--glob",
             "notes/*.md",
             "--format",
@@ -865,12 +843,11 @@ No links
 fn summary_glob_negation_excludes_files() {
     let tmp = setup_vault();
     // Exclude one of the root-level files; the summary file count should be reduced
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--glob",
             "!notes/**/*.md",
             "--format",
@@ -946,7 +923,7 @@ No links.
     );
 
     // Disk scan with site_prefix
-    let disk_out = hyalo()
+    let disk_out = hyalo_no_hints()
         .args([
             "--dir",
             dir_str,
@@ -956,7 +933,6 @@ No links.
             "json",
         ])
         .arg("summary")
-        .arg("--no-hints")
         .output()
         .unwrap();
     assert!(
@@ -973,7 +949,7 @@ No links.
         .collect();
 
     // Create index with same site_prefix
-    let idx_create = hyalo()
+    let idx_create = hyalo_no_hints()
         .args(["--dir", dir_str, "--site-prefix", "docs"])
         .arg("create-index")
         .output()
@@ -986,7 +962,7 @@ No links.
 
     // Index-based summary
     let index_path = tmp.path().join(".hyalo-index");
-    let idx_out = hyalo()
+    let idx_out = hyalo_no_hints()
         .args([
             "--dir",
             dir_str,
@@ -998,7 +974,6 @@ No links.
             "json",
         ])
         .arg("summary")
-        .arg("--no-hints")
         .output()
         .unwrap();
     assert!(
@@ -1086,12 +1061,11 @@ No links.
 #[test]
 fn summary_dead_ends_json() {
     let tmp = setup_dead_end_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -1137,12 +1111,11 @@ fn summary_dead_ends_json() {
 #[test]
 fn summary_dead_ends_text_format() {
     let tmp = setup_dead_end_vault();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "text",
         ])
@@ -1187,12 +1160,11 @@ No links.
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])
@@ -1213,15 +1185,8 @@ fn summary_dead_end_parity_disk_vs_index() {
     let dir_str = tmp.path().to_str().unwrap();
 
     // Disk scan
-    let disk_out = hyalo()
-        .args([
-            "--dir",
-            dir_str,
-            "--no-hints",
-            "summary",
-            "--format",
-            "json",
-        ])
+    let disk_out = hyalo_no_hints()
+        .args(["--dir", dir_str, "summary", "--format", "json"])
         .output()
         .unwrap();
     assert!(
@@ -1238,7 +1203,7 @@ fn summary_dead_end_parity_disk_vs_index() {
         .collect();
 
     // Create index
-    let idx_create = hyalo()
+    let idx_create = hyalo_no_hints()
         .args(["--dir", dir_str, "create-index"])
         .output()
         .unwrap();
@@ -1250,14 +1215,13 @@ fn summary_dead_end_parity_disk_vs_index() {
 
     // Index-based summary
     let index_path = tmp.path().join(".hyalo-index");
-    let idx_out = hyalo()
+    let idx_out = hyalo_no_hints()
         .args([
             "--dir",
             dir_str,
             "--index",
             index_path.to_str().unwrap(),
             "summary",
-            "--no-hints",
             "--format",
             "json",
         ])

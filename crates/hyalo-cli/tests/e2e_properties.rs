@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, sample_frontmatter, write_md};
+use common::{hyalo_no_hints, md, sample_frontmatter, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -41,8 +41,8 @@ priority: 1
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -73,8 +73,8 @@ priority: 1
 fn properties_empty_dir() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -107,8 +107,8 @@ only_in_sub: yes
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary", "--glob", "sub/*.md"])
         .output()
         .unwrap();
@@ -145,7 +145,7 @@ title: B
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
@@ -170,8 +170,8 @@ fn properties_glob_no_match() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", sample_frontmatter());
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary", "--glob", "nonexistent/*.md"])
         .output()
         .unwrap();
@@ -201,8 +201,8 @@ fn find_properties_single_file() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "file.md", sample_frontmatter());
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--file", "file.md", "--fields", "properties"])
         .output()
         .unwrap();
@@ -265,8 +265,8 @@ title: Sub B
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--glob", "sub/*.md", "--fields", "properties"])
         .output()
         .unwrap();
@@ -288,8 +288,8 @@ fn find_properties_file_without_frontmatter() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "plain.md", "Just a plain markdown file.\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--file", "plain.md", "--fields", "properties"])
         .output()
         .unwrap();
@@ -330,8 +330,8 @@ status: draft
         "---\n: invalid yaml [[[{\n---\n# Bad\n",
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "summary"])
         .output()
         .unwrap();
@@ -369,7 +369,7 @@ fn properties_rename_basic() {
     write_md(tmp.path(), "b.md", "---\ntitle: B\nkeywords: other\n---\n");
     write_md(tmp.path(), "c.md", "---\ntitle: C\n---\n"); // no keywords
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "properties",
@@ -400,7 +400,7 @@ fn properties_rename_conflict_skips() {
         "---\ntitle: Note\nfoo: old\nbar: existing\n---\n",
     );
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["properties", "rename", "--from", "foo", "--to", "bar"]);
     let output = cmd.output().unwrap();
@@ -422,7 +422,7 @@ fn properties_rename_with_glob_scope() {
     write_md(tmp.path(), "notes/a.md", "---\nkeywords: test\n---\n");
     write_md(tmp.path(), "other/b.md", "---\nkeywords: test\n---\n");
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "properties",
@@ -450,7 +450,7 @@ fn properties_rename_with_glob_scope() {
 #[test]
 fn properties_rename_same_name_exits_1() {
     let tmp = TempDir::new().unwrap();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["properties", "rename", "--from", "foo", "--to", "foo"]);
     let output = cmd.output().unwrap();
@@ -475,11 +475,10 @@ fn properties_glob_negation_excludes_files() {
         "---\ntitle: Exclude\nexclusive_prop: only_here\n---\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
-            "--no-hints",
             "properties",
             "summary",
             "--glob",
@@ -516,7 +515,7 @@ fn properties_bare_defaults_to_summary() {
         "---\ntitle: A\nstatus: draft\n---\n# A\n",
     );
 
-    let output = common::hyalo()
+    let output = common::hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("properties")
         .output()

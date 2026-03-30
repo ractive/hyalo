@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md, write_tagged};
+use common::{hyalo_no_hints, md, write_md, write_tagged};
 use tempfile::TempDir;
 
 /// Helper: extract the results array from a `{total, results}` envelope.
@@ -21,8 +21,8 @@ fn tags_summary_returns_counts() {
     write_tagged(tmp.path(), "b.md", &["rust", "iteration"]);
     write_md(tmp.path(), "c.md", "No frontmatter.\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary"])
         .output()
         .unwrap();
@@ -41,8 +41,8 @@ fn tags_summary_returns_counts() {
 fn tags_empty_vault() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary"])
         .output()
         .unwrap();
@@ -60,8 +60,8 @@ fn tags_with_glob() {
     write_tagged(tmp.path(), "sub/b.md", &["beta"]);
     write_tagged(tmp.path(), "root.md", &["gamma"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary", "--glob", "sub/*.md"])
         .output()
         .unwrap();
@@ -85,8 +85,8 @@ fn tags_glob_no_match() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary", "--glob", "nonexistent/*.md"])
         .output()
         .unwrap();
@@ -117,7 +117,7 @@ fn tags_text_format() {
     write_tagged(tmp.path(), "note.md", &["rust"]);
     write_tagged(tmp.path(), "other.md", &["rust", "cli"]);
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
@@ -144,8 +144,8 @@ fn tags_file_without_frontmatter() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "plain.md", "Just a plain markdown file.\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary"])
         .output()
         .unwrap();
@@ -170,8 +170,8 @@ tags: rust
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "summary"])
         .output()
         .unwrap();
@@ -192,8 +192,8 @@ fn find_tag_exact_match() {
     write_tagged(tmp.path(), "a.md", &["iteration"]);
     write_tagged(tmp.path(), "b.md", &["links"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--tag", "iteration", "--fields", "tags"])
         .output()
         .unwrap();
@@ -213,8 +213,8 @@ fn find_tag_nested_match() {
     write_tagged(tmp.path(), "c.md", &["inbox"]);
     write_tagged(tmp.path(), "d.md", &["inboxes"]); // must NOT match
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--tag", "inbox"])
         .output()
         .unwrap();
@@ -235,8 +235,8 @@ fn find_tag_no_match_returns_empty_array() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--tag", "nonexistent"])
         .output()
         .unwrap();
@@ -254,8 +254,8 @@ fn find_tag_with_glob() {
     write_tagged(tmp.path(), "sub/b.md", &["python"]);
     write_tagged(tmp.path(), "root.md", &["rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--tag", "rust", "--glob", "sub/*.md"])
         .output()
         .unwrap();
@@ -274,8 +274,8 @@ fn find_tag_case_insensitive() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["Rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--tag", "rust"])
         .output()
         .unwrap();
@@ -303,8 +303,8 @@ title: Note
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "rust", "--file", "note.md"])
         .output()
         .unwrap();
@@ -325,8 +325,8 @@ fn set_tag_glob_pattern() {
     write_tagged(tmp.path(), "sub/a.md", &["existing"]);
     write_tagged(tmp.path(), "sub/b.md", &["existing"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "new-tag", "--glob", "sub/*.md"])
         .output()
         .unwrap();
@@ -342,8 +342,8 @@ fn set_tag_idempotent() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "rust", "--file", "note.md"])
         .output()
         .unwrap();
@@ -368,8 +368,8 @@ title: Note
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "plan", "--file", "note.md"])
         .output()
         .unwrap();
@@ -385,8 +385,8 @@ title: Note
 fn set_tag_file_not_found() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "rust", "--file", "nonexistent.md"])
         .output()
         .unwrap();
@@ -406,8 +406,8 @@ No frontmatter here.
 "),
     );
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "rust", "--file", "plain.md"])
         .output()
         .unwrap();
@@ -431,8 +431,8 @@ fn remove_tag_single_file() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust", "cli"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust", "--file", "note.md"])
         .output()
         .unwrap();
@@ -453,8 +453,8 @@ fn remove_tag_glob_pattern() {
     write_tagged(tmp.path(), "sub/a.md", &["rust", "cli"]);
     write_tagged(tmp.path(), "sub/b.md", &["rust", "python"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust", "--glob", "sub/*.md"])
         .output()
         .unwrap();
@@ -469,8 +469,8 @@ fn remove_tag_absent_tag_idempotent() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["cli"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust", "--file", "note.md"])
         .output()
         .unwrap();
@@ -486,8 +486,8 @@ fn remove_tag_empties_tags_property() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust", "--file", "note.md"])
         .output()
         .unwrap();
@@ -502,8 +502,8 @@ fn remove_tag_empties_tags_property() {
 fn remove_tag_file_not_found() {
     let tmp = TempDir::new().unwrap();
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust", "--file", "nonexistent.md"])
         .output()
         .unwrap();
@@ -516,8 +516,8 @@ fn remove_tag_from_file_with_no_frontmatter() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "plain.md", "No frontmatter here.\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust", "--file", "plain.md"])
         .output()
         .unwrap();
@@ -533,8 +533,8 @@ fn find_tag_empty_tags_list() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "empty.md", &[]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--tag", "rust"])
         .output()
         .unwrap();
@@ -554,8 +554,8 @@ fn set_tag_without_file_or_glob_is_user_error() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["existing"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--tag", "new-tag"])
         .output()
         .unwrap();
@@ -575,8 +575,8 @@ fn remove_tag_without_file_or_glob_is_user_error() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["rust"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["remove", "--tag", "rust"])
         .output()
         .unwrap();
@@ -602,8 +602,8 @@ fn tags_rename_basic() {
     write_tagged(tmp.path(), "b.md", &["filtering"]);
     write_tagged(tmp.path(), "c.md", &["cli"]); // no "filtering"
 
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["tags", "rename", "--from", "filtering", "--to", "filters"]);
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -622,8 +622,8 @@ fn tags_rename_already_has_new_tag() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "note.md", &["old-name", "new-name"]);
 
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["tags", "rename", "--from", "old-name", "--to", "new-name"]);
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -641,8 +641,8 @@ fn tags_rename_already_has_new_tag() {
 #[test]
 fn tags_rename_same_name_exits_1() {
     let tmp = TempDir::new().unwrap();
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["tags", "rename", "--from", "foo", "--to", "foo"]);
     let output = cmd.output().unwrap();
     assert!(!output.status.success());
@@ -654,8 +654,8 @@ fn tags_rename_with_glob_scope() {
     write_tagged(tmp.path(), "notes/a.md", &["old-tag"]);
     write_tagged(tmp.path(), "other/b.md", &["old-tag"]);
 
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "tags",
         "rename",
@@ -681,8 +681,8 @@ fn tags_rename_with_glob_scope() {
 #[test]
 fn tags_rename_invalid_tag_exits_1() {
     let tmp = TempDir::new().unwrap();
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["tags", "rename", "--from", "valid", "--to", "invalid tag!"]);
     let output = cmd.output().unwrap();
     assert!(!output.status.success());
@@ -698,8 +698,8 @@ fn tags_rename_scalar_tag() {
         "---\ntitle: Note\ntags: old-tag\n---\n",
     );
 
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["tags", "rename", "--from", "old-tag", "--to", "new-tag"]);
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -731,8 +731,8 @@ fn tags_rename_scalar_tag_already_has_new() {
     // Instead, verify the simple scalar rename writes back as a scalar string.
     write_md(tmp.path(), "note.md", "---\ntags: alpha\n---\n");
 
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["tags", "rename", "--from", "alpha", "--to", "beta"]);
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -754,11 +754,10 @@ fn tags_glob_negation_excludes_files() {
     write_tagged(tmp.path(), "keep.md", &["rust", "cli"]);
     write_tagged(tmp.path(), "exclude.md", &["exclusive-tag"]);
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
-            "--no-hints",
             "tags",
             "summary",
             "--glob",
@@ -791,8 +790,8 @@ fn tags_bare_defaults_to_summary() {
     let tmp = TempDir::new().unwrap();
     write_tagged(tmp.path(), "a.md", &["rust", "cli"]);
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("tags")
         .output()
         .unwrap();

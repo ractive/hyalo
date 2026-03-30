@@ -7,12 +7,40 @@
 /// Maximum number of hints to return from any generator.
 const MAX_HINTS: usize = 5;
 
+/// A single drill-down hint: a concrete command plus a short human-readable description.
+#[derive(Debug, Clone)]
+pub struct Hint {
+    pub(crate) description: String,
+    pub(crate) cmd: String,
+}
+
+impl Hint {
+    fn new(description: impl Into<String>, cmd: String) -> Self {
+        Self {
+            description: description.into(),
+            cmd,
+        }
+    }
+}
+
 /// Identifies which command produced the output.
 pub enum HintSource {
     Summary,
     PropertiesSummary,
     TagsSummary,
     Find,
+    Set,
+    Remove,
+    Append,
+    Read,
+    Backlinks,
+    Mv,
+    TaskRead,
+    TaskToggle,
+    TaskSetStatus,
+    LinksFix,
+    CreateIndex,
+    DropIndex,
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -29,18 +57,65 @@ pub struct HintContext {
     pub format: Option<String>,
     /// Explicit `--hints` from CLI (not from config).
     pub hints: bool,
+    // Find context
+    pub fields: Vec<String>,
+    pub sort: Option<String>,
+    pub has_limit: bool,
+    pub has_body_search: bool,
+    pub has_regex_search: bool,
+    pub property_filters: Vec<String>,
+    pub tag_filters: Vec<String>,
+    pub task_filter: Option<String>,
+    pub file_targets: Vec<String>,
+    // Mutation context
+    pub dry_run: bool,
+    // Index context
+    pub index_path: Option<String>,
+}
+
+impl HintContext {
+    pub fn new(source: HintSource) -> Self {
+        Self {
+            source,
+            dir: None,
+            glob: vec![],
+            format: None,
+            hints: false,
+            fields: vec![],
+            sort: None,
+            has_limit: false,
+            has_body_search: false,
+            has_regex_search: false,
+            property_filters: vec![],
+            tag_filters: vec![],
+            task_filter: None,
+            file_targets: vec![],
+            dry_run: false,
+            index_path: None,
+        }
+    }
 }
 
 /// Generate concrete drill-down hints from a command's JSON output.
 ///
-/// Returns at most [`MAX_HINTS`] executable `hyalo` command strings.
+/// Returns at most [`MAX_HINTS`] [`Hint`]s, each with a human-readable description
+/// and an executable `hyalo` command (`cmd`).
 #[must_use]
-pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
+pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let hints = match &ctx.source {
         HintSource::Summary => hints_for_summary(ctx, data),
         HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data),
         HintSource::TagsSummary => hints_for_tags_summary(ctx, data),
         HintSource::Find => hints_for_find(ctx, data),
+        HintSource::Set | HintSource::Remove | HintSource::Append => hints_for_mutation(ctx, data),
+        HintSource::Read => hints_for_read(ctx, data),
+        HintSource::Backlinks => hints_for_backlinks(ctx, data),
+        HintSource::Mv => hints_for_mv(ctx, data),
+        HintSource::TaskRead => hints_for_task_read(ctx, data),
+        HintSource::TaskToggle | HintSource::TaskSetStatus => hints_for_task_mutation(ctx, data),
+        HintSource::LinksFix => hints_for_links_fix(ctx, data),
+        HintSource::CreateIndex => hints_for_create_index(ctx, data),
+        HintSource::DropIndex => hints_for_drop_index(ctx, data),
     };
     hints.into_iter().take(MAX_HINTS).collect()
 }
@@ -78,6 +153,38 @@ fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
 fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
     for arg in args {
+        parts.push(shell_quote(arg));
+    }
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    parts.join(" ")
+}
+
+/// Build a `find` command that preserves the caller's existing filters (property,
+/// tag, task, file targets) plus `--glob`, then appends `extra_args`.  Use this for
+/// hints like sort and limit that refine the current query without changing its scope.
+fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
+    for pf in &ctx.property_filters {
+        parts.push("--property".to_owned());
+        parts.push(shell_quote(pf));
+    }
+    for tf in &ctx.tag_filters {
+        parts.push("--tag".to_owned());
+        parts.push(shell_quote(tf));
+    }
+    if let Some(task) = &ctx.task_filter {
+        parts.push("--task".to_owned());
+        parts.push(shell_quote(task));
+    }
+    for ft in &ctx.file_targets {
+        parts.push("--file".to_owned());
+        parts.push(shell_quote(ft));
+    }
+    for arg in extra_args {
         parts.push(shell_quote(arg));
     }
     push_global_flags(&mut parts, ctx);
@@ -132,15 +239,39 @@ fn status_priority(value: &str) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the first modified file path from mutation output (single object or array).
+fn first_modified_file(data: &serde_json::Value) -> Option<&str> {
+    fn extract(obj: &serde_json::Value) -> Option<&str> {
+        obj.get("modified")
+            .and_then(|m| m.as_array())
+            .and_then(|a| a.first())
+            .and_then(|f| f.as_str())
+    }
+    if let Some(arr) = data.as_array() {
+        arr.iter().find_map(extract)
+    } else {
+        extract(data)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-source hint generators
 // ---------------------------------------------------------------------------
 
-fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
+fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
-    // Always suggest aggregate views.
-    hints.push(build_command_with_glob(ctx, &["properties"]));
-    hints.push(build_command_with_glob(ctx, &["tags"]));
+    hints.push(Hint::new(
+        "Browse property names and types",
+        build_command_with_glob(ctx, &["properties"]),
+    ));
+    hints.push(Hint::new(
+        "Browse tags and their counts",
+        build_command_with_glob(ctx, &["tags"]),
+    ));
 
     // Suggest find --task todo if there are open tasks.
     let tasks_total = data
@@ -154,7 +285,23 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     if tasks_total > tasks_done {
-        hints.push(build_command_with_glob(ctx, &["find", "--task", "todo"]));
+        hints.push(Hint::new(
+            "Find files with open tasks",
+            build_command_with_glob(ctx, &["find", "--task", "todo"]),
+        ));
+    }
+
+    // Suggest find --broken-links if there are broken links.
+    let broken_links = data
+        .get("links")
+        .and_then(|l| l.get("broken"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if broken_links > 0 {
+        hints.push(Hint::new(
+            format!("List {broken_links} files with broken links"),
+            build_command_with_glob(ctx, &["find", "--broken-links"]),
+        ));
     }
 
     // Pick 1-2 most interesting status values.
@@ -171,14 +318,17 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String>
         let remaining = MAX_HINTS.saturating_sub(hints.len());
         for (value, _) in groups.into_iter().take(remaining.min(2)) {
             let filter = format!("status={value}");
-            hints.push(build_command_no_glob(ctx, &["find", "--property", &filter]));
+            hints.push(Hint::new(
+                format!("Filter by status: {value}"),
+                build_command_no_glob(ctx, &["find", "--property", &filter]),
+            ));
         }
     }
 
     hints
 }
 
-fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
+fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let Some(arr) = data.as_array() else {
         return vec![];
     };
@@ -200,11 +350,16 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
     entries
         .into_iter()
         .take(3)
-        .map(|(name, _)| build_command_with_glob(ctx, &["find", "--property", name]))
+        .map(|(name, count)| {
+            Hint::new(
+                format!("Find {count} files with property: {name}"),
+                build_command_with_glob(ctx, &["find", "--property", name]),
+            )
+        })
         .collect()
 }
 
-fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
+fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     // find always returns a {total, results} envelope.
     let Some(results) = data["results"].as_array() else {
         return vec![];
@@ -215,32 +370,64 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
     }
 
     let mut hints = Vec::new();
+    let result_count = results.len();
+    let is_single = result_count == 1;
 
-    // Suggest reading the first result.
+    // --- Single-result hints ---
     if let Some(first_file) = results[0].get("file").and_then(|f| f.as_str()) {
-        hints.push(build_command_no_glob(ctx, &["read", "--file", first_file]));
-        hints.push(build_command_no_glob(
-            ctx,
-            &["backlinks", "--file", first_file],
+        hints.push(Hint::new(
+            "Read this file's content",
+            build_command_no_glob(ctx, &["read", "--file", first_file]),
+        ));
+        if is_single {
+            hints.push(Hint::new(
+                "See all metadata for this file",
+                build_command_no_glob(ctx, &["find", "--file", first_file, "--fields", "all"]),
+            ));
+        }
+        hints.push(Hint::new(
+            "See what links to this file",
+            build_command_no_glob(ctx, &["backlinks", "--file", first_file]),
         ));
     }
 
-    // When there are many results, suggest data-driven narrowing filters.
-    if results.len() > 5 {
-        // Collect tag frequencies across all results.
+    // --- Broad query → suggest summary ---
+    let has_no_filters = ctx.property_filters.is_empty()
+        && ctx.tag_filters.is_empty()
+        && ctx.task_filter.is_none()
+        && !ctx.has_body_search
+        && !ctx.has_regex_search
+        && ctx.file_targets.is_empty();
+
+    if has_no_filters && result_count > 10 {
+        hints.push(Hint::new(
+            if ctx.glob.is_empty() {
+                "Get a high-level vault overview"
+            } else {
+                "Get stats for this file set"
+            },
+            build_command_with_glob(ctx, &["summary"]),
+        ));
+    }
+
+    // --- Narrowing for many results (>5) ---
+    if result_count > 5 {
+        // Tag narrowing (skip tags already filtered on).
         let mut tag_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for item in results {
             if let Some(tags) = item.get("tags").and_then(|t| t.as_array()) {
                 for tag in tags {
-                    if let Some(name) = tag.as_str() {
+                    if let Some(name) = tag.as_str()
+                        && !ctx.tag_filters.iter().any(|t| t == name)
+                    {
                         *tag_counts.entry(name).or_insert(0) += 1;
                     }
                 }
             }
         }
 
-        // Collect status property frequencies — status is the most useful drill-down.
+        // Collect status property frequencies — skip statuses already filtered on.
         let mut status_counts: std::collections::HashMap<&str, usize> =
             std::collections::HashMap::new();
         for item in results {
@@ -249,19 +436,28 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
                 .and_then(|p| p.get("status"))
                 .and_then(|s| s.as_str())
             {
-                *status_counts.entry(status).or_insert(0) += 1;
+                let already_filtered = ctx
+                    .property_filters
+                    .iter()
+                    .any(|f| f == &format!("status={status}"));
+                if !already_filtered {
+                    *status_counts.entry(status).or_insert(0) += 1;
+                }
             }
         }
 
         // Pick the most common tag (if any results have tags).
         // Break ties alphabetically for deterministic output.
-        if let Some((top_tag, _)) = tag_counts
+        if let Some((top_tag, count)) = tag_counts
             .iter()
             .max_by(|(a_tag, a_cnt), (b_tag, b_cnt)| a_cnt.cmp(b_cnt).then(b_tag.cmp(a_tag)))
         {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
-                hints.push(build_command_with_glob(ctx, &["find", "--tag", top_tag]));
+                hints.push(Hint::new(
+                    format!("Narrow by tag: {top_tag} ({count} files)"),
+                    build_command_with_glob(ctx, &["find", "--tag", top_tag]),
+                ));
             }
         }
 
@@ -273,22 +469,53 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
         // Sort by priority (ascending), then count (descending), then name (ascending).
         status_vec.sort_by(|a, b| a.2.cmp(&b.2).then(b.1.cmp(&a.1)).then(a.0.cmp(b.0)));
 
-        if let Some((top_status, _, _)) = status_vec.first() {
+        if let Some((top_status, count, _)) = status_vec.first() {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
-                let filter = format!("status={top_status}");
-                hints.push(build_command_with_glob(
-                    ctx,
-                    &["find", "--property", &filter],
+                hints.push(Hint::new(
+                    format!("Filter by status: {top_status} ({count} files)"),
+                    build_command_with_glob(
+                        ctx,
+                        &["find", "--property", &format!("status={top_status}")],
+                    ),
+                ));
+            }
+        }
+
+        // Sort suggestion (only if not already sorting).
+        if ctx.sort.is_none() {
+            let remaining = MAX_HINTS.saturating_sub(hints.len());
+            if remaining > 0 {
+                hints.push(Hint::new(
+                    "Sort by most recently modified",
+                    build_find_command_preserving_filters(
+                        ctx,
+                        &["--sort", "modified", "--reverse"],
+                    ),
+                ));
+            }
+        }
+
+        // Limit suggestion (only if not already limited).
+        if !ctx.has_limit {
+            let remaining = MAX_HINTS.saturating_sub(hints.len());
+            if remaining > 0 {
+                hints.push(Hint::new(
+                    "Limit to 10 results",
+                    build_find_command_preserving_filters(ctx, &["--limit", "10"]),
                 ));
             }
         }
     }
 
+    // Body search → regex suggestion is intentionally omitted.
+    // We cannot produce a concrete regex without knowing the user's intent,
+    // and a placeholder like `'pattern'` would violate our no-templates contract.
+
     hints
 }
 
-fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<String> {
+fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let Some(tags_arr) = data.get("tags").and_then(|t| t.as_array()) else {
         return vec![];
     };
@@ -310,8 +537,242 @@ fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<St
     entries
         .into_iter()
         .take(3)
-        .map(|(name, _)| build_command_with_glob(ctx, &["find", "--tag", name]))
+        .map(|(name, count)| {
+            Hint::new(
+                format!("Find {count} files tagged: {name}"),
+                build_command_with_glob(ctx, &["find", "--tag", name]),
+            )
+        })
         .collect()
+}
+
+fn hints_for_mutation(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let first_modified = first_modified_file(data);
+
+    if let Some(file) = first_modified {
+        hints.push(Hint::new(
+            "Verify the updated file",
+            build_command_no_glob(
+                ctx,
+                &["find", "--file", file, "--fields", "properties,tags"],
+            ),
+        ));
+        hints.push(Hint::new(
+            "Read the modified file",
+            build_command_no_glob(ctx, &["read", "--file", file]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let file = data
+        .get("file")
+        .and_then(|f| f.as_str())
+        .or_else(|| ctx.file_targets.first().map(String::as_str));
+
+    if let Some(file) = file {
+        hints.push(Hint::new(
+            "See metadata for this file",
+            build_command_no_glob(ctx, &["find", "--file", file, "--fields", "all"]),
+        ));
+        hints.push(Hint::new(
+            "See what links to this file",
+            build_command_no_glob(ctx, &["backlinks", "--file", file]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_backlinks(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let file = data.get("file").and_then(|f| f.as_str());
+
+    if let Some(file) = file {
+        hints.push(Hint::new(
+            "Read this file's content",
+            build_command_no_glob(ctx, &["read", "--file", file]),
+        ));
+        hints.push(Hint::new(
+            "See this file's outgoing links",
+            build_command_no_glob(ctx, &["find", "--file", file, "--fields", "links"]),
+        ));
+    }
+
+    // Suggest reading the first backlink source.
+    if let Some(backlinks) = data.get("backlinks").and_then(|b| b.as_array())
+        && let Some(first_source) = backlinks
+            .first()
+            .and_then(|b| b.get("source"))
+            .and_then(|s| s.as_str())
+    {
+        hints.push(Hint::new(
+            format!("Read linking file: {first_source}"),
+            build_command_no_glob(ctx, &["read", "--file", first_source]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let to_path = data.get("to").and_then(|t| t.as_str());
+    let is_dry_run = data
+        .get("dry_run")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    if let Some(to_path) = to_path {
+        if is_dry_run {
+            if let Some(from_path) = data.get("from").and_then(|f| f.as_str()) {
+                hints.push(Hint::new(
+                    "Apply this move",
+                    build_command_no_glob(ctx, &["mv", "--file", from_path, "--to", to_path]),
+                ));
+            }
+        } else {
+            hints.push(Hint::new(
+                "Read the moved file",
+                build_command_no_glob(ctx, &["read", "--file", to_path]),
+            ));
+            hints.push(Hint::new(
+                "Verify backlinks updated",
+                build_command_no_glob(ctx, &["backlinks", "--file", to_path]),
+            ));
+        }
+    }
+
+    hints
+}
+
+/// Hints for `task read` — suggest toggling or viewing remaining tasks.
+fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let file = data.get("file").and_then(|f| f.as_str());
+    let line = data.get("line").and_then(serde_json::Value::as_u64);
+    let done = data
+        .get("done")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    if let (Some(file), Some(line)) = (file, line) {
+        let line_str = line.to_string();
+        if !done {
+            hints.push(Hint::new(
+                "Toggle this task to done",
+                build_command_no_glob(
+                    ctx,
+                    &["task", "toggle", "--file", file, "--line", &line_str],
+                ),
+            ));
+        }
+        hints.push(Hint::new(
+            "See all open tasks in this file",
+            build_command_no_glob(
+                ctx,
+                &[
+                    "find", "--file", file, "--task", "todo", "--fields", "tasks",
+                ],
+            ),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_task_mutation(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let file = data.get("file").and_then(|f| f.as_str());
+
+    if let Some(file) = file {
+        hints.push(Hint::new(
+            "See remaining open tasks",
+            build_command_no_glob(
+                ctx,
+                &[
+                    "find", "--file", file, "--task", "todo", "--fields", "tasks",
+                ],
+            ),
+        ));
+        hints.push(Hint::new(
+            "Read the file",
+            build_command_no_glob(ctx, &["read", "--file", file]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let is_dry_run = !data
+        .get("applied")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let fixable = data
+        .get("fixable")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let unfixable = data
+        .get("unfixable")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    if is_dry_run && fixable > 0 {
+        hints.push(Hint::new(
+            format!("Apply {fixable} fixes"),
+            build_command_with_glob(ctx, &["links", "fix", "--apply"]),
+        ));
+    }
+
+    if unfixable > 0 {
+        hints.push(Hint::new(
+            "List files with remaining broken links",
+            build_command_with_glob(ctx, &["find", "--broken-links"]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_create_index(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let index_path = data
+        .get("path")
+        .and_then(|p| p.as_str())
+        .or(ctx.index_path.as_deref())
+        .unwrap_or(".hyalo-index");
+
+    hints.push(Hint::new(
+        "Query using the index",
+        build_command_no_glob(ctx, &["find", "--index", index_path]),
+    ));
+    hints.push(Hint::new(
+        "Delete the index when done",
+        build_command_no_glob(ctx, &["drop-index"]),
+    ));
+
+    hints
+}
+
+fn hints_for_drop_index(ctx: &HintContext, _data: &serde_json::Value) -> Vec<Hint> {
+    vec![Hint::new(
+        "Rebuild the index",
+        build_command_no_glob(ctx, &["create-index"]),
+    )]
 }
 
 #[cfg(test)]
@@ -320,33 +781,19 @@ mod tests {
     use serde_json::json;
 
     fn ctx(source: HintSource) -> HintContext {
-        HintContext {
-            source,
-            dir: None,
-            glob: vec![],
-            format: None,
-            hints: false,
-        }
+        HintContext::new(source)
     }
 
     fn ctx_with_dir(source: HintSource, dir: &str) -> HintContext {
-        HintContext {
-            source,
-            dir: Some(dir.to_owned()),
-            glob: vec![],
-            format: None,
-            hints: false,
-        }
+        let mut ctx = HintContext::new(source);
+        ctx.dir = Some(dir.to_owned());
+        ctx
     }
 
     fn ctx_with_glob(source: HintSource, glob: &str) -> HintContext {
-        HintContext {
-            source,
-            dir: None,
-            glob: vec![glob.to_owned()],
-            format: None,
-            hints: false,
-        }
+        let mut ctx = HintContext::new(source);
+        ctx.glob = vec![glob.to_owned()];
+        ctx
     }
 
     // --- shell_quote ---
@@ -435,14 +882,14 @@ mod tests {
         });
         let hints = generate_hints(&c, &data);
         assert!(hints.iter().any(|h| {
-            h == "hyalo properties"
-                || (h.starts_with("hyalo properties ") && h.contains("--dir "))
-                || (h.starts_with("hyalo properties ") && h.contains("--glob "))
+            h.cmd == "hyalo properties"
+                || (h.cmd.starts_with("hyalo properties ") && h.cmd.contains("--dir "))
+                || (h.cmd.starts_with("hyalo properties ") && h.cmd.contains("--glob "))
         }));
         assert!(hints.iter().any(|h| {
-            h == "hyalo tags"
-                || (h.starts_with("hyalo tags ") && h.contains("--dir "))
-                || (h.starts_with("hyalo tags ") && h.contains("--glob "))
+            h.cmd == "hyalo tags"
+                || (h.cmd.starts_with("hyalo tags ") && h.cmd.contains("--dir "))
+                || (h.cmd.starts_with("hyalo tags ") && h.cmd.contains("--glob "))
         }));
     }
 
@@ -459,9 +906,9 @@ mod tests {
         });
         let hints = generate_hints(&c, &data);
         assert!(
-            hints
-                .iter()
-                .any(|h| h.contains("find") && h.contains("--task") && h.contains("todo"))
+            hints.iter().any(|h| h.cmd.contains("find")
+                && h.cmd.contains("--task")
+                && h.cmd.contains("todo"))
         );
     }
 
@@ -477,7 +924,7 @@ mod tests {
             "recent_files": []
         });
         let hints = generate_hints(&c, &data);
-        assert!(!hints.iter().any(|h| h.contains("--todo")));
+        assert!(!hints.iter().any(|h| h.cmd.contains("--todo")));
     }
 
     #[test]
@@ -497,8 +944,8 @@ mod tests {
         });
         let hints = generate_hints(&c, &data);
         // in-progress should appear before completed
-        let in_progress_pos = hints.iter().position(|h| h.contains("in-progress"));
-        let completed_pos = hints.iter().position(|h| h.contains("completed"));
+        let in_progress_pos = hints.iter().position(|h| h.cmd.contains("in-progress"));
+        let completed_pos = hints.iter().position(|h| h.cmd.contains("completed"));
         assert!(in_progress_pos.is_some(), "should suggest in-progress");
         // completed may appear (only if limit not reached) or not — but in-progress must come first
         if let Some(cp) = completed_pos {
@@ -539,11 +986,11 @@ mod tests {
         ]);
         let hints = generate_hints(&c, &data);
         assert_eq!(hints.len(), 3);
-        assert!(hints[0].contains("title"));
-        assert!(hints[1].contains("status"));
-        assert!(hints[2].contains("tags"));
+        assert!(hints[0].cmd.contains("title"));
+        assert!(hints[1].cmd.contains("status"));
+        assert!(hints[2].cmd.contains("tags"));
         // author should not appear (rank 4)
-        assert!(!hints.iter().any(|h| h.contains("author")));
+        assert!(!hints.iter().any(|h| h.cmd.contains("author")));
     }
 
     #[test]
@@ -558,8 +1005,8 @@ mod tests {
         let c = ctx_with_glob(HintSource::PropertiesSummary, "notes/*.md");
         let data = json!([{"name": "status", "type": "text", "count": 5}]);
         let hints = generate_hints(&c, &data);
-        assert!(hints[0].contains("--glob"));
-        assert!(hints[0].contains("notes/*.md"));
+        assert!(hints[0].cmd.contains("--glob"));
+        assert!(hints[0].cmd.contains("notes/*.md"));
     }
 
     // --- hints_for_find ---
@@ -596,13 +1043,13 @@ mod tests {
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("read") && h.contains("alpha.md")),
+                .any(|h| h.cmd.contains("read") && h.cmd.contains("alpha.md")),
             "should suggest read: {hints:?}"
         );
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("backlinks") && h.contains("alpha.md")),
+                .any(|h| h.cmd.contains("backlinks") && h.cmd.contains("alpha.md")),
             "should suggest backlinks: {hints:?}"
         );
     }
@@ -624,7 +1071,7 @@ mod tests {
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("--tag") && h.contains("rust")),
+                .any(|h| h.cmd.contains("--tag") && h.cmd.contains("rust")),
             "should suggest --tag rust (most common): {hints:?}"
         );
     }
@@ -646,7 +1093,7 @@ mod tests {
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("--property") && h.contains("status=in-progress")),
+                .any(|h| h.cmd.contains("--property") && h.cmd.contains("status=in-progress")),
             "should prefer in-progress status: {hints:?}"
         );
     }
@@ -668,12 +1115,12 @@ mod tests {
         assert!(
             hints
                 .iter()
-                .any(|h| h.contains("--property") && h.contains("status=planned")),
+                .any(|h| h.cmd.contains("--property") && h.cmd.contains("status=planned")),
             "should suggest status filter: {hints:?}"
         );
         // No --tag hints when no tags exist.
         assert!(
-            !hints.iter().any(|h| h.contains("--tag")),
+            !hints.iter().any(|h| h.cmd.contains("--tag")),
             "should not suggest --tag when no tags: {hints:?}"
         );
     }
@@ -690,6 +1137,51 @@ mod tests {
         assert!(hints.len() <= MAX_HINTS);
     }
 
+    #[test]
+    fn find_sort_hint_preserves_existing_filters() {
+        let mut c = ctx(HintSource::Find);
+        c.property_filters = vec!["status=draft".to_owned()];
+        c.tag_filters = vec!["research".to_owned()];
+        // 6 results to trigger sort/limit hints.
+        let items: Vec<serde_json::Value> = (0..6)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("draft"), &["research"]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        let sort_hint = hints.iter().find(|h| h.cmd.contains("--sort"));
+        assert!(sort_hint.is_some(), "should include a sort hint: {hints:?}");
+        let cmd = &sort_hint.unwrap().cmd;
+        assert!(
+            cmd.contains("--property status=draft"),
+            "sort hint should preserve --property filter: {cmd}"
+        );
+        assert!(
+            cmd.contains("--tag research"),
+            "sort hint should preserve --tag filter: {cmd}"
+        );
+    }
+
+    #[test]
+    fn find_limit_hint_preserves_existing_filters() {
+        let mut c = ctx(HintSource::Find);
+        c.tag_filters = vec!["iteration".to_owned()];
+        let items: Vec<serde_json::Value> = (0..6)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["iteration"]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        let limit_hint = hints.iter().find(|h| h.cmd.contains("--limit"));
+        assert!(
+            limit_hint.is_some(),
+            "should include a limit hint: {hints:?}"
+        );
+        let cmd = &limit_hint.unwrap().cmd;
+        assert!(
+            cmd.contains("--tag iteration"),
+            "limit hint should preserve --tag filter: {cmd}"
+        );
+    }
+
     // --- flag propagation ---
 
     #[test]
@@ -700,7 +1192,267 @@ mod tests {
             "total": 1
         });
         let hints = generate_hints(&c, &data);
-        assert!(hints[0].contains("--dir"));
-        assert!(hints[0].contains("/vault"));
+        assert!(hints[0].cmd.contains("--dir"));
+        assert!(hints[0].cmd.contains("/vault"));
+    }
+
+    // --- new generator tests ---
+
+    #[test]
+    fn mutation_hints_suggest_verify_and_read() {
+        let c = ctx(HintSource::Set);
+        let data = json!({
+            "property": "status",
+            "value": "completed",
+            "modified": ["notes/alpha.md"],
+            "skipped": [],
+            "total": 1
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("find") && h.cmd.contains("alpha.md")),
+            "should suggest verify: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("read") && h.cmd.contains("alpha.md")),
+            "should suggest read: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn read_hints_suggest_metadata_and_backlinks() {
+        let c = ctx(HintSource::Read);
+        let data = json!({"file": "notes/alpha.md", "content": "Some content"});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("find") && h.cmd.contains("alpha.md")),
+            "should suggest find: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("backlinks") && h.cmd.contains("alpha.md")),
+            "should suggest backlinks: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn backlinks_hints_suggest_read_and_outgoing() {
+        let c = ctx(HintSource::Backlinks);
+        let data = json!({
+            "file": "target.md",
+            "backlinks": [{"source": "a.md", "line": 5, "target": "target"}],
+            "total": 1
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("read") && h.cmd.contains("target.md")),
+            "should suggest read target: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("read") && h.cmd.contains("a.md")),
+            "should suggest read first backlink source: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn create_index_hints_suggest_find_and_drop() {
+        let c = ctx(HintSource::CreateIndex);
+        let data = json!({"path": ".hyalo-index", "files_indexed": 42, "warnings": 0});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("find") && h.cmd.contains("--index")),
+            "should suggest find with index: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("drop-index")),
+            "should suggest drop-index: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn drop_index_hints_suggest_create() {
+        let c = ctx(HintSource::DropIndex);
+        let data = json!({"deleted": ".hyalo-index"});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("create-index")),
+            "should suggest create-index: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn mv_dry_run_hints_suggest_apply() {
+        let c = ctx(HintSource::Mv);
+        let data = json!({
+            "from": "old.md",
+            "to": "new.md",
+            "dry_run": true,
+            "updated_files": [],
+            "total_files_updated": 0,
+            "total_links_updated": 0
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("mv")
+                && h.cmd.contains("new.md")
+                && !h.cmd.contains("dry-run")),
+            "should suggest applying the move: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn mv_applied_hints_suggest_read_and_backlinks() {
+        let c = ctx(HintSource::Mv);
+        let data = json!({
+            "from": "old.md",
+            "to": "new.md",
+            "dry_run": false,
+            "updated_files": [],
+            "total_files_updated": 0,
+            "total_links_updated": 0
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("read") && h.cmd.contains("new.md")),
+            "should suggest reading moved file: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("backlinks") && h.cmd.contains("new.md")),
+            "should suggest checking backlinks: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn task_read_undone_suggests_toggle() {
+        let c = ctx(HintSource::TaskRead);
+        let data =
+            json!({"file": "todo.md", "line": 5, "status": " ", "text": "Fix bug", "done": false});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("task toggle")),
+            "should suggest toggling undone task: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn task_read_done_omits_toggle() {
+        let c = ctx(HintSource::TaskRead);
+        let data =
+            json!({"file": "todo.md", "line": 5, "status": "x", "text": "Fix bug", "done": true});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("task toggle")),
+            "should not suggest toggling already-done task: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("--task todo")),
+            "should suggest viewing open tasks: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn task_mutation_hints_suggest_remaining_tasks() {
+        let c = ctx(HintSource::TaskToggle);
+        let data =
+            json!({"file": "todo.md", "line": 5, "status": "x", "text": "Fix bug", "done": true});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("find")
+                && h.cmd.contains("--task")
+                && h.cmd.contains("todo")),
+            "should suggest finding remaining tasks: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn links_fix_dry_run_hints_suggest_apply() {
+        let c = ctx(HintSource::LinksFix);
+        let data = json!({
+            "broken": 5,
+            "fixable": 3,
+            "unfixable": 2,
+            "applied": false,
+            "fixes": []
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("links fix --apply")),
+            "should suggest applying fixes: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("--broken-links")),
+            "should suggest finding broken links: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_broad_query_suggests_summary() {
+        let c = ctx(HintSource::Find);
+        // 15 results, no filters
+        let items: Vec<serde_json::Value> = (0..15)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("completed"), &[]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("summary")),
+            "broad query should suggest summary: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_with_filters_does_not_suggest_summary() {
+        let mut c = ctx(HintSource::Find);
+        c.tag_filters = vec!["rust".to_owned()];
+        let items: Vec<serde_json::Value> = (0..15)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("completed"), &["rust"]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("summary")),
+            "filtered query should not suggest summary: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_suppresses_already_filtered_tag() {
+        let mut c = ctx(HintSource::Find);
+        c.tag_filters = vec!["rust".to_owned()];
+        let items: Vec<serde_json::Value> = (0..10)
+            .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
+            .collect();
+        let data = json!({"total": items.len(), "results": items});
+        let hints = generate_hints(&c, &data);
+        // Should NOT suggest narrowing by --tag rust (already filtered).
+        // Sort/limit hints may legitimately include --tag rust as a preserved filter,
+        // so only check narrowing hints (those whose description starts with "Narrow").
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.starts_with("Narrow") && h.cmd.contains("--tag rust")),
+            "should not suggest narrowing by already-filtered tag: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("--tag cli")),
+            "should suggest non-filtered tag: {hints:?}"
+        );
     }
 }

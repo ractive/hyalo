@@ -72,15 +72,16 @@ pub(crate) struct Cli {
     pub jq: Option<String>,
 
     /// Force hints on (already the default).
-    /// Text mode: '-> hyalo ...' lines — concrete, copy-pasteable commands.
-    /// JSON mode: wraps in {"data": ..., "hints": [...]}.
+    /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.
+    /// JSON mode: wraps in {"data": ..., "hints": [{"description": "...", "cmd": "hyalo ..."}]}.
     /// Suppressed when --jq is active.
     #[arg(long, global = true)]
     pub hints: bool,
 
     /// Disable drill-down command hints (enabled by default).
     /// Override via .hyalo.toml: hints = false
-    #[arg(long, global = true, conflicts_with = "hints")]
+    /// When both --hints and --no-hints are present, --hints takes precedence.
+    #[arg(long, global = true)]
     pub no_hints: bool,
 
     /// Site prefix for resolving root-absolute links like `/docs/page.md`.

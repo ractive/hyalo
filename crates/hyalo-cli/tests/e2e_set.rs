@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -12,7 +12,7 @@ fn set_json(
     tmp: &TempDir,
     extra_args: &[&str],
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.arg("set");
     cmd.args(extra_args);
@@ -206,7 +206,7 @@ title: Note
 #[test]
 fn set_requires_file_or_glob() {
     let tmp = TempDir::new().unwrap();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["set", "--property", "status=done"]);
     let output = cmd.output().unwrap();
@@ -222,7 +222,7 @@ fn set_requires_file_or_glob() {
 fn set_requires_at_least_one_mutation() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["set", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -238,7 +238,7 @@ fn set_requires_at_least_one_mutation() {
 fn set_empty_property_name_returns_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["set", "--property", "=value", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -254,7 +254,7 @@ fn set_empty_property_name_returns_error() {
 fn set_invalid_kv_no_equals_returns_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["set", "--property", "no-equals-sign", "--file", "note.md"]);
     let output = cmd.output().unwrap();
@@ -339,7 +339,7 @@ title: Note
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["set", "--property", "status=done", "--file", "note.md"])
@@ -932,7 +932,7 @@ title: Good
         "---\n: invalid yaml [[[{\n---\n# Bad\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["set", "--property", "status=done", "--glob", "*.md"])
         .output()

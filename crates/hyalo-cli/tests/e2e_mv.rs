@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -34,7 +34,7 @@ Content.
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "archive/b.md"])
         .output()
@@ -70,7 +70,7 @@ fn mv_updates_wikilink_with_path() {
     write_md(tmp.path(), "a.md", "See [[backlog/item]] for details.\n");
     write_md(tmp.path(), "backlog/item.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "backlog/item.md", "--to", "archive/item.md"])
         .output()
@@ -98,7 +98,7 @@ fn mv_preserves_wikilink_alias() {
     write_md(tmp.path(), "a.md", "See [[sub/b|my note]] here.\n");
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()
@@ -122,7 +122,7 @@ fn mv_preserves_wikilink_fragment() {
     write_md(tmp.path(), "a.md", "See [[sub/b#section]] here.\n");
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()
@@ -146,7 +146,7 @@ fn mv_updates_inbound_markdown_link() {
     write_md(tmp.path(), "a.md", "See [note](b.md) here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
         .output()
@@ -170,7 +170,7 @@ fn mv_updates_outbound_relative_link() {
     write_md(tmp.path(), "a.md", "Target.\n");
     write_md(tmp.path(), "b.md", "See [note](a.md) here.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
         .output()
@@ -194,7 +194,7 @@ fn mv_outbound_wikilink_unchanged() {
     write_md(tmp.path(), "a.md", "Target.\n");
     write_md(tmp.path(), "b.md", "See [[a]] here.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
         .output()
@@ -228,7 +228,7 @@ Real [[sub/b]] here.
     );
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()
@@ -264,7 +264,7 @@ fn mv_skips_links_in_inline_code() {
     );
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()
@@ -292,7 +292,7 @@ fn mv_dry_run_does_not_modify() {
     write_md(tmp.path(), "a.md", "See [[sub/b]] here.\n");
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "mv",
@@ -332,7 +332,7 @@ fn mv_target_already_exists_error() {
     write_md(tmp.path(), "a.md", "Content A.\n");
     write_md(tmp.path(), "b.md", "Content B.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "a.md", "--to", "b.md"])
         .output()
@@ -348,7 +348,7 @@ fn mv_source_not_found_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "nonexistent.md", "--to", "new.md"])
         .output()
@@ -364,7 +364,7 @@ fn mv_creates_parent_directory() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "a.md", "--to", "deep/nested/a.md"])
         .output()
@@ -385,8 +385,8 @@ fn mv_text_format() {
     write_md(tmp.path(), "a.md", "See [[sub/b]] here.\n");
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["--format", "text"])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()
@@ -410,7 +410,7 @@ fn mv_no_links_to_update() {
     write_md(tmp.path(), "a.md", "No links here.\n");
     write_md(tmp.path(), "b.md", "Also no links.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "a.md", "--to", "sub/a.md"])
         .output()
@@ -439,7 +439,7 @@ fn mv_multiple_links_same_file() {
     );
     write_md(tmp.path(), "sub/b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "sub/b.md", "--to", "archive/b.md"])
         .output()
@@ -466,7 +466,7 @@ fn mv_target_must_end_with_md() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "a.md", "--to", "b.txt"])
         .output()
@@ -483,7 +483,7 @@ fn mv_markdown_link_with_fragment() {
     write_md(tmp.path(), "a.md", "See [note](b.md#section) here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
         .output()
@@ -507,7 +507,7 @@ fn mv_cross_directory_markdown_link() {
     write_md(tmp.path(), "sub/a.md", "See [note](../b.md) here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "other/b.md"])
         .output()
@@ -537,7 +537,7 @@ fn mv_updates_wikilink_with_path_separator() {
         "See [[backlog/item]] for context.\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "backlog/item.md", "--to", "archive/item.md"])
         .output()
@@ -571,7 +571,7 @@ fn mv_wikilink_with_path_from_subdirectory_not_false_positive() {
     write_md(tmp.path(), "other/unrelated.md", "# Unrelated\n");
     write_md(tmp.path(), "sub/source.md", "See [[other/target]] here.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "mv",
@@ -606,7 +606,7 @@ fn mv_same_source_and_destination_error() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "Content.\n");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "a.md", "--to", "a.md"])
         .output()
@@ -662,7 +662,7 @@ fn mv_absolute_links_bare_subdir() {
     let docs = build_absolute_link_vault(tmp.path());
     let docs_str = docs.to_str().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", docs_str])
         .args([
             "mv",
@@ -695,7 +695,7 @@ fn mv_absolute_links_absolute_subdir_path() {
     build_absolute_link_vault(tmp.path());
 
     let dir_arg = format!("{}/docs", tmp.path().to_str().unwrap());
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", &dir_arg])
         .args([
             "mv",
@@ -728,7 +728,7 @@ fn mv_absolute_links_no_leaked_dir_in_rewrites() {
     build_absolute_link_vault(tmp.path());
     let docs = tmp.path().join("docs");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", docs.to_str().unwrap()])
         .args([
             "mv",
@@ -769,7 +769,7 @@ fn mv_site_prefix_cli_flag_overrides_auto_derive() {
     build_absolute_link_vault(tmp.path());
     let docs = tmp.path().join("docs");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", docs.to_str().unwrap()])
         .args(["--site-prefix", "docs"])
         .args([
@@ -802,7 +802,7 @@ fn mv_site_prefix_cli_empty_disables_prefix() {
     build_absolute_link_vault(tmp.path());
     let docs = tmp.path().join("docs");
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", docs.to_str().unwrap()])
         .args(["--site-prefix", ""])
         .args([
@@ -847,7 +847,7 @@ See [me](a.md) for details.
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "a.md", "--to", "archive/a.md"])
         .output()

@@ -441,3 +441,26 @@ Research across tools:
 **Consequences:**
 - Orphan counts will be inflated for SSG repos that use frontmatter-based navigation
 - This is expected and documented behavior, not a bug
+
+## DEC-040: Context-Aware Hints with Descriptions (2026-03-30)
+
+**Context:** [[iteration-80-smarter-hints]] evolved the hint system introduced in [[backlog/done/discoverable-drill-down-commands]] (DEC-031). Two changes: (1) hints now include a human-readable description alongside the command, and (2) hints are generated for all commands — not just the original four (find, summary, properties summary, tags summary).
+
+**Decision:** Change the hint format from a flat string array to an array of `{"description": "...", "cmd": "..."}` objects. Extend hint generation to all 15 command variants including mutations, read, backlinks, mv, task operations, links fix, create-index, and drop-index.
+
+**Why these tradeoffs:**
+
+1. **Descriptions make hints self-documenting.** An LLM seeing `{"description": "Find files with open tasks", "cmd": "hyalo find --task todo"}` understands intent without parsing the command. Humans scanning text output benefit from the `# description` suffix too.
+
+2. **Breaking JSON change is acceptable.** The `--hints` envelope is a UX feature, not a stable API contract. Consumers using `--jq` never see hints (they are suppressed). The `data` field remains structurally identical.
+
+3. **All-command coverage teaches the full CLI.** Mutation hints suggest verification commands (`hyalo find --file X`), dry-run hints suggest `--apply`, and create-index suggests drop-index. This turns every command into a learning opportunity.
+
+4. **Performance constraint preserved.** All hint generation operates on the already-computed JSON output — no additional file I/O. Hints are O(n) on result count with a hard cap of ~5 hints per command.
+
+**Consequences:**
+- JSON envelope: `{"data": ..., "hints": [{"description": "...", "cmd": "..."}]}`
+- Text format: `  -> hyalo cmd  # description`
+- Updates DEC-031 point 3 (envelope format) — string array → object array
+- `HintSource` enum expanded from 4 to 15 variants
+- 12 generator functions in `hints.rs` covering all command families

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 
 // ---------------------------------------------------------------------------
 // Vault fixture
@@ -90,8 +90,8 @@ fn find_json(
     tmp: &tempfile::TempDir,
     extra_args: &[&str],
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.arg("find");
     cmd.args(extra_args);
     let output = cmd.output().unwrap();
@@ -186,7 +186,7 @@ fn find_glob_sub_only() {
 #[test]
 fn find_file_not_found_exits_1() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--file", "does_not_exist.md"]);
     let output = cmd.output().unwrap();
@@ -749,7 +749,7 @@ fn find_limit_no_truncation_returns_envelope() {
 #[test]
 fn find_limit_truncated_text_shows_summary() {
     let tmp = setup_vault();
-    let mut cmd = common::hyalo();
+    let mut cmd = common::hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.args(["find", "--limit", "2"]);
@@ -766,7 +766,7 @@ fn find_limit_truncated_text_shows_summary() {
 #[test]
 fn find_limit_jq_total() {
     let tmp = setup_vault();
-    let mut cmd = common::hyalo();
+    let mut cmd = common::hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--limit", "2", "--jq", ".total"]);
     let output = cmd.output().unwrap();
@@ -956,7 +956,7 @@ fn find_sort_file_limit_with_filter_reports_accurate_total() {
 #[test]
 fn find_text_format_produces_output() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.arg("find");
@@ -974,7 +974,7 @@ fn find_text_format_produces_output() {
 #[test]
 fn find_text_format_with_pattern() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.args(["find", "Rust programming"]);
@@ -992,8 +992,8 @@ fn find_text_format_with_pattern() {
 #[test]
 fn find_text_format_file_object_structure() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.args(["find", "--file", "alpha.md", "--fields", "all"]);
     let output = cmd.output().unwrap();
@@ -1046,7 +1046,7 @@ fn find_text_format_file_object_structure() {
 #[test]
 fn find_text_format_content_matches() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.args(["find", "Rust programming"]);
@@ -1067,7 +1067,7 @@ fn find_text_format_content_matches() {
 #[test]
 fn find_text_format_multi_file_separation() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.arg("find");
@@ -1087,7 +1087,7 @@ fn find_text_format_multi_file_separation() {
 #[test]
 fn find_text_format_fields_properties_only() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.args(["find", "--file", "alpha.md", "--fields", "properties"]);
@@ -1117,7 +1117,7 @@ fn find_text_format_fields_properties_only() {
 fn find_text_format_fields_backlinks_renders() {
     let tmp = setup_vault();
     // alpha.md links to [[beta]], so beta should have backlinks in text format
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["--format", "text"]);
     cmd.args(["find", "--file", "beta.md", "--fields", "backlinks"]);
@@ -1227,7 +1227,7 @@ fn find_regexp_combined_with_tag() {
 #[test]
 fn find_regexp_invalid_exits_1() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--regexp", "[invalid"]);
     let output = cmd.output().unwrap();
@@ -1243,7 +1243,7 @@ fn find_regexp_invalid_exits_1() {
 #[test]
 fn find_regexp_conflicts_with_positional_pattern() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "substring", "--regexp", "regex"]);
     let output = cmd.output().unwrap();
@@ -1287,7 +1287,7 @@ title: Dotdot
 #[test]
 fn find_task_invalid_multi_char_exits_1() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--task", "invalid_multi_char"]);
     let output = cmd.output().unwrap();
@@ -1299,7 +1299,7 @@ fn find_task_invalid_multi_char_exits_1() {
 #[test]
 fn find_fields_bogus_exits_1() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--fields", "bogus"]);
     let output = cmd.output().unwrap();
@@ -1311,7 +1311,7 @@ fn find_fields_bogus_exits_1() {
 #[test]
 fn find_sort_bogus_exits_1() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--sort", "bogus"]);
     let output = cmd.output().unwrap();
@@ -1618,7 +1618,7 @@ fn section_filter_content_search_excludes_other_sections() {
 #[test]
 fn section_filter_invalid_exits_1() {
     let tmp = setup_section_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--section", "####### Too deep"]);
     let output = cmd.output().unwrap();
@@ -1629,8 +1629,8 @@ fn section_filter_invalid_exits_1() {
 #[test]
 fn empty_text_result_prints_notice_on_stderr() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "find",
         "--property",
@@ -1655,8 +1655,8 @@ fn empty_text_result_prints_notice_on_stderr() {
 #[test]
 fn empty_json_result_returns_empty_array_no_stderr() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "find",
         "--property",
@@ -1780,7 +1780,7 @@ fn find_fields_properties_and_properties_typed_together_e2e() {
 #[test]
 fn find_fields_properties_typed_text_format() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "find",
@@ -1809,7 +1809,7 @@ fn find_fields_properties_typed_text_format() {
 #[test]
 fn find_fields_properties_typed_unknown_field_error() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--fields", "properties-badtypo"]);
     let output = cmd.output().unwrap();
@@ -1936,7 +1936,7 @@ fn find_property_regex_list_property_nested_tag() {
 #[test]
 fn find_property_regex_invalid_pattern_returns_user_error() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--property", "status~=[invalid"]);
     let output = cmd.output().unwrap();
@@ -2197,7 +2197,7 @@ fn section_filter_regex_anchored() {
 #[test]
 fn section_filter_regex_invalid_exits_1() {
     let tmp = setup_section_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--section", "~=/[invalid/"]);
     let output = cmd.output().unwrap();
@@ -2311,8 +2311,8 @@ fn find_multi_file_returns_array() {
     write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n");
     write_md(tmp.path(), "c.md", "---\ntitle: C\n---\n");
 
-    let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--file", "a.md", "--file", "b.md"]);
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -2837,7 +2837,7 @@ Content.
 #[test]
 fn find_sort_property_empty_key_errors() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "--sort", "property:"]);
     let output = cmd.output().unwrap();
@@ -2851,7 +2851,7 @@ fn find_sort_property_empty_key_errors() {
 #[test]
 fn find_empty_body_pattern_errors() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", ""]);
     let output = cmd.output().unwrap();
@@ -2869,7 +2869,7 @@ fn find_empty_body_pattern_errors() {
 #[test]
 fn find_whitespace_only_body_pattern_errors() {
     let tmp = setup_vault();
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["find", "   "]);
     let output = cmd.output().unwrap();
@@ -3047,7 +3047,7 @@ tags: [foo]
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", dir.path().to_str().unwrap(), "find", "--tag", ""])
         .output()
         .unwrap();
@@ -3090,7 +3090,7 @@ title: B
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             dir.path().to_str().unwrap(),
@@ -3130,7 +3130,7 @@ title: A
 "),
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args([
             "--dir",
             dir.path().to_str().unwrap(),
@@ -3160,9 +3160,8 @@ title: A
 #[test]
 fn find_sort_title_reverse() {
     let tmp = setup_vault();
-    let out = hyalo()
+    let out = hyalo_no_hints()
         .args([
-            "--no-hints",
             "find",
             "--sort",
             "title",
@@ -3197,9 +3196,8 @@ fn find_sort_title_reverse() {
 #[test]
 fn find_reverse_with_limit() {
     let tmp = setup_vault();
-    let out = hyalo()
+    let out = hyalo_no_hints()
         .args([
-            "--no-hints",
             "find",
             "--sort",
             "file",
@@ -3233,8 +3231,8 @@ fn find_reverse_with_limit() {
 fn find_reverse_alone() {
     let tmp = setup_vault();
     // --reverse without --sort should reverse the default file-path sort
-    let out = hyalo()
-        .args(["--no-hints", "find", "--reverse", "--format", "json"])
+    let out = hyalo_no_hints()
+        .args(["find", "--reverse", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3264,8 +3262,8 @@ fn find_reverse_alone() {
 fn find_title_h1_match() {
     let tmp = setup_vault();
     // gamma.md has no frontmatter title but has H1 "# Gamma"
-    let out = hyalo()
-        .args(["--no-hints", "find", "--title", "gamma", "--format", "json"])
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "gamma", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3288,8 +3286,8 @@ fn find_title_h1_match() {
 #[test]
 fn find_title_case_insensitive() {
     let tmp = setup_vault();
-    let out = hyalo()
-        .args(["--no-hints", "find", "--title", "ALPHA", "--format", "json"])
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "ALPHA", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3312,15 +3310,8 @@ fn find_title_case_insensitive() {
 #[test]
 fn find_title_regex_mode() {
     let tmp = setup_vault();
-    let out = hyalo()
-        .args([
-            "--no-hints",
-            "find",
-            "--title",
-            "~=^(Alpha|Beta)$",
-            "--format",
-            "json",
-        ])
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=^(Alpha|Beta)$", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3343,8 +3334,8 @@ fn find_title_regex_mode() {
 fn find_title_frontmatter_match() {
     let tmp = setup_vault();
     // alpha.md has frontmatter title "Alpha"
-    let out = hyalo()
-        .args(["--no-hints", "find", "--title", "alph", "--format", "json"])
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "alph", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3365,7 +3356,7 @@ fn find_title_frontmatter_match() {
 #[test]
 fn find_title_invalid_regex_returns_error() {
     let tmp = setup_vault();
-    let out = hyalo()
+    let out = hyalo_no_hints()
         .args(["find", "--title", "~=[unclosed", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())

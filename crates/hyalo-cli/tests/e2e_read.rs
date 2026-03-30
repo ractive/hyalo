@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, md, write_md};
+use common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ No frontmatter here.
 #[test]
 fn read_full_body_text() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md"])
         .output()
@@ -86,7 +86,7 @@ fn read_full_body_text() {
 #[test]
 fn read_full_body_json() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--format", "json"])
         .output()
@@ -106,7 +106,7 @@ fn read_full_body_json() {
 fn read_defaults_to_text_format() {
     let tmp = setup();
     // Without --format, read should output plain text (not JSON)
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md"])
         .output()
@@ -126,7 +126,7 @@ fn read_defaults_to_text_format() {
 #[test]
 fn read_section_exact_match() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "Solution"])
         .output()
@@ -145,7 +145,7 @@ fn read_section_exact_match() {
 #[test]
 fn read_section_with_hashes() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "## Solution"])
         .output()
@@ -160,7 +160,7 @@ fn read_section_with_hashes() {
 #[test]
 fn read_section_case_insensitive() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "solution"])
         .output()
@@ -174,7 +174,7 @@ fn read_section_case_insensitive() {
 #[test]
 fn read_section_multiple_matches() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "Problem"])
         .output()
@@ -189,7 +189,7 @@ fn read_section_multiple_matches() {
 #[test]
 fn read_section_no_match() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "Nonexistent"])
         .output()
@@ -204,7 +204,7 @@ fn read_section_no_match() {
 fn read_section_no_substring_match() {
     let tmp = setup();
     // "XYZ" is not a substring of any heading in note.md
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "XYZ"])
         .output()
@@ -219,7 +219,7 @@ fn read_section_no_substring_match() {
 fn read_section_substring_match() {
     let tmp = setup();
     // "Prob" is a substring of "Problem" — should now succeed
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--section", "Prob"])
         .output()
@@ -245,7 +245,7 @@ fn read_section_with_count_suffix() {
 "),
     );
     // 'Tasks' is a substring of 'Tasks [4/4]'
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "tasks.md", "--section", "Tasks"])
         .output()
@@ -263,7 +263,7 @@ fn read_section_with_count_suffix() {
 #[test]
 fn read_lines_range() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read", "--file", "note.md", "--lines", "1:3", "--format", "json",
@@ -283,7 +283,7 @@ fn read_lines_range() {
 #[test]
 fn read_lines_single() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read", "--file", "note.md", "--lines", "1", "--format", "json",
@@ -300,7 +300,7 @@ fn read_lines_single() {
 #[test]
 fn read_lines_open_end() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--lines", "1:"])
         .output()
@@ -316,8 +316,8 @@ fn read_lines_open_end() {
 #[test]
 fn read_lines_open_start() {
     let tmp = setup();
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--lines", ":2"])
         .output()
         .unwrap();
@@ -331,7 +331,7 @@ fn read_lines_open_start() {
 #[test]
 fn read_lines_invalid() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--lines", "abc"])
         .output()
@@ -347,8 +347,8 @@ fn read_lines_invalid() {
 #[test]
 fn read_frontmatter_only() {
     let tmp = setup();
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--frontmatter"])
         .output()
         .unwrap();
@@ -364,7 +364,7 @@ fn read_frontmatter_only() {
 #[test]
 fn read_frontmatter_with_section() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read",
@@ -386,7 +386,7 @@ fn read_frontmatter_with_section() {
 #[test]
 fn read_frontmatter_json() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read",
@@ -409,7 +409,7 @@ fn read_frontmatter_json() {
 fn read_frontmatter_with_lines() {
     let tmp = setup();
     // --frontmatter + --lines should show frontmatter + sliced body
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read",
@@ -435,7 +435,7 @@ fn read_frontmatter_with_lines() {
 #[test]
 fn read_file_not_found() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "missing.md"])
         .output()
@@ -449,7 +449,7 @@ fn read_file_not_found() {
 #[test]
 fn read_file_requires_file_flag() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read"])
         .output()
@@ -466,7 +466,7 @@ fn read_file_requires_file_flag() {
 #[test]
 fn read_no_frontmatter_file() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "no-frontmatter.md"])
         .output()
@@ -481,7 +481,7 @@ fn read_no_frontmatter_file() {
 #[test]
 fn read_empty_file() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "empty.md"])
         .output()
@@ -500,8 +500,8 @@ fn read_frontmatter_only_file_returns_empty_body() {
     );
 
     // Text output: body should be empty
-    let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "fm-only.md"])
         .output()
         .unwrap();
@@ -514,7 +514,7 @@ fn read_frontmatter_only_file_returns_empty_body() {
     );
 
     // JSON output: content field should be empty
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "fm-only.md", "--format", "json"])
         .output()
@@ -539,7 +539,7 @@ fn read_frontmatter_only_file_returns_empty_body() {
 #[test]
 fn read_with_jq_explicit_json() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read", "--file", "note.md", "--format", "json", "--jq", ".file",
@@ -556,7 +556,7 @@ fn read_with_jq_explicit_json() {
 fn read_with_jq_auto_promotes_to_json() {
     let tmp = setup();
     // --jq without --format json should auto-promote to JSON (not error)
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "note.md", "--jq", ".file"])
         .output()
@@ -570,7 +570,7 @@ fn read_with_jq_auto_promotes_to_json() {
 #[test]
 fn read_section_json_output() {
     let tmp = setup();
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
             "read",
@@ -606,7 +606,7 @@ fn read_frontmatter_broken_errors() {
         "---\ntitle: Unclosed\nNo closing delimiter here\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "broken.md", "--frontmatter"])
         .output()
@@ -635,7 +635,7 @@ fn read_frontmatter_valid_works() {
         "---\ntitle: Good File\nstatus: ok\n---\n# Body\n",
     );
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["read", "--file", "valid.md", "--frontmatter"])
         .output()

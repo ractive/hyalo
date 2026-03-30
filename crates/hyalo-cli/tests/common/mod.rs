@@ -12,8 +12,21 @@ macro_rules! md {
 pub(crate) use md;
 
 /// Returns a `Command` pre-configured to run the `hyalo` binary built by Cargo.
+#[allow(dead_code)]
 pub fn hyalo() -> Command {
     Command::cargo_bin("hyalo").unwrap()
+}
+
+/// Returns a `Command` pre-configured to run `hyalo` with `--no-hints`.
+///
+/// Use this in tests that verify plain (non-wrapped) JSON output and do not
+/// test hint behaviour. Hints are on by default in the built-in config, so
+/// without `--no-hints` the output would be wrapped in a hints envelope.
+#[allow(dead_code)]
+pub fn hyalo_no_hints() -> Command {
+    let mut cmd = Command::cargo_bin("hyalo").unwrap();
+    cmd.arg("--no-hints");
+    cmd
 }
 
 /// Writes a file at `relative_path` inside `dir`, creating parent directories as needed.

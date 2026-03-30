@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo_no_hints, write_md};
 
 // ---------------------------------------------------------------------------
 // e2e tests for subcommand-flag suggestion
@@ -27,7 +27,7 @@ fn suggest_task_toggle_as_flag() {
     let tmp = tempfile::tempdir().unwrap();
     setup_file(&tmp);
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["task", "--toggle", "--file", "tasks.md", "--line", "4"])
         .output()
@@ -50,7 +50,7 @@ fn suggest_task_toggle_as_flag() {
 fn suggest_properties_rename_as_flag() {
     let tmp = tempfile::tempdir().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["properties", "--rename", "--from", "old", "--to", "new"])
         .output()
@@ -73,7 +73,7 @@ fn suggest_properties_rename_as_flag() {
 fn suggest_tags_summary_as_flag() {
     let tmp = tempfile::tempdir().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["tags", "--summary"])
         .output()
@@ -101,7 +101,7 @@ fn no_suggestion_for_valid_task_toggle() {
     let tmp = tempfile::tempdir().unwrap();
     setup_file(&tmp);
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["task", "toggle", "--file", "tasks.md", "--line", "4"])
         .output()
@@ -128,7 +128,7 @@ fn no_suggestion_for_valid_task_toggle() {
 fn suggest_property_when_filter_used() {
     let tmp = tempfile::tempdir().unwrap();
 
-    let output = hyalo()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["find", "--filter", "status=draft"])
         .output()
@@ -153,7 +153,7 @@ fn suggest_property_when_filter_used() {
 
 #[test]
 fn suggest_version_for_typo() {
-    let output = hyalo().arg("versio").output().unwrap();
+    let output = hyalo_no_hints().arg("versio").output().unwrap();
 
     assert!(
         !output.status.success(),
@@ -168,7 +168,7 @@ fn suggest_version_for_typo() {
 
 #[test]
 fn suggest_help_for_typo() {
-    let output = hyalo().arg("hep").output().unwrap();
+    let output = hyalo_no_hints().arg("hep").output().unwrap();
 
     assert!(
         !output.status.success(),

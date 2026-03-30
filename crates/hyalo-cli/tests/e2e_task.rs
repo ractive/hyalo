@@ -1,6 +1,6 @@
 mod common;
 
-use common::{hyalo, write_md};
+use common::{hyalo_no_hints, write_md};
 use std::fs;
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ fn run_task_read(
     file: &str,
     line: usize,
 ) -> (std::process::ExitStatus, String, String) {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["task", "read", "--file", file, "--line", &line.to_string()]);
     let output = cmd.output().unwrap();
@@ -76,7 +76,7 @@ fn run_task_toggle(
     file: &str,
     line: usize,
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
@@ -109,7 +109,7 @@ fn run_task_set_status(
     line: usize,
     status_char: &str,
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
@@ -280,7 +280,7 @@ fn task_toggle_non_task_line_exits_1() {
     let tmp = tempfile::tempdir().unwrap();
     setup_task_file(&tmp);
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
@@ -360,7 +360,7 @@ fn task_set_status_non_task_line_exits_1() {
     let tmp = tempfile::tempdir().unwrap();
     setup_task_file(&tmp);
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
@@ -383,7 +383,7 @@ fn task_set_status_multi_char_status_exits_1() {
     let tmp = tempfile::tempdir().unwrap();
     setup_task_file(&tmp);
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
@@ -411,7 +411,7 @@ fn task_set_status_empty_string_exits_1() {
     let tmp = tempfile::tempdir().unwrap();
     setup_task_file(&tmp);
 
-    let mut cmd = hyalo();
+    let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
