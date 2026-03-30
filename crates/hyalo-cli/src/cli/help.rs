@@ -236,8 +236,8 @@ OUTPUT SHAPES (JSON, default):
   # properties rename
   {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"conflicts\": [...], \"total\": N}, \"hints\": [...]}
 
-  # tags summary — results has tags array
-  {\"results\": {\"tags\": [{\"name\": \"backlog\", \"count\": 10}, ...]}, \"total\": 31, \"hints\": [...]}
+  # tags summary — results is an array
+  {\"results\": [{\"name\": \"backlog\", \"count\": 10}, ...], \"total\": 31, \"hints\": [...]}
 
   # tags rename
   {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}

@@ -52,10 +52,10 @@ Key design decisions:
 
 ## Acceptance criteria
 
-- [ ] All commands use the same envelope shape
-- [ ] `--jq` operates on `.results` regardless of `--hints`
-- [ ] `properties` command wraps in envelope (breaking change)
-- [ ] Shape is identical with and without `--hints`
-- [ ] `--help` documents the JSON envelope structure
-- [ ] `-h` short help mentions the envelope
-- [ ] Skill file updated with envelope documentation
+- [x] All commands use the same envelope shape
+- [x] `--jq` operates on the full envelope (e.g. `.results[].file`, `.total`)
+- [x] `properties` command wraps in envelope (breaking change)
+- [x] Shape is identical with and without `--hints`
+- [x] `--help` documents the JSON envelope structure
+- [x] `-h` short help mentions the envelope
+- [x] Skill file updated with envelope documentation

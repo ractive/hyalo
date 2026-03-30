@@ -64,14 +64,15 @@ impl OutputPipeline<'_> {
                     }
                 } else {
                     let formatted = format_envelope(self.user_format, &value, total, &hints);
-                    // In text mode, when the result is an empty array, emit a notice on stderr
-                    // so the user knows the command ran but produced no matches.
+                    println!("{formatted}");
+                    // In text mode, when a list command returns zero results, emit a
+                    // notice on stderr so the user knows the command ran successfully.
+                    // Only fires for list commands (total is Some) with empty arrays.
                     if self.user_format == Format::Text
+                        && total == Some(0)
                         && value.as_array().is_some_and(Vec::is_empty)
                     {
                         eprintln!("No files matched");
-                    } else {
-                        println!("{formatted}");
                     }
                 }
                 0
