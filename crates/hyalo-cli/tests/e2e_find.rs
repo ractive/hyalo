@@ -1112,6 +1112,34 @@ fn find_text_format_fields_properties_only() {
     );
 }
 
+// Text format: find with --fields backlinks renders backlinks
+#[test]
+fn find_text_format_fields_backlinks_renders() {
+    let tmp = setup_vault();
+    // alpha.md links to [[beta]], so beta should have backlinks in text format
+    let mut cmd = hyalo();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--format", "text"]);
+    cmd.args(["find", "--file", "beta.md", "--fields", "backlinks"]);
+    let output = cmd.output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("backlinks:"),
+        "backlinks group label should appear: {stdout}"
+    );
+    assert!(
+        stdout.contains("alpha.md"),
+        "backlink source should appear: {stdout}"
+    );
+    assert!(
+        stdout.contains("line"),
+        "backlink line number should appear: {stdout}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Regexp search (--regexp / -e)
 // ---------------------------------------------------------------------------
@@ -1943,6 +1971,35 @@ fn find_property_eq_tilde_delimited_case_insensitive() {
     let tmp = setup_vault();
     // =~ delimited with /i flag: title=~/ALPHA/i should match alpha.md
     let (status, json, stderr) = find_json(&tmp, &["--property", "title=~/ALPHA/i"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert_eq!(arr.len(), 1, "expected alpha.md: {arr:?}");
+    assert_eq!(arr[0]["file"], "alpha.md");
+}
+
+// ---------------------------------------------------------------------------
+// Derived title: --property 'title~=...' falls back to H1 heading
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_property_regex_matches_derived_title_from_h1() {
+    let tmp = setup_vault();
+    // gamma.md has no frontmatter title but has "# Gamma" as H1.
+    // `title~=Gamma` should match it via the derived title fallback.
+    let (status, json, stderr) = find_json(&tmp, &["--property", "title~=Gamma"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert_eq!(arr.len(), 1, "expected gamma.md: {arr:?}");
+    assert_eq!(arr[0]["file"], "gamma.md");
+}
+
+#[test]
+fn find_property_regex_derived_title_does_not_shadow_frontmatter() {
+    let tmp = setup_vault();
+    // alpha.md has frontmatter title "Alpha" — should match that, not H1 text.
+    let (status, json, stderr) = find_json(&tmp, &["--property", "title~=Alpha"]);
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = unwrap_results(&json);

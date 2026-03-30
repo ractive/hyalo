@@ -41,6 +41,17 @@ pub enum PropertyFilter {
     RegexMatch { key: String, pattern: Regex },
 }
 
+impl PropertyFilter {
+    /// Return the property key this filter targets, if any.
+    #[must_use]
+    pub fn key(&self) -> Option<&str> {
+        match self {
+            PropertyFilter::Scalar { name, .. } => Some(name),
+            PropertyFilter::Absent { key } | PropertyFilter::RegexMatch { key, .. } => Some(key),
+        }
+    }
+}
+
 /// Parse a property filter expression.
 ///
 /// Supported formats:

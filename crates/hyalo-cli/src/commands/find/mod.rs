@@ -137,13 +137,45 @@ pub fn find(
         presort_index_entries(&mut scoped_entries, sort, index.link_graph());
     }
 
+    // Pre-check: does any property filter target the "title" key?
+    // If so, we may need to inject the derived title (from H1) into the
+    // properties map for entries that lack a frontmatter `title`.
+    let has_title_property_filter = property_filters.iter().any(|f| f.key() == Some("title"));
+
     let mut results: Vec<FileObject> = Vec::new();
     let mut total_matching: usize = 0;
 
     for entry in &scoped_entries {
         // --- Metadata filters using pre-indexed data ---
+        // When a property filter targets "title" and the entry has no
+        // frontmatter title (or a non-string title), inject the derived
+        // title (from H1 heading) so that `--property 'title~=...'`
+        // matches derived titles too.  The gate mirrors `extract_title()`
+        // which only treats a frontmatter title as authoritative when it
+        // is a String.
+        let props_with_derived_title;
+        let effective_props = if has_title_property_filter
+            && !matches!(
+                entry.properties.get("title"),
+                Some(serde_json::Value::String(_))
+            ) {
+            let derived = extract_title(&entry.properties, Some(&entry.sections));
+            if derived.is_null() {
+                &entry.properties
+            } else {
+                props_with_derived_title = {
+                    let mut p = entry.properties.clone();
+                    p.insert("title".to_owned(), derived);
+                    p
+                };
+                &props_with_derived_title
+            }
+        } else {
+            &entry.properties
+        };
+
         if !filter::matches_filters_with_tags(
-            &entry.properties,
+            effective_props,
             property_filters,
             &entry.tags,
             tag_filters,
@@ -750,8 +782,9 @@ Just some text here.
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let arr = parsed["results"].as_array().unwrap();
-        // alpha and beta have title; gamma does not
-        assert_eq!(arr.len(), 2);
+        // alpha and beta have frontmatter title; gamma has a derived title
+        // from its H1 heading — all three should match the existence filter.
+        assert_eq!(arr.len(), 3);
     }
 
     // --- find: tag filter ---
