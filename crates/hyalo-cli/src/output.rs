@@ -503,6 +503,13 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
         );
     }
 
+    // Backlinks: header then each as "    \"source\" line N" or "    \"source\" line N: label"
+    if map.contains_key("backlinks") {
+        parts.push(
+            r#"if (.backlinks | length) > 0 then "  backlinks:\n\(.backlinks | map("    \"\(.source)\" line \(.line)\(if .label then ": \(.label)" else "" end)") | join("\n"))" else empty end"#.to_owned(),
+        );
+    }
+
     parts.join(", ")
 }
 
