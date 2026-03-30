@@ -76,7 +76,7 @@ pub fn collect_files(
                         format!("path is a directory, not a file: {path} (try {hint})")
                     }
                     FileResolveError::OutsideVault { .. } => {
-                        format!("file resolves outside vault: {path}")
+                        format!("file resolves outside vault boundary: {path}")
                     }
                     FileResolveError::InvalidPath { reason, .. } => {
                         format!("invalid path ({reason}): {path}")

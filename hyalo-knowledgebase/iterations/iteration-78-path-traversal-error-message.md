@@ -1,5 +1,5 @@
 ---
-title: Improve error message for path traversal rejection
+title: "Improve error message for path traversal rejection"
 type: iteration
 date: 2026-03-30
 tags:
@@ -20,9 +20,9 @@ Found during v0.6.0 dogfooding (iteration 74). `--file ../Cargo.toml` returns `E
 
 ## Tasks
 
-- [x]In `resolve_file`, return `OutsideVault` (or a new variant) when `..` segments are detected, instead of falling through to `NotFound`
-- [x]Update error message to clearly state the path resolves outside the vault
-- [x]Add/update test for `..` traversal error variant
-- [x]`cargo fmt`
-- [x]`cargo clippy --workspace --all-targets -- -D warnings`
-- [x]`cargo test --workspace`
+- [x] In `resolve_file`, return `OutsideVault` (or a new variant) when `..` segments are detected, instead of falling through to `NotFound`
+- [x] Update error message to clearly state the path resolves outside the vault
+- [x] Add/update test for `..` traversal error variant
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`

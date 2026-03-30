@@ -1,7 +1,7 @@
 /// Compute the Levenshtein edit distance between two strings.
 ///
 /// Uses the standard iterative two-row DP algorithm.
-/// Runs in O(|a| * |b|) time and O(min(|a|, |b|)) space.
+/// Runs in O(|a| * |b|) time and O(|a| + |b|) additional space.
 pub fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();

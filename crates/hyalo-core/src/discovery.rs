@@ -116,7 +116,15 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
     let full = dir.join(&normalized);
     if !full.is_file() {
         // Try fuzzy-matching against .md siblings in the same parent directory.
-        if let Some(suggestion) = fuzzy_match_sibling(&full) {
+        if let Some(sibling_name) = fuzzy_match_sibling(&full) {
+            // Reconstruct the suggestion as a vault-relative path so nested
+            // directories produce e.g. "sub/readme.md", not just "readme.md".
+            let suggestion = match Path::new(&normalized).parent() {
+                Some(p) if p != Path::new("") => {
+                    format!("{}/{sibling_name}", p.display())
+                }
+                _ => sibling_name,
+            };
             return Err(FileResolveError::NotFoundSuggestion {
                 path: normalized,
                 suggestion,
@@ -153,21 +161,23 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
 /// or `None` when nothing is close enough.
 fn fuzzy_match_sibling(full: &Path) -> Option<String> {
     let parent = full.parent()?;
-    let stem = full.file_name()?.to_str()?;
+    let target_name = full.file_name()?.to_str()?;
 
     let entries = std::fs::read_dir(parent).ok()?;
     let mut best: Option<(usize, String)> = None;
 
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name();
-        let name_str = name.to_str()?;
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
         let is_md = std::path::Path::new(name_str)
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-        if !is_md || name_str == stem {
+        if !is_md || name_str == target_name {
             continue;
         }
-        let dist = levenshtein(stem, name_str);
+        let dist = levenshtein(target_name, name_str);
         if dist <= 3 && best.as_ref().is_none_or(|(d, _)| dist < *d) {
             best = Some((dist, name_str.to_owned()));
         }
@@ -1194,6 +1204,22 @@ mod tests {
             other => panic!("expected NotFoundSuggestion, got {other:?}"),
         }
         assert!(err.to_string().contains("did you mean"));
+    }
+
+    #[test]
+    fn resolve_file_fuzzy_suggests_with_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("sub/readme.md"), "").unwrap();
+
+        // "sub/readem.md" should suggest "sub/readme.md", not just "readme.md"
+        let err = resolve_file(tmp.path(), "sub/readem.md").unwrap_err();
+        match err {
+            FileResolveError::NotFoundSuggestion { ref suggestion, .. } => {
+                assert_eq!(suggestion, "sub/readme.md");
+            }
+            other => panic!("expected NotFoundSuggestion, got {other:?}"),
+        }
     }
 
     #[test]
