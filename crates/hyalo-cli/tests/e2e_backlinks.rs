@@ -109,7 +109,7 @@ fn backlinks_text_format() {
     write_md(tmp.path(), "source.md", "Link to [[target]]\n");
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["--format", "text"])
         .args(["backlinks", "--file", "target.md"])
         .output()
@@ -127,7 +127,7 @@ fn backlinks_text_format_empty() {
     write_md(tmp.path(), "lonely.md", "# Alone\n");
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["--format", "text"])
         .args(["backlinks", "--file", "lonely.md"])
         .output()

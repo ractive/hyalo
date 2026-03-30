@@ -91,7 +91,7 @@ fn find_json(
     extra_args: &[&str],
 ) -> (std::process::ExitStatus, serde_json::Value, String) {
     let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
     cmd.arg("find");
     cmd.args(extra_args);
     let output = cmd.output().unwrap();
@@ -993,9 +993,9 @@ fn find_text_format_with_pattern() {
 fn find_text_format_file_object_structure() {
     let tmp = setup_vault();
     let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
     cmd.args(["--format", "text"]);
-    cmd.args(["find", "--file", "alpha.md"]);
+    cmd.args(["find", "--file", "alpha.md", "--fields", "all"]);
     let output = cmd.output().unwrap();
 
     assert!(output.status.success());
@@ -1630,7 +1630,7 @@ fn section_filter_invalid_exits_1() {
 fn empty_text_result_prints_notice_on_stderr() {
     let tmp = setup_vault();
     let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
     cmd.args([
         "find",
         "--property",
@@ -1656,7 +1656,7 @@ fn empty_text_result_prints_notice_on_stderr() {
 fn empty_json_result_returns_empty_array_no_stderr() {
     let tmp = setup_vault();
     let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
     cmd.args([
         "find",
         "--property",
@@ -2100,6 +2100,8 @@ fn section_filter_substring_matches_ticket_heading() {
             "DEC-031",
             "--task",
             "any",
+            "--fields",
+            "tasks",
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
@@ -2156,6 +2158,8 @@ fn section_filter_regex_matches() {
             "~=/DEC-03[12]/",
             "--task",
             "any",
+            "--fields",
+            "tasks",
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
@@ -2308,7 +2312,7 @@ fn find_multi_file_returns_array() {
     write_md(tmp.path(), "c.md", "---\ntitle: C\n---\n");
 
     let mut cmd = hyalo();
-    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"]);
     cmd.args(["find", "--file", "a.md", "--file", "b.md"]);
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -3158,6 +3162,7 @@ fn find_sort_title_reverse() {
     let tmp = setup_vault();
     let out = hyalo()
         .args([
+            "--no-hints",
             "find",
             "--sort",
             "title",
@@ -3194,6 +3199,7 @@ fn find_reverse_with_limit() {
     let tmp = setup_vault();
     let out = hyalo()
         .args([
+            "--no-hints",
             "find",
             "--sort",
             "file",
@@ -3228,7 +3234,7 @@ fn find_reverse_alone() {
     let tmp = setup_vault();
     // --reverse without --sort should reverse the default file-path sort
     let out = hyalo()
-        .args(["find", "--reverse", "--format", "json"])
+        .args(["--no-hints", "find", "--reverse", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3259,7 +3265,7 @@ fn find_title_h1_match() {
     let tmp = setup_vault();
     // gamma.md has no frontmatter title but has H1 "# Gamma"
     let out = hyalo()
-        .args(["find", "--title", "gamma", "--format", "json"])
+        .args(["--no-hints", "find", "--title", "gamma", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3283,7 +3289,7 @@ fn find_title_h1_match() {
 fn find_title_case_insensitive() {
     let tmp = setup_vault();
     let out = hyalo()
-        .args(["find", "--title", "ALPHA", "--format", "json"])
+        .args(["--no-hints", "find", "--title", "ALPHA", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3307,7 +3313,14 @@ fn find_title_case_insensitive() {
 fn find_title_regex_mode() {
     let tmp = setup_vault();
     let out = hyalo()
-        .args(["find", "--title", "~=^(Alpha|Beta)$", "--format", "json"])
+        .args([
+            "--no-hints",
+            "find",
+            "--title",
+            "~=^(Alpha|Beta)$",
+            "--format",
+            "json",
+        ])
         .arg("--dir")
         .arg(tmp.path())
         .output()
@@ -3331,7 +3344,7 @@ fn find_title_frontmatter_match() {
     let tmp = setup_vault();
     // alpha.md has frontmatter title "Alpha"
     let out = hyalo()
-        .args(["find", "--title", "alph", "--format", "json"])
+        .args(["--no-hints", "find", "--title", "alph", "--format", "json"])
         .arg("--dir")
         .arg(tmp.path())
         .output()

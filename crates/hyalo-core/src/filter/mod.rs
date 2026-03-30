@@ -512,9 +512,13 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn fields_empty_returns_all() {
+    fn fields_empty_returns_default() {
         let f = Fields::parse(&[]).unwrap();
-        assert!(f.properties && f.tags && f.sections && f.tasks && f.links);
+        // Default: properties, tags, sections, links enabled; tasks is opt-in (off by default)
+        assert!(f.properties && f.tags && f.sections && f.links);
+        assert!(!f.tasks, "tasks should be off by default");
+        assert!(!f.backlinks, "backlinks should be off by default");
+        assert!(!f.title, "title should be off by default");
     }
 
     #[test]

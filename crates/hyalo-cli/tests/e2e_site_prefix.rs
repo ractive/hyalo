@@ -36,7 +36,7 @@ fn build_vault(root: &std::path::Path) {
 /// Run `hyalo --dir <dir_arg> find --fields links` and return the parsed JSON.
 fn find_links(dir_arg: &str) -> serde_json::Value {
     let output = hyalo()
-        .args(["--dir", dir_arg])
+        .args(["--dir", dir_arg, "--no-hints"])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
         .unwrap();
@@ -88,7 +88,7 @@ fn find_links_absolute_path_with_dotslash_dir() {
     let docs = format!("{}/docs/", tmp.path().to_str().unwrap());
 
     let output = hyalo()
-        .args(["--dir", docs.trim_end_matches('/')])
+        .args(["--dir", docs.trim_end_matches('/'), "--no-hints"])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
         .unwrap();
@@ -113,7 +113,7 @@ fn find_links_site_prefix_cli_flag() {
     let docs = tmp.path().join("docs");
 
     let output = hyalo()
-        .args(["--dir", docs.to_str().unwrap()])
+        .args(["--dir", docs.to_str().unwrap(), "--no-hints"])
         .args(["--site-prefix", "docs"])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
@@ -153,7 +153,11 @@ fn find_links_site_prefix_config_file() {
     .unwrap();
 
     let output = hyalo()
-        .args(["--dir", tmp.path().join("docs").to_str().unwrap()])
+        .args([
+            "--dir",
+            tmp.path().join("docs").to_str().unwrap(),
+            "--no-hints",
+        ])
         .args(["find", "--fields", "links", "--file", "index.md"])
         .output()
         .unwrap();

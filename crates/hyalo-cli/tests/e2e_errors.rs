@@ -140,7 +140,7 @@ title: OK
     );
 
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["summary"])
         .output()
         .unwrap();
@@ -371,6 +371,7 @@ fn error_text_format() {
             tmp.path().to_str().unwrap(),
             "--format",
             "text",
+            "--no-hints",
             "find",
             "--file",
             "nope.md",

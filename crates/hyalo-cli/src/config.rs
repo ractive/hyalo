@@ -34,7 +34,7 @@ impl ResolvedDefaults {
         Self {
             dir: PathBuf::from("."),
             format: "json".to_owned(),
-            hints: false,
+            hints: true,
             site_prefix: None,
         }
     }
@@ -187,6 +187,6 @@ site_prefix = "docs"
         let resolved = load_config_from(dir.path());
         assert_eq!(resolved.format, "xml");
         assert_eq!(resolved.dir, PathBuf::from("."));
-        assert!(!resolved.hints);
+        assert!(resolved.hints);
     }
 }

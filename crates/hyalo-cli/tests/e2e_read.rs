@@ -317,7 +317,7 @@ fn read_lines_open_end() {
 fn read_lines_open_start() {
     let tmp = setup();
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["read", "--file", "note.md", "--lines", ":2"])
         .output()
         .unwrap();
@@ -348,7 +348,7 @@ fn read_lines_invalid() {
 fn read_frontmatter_only() {
     let tmp = setup();
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["read", "--file", "note.md", "--frontmatter"])
         .output()
         .unwrap();
@@ -501,7 +501,7 @@ fn read_frontmatter_only_file_returns_empty_body() {
 
     // Text output: body should be empty
     let output = hyalo()
-        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--dir", tmp.path().to_str().unwrap(), "--no-hints"])
         .args(["read", "--file", "fm-only.md"])
         .output()
         .unwrap();
