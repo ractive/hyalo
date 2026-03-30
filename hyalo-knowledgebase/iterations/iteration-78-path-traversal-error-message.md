@@ -1,11 +1,11 @@
 ---
-title: "Improve error message for path traversal rejection"
+title: Improve error message for path traversal rejection
 type: iteration
 date: 2026-03-30
 tags:
   - ux
   - dogfood
-status: in-progress
+status: completed
 priority: 4
 branch: iter-76/file-resolve-suggestions
 ---
