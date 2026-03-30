@@ -426,7 +426,10 @@ fn execute_jq_filter(
         match result {
             Ok(val) => {
                 let s = match val {
-                    Val::TStr(ref s) => String::from_utf8_lossy(s).into_owned(),
+                    Val::TStr(ref s) | Val::BStr(ref s) => match std::str::from_utf8(s) {
+                        Ok(valid) => valid.to_owned(),
+                        Err(_) => String::from_utf8_lossy(s).into_owned(),
+                    },
                     // For non-string values, `Display` produces valid JSON
                     // (numbers, booleans, null, arrays, objects).
                     other => other.to_string(),
