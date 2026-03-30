@@ -61,6 +61,23 @@ pub trait VaultIndex {
 }
 
 // ---------------------------------------------------------------------------
+// ScanOptions — controls what ScannedIndex::build scans
+// ---------------------------------------------------------------------------
+
+/// Controls which parts of each file are scanned during index building.
+///
+/// When `scan_body` is `false`, only YAML frontmatter is read — sections, tasks,
+/// and links fields in [`IndexEntry`] will be empty `Vec`s. The [`LinkGraph`]
+/// will be empty.  This is an optimization for commands that only need
+/// frontmatter data (e.g. `properties summary`, `tags summary`,
+/// `find --property status=planned` without body fields).
+#[derive(Debug, Clone, Copy)]
+pub struct ScanOptions {
+    /// When false, only frontmatter is read.
+    pub scan_body: bool,
+}
+
+// ---------------------------------------------------------------------------
 // ScannedIndex — live filesystem scan
 // ---------------------------------------------------------------------------
 
@@ -105,16 +122,19 @@ impl ScannedIndex {
     pub fn build(
         files: &[(PathBuf, String)],
         site_prefix: Option<&str>,
+        options: &ScanOptions,
     ) -> Result<ScannedIndexBuild> {
         let mut entries = Vec::with_capacity(files.len());
         let mut file_links_vec: Vec<FileLinks> = Vec::with_capacity(files.len());
         let mut warnings: Vec<IndexWarning> = Vec::new();
 
         for (full_path, rel_path) in files {
-            match scan_one_file(full_path, rel_path) {
+            match scan_one_file(full_path, rel_path, options.scan_body) {
                 Ok((entry, file_links)) => {
                     entries.push(entry);
-                    file_links_vec.push(file_links);
+                    if let Some(fl) = file_links {
+                        file_links_vec.push(fl);
+                    }
                 }
                 Err(e) if frontmatter::is_parse_error(&e) => {
                     warnings.push(IndexWarning {
@@ -130,9 +150,12 @@ impl ScannedIndex {
         // a stable, deterministic order (as documented on the trait).
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
-        let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix);
-        // from_file_links never produces warnings (callers handle parse errors
-        // before collecting FileLinks), but we could extend this if needed.
+        let graph = if options.scan_body {
+            let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix);
+            graph_build.graph
+        } else {
+            LinkGraph::default()
+        };
 
         // Build path_index AFTER sorting so indices remain valid.
         let path_index: HashMap<String, usize> = entries
@@ -145,7 +168,7 @@ impl ScannedIndex {
             index: ScannedIndex {
                 entries,
                 path_index,
-                graph: graph_build.graph,
+                graph,
             },
             warnings,
         })
@@ -481,38 +504,49 @@ pub fn find_stale_indexes(dir: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
 // Per-file scan — single pass with multiple visitors
 // ---------------------------------------------------------------------------
 
-/// Scan a single file and return its `IndexEntry` plus `FileLinks` for the
-/// link graph. Mirrors the multi-visitor pattern used by the `find` command.
-fn scan_one_file(full_path: &Path, rel_path: &str) -> Result<(IndexEntry, FileLinks)> {
-    let mut fm = FrontmatterCollector::new(true);
-    let mut section_scanner = SectionScanner::new();
-    let mut task_extractor = TaskExtractor::new();
-    let mut link_visitor = LinkGraphVisitor::new(PathBuf::from(rel_path));
+/// Scan a single file and return its `IndexEntry` plus optionally `FileLinks`
+/// for the link graph.
+///
+/// When `scan_body` is `false`, only frontmatter is read — sections, tasks, and
+/// links are empty, and no `FileLinks` are produced.
+fn scan_one_file(
+    full_path: &Path,
+    rel_path: &str,
+    scan_body: bool,
+) -> Result<(IndexEntry, Option<FileLinks>)> {
+    let mut fm = FrontmatterCollector::new(scan_body);
 
-    scanner::scan_file_multi(
-        full_path,
-        &mut [
-            &mut fm,
-            &mut section_scanner,
-            &mut task_extractor,
-            &mut link_visitor,
-        ],
-    )?;
+    let (sections, tasks, links, file_links) = if scan_body {
+        let mut section_scanner = SectionScanner::new();
+        let mut task_extractor = TaskExtractor::new();
+        let mut link_visitor = LinkGraphVisitor::new(PathBuf::from(rel_path));
+
+        scanner::scan_file_multi(
+            full_path,
+            &mut [
+                &mut fm,
+                &mut section_scanner,
+                &mut task_extractor,
+                &mut link_visitor,
+            ],
+        )?;
+
+        let sections = section_scanner.into_sections();
+        let tasks = task_extractor.into_tasks();
+        let fl = link_visitor.into_file_links();
+        let links_clone: Vec<(usize, Link)> = fl
+            .links
+            .iter()
+            .map(|(line, link)| (*line, link.clone()))
+            .collect();
+        (sections, tasks, links_clone, Some(fl))
+    } else {
+        scanner::scan_file_multi(full_path, &mut [&mut fm])?;
+        (Vec::new(), Vec::new(), Vec::new(), None)
+    };
 
     let props = fm.into_props();
     let tags = extract_tags(&props);
-    let sections = section_scanner.into_sections();
-    let tasks = task_extractor.into_tasks();
-    let file_links = link_visitor.into_file_links();
-
-    // Clone link data before it's moved into the FileLinks (we need both
-    // the raw links for IndexEntry and the FileLinks for the graph builder).
-    let links_clone: Vec<(usize, Link)> = file_links
-        .links
-        .iter()
-        .map(|(line, link)| (*line, link.clone()))
-        .collect();
-
     let modified = format_modified(full_path)?;
 
     let entry = IndexEntry {
@@ -522,7 +556,7 @@ fn scan_one_file(full_path: &Path, rel_path: &str) -> Result<(IndexEntry, FileLi
         tags,
         sections,
         tasks,
-        links: links_clone,
+        links,
     };
 
     Ok((entry, file_links))
@@ -772,7 +806,7 @@ See [[a]] for details.
     #[test]
     fn scanned_index_builds_entries() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         assert!(build.warnings.is_empty());
         assert_eq!(build.index.entries().len(), 2);
     }
@@ -780,7 +814,7 @@ See [[a]] for details.
     #[test]
     fn scanned_index_get_by_path() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let idx = &build.index;
 
         let a = idx.get("a.md").unwrap();
@@ -796,7 +830,7 @@ See [[a]] for details.
     #[test]
     fn scanned_index_sections_and_tasks() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let a = build.index.get("a.md").unwrap();
 
         // a.md has 2 sections: Introduction and Tasks
@@ -813,7 +847,7 @@ See [[a]] for details.
     #[test]
     fn scanned_index_link_graph() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let graph = build.index.link_graph();
 
         // a.md links to b, b.md links to a
@@ -826,7 +860,7 @@ See [[a]] for details.
     #[test]
     fn scanned_index_outbound_links() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let a = build.index.get("a.md").unwrap();
 
         // a.md has one outbound link: [[b]]
@@ -857,7 +891,7 @@ Content.
             (tmp.path().join("good.md"), "good.md".to_owned()),
             (tmp.path().join("bad.md"), "bad.md".to_owned()),
         ];
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         assert_eq!(build.index.entries().len(), 1);
         assert_eq!(build.warnings.len(), 1);
         assert_eq!(build.warnings[0].rel_path, "bad.md");
@@ -866,7 +900,7 @@ Content.
     #[test]
     fn scanned_index_modified_is_iso8601() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let a = build.index.get("a.md").unwrap();
         assert!(
             a.modified.contains('T') && a.modified.ends_with('Z'),
@@ -878,7 +912,7 @@ Content.
     #[test]
     fn snapshot_roundtrip() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let index = &build.index;
 
         let snap_dir = tempfile::tempdir().unwrap();
@@ -901,5 +935,27 @@ Content.
         // Link graph survives roundtrip
         let bl = loaded.link_graph().backlinks("a");
         assert!(!bl.is_empty());
+    }
+
+    #[test]
+    fn scanned_index_skip_body() {
+        let (_tmp, files) = setup_vault();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: false }).unwrap();
+        assert!(build.warnings.is_empty());
+        let idx = &build.index;
+
+        // Frontmatter is still populated
+        let a = idx.get("a.md").unwrap();
+        assert_eq!(a.tags, vec!["rust", "cli"]);
+        assert_eq!(a.properties.get("status").unwrap(), "draft");
+
+        // Body fields are empty
+        assert!(a.sections.is_empty());
+        assert!(a.tasks.is_empty());
+        assert!(a.links.is_empty());
+
+        // Link graph is empty
+        assert!(idx.link_graph().backlinks("a").is_empty());
+        assert!(idx.link_graph().backlinks("b").is_empty());
     }
 }

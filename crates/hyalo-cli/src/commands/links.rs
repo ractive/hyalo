@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
-use hyalo_core::index::{ScannedIndex, VaultIndex};
+use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_index, plan_fixes};
 
 // ---------------------------------------------------------------------------
@@ -17,7 +17,7 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 /// `dry_run = true`  → preview only (default)
 /// `dry_run = false` → write fixes to disk (`--apply`)
 #[allow(clippy::too_many_arguments)]
-pub fn links_fix_from_index(
+pub fn links_fix(
     index: &dyn VaultIndex,
     dir: &Path,
     site_prefix: Option<&str>,
@@ -88,43 +88,6 @@ pub fn links_fix_from_index(
     };
 
     Ok(CommandOutcome::Success(formatted))
-}
-
-/// Run `hyalo links fix` with a full disk scan (no pre-built index).
-///
-/// Discovers all files, builds an ephemeral `ScannedIndex`, then delegates to
-/// [`links_fix_from_index`].
-pub fn links_fix(
-    dir: &Path,
-    site_prefix: Option<&str>,
-    globs: &[String],
-    dry_run: bool,
-    threshold: f64,
-    ignore_target: &[String],
-    format: Format,
-) -> Result<CommandOutcome> {
-    let files = discovery::discover_files(dir)?;
-    let file_pairs: Vec<(std::path::PathBuf, String)> = files
-        .into_iter()
-        .map(|p| {
-            let rel = discovery::relative_path(dir, &p);
-            (p, rel)
-        })
-        .collect();
-    let build = ScannedIndex::build(&file_pairs, site_prefix)?;
-    for w in &build.warnings {
-        crate::warn::warn(format!("skipping {}: {}", w.rel_path, w.message));
-    }
-    links_fix_from_index(
-        &build.index,
-        dir,
-        site_prefix,
-        globs,
-        dry_run,
-        threshold,
-        ignore_target,
-        format,
-    )
 }
 
 // ---------------------------------------------------------------------------

@@ -1,445 +1,21 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSetBuilder};
-use indexmap::IndexMap;
 use std::path::Path;
-use std::time::SystemTime;
 
-use crate::commands::section_scanner::SectionScanner;
-use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
-use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField, extract_tags};
-use hyalo_core::frontmatter;
+use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField};
 use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
 use hyalo_core::index::{IndexEntry, VaultIndex};
 use hyalo_core::link_graph::{LinkGraph, is_self_link};
-use hyalo_core::links::Link;
-use hyalo_core::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
-use hyalo_core::tasks::TaskExtractor;
 use hyalo_core::types::{
     BacklinkInfo, ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
 };
 
 // ---------------------------------------------------------------------------
 // Public command entry point
-// ---------------------------------------------------------------------------
-
-/// Find files matching the given filters and return them as a JSON array.
-///
-/// - `pattern`            — case-insensitive content search substring
-/// - `regexp`             — regex content search (mutually exclusive with `pattern`)
-/// - `property_filters`  — all must match (AND semantics)
-/// - `tag_filters`        — all must be present (AND semantics, nested tag rules)
-/// - `task_filter`        — file-level task presence/status filter
-/// - `section_filters`   — restrict body results to matching sections (OR semantics)
-/// - `file` / `glob`      — scope limiting
-/// - `fields`             — controls which fields appear in each `FileObject`
-/// - `sort`               — sort order; defaults to ascending by file path
-/// - `reverse`            — reverse the final sort order
-/// - `limit`              — maximum number of results
-/// - `title_filter`       — case-insensitive substring or `~=regex` match against title
-#[allow(clippy::too_many_arguments)]
-pub fn find(
-    dir: &Path,
-    site_prefix: Option<&str>,
-    pattern: Option<&str>,
-    regexp: Option<&str>,
-    property_filters: &[PropertyFilter],
-    tag_filters: &[String],
-    task_filter: Option<&FindTaskFilter>,
-    section_filters: &[SectionFilter],
-    files_arg: &[String],
-    globs: &[String],
-    fields: &Fields,
-    sort: Option<&SortField>,
-    reverse: bool,
-    limit: Option<usize>,
-    broken_links: bool,
-    title_filter: Option<&str>,
-    format: Format,
-) -> Result<CommandOutcome> {
-    let files = collect_files(dir, files_arg, globs, format)?;
-    let files = match files {
-        FilesOrOutcome::Files(f) => f,
-        FilesOrOutcome::Outcome(o) => return Ok(o),
-    };
-
-    if pattern.is_some_and(|p| p.trim().is_empty()) {
-        return Ok(CommandOutcome::UserError(
-            "body pattern must not be empty; omit the pattern to match all files".to_owned(),
-        ));
-    }
-
-    let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
-    let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
-    let sort_needs_properties = matches!(sort, Some(SortField::Property(_)));
-    let sort_needs_title = matches!(sort, Some(SortField::Title));
-
-    let has_content_search = pattern.is_some() || regexp.is_some();
-    let has_task_filter = task_filter.is_some();
-    let has_section_filter = !section_filters.is_empty();
-    // Compile --title filter once before the loop to avoid per-file regex
-    // compilation and repeated to_lowercase() allocation.
-    let title_matcher = match title_filter.map(TitleMatcher::parse) {
-        Some(Ok(m)) => Some(m),
-        Some(Err(outcome)) => return Ok(outcome),
-        None => None,
-    };
-    let has_title_filter = title_matcher.is_some();
-    let body_needed = needs_body(
-        fields,
-        has_content_search,
-        has_task_filter,
-        has_section_filter,
-    ) || sort_needs_links
-        || sort_needs_title
-        // --broken-links forces fields.links on (applied later in effective_fields),
-        // so we must also force body scanning here before effective_fields is built.
-        || broken_links
-        // --title filter needs body scanning for H1 fallback when frontmatter title absent.
-        || has_title_filter;
-
-    // Compile the regex once (if any), then clone cheaply per file.
-    // Invalid regex is a user error (exit 1), not an internal error (exit 2).
-    let compiled_regex = match regexp {
-        Some(re) => {
-            let effective = format!("(?i){re}");
-            match regex::RegexBuilder::new(&effective)
-                .size_limit(1 << 20)
-                .build()
-            {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!(
-                        "invalid regular expression: {re}\n{e}"
-                    )));
-                }
-            }
-        }
-        None => None,
-    };
-
-    // Canonicalize the vault directory once so that resolve_target (called
-    // per-link inside the loop) can avoid repeated canonicalization.
-    let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
-
-    // Build the link graph lazily — only when backlinks field is requested.
-    // This requires scanning all files in the vault so it's opt-in.
-    // Collect warned paths (as forward-slash strings) so the per-file scan loop
-    // below can skip duplicate warnings.  PathBuf uses backslashes on Windows,
-    // but `rel_path` in the loop is always forward-slash-normalized
-    // (via `discovery::relative_path`), so we normalize here to match.
-    let mut link_graph_warned: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let link_graph = if fields.backlinks || sort_needs_backlinks {
-        let build = LinkGraph::build(dir, site_prefix)?;
-        for (path, msg) in &build.warnings {
-            crate::warn::warn(format!("skipping {}: {msg}", path.display()));
-            link_graph_warned.insert(path.to_string_lossy().replace('\\', "/"));
-        }
-        Some(build.graph)
-    } else {
-        None
-    };
-
-    // When sorting by a frontmatter property or title, or when --broken-links
-    // is active, force the relevant fields on even if not requested via --fields.
-    let original_fields = fields;
-    let effective_fields;
-    let fields = if (sort_needs_properties && !fields.properties)
-        || (sort_needs_title && !fields.title)
-        || (broken_links && !fields.links)
-    {
-        effective_fields = Fields {
-            properties: fields.properties || sort_needs_properties,
-            title: fields.title || sort_needs_title,
-            links: fields.links || broken_links,
-            ..fields.clone()
-        };
-        &effective_fields
-    } else {
-        fields
-    };
-
-    // Pre-sort the file list when we can determine the final order upfront.
-    // Currently only --sort file (explicit) qualifies for the scan path,
-    // since other sort keys require scanning the file first.
-    let presorted = matches!(sort, Some(SortField::File)) && !reverse && !fields.backlinks;
-
-    let mut files = files;
-    if presorted {
-        files.sort_by(|a, b| a.1.cmp(&b.1));
-    }
-
-    let mut results: Vec<FileObject> = Vec::new();
-    let mut total_matching: usize = 0;
-
-    for (full_path, rel_path) in &files {
-        // --- Single-pass scan ---
-        let mut fm = FrontmatterCollector::new(body_needed);
-        let mut section_scanner = if body_needed
-            && (fields.sections
-                || fields.links
-                || fields.title
-                || sort_needs_links
-                || has_section_filter
-                || has_title_filter)
-        {
-            Some(SectionScanner::new())
-        } else {
-            None
-        };
-        let mut task_extractor = if body_needed && (fields.tasks || has_task_filter) {
-            Some(TaskExtractor::new())
-        } else {
-            None
-        };
-        let mut link_collector = if body_needed && (fields.links || sort_needs_links) {
-            Some(LinkCollector::new())
-        } else {
-            None
-        };
-        let mut content_visitor = if let Some(ref re) = compiled_regex {
-            Some(ContentSearchVisitor::from_compiled(re.clone()))
-        } else {
-            pattern.map(ContentSearchVisitor::new)
-        };
-
-        // Build visitor slice dynamically — only include Some visitors.
-        let scan_result = {
-            let mut visitor_refs: Vec<&mut dyn FileVisitor> = Vec::new();
-            visitor_refs.push(&mut fm);
-            if let Some(ref mut ss) = section_scanner {
-                visitor_refs.push(ss);
-            }
-            if let Some(ref mut te) = task_extractor {
-                visitor_refs.push(te);
-            }
-            if let Some(ref mut lc) = link_collector {
-                visitor_refs.push(lc);
-            }
-            if let Some(ref mut cv) = content_visitor {
-                visitor_refs.push(cv);
-            }
-            scanner::scan_file_multi(full_path, &mut visitor_refs)
-        };
-        match scan_result {
-            Ok(()) => {}
-            Err(e) if frontmatter::is_parse_error(&e) => {
-                // Only warn if the link graph build hasn't already warned for this path.
-                // Both are forward-slash-normalized relative strings.
-                if !link_graph_warned.contains(rel_path.as_str()) {
-                    crate::warn::warn(format!("skipping {rel_path}: {e}"));
-                }
-                continue;
-            }
-            Err(e) => return Err(e),
-        }
-
-        let props = fm.into_props();
-
-        // --- Extract tags once and apply filters ---
-        let tags = extract_tags(&props);
-        if !filter::matches_filters_with_tags(&props, property_filters, &tags, tag_filters) {
-            continue;
-        }
-
-        // --- Consume section scanner to get outline sections ---
-        // Must happen before scope building and before build_file_object.
-        let outline_sections: Option<Vec<OutlineSection>> =
-            section_scanner.map(SectionScanner::into_sections);
-
-        // --- Apply title filter ---
-        if let Some(ref matcher) = title_matcher {
-            let title_val = extract_title(&props, outline_sections.as_deref());
-            if !matcher.matches(&title_val) {
-                continue;
-            }
-        }
-
-        // --- Build section scope ranges (if section filter is active) ---
-        let scope_ranges: Vec<SectionRange> = if has_section_filter {
-            if let Some(ref sections) = outline_sections {
-                build_section_scope(sections, section_filters, usize::MAX)
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
-        // --- Collect tasks (needed for filter and/or output field) ---
-        // Consume the extractor now so we can both filter and include in output.
-        let mut collected_tasks: Option<Vec<FindTaskInfo>> =
-            task_extractor.map(TaskExtractor::into_tasks);
-
-        // --- Collect content matches early so we can apply section scope ---
-        let mut content_matches: Option<Vec<ContentMatch>> =
-            content_visitor.map(|cv| cv.into_matches());
-
-        // --- Apply section scope filter to body results ---
-        if has_section_filter {
-            if scope_ranges.is_empty() {
-                // No section matched in this file — skip it entirely
-                continue;
-            }
-            if let Some(ref mut tasks) = collected_tasks {
-                tasks.retain(|t| in_scope(&scope_ranges, t.line));
-            }
-            if let Some(ref mut matches) = content_matches {
-                matches.retain(|m| in_scope(&scope_ranges, m.line));
-            }
-        }
-
-        // --- Apply task filter ---
-        if let Some(filter) = task_filter {
-            let tasks_slice: &[FindTaskInfo] = collected_tasks.as_deref().unwrap_or(&[]);
-            if !matches_task_filter(tasks_slice, filter) {
-                continue;
-            }
-        }
-
-        // --- Apply content search filter ---
-        if has_content_search && content_matches.as_ref().is_some_and(|m| m.is_empty()) {
-            continue;
-        }
-
-        // When pre-sorted with a limit, skip expensive construction once full.
-        // (broken_links needs the built object, so it must fall through.)
-        if presorted && limit.is_some_and(|n| results.len() >= n) && !broken_links {
-            total_matching += 1;
-            continue;
-        }
-
-        // --- Get modified time ---
-        let modified = format_modified(full_path)?;
-
-        // --- Build FileObject ---
-        let obj = build_file_object(
-            rel_path,
-            &modified,
-            &props,
-            &tags,
-            fields,
-            outline_sections,
-            &scope_ranges,
-            collected_tasks,
-            link_collector,
-            content_matches,
-            &canonical_dir,
-            link_graph.as_ref(),
-            site_prefix,
-        );
-
-        // --- Apply broken-links filter ---
-        if broken_links {
-            let has_broken = obj
-                .links
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .any(|l| l.path.is_none());
-            if !has_broken {
-                continue;
-            }
-        }
-
-        if presorted {
-            total_matching += 1;
-        }
-        if !presorted || limit.is_none_or(|n| results.len() < n) {
-            results.push(obj);
-        }
-    }
-
-    // --- Sort ---
-    // When presorted, files were pre-sorted and results already collected in
-    // order — skip the redundant sort.
-    if !presorted {
-        apply_sort(&mut results, sort, link_graph.as_ref());
-    }
-
-    if let Some(SortField::Property(key)) = sort
-        && !results.is_empty()
-        && results.iter().all(|r| {
-            r.properties
-                .as_ref()
-                .and_then(|p| p.get(key.as_str()))
-                .is_none()
-        })
-    {
-        crate::warn::warn(format!(
-            "no files have property '{key}' -- sort has no effect"
-        ));
-    }
-
-    // Strip internally-computed fields that the user didn't request in --fields.
-    // These were populated only to support sorting by count or property.
-    if sort_needs_links && !original_fields.links {
-        for obj in &mut results {
-            obj.links = None;
-        }
-    }
-    if sort_needs_properties && !original_fields.properties {
-        for obj in &mut results {
-            obj.properties = None;
-        }
-    }
-    if sort_needs_title && !original_fields.title {
-        for obj in &mut results {
-            obj.title = None;
-        }
-    }
-    // Note: no strip needed for BacklinksCount — build_file_object only populates
-    // obj.backlinks when fields.backlinks is true. The sort closure queries
-    // link_graph directly when obj.backlinks is None.
-
-    // --- Reverse ---
-    if reverse {
-        results.reverse();
-    }
-
-    // --- Limit ---
-    // When presorted, total_matching already holds the accurate count and
-    // results are already capped — skip truncation.
-    let total = if presorted {
-        total_matching
-    } else {
-        let t = results.len();
-        if let Some(n) = limit {
-            results.truncate(n);
-        }
-        t
-    };
-
-    // --- Serialize ---
-    let json_array: Vec<serde_json::Value> = results
-        .into_iter()
-        .map(|obj| serde_json::to_value(obj).context("failed to serialize find result"))
-        .collect::<Result<_>>()?;
-
-    // In text mode, an empty result set produces no stdout output, which an
-    // LLM (or script) cannot distinguish from a silent failure.  Emit an
-    // explicit notice on stderr so the caller knows the query succeeded but
-    // matched nothing.  JSON mode keeps the empty array on stdout unchanged.
-    if format == crate::output::Format::Text && json_array.is_empty() {
-        crate::warn::warn("No files matched.");
-    }
-
-    let json_output = serde_json::json!({
-        "total": total,
-        "results": json_array,
-    });
-
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format,
-        &json_output,
-    )))
-}
-
-// ---------------------------------------------------------------------------
-// find_from_index — index-backed variant
 // ---------------------------------------------------------------------------
 
 /// Filter index entries by optional `--file` and `--glob` scoping arguments.
@@ -552,19 +128,42 @@ pub fn filter_index_entries<'a>(
     Ok(filtered)
 }
 
-/// Find files using pre-scanned index data.
+/// Returns `true` when the command needs body content (sections, tasks, links,
+/// title, content search, or structural filters).
 ///
-/// This is the index-backed variant of [`find`]. It accepts `&dyn VaultIndex`
-/// instead of a directory to scan, and uses `dir` only for:
-/// - Content search (disk I/O is still required to read file bodies when
+/// This is the core body-scan predicate shared between the `find` command
+/// dispatch in `main.rs` and any other caller that needs to decide whether to
+/// request a full body scan from [`crate::commands::build_scanned_index`].
+///
+/// Callers may add extra conditions on top (e.g. `sort_needs_links`,
+/// `broken_links`, `has_title_filter`) that are specific to their dispatch
+/// context.
+pub fn needs_body(
+    fields: &Fields,
+    has_content_search: bool,
+    has_task_filter: bool,
+    has_section_filter: bool,
+) -> bool {
+    fields.sections
+        || fields.tasks
+        || fields.links
+        || fields.title
+        || has_content_search
+        || has_task_filter
+        || has_section_filter
+}
+
+/// Find files matching the given filters and return them as a JSON array.
+///
+/// Uses pre-scanned index data for all metadata (properties, tags, sections,
+/// tasks, outbound links). `dir` is still used for:
+/// - Content search (disk I/O is required to read file bodies when
 ///   `pattern` or `regexp` is specified)
 /// - Link path resolution (`discovery::resolve_target`)
 ///
-/// All other data (properties, tags, sections, tasks, outbound links) comes
-/// directly from `IndexEntry` values. Backlinks are resolved via
-/// `index.link_graph()` rather than a new `LinkGraph::build`.
+/// Backlinks are resolved via `index.link_graph()` without a fresh vault scan.
 #[allow(clippy::too_many_arguments)]
-pub fn find_from_index(
+pub fn find(
     index: &dyn VaultIndex,
     dir: &Path,
     site_prefix: Option<&str>,
@@ -982,22 +581,6 @@ pub fn find_from_index(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Determine whether body scanning is needed at all.
-fn needs_body(
-    fields: &Fields,
-    has_content_search: bool,
-    has_task_filter: bool,
-    has_section_filter: bool,
-) -> bool {
-    fields.sections
-        || fields.tasks
-        || fields.links
-        || fields.title
-        || has_content_search
-        || has_task_filter
-        || has_section_filter
-}
-
 /// Extract the title value for `--fields title`.
 ///
 /// Priority:
@@ -1076,20 +659,6 @@ fn matches_task_filter(tasks: &[FindTaskInfo], filter: &FindTaskFilter) -> bool 
         FindTaskFilter::Done => tasks.iter().any(|t| t.done),
         FindTaskFilter::Status(c) => tasks.iter().any(|t| t.status.starts_with(*c)),
     }
-}
-
-/// Format a file's last-modified time as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
-fn format_modified(path: &Path) -> Result<String> {
-    let meta = std::fs::metadata(path)
-        .with_context(|| format!("failed to read metadata for {}", path.display()))?;
-    let mtime = meta
-        .modified()
-        .with_context(|| format!("mtime not available for {}", path.display()))?;
-    let secs = mtime
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    Ok(format_iso8601(secs))
 }
 
 /// Apply the requested sort order to the results.
@@ -1185,169 +754,6 @@ fn presort_index_entries(
     }
 }
 
-use super::format_iso8601;
-
-/// Build a `FileObject` from the already-scanned data.
-///
-/// `canonical_dir` must be a pre-canonicalized vault path (see
-/// `discovery::canonicalize_vault_dir`). It is passed directly to
-/// `resolve_target` to avoid per-link re-canonicalization.
-#[allow(clippy::too_many_arguments)]
-fn build_file_object(
-    rel_path: &str,
-    modified: &str,
-    props: &IndexMap<String, serde_json::Value>,
-    tags: &[String],
-    fields: &Fields,
-    outline_sections: Option<Vec<OutlineSection>>,
-    scope_ranges: &[SectionRange],
-    collected_tasks: Option<Vec<FindTaskInfo>>,
-    link_collector: Option<LinkCollector>,
-    content_matches: Option<Vec<ContentMatch>>,
-    canonical_dir: &Path,
-    link_graph: Option<&LinkGraph>,
-    site_prefix: Option<&str>,
-) -> FileObject {
-    let properties = if fields.properties {
-        let mut map = serde_json::Map::new();
-        for (name, value) in props.iter().filter(|(n, _)| n.as_str() != "tags") {
-            map.insert(name.clone(), value.clone());
-        }
-        Some(map)
-    } else {
-        None
-    };
-
-    let properties_typed = if fields.properties_typed {
-        Some(
-            props
-                .iter()
-                .filter(|(name, _)| name.as_str() != "tags")
-                .map(|(name, value)| PropertyInfo {
-                    name: name.clone(),
-                    prop_type: frontmatter::infer_type(value).to_owned(),
-                    value: value.clone(),
-                })
-                .collect(),
-        )
-    } else {
-        None
-    };
-
-    let tags_field = if fields.tags {
-        Some(tags.to_vec())
-    } else {
-        None
-    };
-
-    // Extract title before outline_sections is consumed into sections.
-    let title = if fields.title {
-        Some(extract_title(props, outline_sections.as_deref()))
-    } else {
-        None
-    };
-
-    let sections = if fields.sections {
-        outline_sections.map(|mut secs| {
-            if !scope_ranges.is_empty() {
-                secs.retain(|s| in_scope(scope_ranges, s.line));
-            }
-            secs
-        })
-    } else {
-        None
-    };
-
-    let tasks = if fields.tasks { collected_tasks } else { None };
-
-    let links = if fields.links || link_collector.is_some() {
-        link_collector.map(|lc| {
-            lc.into_links()
-                .into_iter()
-                .map(|link| {
-                    let path = discovery::resolve_target(canonical_dir, &link.target, site_prefix);
-                    LinkInfo {
-                        target: link.target,
-                        path,
-                        label: link.label,
-                    }
-                })
-                .collect()
-        })
-    } else {
-        None
-    };
-
-    let matches: Option<Vec<ContentMatch>> = content_matches;
-
-    let backlinks = if fields.backlinks {
-        let entries = link_graph
-            .map(|graph| graph.backlinks(rel_path))
-            .unwrap_or_default();
-        Some(
-            entries
-                .into_iter()
-                // Exclude self-links at the display boundary so the user
-                // doesn't see a file listed as its own backlink source.
-                .filter(|e| !is_self_link(e, rel_path))
-                .map(|e| {
-                    let source = e.source.to_string_lossy().replace('\\', "/");
-                    BacklinkInfo {
-                        source,
-                        line: e.line,
-                        label: e.link.label.clone(),
-                    }
-                })
-                .collect(),
-        )
-    } else {
-        None
-    };
-
-    FileObject {
-        file: rel_path.to_owned(),
-        modified: modified.to_owned(),
-        title,
-        properties,
-        properties_typed,
-        tags: tags_field,
-        sections,
-        tasks,
-        links,
-        backlinks,
-        matches,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// LinkCollector visitor
-// ---------------------------------------------------------------------------
-
-/// Visitor that collects all `Link` structs from body lines for later resolution.
-struct LinkCollector {
-    links: Vec<Link>,
-}
-
-impl LinkCollector {
-    fn new() -> Self {
-        Self { links: Vec::new() }
-    }
-
-    fn into_links(self) -> Vec<Link> {
-        self.links
-    }
-}
-
-impl FileVisitor for LinkCollector {
-    fn on_body_line(&mut self, raw: &str, cleaned: &str, _line_num: usize) -> ScanAction {
-        // Use `cleaned` for structural parsing (so links inside backtick spans
-        // are not extracted) but `raw` for label text (so backtick-wrapped
-        // content like [`file.ts`](path) is preserved).
-        hyalo_core::links::extract_links_from_text_with_original(cleaned, raw, &mut self.links);
-        ScanAction::Continue
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
@@ -1355,7 +761,62 @@ impl FileVisitor for LinkCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyalo_core::index::{ScanOptions, ScannedIndex};
     use std::fs;
+
+    /// Build a `ScannedIndex` from `dir` and call `find`.
+    /// Mirrors the old disk-scan helper signature used in pre-Phase-5 tests.
+    #[allow(clippy::too_many_arguments)]
+    fn run_find(
+        dir: &std::path::Path,
+        site_prefix: Option<&str>,
+        pattern: Option<&str>,
+        regexp: Option<&str>,
+        property_filters: &[PropertyFilter],
+        tag_filters: &[String],
+        task_filter: Option<&FindTaskFilter>,
+        section_filters: &[SectionFilter],
+        files_arg: &[String],
+        globs: &[String],
+        fields: &Fields,
+        sort: Option<&SortField>,
+        reverse: bool,
+        limit: Option<usize>,
+        broken_links: bool,
+        title_filter: Option<&str>,
+        format: Format,
+    ) -> anyhow::Result<CommandOutcome> {
+        let all = hyalo_core::discovery::discover_files(dir)?;
+        let file_pairs: Vec<(std::path::PathBuf, String)> = all
+            .into_iter()
+            .map(|p| {
+                let rel = hyalo_core::discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
+        let build =
+            ScannedIndex::build(&file_pairs, site_prefix, &ScanOptions { scan_body: true })?;
+        find(
+            &build.index,
+            dir,
+            site_prefix,
+            pattern,
+            regexp,
+            property_filters,
+            tag_filters,
+            task_filter,
+            section_filters,
+            files_arg,
+            globs,
+            fields,
+            sort,
+            reverse,
+            limit,
+            broken_links,
+            title_filter,
+            format,
+        )
+    }
 
     macro_rules! md {
         ($s:expr) => {
@@ -1431,7 +892,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1462,7 +923,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1496,7 +957,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1536,7 +997,7 @@ Just some text here.
         let filter = hyalo_core::filter::parse_property_filter("status=planned").unwrap();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1569,7 +1030,7 @@ Just some text here.
         let filter = hyalo_core::filter::parse_property_filter("title").unwrap();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1603,7 +1064,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1635,7 +1096,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1668,7 +1129,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 Some("Rust programming"),
@@ -1700,7 +1161,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 Some("Rust"),
@@ -1735,7 +1196,7 @@ Just some text here.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1799,7 +1260,7 @@ title: Empty Body
         let tmp = setup_vault_with_empty_body();
         let fields = Fields::default();
 
-        let outcome = find(
+        let outcome = run_find(
             tmp.path(),
             None,
             Some(""),
@@ -1837,7 +1298,7 @@ title: Empty Body
         let tmp = setup_vault_with_empty_body();
         let fields = Fields::default();
 
-        let outcome = find(
+        let outcome = run_find(
             tmp.path(),
             None,
             Some("   "),
@@ -1876,7 +1337,7 @@ title: Empty Body
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1909,7 +1370,7 @@ title: Empty Body
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1943,7 +1404,7 @@ title: Empty Body
         let tmp = setup_vault();
         let fields = Fields::parse(&["properties".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -1980,7 +1441,7 @@ title: Empty Body
         let tmp = setup_vault();
         let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2021,7 +1482,7 @@ title: Empty Body
         // Create beta.md so the wikilink [[beta]] from alpha can resolve
         let fields = Fields::parse(&["links".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2059,7 +1520,7 @@ title: Empty Body
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2099,7 +1560,7 @@ title: Empty Body
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2139,7 +1600,7 @@ title: Empty Body
         let filter = hyalo_core::filter::parse_property_filter("status=nonexistent").unwrap();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2167,10 +1628,12 @@ title: Empty Body
     // --- find: file not found ---
 
     #[test]
-    fn find_file_not_found_returns_user_error() {
+    fn find_file_not_found_returns_empty_results() {
+        // The index-backed `find` silently returns zero results for a
+        // `--file` argument that matches no index entry (no UserError).
         let tmp = setup_vault();
         let fields = Fields::default();
-        let result = find(
+        let result = run_find(
             tmp.path(),
             None,
             None,
@@ -2190,54 +1653,9 @@ title: Empty Body
             Format::Json,
         )
         .unwrap();
-        assert!(matches!(result, CommandOutcome::UserError(_)));
-    }
-
-    // --- needs_body ---
-
-    #[test]
-    fn needs_body_false_when_only_fm_fields() {
-        let fields = Fields {
-            properties: true,
-            properties_typed: false,
-            tags: true,
-            sections: false,
-            tasks: false,
-            links: false,
-            backlinks: false,
-            title: false,
-        };
-        assert!(!needs_body(&fields, false, false, false));
-    }
-
-    #[test]
-    fn needs_body_true_when_pattern() {
-        let fields = Fields {
-            properties: true,
-            properties_typed: false,
-            tags: true,
-            sections: false,
-            tasks: false,
-            links: false,
-            backlinks: false,
-            title: false,
-        };
-        assert!(needs_body(&fields, true, false, false));
-    }
-
-    #[test]
-    fn needs_body_true_when_sections() {
-        let fields = Fields {
-            properties: false,
-            properties_typed: false,
-            tags: false,
-            sections: true,
-            tasks: false,
-            links: false,
-            backlinks: false,
-            title: false,
-        };
-        assert!(needs_body(&fields, false, false, false));
+        let out = unwrap_success(result);
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(json["total"], 0);
     }
 
     // --- matches_task_filter ---
@@ -2340,7 +1758,7 @@ Just intro, no tasks section.
         let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
         let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2375,7 +1793,7 @@ Just intro, no tasks section.
         // Filter on a section that does not exist
         let section_filters = vec![SectionFilter::parse("Nonexistent").unwrap()];
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2412,7 +1830,7 @@ Just intro, no tasks section.
         // "Background" text only appears in ## Background, not ## Tasks
         let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 Some("background"),
@@ -2448,7 +1866,7 @@ Just intro, no tasks section.
         let fields = Fields::parse(&["sections".to_owned()]).unwrap();
         let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2490,7 +1908,7 @@ Just intro, no tasks section.
         let fields = Fields::parse(&["tasks".to_owned()]).unwrap();
         let section_filters = vec![SectionFilter::parse("Tasks").unwrap()];
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2521,22 +1939,6 @@ Just intro, no tasks section.
     }
 
     #[test]
-    fn needs_body_true_when_section_filter() {
-        let fields = Fields {
-            properties: false,
-            properties_typed: false,
-            tags: false,
-            sections: false,
-            tasks: false,
-            links: false,
-            backlinks: false,
-            title: false,
-        };
-        assert!(needs_body(&fields, false, false, true));
-        assert!(!needs_body(&fields, false, false, false));
-    }
-
-    #[test]
     fn find_skips_broken_frontmatter_file() {
         let tmp = setup_vault();
         // Add a file with unclosed frontmatter
@@ -2546,7 +1948,7 @@ Just intro, no tasks section.
         )
         .unwrap();
         let fields = Fields::default();
-        let result = find(
+        let result = run_find(
             tmp.path(),
             None,
             None,
@@ -2584,7 +1986,7 @@ Just intro, no tasks section.
         let tmp = setup_vault();
         let fields = Fields::parse(&["properties-typed".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2645,7 +2047,7 @@ Just intro, no tasks section.
         let tmp = setup_vault();
         let fields = Fields::parse(&["properties,properties-typed".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2686,7 +2088,7 @@ Just intro, no tasks section.
         let tmp = setup_vault();
         let fields = Fields::parse(&["properties-typed".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2728,7 +2130,7 @@ Just intro, no tasks section.
         // alpha.md links to [[beta]], so beta should have a backlink from alpha
         let fields = Fields::parse(&["backlinks".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2763,7 +2165,7 @@ Just intro, no tasks section.
         let tmp = setup_vault();
         let fields = Fields::default();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,
@@ -2800,7 +2202,7 @@ Just intro, no tasks section.
         // gamma has no frontmatter and nobody links to it
         let fields = Fields::parse(&["backlinks".to_owned()]).unwrap();
         let out = unwrap_success(
-            find(
+            run_find(
                 tmp.path(),
                 None,
                 None,

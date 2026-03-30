@@ -49,60 +49,11 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
 // `hyalo tags` — aggregate: unique tags with counts
 // ---------------------------------------------------------------------------
 
-/// Aggregate summary: unique tag names with file counts.
-/// Scope is filtered by `--file` / `--glob` (or all files if both are None).
-pub fn tags_summary(
-    dir: &Path,
-    file: Option<&str>,
-    globs: &[String],
-    format: Format,
-) -> Result<CommandOutcome> {
-    let file_vec: Vec<String> = file.map(|f| vec![f.to_owned()]).unwrap_or_default();
-    let files = collect_files(dir, &file_vec, globs, format)?;
-    let files = match files {
-        FilesOrOutcome::Files(f) => f,
-        FilesOrOutcome::Outcome(o) => return Ok(o),
-    };
-
-    // Aggregate case-insensitively: use lowercase key, preserve first-seen casing for display
-    let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-
-    for (full_path, rel) in &files {
-        let props = match frontmatter::read_frontmatter(full_path) {
-            Ok(p) => p,
-            Err(e) if frontmatter::is_parse_error(&e) => {
-                crate::warn::warn(format!("skipping {rel}: {e}"));
-                continue;
-            }
-            Err(e) => return Err(e),
-        };
-        for tag in extract_tags(&props) {
-            let key = tag.to_ascii_lowercase();
-            counts
-                .entry(key)
-                .and_modify(|entry| entry.1 += 1)
-                .or_insert((tag, 1));
-        }
-    }
-
-    let tags: Vec<TagSummaryEntry> = counts
-        .into_iter()
-        .map(|(_, (name, count))| TagSummaryEntry { name, count })
-        .collect();
-
-    let total = tags.len();
-    let result = TagSummary { tags, total };
-
-    Ok(CommandOutcome::Success(crate::output::format_output(
-        format, &result,
-    )))
-}
-
 /// Aggregate tag summary using pre-scanned index data.
 ///
 /// `file_filter` is an optional list of vault-relative paths to include.
 /// When `None` (or an empty slice), all index entries are used.
-pub fn tags_summary_from_index(
+pub fn tags_summary(
     index: &dyn VaultIndex,
     file_filter: Option<&[String]>,
     format: Format,
@@ -286,9 +237,30 @@ pub fn tags_rename(
 mod tests {
     use super::*;
     use hyalo_core::filter::tag_matches;
+    use hyalo_core::index::{ScanOptions, ScannedIndex};
     use indexmap::IndexMap;
     use serde_json::Value;
     use std::fs;
+
+    /// Build a `ScannedIndex` from `dir` and call `tags_summary`.
+    /// Mirrors the old disk-scan helper signature used in pre-Phase-5 tests.
+    fn run_tags_summary(
+        dir: &std::path::Path,
+        file: Option<&str>,
+        format: Format,
+    ) -> anyhow::Result<CommandOutcome> {
+        let all = hyalo_core::discovery::discover_files(dir)?;
+        let file_pairs: Vec<(std::path::PathBuf, String)> = all
+            .into_iter()
+            .map(|p| {
+                let rel = hyalo_core::discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
+        let build = ScannedIndex::build(&file_pairs, None, &ScanOptions { scan_body: false })?;
+        let file_filter: Option<Vec<String>> = file.map(|f| vec![f.to_owned()]);
+        tags_summary(&build.index, file_filter.as_deref(), format)
+    }
 
     macro_rules! md {
         ($s:expr) => {
@@ -449,7 +421,7 @@ tags:
     #[test]
     fn tags_summary_all_files() {
         let tmp = setup_vault();
-        let outcome = tags_summary(tmp.path(), None, &[], Format::Json).unwrap();
+        let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
@@ -464,7 +436,7 @@ tags:
     #[test]
     fn tags_summary_single_file() {
         let tmp = setup_vault();
-        let outcome = tags_summary(tmp.path(), Some("a.md"), &[], Format::Json).unwrap();
+        let outcome = run_tags_summary(tmp.path(), Some("a.md"), Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
@@ -479,7 +451,7 @@ tags:
     fn tags_summary_no_file_or_glob_reads_all() {
         let tmp = setup_vault();
         // tags_summary (read-only) still accepts no --file/--glob
-        let outcome = tags_summary(tmp.path(), None, &[], Format::Json).unwrap();
+        let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success(_)));
     }
 
@@ -638,7 +610,7 @@ tags:
         )
         .unwrap();
 
-        let outcome = tags_summary(tmp.path(), None, &[], Format::Json).unwrap();
+        let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success(s) => s,
             CommandOutcome::UserError(s) => panic!("unexpected UserError: {s}"),

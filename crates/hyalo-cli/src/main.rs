@@ -4,8 +4,8 @@ use std::process;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use hyalo_cli::commands::{
-    append as append_commands, backlinks as backlinks_commands,
-    create_index as create_index_commands, drop_index as drop_index_commands,
+    ScannedIndexOutcome, append as append_commands, backlinks as backlinks_commands,
+    build_scanned_index, create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, init as init_commands, links as links_commands, mv as mv_commands,
     properties, read as read_commands, remove as remove_commands, set as set_commands,
     summary as summary_commands, tags as tag_commands, tasks as task_commands,
@@ -15,7 +15,7 @@ use hyalo_cli::output::{
     CommandOutcome, Format, apply_jq_filter_result, format_success, format_with_hints,
 };
 use hyalo_core::filter;
-use hyalo_core::index::{SnapshotIndex, VaultIndex};
+use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex};
 
 fn parse_limit(s: &str) -> Result<usize, String> {
     let n: usize = s
@@ -1483,7 +1483,7 @@ fn main() {
             }
 
             if let Some(ref idx) = snapshot_index {
-                find_commands::find_from_index(
+                find_commands::find(
                     idx,
                     &dir,
                     site_prefix,
@@ -1504,25 +1504,67 @@ fn main() {
                     effective_format,
                 )
             } else {
-                find_commands::find(
+                let sort_needs_backlinks =
+                    matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
+                let sort_needs_links =
+                    matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
+                let sort_needs_title =
+                    matches!(sort_field.as_ref(), Some(filter::SortField::Title));
+                let has_content_search = pattern.is_some() || regexp.is_some();
+                let has_task_filter = task_filter.is_some();
+                let has_section_filter = !section_filters.is_empty();
+                let has_title_filter = title.is_some();
+                let needs_body = find_commands::needs_body(
+                    &parsed_fields,
+                    has_content_search,
+                    has_task_filter,
+                    has_section_filter,
+                ) || sort_needs_links
+                    || sort_needs_title
+                    || broken_links
+                    || has_title_filter;
+                let needs_full_vault = parsed_fields.backlinks || sort_needs_backlinks;
+                // The link graph is only built when scan_body is true, so
+                // backlinks / backlink-sort always require body scanning.
+                let scan_body = needs_body || needs_full_vault;
+                let build = match build_scanned_index(
                     &dir,
-                    site_prefix,
-                    pattern.as_deref(),
-                    regexp.as_deref(),
-                    &prop_filters,
-                    tag,
-                    task_filter.as_ref(),
-                    &section_filters,
                     file,
                     glob,
-                    &parsed_fields,
-                    sort_field.as_ref(),
-                    reverse,
-                    limit,
-                    broken_links,
-                    title.as_deref(),
                     effective_format,
-                )
+                    site_prefix,
+                    needs_full_vault,
+                    &ScanOptions { scan_body },
+                ) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        die(2);
+                    }
+                };
+                match build {
+                    ScannedIndexOutcome::Index(build) => find_commands::find(
+                        &build.index,
+                        &dir,
+                        site_prefix,
+                        pattern.as_deref(),
+                        regexp.as_deref(),
+                        &prop_filters,
+                        tag,
+                        task_filter.as_ref(),
+                        &section_filters,
+                        file,
+                        glob,
+                        &parsed_fields,
+                        sort_field.as_ref(),
+                        reverse,
+                        limit,
+                        broken_links,
+                        title.as_deref(),
+                        effective_format,
+                    ),
+                    ScannedIndexOutcome::Outcome(o) => Ok(o),
+                }
             }
         }
         Commands::Read {
@@ -1555,15 +1597,31 @@ fn main() {
                                 } else {
                                     Some(paths.as_slice())
                                 };
-                                properties::properties_summary_from_index(
-                                    idx,
-                                    file_filter,
-                                    effective_format,
-                                )
+                                properties::properties_summary(idx, file_filter, effective_format)
                             }
                         }
                     } else {
-                        properties::properties_summary(&dir, None, glob, effective_format)
+                        let build = match build_scanned_index(
+                            &dir,
+                            &[],
+                            glob,
+                            effective_format,
+                            site_prefix,
+                            false,
+                            &ScanOptions { scan_body: false },
+                        ) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                eprintln!("Error: {e}");
+                                die(2);
+                            }
+                        };
+                        match build {
+                            ScannedIndexOutcome::Index(build) => {
+                                properties::properties_summary(&build.index, None, effective_format)
+                            }
+                            ScannedIndexOutcome::Outcome(o) => Ok(o),
+                        }
                     }
                 }
                 PropertiesAction::Rename {
@@ -1598,15 +1656,31 @@ fn main() {
                                 } else {
                                     Some(paths.as_slice())
                                 };
-                                tag_commands::tags_summary_from_index(
-                                    idx,
-                                    file_filter,
-                                    effective_format,
-                                )
+                                tag_commands::tags_summary(idx, file_filter, effective_format)
                             }
                         }
                     } else {
-                        tag_commands::tags_summary(&dir, None, glob, effective_format)
+                        let build = match build_scanned_index(
+                            &dir,
+                            &[],
+                            glob,
+                            effective_format,
+                            site_prefix,
+                            false,
+                            &ScanOptions { scan_body: false },
+                        ) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                eprintln!("Error: {e}");
+                                die(2);
+                            }
+                        };
+                        match build {
+                            ScannedIndexOutcome::Index(build) => {
+                                tag_commands::tags_summary(&build.index, None, effective_format)
+                            }
+                            ScannedIndexOutcome::Outcome(o) => Ok(o),
+                        }
                     }
                 }
                 TagsAction::Rename {
@@ -1669,7 +1743,7 @@ fn main() {
             depth,
         } => {
             if let Some(ref idx) = snapshot_index {
-                summary_commands::summary_from_index(
+                summary_commands::summary(
                     &dir,
                     idx,
                     glob,
@@ -1679,7 +1753,33 @@ fn main() {
                     effective_format,
                 )
             } else {
-                summary_commands::summary(&dir, glob, recent, depth, site_prefix, effective_format)
+                let build = match build_scanned_index(
+                    &dir,
+                    &[],
+                    glob,
+                    effective_format,
+                    site_prefix,
+                    true,
+                    &ScanOptions { scan_body: true },
+                ) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        die(2);
+                    }
+                };
+                match build {
+                    ScannedIndexOutcome::Index(build) => summary_commands::summary(
+                        &dir,
+                        &build.index,
+                        glob,
+                        recent,
+                        depth,
+                        site_prefix,
+                        effective_format,
+                    ),
+                    ScannedIndexOutcome::Outcome(o) => Ok(o),
+                }
             }
         }
         Commands::Set {
@@ -1748,9 +1848,29 @@ fn main() {
         }
         Commands::Backlinks { ref file } => {
             if let Some(ref idx) = snapshot_index {
-                backlinks_commands::backlinks_from_index(idx, file, &dir, effective_format)
+                backlinks_commands::backlinks(idx, file, &dir, effective_format)
             } else {
-                backlinks_commands::backlinks(&dir, site_prefix, file, effective_format)
+                let build = match build_scanned_index(
+                    &dir,
+                    &[],
+                    &[],
+                    effective_format,
+                    site_prefix,
+                    true,
+                    &ScanOptions { scan_body: true },
+                ) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        die(2);
+                    }
+                };
+                match build {
+                    ScannedIndexOutcome::Index(build) => {
+                        backlinks_commands::backlinks(&build.index, file, &dir, effective_format)
+                    }
+                    ScannedIndexOutcome::Outcome(o) => Ok(o),
+                }
             }
         }
         Commands::Mv {
@@ -1795,7 +1915,7 @@ fn main() {
                 ref ignore_target,
             } => {
                 if let Some(ref idx) = snapshot_index {
-                    links_commands::links_fix_from_index(
+                    links_commands::links_fix(
                         idx,
                         &dir,
                         site_prefix,
@@ -1806,15 +1926,34 @@ fn main() {
                         effective_format,
                     )
                 } else {
-                    links_commands::links_fix(
+                    let build = match build_scanned_index(
                         &dir,
-                        site_prefix,
-                        glob,
-                        !apply,
-                        threshold,
-                        ignore_target,
+                        &[],
+                        &[],
                         effective_format,
-                    )
+                        site_prefix,
+                        true,
+                        &ScanOptions { scan_body: true },
+                    ) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            die(2);
+                        }
+                    };
+                    match build {
+                        ScannedIndexOutcome::Index(build) => links_commands::links_fix(
+                            &build.index,
+                            &dir,
+                            site_prefix,
+                            glob,
+                            !apply,
+                            threshold,
+                            ignore_target,
+                            effective_format,
+                        ),
+                        ScannedIndexOutcome::Outcome(o) => Ok(o),
+                    }
                 }
             }
         },

@@ -1,342 +1,17 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::Path;
 
-use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
-use hyalo_core::link_fix::detect_broken_links;
 use hyalo_core::link_fix::detect_broken_links_from_index;
-use hyalo_core::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
-use hyalo_core::scanner::{FrontmatterCollector, scan_file_multi};
-use hyalo_core::tasks::TaskCounter;
 use hyalo_core::types::{
     DeadEndSummary, DirectoryCount, FileCounts, LinkHealthSummary, OrphanSummary,
     PropertySummaryEntry, RecentFile, StatusGroup, TagSummary, TagSummaryEntry, TaskCount,
     VaultSummary,
 };
-
-/// Show a high-level vault summary.
-pub fn summary(
-    dir: &Path,
-    globs: &[String],
-    recent: usize,
-    depth: Option<usize>,
-    site_prefix: Option<&str>,
-    format: Format,
-) -> Result<CommandOutcome> {
-    let files = collect_files(dir, &[], globs, format)?;
-    let files = match files {
-        FilesOrOutcome::Files(f) => f,
-        FilesOrOutcome::Outcome(o) => return Ok(o),
-    };
-
-    // When no glob filter is active, we collect links alongside frontmatter+tasks
-    // in a single pass per file, then build the LinkGraph from collected data.
-    // This avoids a second full-vault scan for orphan detection.
-    // When a glob IS active, orphan detection needs a vault-wide link graph
-    // (links from outside the glob count), so we do a separate LinkGraph::build.
-    let collect_links = globs.is_empty();
-
-    // Aggregation state
-    let mut total_files: usize = 0;
-    let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
-    // string_prop_values: for inconsistency detection — property_name -> (value -> count)
-    // Only tracks text-typed string properties (not date/datetime/number/checkbox/list).
-    let mut string_prop_values: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
-    let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut total_tasks: usize = 0;
-    let mut done_tasks: usize = 0;
-    let mut recent_entries: Vec<(i64, String)> = Vec::new();
-    let mut good_files: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut collected_links: Vec<FileLinks> = Vec::new();
-
-    for (full_path, rel_path) in &files {
-        total_files += 1;
-
-        let dir_key = {
-            use std::path::Path as P;
-            let rel = P::new(rel_path.as_str());
-            match rel.parent() {
-                Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().into_owned(),
-                _ => ".".to_owned(),
-            }
-        };
-
-        // Single-pass scan: collect frontmatter + tasks + links (when applicable)
-        let mut fm = FrontmatterCollector::new(true);
-        let mut counter = TaskCounter::new();
-        let mut link_visitor = if collect_links {
-            Some(LinkGraphVisitor::new(PathBuf::from(rel_path)))
-        } else {
-            None
-        };
-
-        let scan_result = match link_visitor.as_mut() {
-            Some(lv) => scan_file_multi(full_path, &mut [&mut fm, &mut counter, lv]),
-            None => scan_file_multi(full_path, &mut [&mut fm, &mut counter]),
-        };
-        match scan_result {
-            Ok(()) => {}
-            Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
-                crate::warn::warn(format!("skipping {rel_path}: {e}"));
-                total_files -= 1;
-                continue;
-            }
-            Err(e) => return Err(e),
-        }
-
-        good_files.push((full_path.clone(), PathBuf::from(rel_path)));
-        if let Some(lv) = link_visitor {
-            collected_links.push(lv.into_file_links());
-        }
-        *dir_counts.entry(dir_key).or_insert(0) += 1;
-        let props = fm.into_props();
-        let TaskCount { total, done } = counter.into_count();
-        total_tasks += total;
-        done_tasks += done;
-
-        // Properties aggregation (skip "tags" — they have a dedicated section)
-        for (name, value) in props.iter().filter(|(n, _)| n.as_str() != "tags") {
-            let prop_type = infer_type(value).to_owned();
-            *property_counts
-                .entry((name.clone(), prop_type.clone()))
-                .or_insert(0) += 1;
-            // Track string (text) values for rare-value inconsistency detection.
-            // Cap at 50 distinct values per property to avoid wasting memory on
-            // high-cardinality fields (e.g. title, origin) that aren't controlled
-            // vocabularies.
-            if prop_type == "text"
-                && let serde_json::Value::String(s) = value
-            {
-                let entry = string_prop_values.entry(name.clone()).or_default();
-                if entry.len() < 50 || entry.contains_key(s.as_str()) {
-                    *entry.entry(s.clone()).or_insert(0) += 1;
-                }
-            }
-        }
-
-        // Tags aggregation (case-insensitive, preserve first-seen casing)
-        for tag in extract_tags(&props) {
-            let key = tag.to_ascii_lowercase();
-            tag_counts
-                .entry(key)
-                .and_modify(|e| e.1 += 1)
-                .or_insert((tag, 1));
-        }
-
-        // Status grouping
-        if let Some(status_val) = props.get("status") {
-            let status_str = match status_val.clone() {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            status_groups
-                .entry(status_str)
-                .or_default()
-                .push(rel_path.clone());
-        }
-
-        // Recent files: get mtime
-        if let Ok(meta) = std::fs::metadata(full_path)
-            && let Ok(mtime) = meta.modified()
-        {
-            let secs = mtime
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            recent_entries.push((-secs, rel_path.clone()));
-        }
-    }
-
-    // Apply depth limit: collapse deeper directories into their nearest visible ancestor
-    if let Some(max_depth) = depth {
-        let original: Vec<(String, usize)> = dir_counts.into_iter().collect();
-        dir_counts = BTreeMap::new();
-        for (dir_key, count) in original {
-            let target = truncate_to_depth(&dir_key, max_depth);
-            *dir_counts.entry(target).or_insert(0) += count;
-        }
-    }
-
-    // Build FileCounts
-    let mut by_directory: Vec<DirectoryCount> = dir_counts
-        .into_iter()
-        .map(|(directory, count)| DirectoryCount { directory, count })
-        .collect();
-    by_directory.sort_by(|a, b| a.directory.cmp(&b.directory));
-
-    let file_counts = FileCounts {
-        total: total_files,
-        by_directory,
-    };
-
-    // Build properties summary
-    let mut properties: Vec<PropertySummaryEntry> = property_counts
-        .into_iter()
-        .map(|((name, prop_type), count)| PropertySummaryEntry {
-            name,
-            prop_type,
-            count,
-        })
-        .collect();
-    properties.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
-
-    // Build tag summary
-    let mut tags_vec: Vec<TagSummaryEntry> = tag_counts
-        .into_iter()
-        .map(|(_, (name, count))| TagSummaryEntry { name, count })
-        .collect();
-    tags_vec.sort_by(|a, b| b.count.cmp(&a.count).then(a.name.cmp(&b.name)));
-    let tags_total = tags_vec.len();
-    let tags = TagSummary {
-        tags: tags_vec,
-        total: tags_total,
-    };
-
-    // Build status groups (sorted by value)
-    let status: Vec<StatusGroup> = status_groups
-        .into_iter()
-        .map(|(value, files)| StatusGroup { value, files })
-        .collect();
-
-    let tasks = TaskCount {
-        total: total_tasks,
-        done: done_tasks,
-    };
-
-    // Build recent files (sort most recent first, take top N)
-    recent_entries.sort_by_key(|(neg_secs, _)| *neg_secs);
-    let recent_files: Vec<RecentFile> = recent_entries
-        .into_iter()
-        .take(recent)
-        .map(|(neg_secs, path)| {
-            let secs = (-neg_secs) as u64;
-            let modified = format_iso8601(secs);
-            RecentFile { path, modified }
-        })
-        .collect();
-
-    // Link health is intentionally vault-wide regardless of any --glob scope:
-    // a broken link is a broken link whether or not the referencing file matches
-    // the glob filter, and scoped results (0/0 when globs are active) would be
-    // misleading.  When no glob is active, `collected_links` already covers the
-    // whole vault so we reuse it; otherwise we do a separate vault-wide scan.
-    let link_health = {
-        let report = if collect_links {
-            detect_broken_links(dir, &collected_links, site_prefix)
-        } else {
-            let all_files = hyalo_core::discovery::discover_files(dir)
-                .context("failed to discover files for link health")?;
-            let mut all_links: Vec<FileLinks> = Vec::with_capacity(all_files.len());
-            for full_path in &all_files {
-                let rel = full_path
-                    .strip_prefix(dir)
-                    .unwrap_or(full_path)
-                    .to_path_buf();
-                let mut lv = LinkGraphVisitor::new(rel);
-                match scan_file_multi(full_path, &mut [&mut lv]) {
-                    Ok(()) => {
-                        all_links.push(lv.into_file_links());
-                    }
-                    Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => continue,
-                    Err(e) => return Err(e),
-                }
-            }
-            detect_broken_links(dir, &all_links, site_prefix)
-        };
-        LinkHealthSummary {
-            total: report.total_links,
-            broken: report.broken.len(),
-            broken_links: report.broken,
-        }
-    };
-
-    // Build orphan and dead-end lists using the vault-wide link graph.
-    // When no glob: use pre-collected link data (single pass, no re-read).
-    // When glob: build vault-wide link graph so links from outside the glob count.
-    let (orphans, dead_ends) = {
-        let build = if collect_links {
-            LinkGraph::from_file_links(collected_links, site_prefix)
-        } else {
-            LinkGraph::build(dir, site_prefix)
-                .context("failed to build link graph for orphan detection")?
-        };
-        let targets = build.graph.all_targets();
-        let sources = build.graph.all_sources();
-
-        // Orphans: no inbound AND no outbound (fully isolated)
-        let mut orphan_files: Vec<String> = good_files
-            .iter()
-            .map(|(_, rel)| rel.to_string_lossy())
-            .filter(|rel| {
-                let rel_str: &str = rel.as_ref();
-                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
-                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
-                let has_outbound = sources.contains(rel_str);
-                !has_inbound && !has_outbound
-            })
-            .map(|rel| rel.into_owned())
-            .collect();
-        orphan_files.sort();
-
-        // Dead-ends: has inbound links but no outbound links
-        let mut dead_end_files: Vec<String> = good_files
-            .iter()
-            .map(|(_, rel)| rel.to_string_lossy())
-            .filter(|rel| {
-                let rel_str: &str = rel.as_ref();
-                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
-                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
-                let has_outbound = sources.contains(rel_str);
-                has_inbound && !has_outbound
-            })
-            .map(|rel| rel.into_owned())
-            .collect();
-        dead_end_files.sort();
-
-        (
-            OrphanSummary {
-                total: orphan_files.len(),
-                files: orphan_files,
-            },
-            DeadEndSummary {
-                total: dead_end_files.len(),
-                files: dead_end_files,
-            },
-        )
-    };
-
-    // Emit warnings for any property value that looks like a typo of a dominant value.
-    warn_inconsistent_properties(&string_prop_values);
-
-    let vault_summary = VaultSummary {
-        files: file_counts,
-        orphans,
-        dead_ends,
-        links: link_health,
-        properties,
-        tags,
-        status,
-        tasks,
-        recent_files,
-    };
-
-    let json_value =
-        serde_json::to_value(&vault_summary).expect("derived Serialize impl should not fail");
-    Ok(CommandOutcome::Success(crate::output::format_success(
-        format,
-        &json_value,
-    )))
-}
-
-use super::format_iso8601;
 
 // ---------------------------------------------------------------------------
 // Rare-value inconsistency detection
@@ -449,13 +124,9 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
 /// files, orphans) is derived from `IndexEntry` values rather than scanning
 /// files from disk.
 ///
-/// Unlike [`summary`], this function does not take a `site_prefix` parameter
-/// because the prefix is already baked into the index's `LinkGraph` at build
-/// time (via `ScannedIndex::build` → `LinkGraph::from_file_links`).
-///
 /// `globs` optionally narrows which entries are included (same semantics as the
 /// `--glob` flag on the `summary` command).
-pub fn summary_from_index(
+pub fn summary(
     dir: &Path,
     index: &dyn VaultIndex,
     globs: &[String],
@@ -723,7 +394,31 @@ fn truncate_to_depth(dir: &str, max_depth: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyalo_core::index::{ScanOptions, ScannedIndex};
     use std::fs;
+
+    /// Build a `ScannedIndex` from `dir` and call `summary`.
+    /// Mirrors the old disk-scan helper signature used in pre-Phase-5 tests.
+    fn run_summary(
+        dir: &std::path::Path,
+        globs: &[String],
+        recent: usize,
+        depth: Option<usize>,
+        site_prefix: Option<&str>,
+        format: Format,
+    ) -> anyhow::Result<CommandOutcome> {
+        let all = hyalo_core::discovery::discover_files(dir)?;
+        let file_pairs: Vec<(std::path::PathBuf, String)> = all
+            .into_iter()
+            .map(|p| {
+                let rel = hyalo_core::discovery::relative_path(dir, &p);
+                (p, rel)
+            })
+            .collect();
+        let build =
+            ScannedIndex::build(&file_pairs, site_prefix, &ScanOptions { scan_body: true })?;
+        summary(dir, &build.index, globs, recent, depth, site_prefix, format)
+    }
 
     macro_rules! md {
         ($s:expr) => {
@@ -792,14 +487,16 @@ No tasks here.
     #[test]
     fn summary_file_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         assert_eq!(val["files"]["total"], 3);
     }
 
     #[test]
     fn summary_directory_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         // Should have "." and "notes"
         assert!(
@@ -817,7 +514,8 @@ No tasks here.
     #[test]
     fn summary_task_counts() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         // a.md: 2 tasks (1 done), b.md: 1 task (0 done), c.md: 0 tasks
         assert_eq!(val["tasks"]["total"], 3);
         assert_eq!(val["tasks"]["done"], 1);
@@ -826,7 +524,8 @@ No tasks here.
     #[test]
     fn summary_property_aggregation() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let props = val["properties"].as_array().unwrap();
         // title appears in all 3 files, status in all 3 files, tags in 2 files
         let title = props.iter().find(|p| p["name"] == "title").unwrap();
@@ -838,7 +537,8 @@ No tasks here.
     #[test]
     fn summary_tag_aggregation() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let total_tags = val["tags"]["total"].as_u64().unwrap();
         // rust and cli are unique tag names
         assert_eq!(total_tags, 2);
@@ -852,7 +552,8 @@ No tasks here.
     #[test]
     fn summary_status_grouping() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let status_groups = val["status"].as_array().unwrap();
         let draft = status_groups
             .iter()
@@ -867,7 +568,8 @@ No tasks here.
     #[test]
     fn summary_recent_files_respects_limit() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 2, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 2, None, None, Format::Json).unwrap());
         let recent = val["recent_files"].as_array().unwrap();
         // With limit=2, at most 2 recent files
         assert!(recent.len() <= 2);
@@ -876,7 +578,8 @@ No tasks here.
     #[test]
     fn summary_recent_files_have_iso8601_timestamps() {
         let tmp = setup_vault();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let recent = val["recent_files"].as_array().unwrap();
         for entry in recent {
             let modified = entry["modified"].as_str().unwrap();
@@ -893,7 +596,7 @@ No tasks here.
         let tmp = setup_vault();
         // Only scan root files, not notes/
         let val = unwrap_success(
-            summary(
+            run_summary(
                 tmp.path(),
                 &["*.md".to_owned()],
                 10,
@@ -909,7 +612,7 @@ No tasks here.
     #[test]
     fn summary_text_format() {
         let tmp = setup_vault();
-        let outcome = summary(tmp.path(), &[], 10, None, None, Format::Text).unwrap();
+        let outcome = run_summary(tmp.path(), &[], 10, None, None, Format::Text).unwrap();
         match outcome {
             CommandOutcome::Success(s) => {
                 assert!(s.contains("Files:"), "expected 'Files:' in: {s}");
@@ -937,7 +640,7 @@ No tasks here.
     fn summary_depth_zero_collapses_all() {
         let tmp = setup_vault_nested();
         let val =
-            unwrap_success(summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
+            unwrap_success(run_summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         assert_eq!(by_dir.len(), 1);
         assert_eq!(by_dir[0]["directory"], ".");
@@ -948,7 +651,7 @@ No tasks here.
     fn summary_depth_one_shows_top_level() {
         let tmp = setup_vault_nested();
         let val =
-            unwrap_success(summary(tmp.path(), &[], 10, Some(1), None, Format::Json).unwrap());
+            unwrap_success(run_summary(tmp.path(), &[], 10, Some(1), None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         // "." (1 file) and "notes" (2 files collapsed from notes/ and notes/sub/)
         assert_eq!(by_dir.len(), 2);
@@ -961,7 +664,8 @@ No tasks here.
     #[test]
     fn summary_depth_none_shows_all() {
         let tmp = setup_vault_nested();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let by_dir = val["files"]["by_directory"].as_array().unwrap();
         assert_eq!(by_dir.len(), 3);
         assert!(by_dir.iter().any(|d| d["directory"] == "."));
@@ -974,9 +678,9 @@ No tasks here.
         // Stats (tasks, tags, properties) must be computed from all files regardless of depth
         let tmp = setup_vault_nested();
         let val_no_depth =
-            unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let val_depth0 =
-            unwrap_success(summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
+            unwrap_success(run_summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
         assert_eq!(val_no_depth["files"]["total"], val_depth0["files"]["total"]);
         assert_eq!(val_no_depth["tasks"], val_depth0["tasks"]);
         assert_eq!(val_no_depth["tags"], val_depth0["tags"]);
@@ -997,7 +701,8 @@ No tasks here.
         .unwrap();
 
         // No glob: single-pass code path
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         let orphan_files: Vec<&str> = val["orphans"]["files"]
             .as_array()
             .unwrap()
@@ -1040,7 +745,7 @@ No tasks here.
 
         // Passing "*.md" glob activates the separate LinkGraph::build code path.
         let val = unwrap_success(
-            summary(
+            run_summary(
                 tmp.path(),
                 &["*.md".to_owned()],
                 10,
@@ -1080,7 +785,7 @@ No tasks here.
     /// that was previously inconsistent (disk scan hardcoded `None`).
     #[test]
     fn summary_orphan_parity_disk_vs_index() {
-        use hyalo_core::index::{ScannedIndex, SnapshotIndex};
+        use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex};
 
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -1105,7 +810,8 @@ No tasks here.
         let prefix = Some("docs");
 
         // Disk-scan path
-        let disk_val = unwrap_success(summary(dir, &[], 10, None, prefix, Format::Json).unwrap());
+        let disk_val =
+            unwrap_success(run_summary(dir, &[], 10, None, prefix, Format::Json).unwrap());
         let disk_orphans: Vec<&str> = disk_val["orphans"]["files"]
             .as_array()
             .unwrap()
@@ -1113,7 +819,7 @@ No tasks here.
             .map(|v| v.as_str().unwrap())
             .collect();
 
-        // Index path: build index with same site_prefix, then query via summary_from_index
+        // Index path: build a SnapshotIndex and query via summary
         let all = hyalo_core::discovery::discover_files(dir).unwrap();
         let files: Vec<(std::path::PathBuf, String)> = all
             .into_iter()
@@ -1122,7 +828,7 @@ No tasks here.
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&files, prefix).unwrap();
+        let build = ScannedIndex::build(&files, prefix, &ScanOptions { scan_body: true }).unwrap();
         let index_path = dir.join(".hyalo-index");
         SnapshotIndex::save(
             &build.index,
@@ -1132,9 +838,8 @@ No tasks here.
         )
         .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
-        let index_val = unwrap_success(
-            summary_from_index(dir, &loaded, &[], 10, None, prefix, Format::Json).unwrap(),
-        );
+        let index_val =
+            unwrap_success(summary(dir, &loaded, &[], 10, None, prefix, Format::Json).unwrap());
         let index_orphans: Vec<&str> = index_val["orphans"]["files"]
             .as_array()
             .unwrap()
@@ -1172,7 +877,8 @@ No tasks here.
         fs::write(tmp.path().join("c.md"), "---\ntitle: C\n---\nNo links.\n").unwrap();
         fs::write(tmp.path().join("d.md"), "---\ntitle: D\n---\nNo links.\n").unwrap();
 
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
 
         // c.md is the only dead-end
         assert_eq!(val["dead_ends"]["total"], 1, "expected 1 dead-end");
@@ -1202,7 +908,7 @@ No tasks here.
     /// Dead-end parity: disk scan and index path must agree on dead-end lists.
     #[test]
     fn summary_dead_end_parity_disk_vs_index() {
-        use hyalo_core::index::{ScannedIndex, SnapshotIndex};
+        use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex};
 
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
@@ -1217,7 +923,7 @@ No tasks here.
         fs::write(dir.join("d.md"), "---\ntitle: D\n---\nNo links.\n").unwrap();
 
         // Disk-scan path
-        let disk_val = unwrap_success(summary(dir, &[], 10, None, None, Format::Json).unwrap());
+        let disk_val = unwrap_success(run_summary(dir, &[], 10, None, None, Format::Json).unwrap());
         let disk_dead_ends: Vec<&str> = disk_val["dead_ends"]["files"]
             .as_array()
             .unwrap()
@@ -1234,13 +940,12 @@ No tasks here.
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&files, None).unwrap();
+        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
         let index_path = dir.join(".hyalo-index");
         SnapshotIndex::save(&build.index, &index_path, &dir.display().to_string(), None).unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
-        let index_val = unwrap_success(
-            summary_from_index(dir, &loaded, &[], 10, None, None, Format::Json).unwrap(),
-        );
+        let index_val =
+            unwrap_success(summary(dir, &loaded, &[], 10, None, None, Format::Json).unwrap());
         let index_dead_ends: Vec<&str> = index_val["dead_ends"]["files"]
             .as_array()
             .unwrap()
@@ -1264,7 +969,8 @@ No tasks here.
             "---\ntitle: Broken\nNo closing delimiter.\n",
         )
         .unwrap();
-        let val = unwrap_success(summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
+        let val =
+            unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         // Only the 3 good files should be counted
         assert_eq!(val["files"]["total"], 3);
     }
