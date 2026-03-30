@@ -4,6 +4,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Filter by tag:                hyalo find --tag project
   Filter by task status:        hyalo find --task todo
   Full-text search:             hyalo find 'meeting notes'
+  Regex body search:            hyalo find -e 'perf(ormance)?'
   Filter by section:            hyalo find --section 'Tasks' --task todo
   Read file content:            hyalo read --file notes/todo.md
   Read a section:               hyalo read --file notes/todo.md --section Proposal
@@ -115,6 +116,15 @@ COOKBOOK:
 
   # Find files tagged 'project' (matches project/backend, project/frontend, etc.)
   hyalo find --tag project
+
+  # Regex body search (standalone)
+  hyalo find -e 'TODO|FIXME'
+
+  # Regex body search combined with filters
+  hyalo find -e 'perf(ormance)?' --tag iteration --property status=completed
+
+  # Count matching files
+  hyalo find --property status=draft --jq '.total'
 
   # Find files with open tasks
   hyalo find --task todo

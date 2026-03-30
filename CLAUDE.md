@@ -16,7 +16,7 @@ Then use target/release/hyalo to work with the documentation in `./hyalo-knowled
 
 **Always use hyalo for knowledgebase interactions — never use Edit/Read/Grep directly:**
 - **Search/filter**: `hyalo find --property status=planned --tag iteration --format text`
-- **Body search**: `hyalo find "broken links" --format text`
+- **Body search**: `hyalo find "broken links" --format text` or regex: `hyalo find -e 'TODO|FIXME' --format text`
 - **Title regex**: `hyalo find --property 'title~=link' --format text`
 - **Overview**: `hyalo summary`, `hyalo properties`, `hyalo tags`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set --property status=completed --file iterations/iteration-16-robustness.md`)
