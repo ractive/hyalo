@@ -6,7 +6,7 @@ tags:
   - ux
   - dogfood
   - breaking-change
-status: in-progress
+status: completed
 priority: 2
 branch: iter-79/slim-defaults
 ---
