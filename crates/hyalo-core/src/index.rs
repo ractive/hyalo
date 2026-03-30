@@ -214,6 +214,14 @@ struct SnapshotData {
     graph: LinkGraph,
 }
 
+/// Borrowed variant used only for serialization — avoids cloning all entries.
+#[derive(Serialize)]
+struct SnapshotDataRef<'a> {
+    header: SnapshotHeader,
+    entries: &'a [IndexEntry],
+    graph: &'a LinkGraph,
+}
+
 /// A vault index loaded from a MessagePack snapshot file.
 ///
 /// Created by [`SnapshotIndex::save`] and loaded by [`SnapshotIndex::load`].
@@ -393,10 +401,10 @@ fn write_snapshot(
             .unwrap_or(0),
         pid: std::process::id(),
     };
-    let data = SnapshotData {
+    let data = SnapshotDataRef {
         header,
-        entries: index.entries().to_vec(),
-        graph: index.link_graph().clone(),
+        entries: index.entries(),
+        graph: index.link_graph(),
     };
     let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
     // Use a kernel-assigned temp-file name in the same directory as the

@@ -216,8 +216,9 @@ pub fn append(
             if let Some(idx) = snapshot_index.as_mut()
                 && let Some(entry) = idx.get_mut(rel_path)
             {
-                entry.properties = props.clone();
-                entry.tags = extract_tags(&props);
+                let new_tags = extract_tags(&props);
+                entry.properties = props;
+                entry.tags = new_tags;
                 entry.modified = format_modified(full_path)?;
                 index_dirty = true;
             }

@@ -148,6 +148,10 @@ impl FileVisitor for ContentSearchVisitor {
         }
         ScanAction::Continue
     }
+
+    fn needs_frontmatter(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------

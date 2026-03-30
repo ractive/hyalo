@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSetBuilder};
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
@@ -34,10 +35,11 @@ pub fn filter_index_entries<'a>(
     }
 
     if !files_arg.is_empty() && globs.is_empty() {
-        // Exact path matching (same order as `files_arg` for explicit file lists)
+        // Exact path matching — build a HashSet for O(1) lookup instead of O(n×m)
+        let file_set: HashSet<&str> = files_arg.iter().map(String::as_str).collect();
         let filtered: Vec<&IndexEntry> = entries
             .iter()
-            .filter(|e| files_arg.iter().any(|f| f == &e.rel_path))
+            .filter(|e| file_set.contains(e.rel_path.as_str()))
             .collect();
         return Ok(filtered);
     }
