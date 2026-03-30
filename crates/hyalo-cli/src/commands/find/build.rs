@@ -1,4 +1,4 @@
-use hyalo_core::filter::{FindTaskFilter, parse_regex_pattern};
+use hyalo_core::filter::FindTaskFilter;
 use hyalo_core::types::{FindTaskInfo, OutlineSection};
 
 use crate::output::CommandOutcome;
@@ -52,42 +52,40 @@ impl TitleMatcher {
     /// Returns `Err(CommandOutcome::UserError(...))` on invalid regex.
     pub(super) fn parse(pattern: &str) -> Result<Self, CommandOutcome> {
         if let Some(regex_pat) = pattern.strip_prefix("~=") {
-            if regex_pat.starts_with('/') {
-                // Delimited form: reuse the same /pattern/flags parser as
-                // --property filters, but default to case-insensitive.
-                match parse_regex_pattern(regex_pat) {
-                    Ok(re) => {
-                        // If no explicit 'i' flag was given, wrap with (?i).
-                        // Detect by checking if the regex already matches
-                        // case-insensitively — simplest: rebuild with (?i) if
-                        // the flags section is empty.
-                        let flags_section =
-                            regex_pat.rfind('/').map_or("", |pos| &regex_pat[pos + 1..]);
-                        if flags_section.contains('i') {
-                            Ok(Self::Regex(re))
-                        } else {
-                            // Re-parse with case-insensitive default
-                            let inner_pattern = re.as_str();
-                            let effective = format!("(?i){inner_pattern}");
-                            match regex::RegexBuilder::new(&effective)
-                                .size_limit(1 << 20)
-                                .build()
-                            {
-                                Ok(ci_re) => Ok(Self::Regex(ci_re)),
-                                Err(e) => Err(CommandOutcome::UserError(format!(
-                                    "invalid --title regex: {regex_pat}\n{e}"
-                                ))),
-                            }
-                        }
+            if let Some(rest) = regex_pat.strip_prefix('/') {
+                // Delimited form: /pattern/ or /pattern/i
+                let close = rest.rfind('/').ok_or_else(|| {
+                    CommandOutcome::UserError(format!(
+                        "invalid --title regex: {regex_pat}\nregex pattern starting with '/' must end with '/' (e.g. /pattern/ or /pattern/i), got: {regex_pat}"
+                    ))
+                })?;
+                let inner = &rest[..close];
+                let flags = &rest[close + 1..];
+
+                // Validate flags
+                for ch in flags.chars() {
+                    if ch != 'i' {
+                        return Err(CommandOutcome::UserError(format!(
+                            "invalid --title regex: {regex_pat}\nunsupported regex flag {ch:?}: only 'i' is supported"
+                        )));
                     }
+                }
+
+                // --title is case-insensitive by default; explicit /i is redundant but allowed
+                match regex::RegexBuilder::new(inner)
+                    .case_insensitive(true)
+                    .size_limit(1 << 20)
+                    .build()
+                {
+                    Ok(re) => Ok(Self::Regex(re)),
                     Err(e) => Err(CommandOutcome::UserError(format!(
                         "invalid --title regex: {regex_pat}\n{e}"
                     ))),
                 }
             } else {
                 // Bare form: always case-insensitive
-                let effective = format!("(?i){regex_pat}");
-                match regex::RegexBuilder::new(&effective)
+                match regex::RegexBuilder::new(regex_pat)
+                    .case_insensitive(true)
                     .size_limit(1 << 20)
                     .build()
                 {
@@ -126,11 +124,11 @@ impl TitleMatcher {
 /// Heuristic: does a plain `--title` value look like the user intended regex
 /// or property-filter syntax?
 ///
-/// Catches patterns like `/^foo/`, `^foo$`, `.*bar`, etc. that would silently
-/// match nothing as a literal substring.
+/// Catches patterns like `/^foo/`, `^foo$`, `.*bar`, etc. that often indicate
+/// regex intent and may not behave as expected when used as a literal substring.
 fn looks_like_misused_regex(pattern: &str) -> bool {
     // Starts with `/` and contains another `/` → likely /regex/ or /regex/i
-    if pattern.starts_with('/') && pattern[1..].contains('/') {
+    if matches!(pattern.strip_prefix('/'), Some(rest) if rest.contains('/')) {
         return true;
     }
     // Contains regex anchors or common metacharacters unlikely in titles

@@ -218,7 +218,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
 ///
 /// In both forms the pattern is compiled with a 1 MiB size limit to prevent
 /// pathological regex compilation.
-pub fn parse_regex_pattern(s: &str) -> Result<Regex> {
+fn parse_regex_pattern(s: &str) -> Result<Regex> {
     const SIZE_LIMIT: usize = 1 << 20; // 1 MiB
 
     if let Some(rest) = s.strip_prefix('/') {

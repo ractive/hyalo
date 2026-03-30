@@ -3464,8 +3464,8 @@ fn find_title_delimited_regex_missing_closing_slash() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("invalid --title regex"),
-        "stderr should mention invalid regex: {stderr}"
+        stderr.contains("must end with '/'"),
+        "stderr should mention missing closing slash: {stderr}"
     );
 }
 
@@ -3511,4 +3511,29 @@ fn find_title_warns_on_anchor_pattern() {
         stderr.contains("--title does substring matching"),
         "should warn about anchor usage: {stderr}"
     );
+}
+
+#[test]
+fn find_title_bare_regex_with_anchors() {
+    let tmp = setup_vault();
+    // Bare ~=^Alpha$ should match (case-insensitive)
+    let out = hyalo_no_hints()
+        .args(["find", "--title", "~=^alpha$", "--format", "json"])
+        .arg("--dir")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = unwrap_results(&json);
+    assert_eq!(
+        results.len(),
+        1,
+        "bare regex with anchors should match: {results:?}"
+    );
+    assert_eq!(results[0]["file"], "alpha.md");
 }
