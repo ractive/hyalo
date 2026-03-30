@@ -79,6 +79,6 @@ pub(super) fn matches_task_filter(tasks: &[FindTaskInfo], filter: &FindTaskFilte
         FindTaskFilter::Any => !tasks.is_empty(),
         FindTaskFilter::Todo => tasks.iter().any(|t| !t.done),
         FindTaskFilter::Done => tasks.iter().any(|t| t.done),
-        FindTaskFilter::Status(c) => tasks.iter().any(|t| t.status.starts_with(*c)),
+        FindTaskFilter::Status(c) => tasks.iter().any(|t| t.status == *c),
     }
 }

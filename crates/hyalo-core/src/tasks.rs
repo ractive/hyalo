@@ -86,35 +86,38 @@ fn extract_task_text(line: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// Visitor that collects all tasks with full detail.
+// Only used by extract_tasks which is test-only.
+#[cfg(test)]
 pub(crate) struct TaskCollector {
     tasks: Vec<TaskInfo>,
 }
 
+#[cfg(test)]
 impl Default for TaskCollector {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(test)]
 impl TaskCollector {
-    #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { tasks: Vec::new() }
     }
 
     /// Consume and return collected tasks.
-    #[must_use]
-    pub fn into_tasks(self) -> Vec<TaskInfo> {
+    pub(crate) fn into_tasks(self) -> Vec<TaskInfo> {
         self.tasks
     }
 }
 
+#[cfg(test)]
 impl FileVisitor for TaskCollector {
     fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
         if let Some((status_char, done)) = detect_task_checkbox(raw) {
             self.tasks.push(TaskInfo {
                 line: line_num,
-                status: status_char.to_string(),
+                status: status_char,
                 text: extract_task_text(raw).to_owned(),
                 done,
             });
@@ -205,7 +208,7 @@ impl FileVisitor for TaskExtractor {
             self.tasks.push(crate::types::FindTaskInfo {
                 line: line_num,
                 section: self.current_section.clone(),
-                status: status_char.to_string(),
+                status: status_char,
                 text: extract_task_text(raw).to_owned(),
                 done,
             });
@@ -221,14 +224,16 @@ impl FileVisitor for TaskExtractor {
 /// Extract all tasks from a file, streaming through line by line.
 /// Returns tasks with 1-based line numbers, status chars, text, and done state.
 /// Skips frontmatter and fenced code blocks.
-pub fn extract_tasks(path: &Path) -> Result<Vec<TaskInfo>> {
+#[cfg(test)]
+pub(crate) fn extract_tasks(path: &Path) -> Result<Vec<TaskInfo>> {
     let mut collector = TaskCollector::new();
     scanner::scan_file_multi(path, &mut [&mut collector])?;
     Ok(collector.into_tasks())
 }
 
 /// Count tasks in a file without collecting details. Lightweight.
-pub fn count_tasks(path: &Path) -> Result<TaskCount> {
+#[cfg(test)]
+pub(crate) fn count_tasks(path: &Path) -> Result<TaskCount> {
     let mut counter = TaskCounter::new();
     scanner::scan_file_multi(path, &mut [&mut counter])?;
     Ok(counter.into_count())
@@ -279,7 +284,7 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
                 let info =
                     detect_task_checkbox(&first_trimmed).map(|(status_char, done)| TaskInfo {
                         line: line_num,
-                        status: status_char.to_string(),
+                        status: status_char,
                         text: extract_task_text(&first_trimmed).to_owned(),
                         done,
                     });
@@ -351,7 +356,7 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
         if line_num == line {
             let info = detect_task_checkbox(line_str).map(|(status_char, done)| TaskInfo {
                 line: line_num,
-                status: status_char.to_string(),
+                status: status_char,
                 text: extract_task_text(line_str).to_owned(),
                 done,
             });
@@ -418,7 +423,7 @@ fn mutate_task_line(line: &str, line_num: usize, new_status: char) -> Option<(St
 
     let info = TaskInfo {
         line: line_num,
-        status: new_status.to_string(),
+        status: new_status,
         text,
         done,
     };
@@ -655,15 +660,15 @@ Some regular text.
         let tasks = extract_tasks(&path).unwrap();
         assert_eq!(tasks.len(), 3);
 
-        assert_eq!(tasks[0].status, " ");
+        assert_eq!(tasks[0].status, ' ');
         assert_eq!(tasks[0].text, "Open task");
         assert!(!tasks[0].done);
 
-        assert_eq!(tasks[1].status, "x");
+        assert_eq!(tasks[1].status, 'x');
         assert_eq!(tasks[1].text, "Done task");
         assert!(tasks[1].done);
 
-        assert_eq!(tasks[2].status, "?");
+        assert_eq!(tasks[2].status, '?');
         assert_eq!(tasks[2].text, "Custom status");
         assert!(!tasks[2].done);
     }
@@ -777,7 +782,7 @@ Regular text.
         assert!(task.is_some());
         let task = task.unwrap();
         assert_eq!(task.line, 2);
-        assert_eq!(task.status, " ");
+        assert_eq!(task.status, ' ');
         assert_eq!(task.text, "The task");
         assert!(!task.done);
     }
@@ -826,7 +831,7 @@ Regular text.
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
         let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, "x");
+        assert_eq!(info.status, 'x');
         assert!(info.done);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -840,7 +845,7 @@ Regular text.
         fs::write(&path, "- [x] Done task\n").unwrap();
 
         let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, " ");
+        assert_eq!(info.status, ' ');
         assert!(!info.done);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -854,7 +859,7 @@ Regular text.
         fs::write(&path, "- [X] Done task\n").unwrap();
 
         let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, " ");
+        assert_eq!(info.status, ' ');
         assert!(!info.done);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -868,7 +873,7 @@ Regular text.
         fs::write(&path, "- [-] Cancelled task\n").unwrap();
 
         let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, "x");
+        assert_eq!(info.status, 'x');
         assert!(info.done);
     }
 
@@ -906,7 +911,7 @@ Regular text.
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
         let info = set_task_status(&path, 1, '?').unwrap();
-        assert_eq!(info.status, "?");
+        assert_eq!(info.status, '?');
         assert!(!info.done);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -920,7 +925,7 @@ Regular text.
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
         let info = set_task_status(&path, 1, 'x').unwrap();
-        assert_eq!(info.status, "x");
+        assert_eq!(info.status, 'x');
         assert!(info.done);
     }
 

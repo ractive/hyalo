@@ -105,7 +105,7 @@ pub struct OutlineSection {
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub line: usize,
-    pub status: String,
+    pub status: char,
     pub text: String,
     pub done: bool,
 }
@@ -116,7 +116,7 @@ pub struct TaskInfo {
 pub struct TaskReadResult {
     pub file: String,
     pub line: usize,
-    pub status: String,
+    pub status: char,
     pub text: String,
     pub done: bool,
 }
@@ -211,7 +211,7 @@ pub struct RecentFile {
 pub struct FindTaskInfo {
     pub line: usize,
     pub section: String,
-    pub status: String,
+    pub status: char,
     pub text: String,
     pub done: bool,
 }

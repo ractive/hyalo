@@ -158,7 +158,7 @@ fn patch_index(
     if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
         if let Some(entry) = idx.get_mut(rel_path) {
             if let Some(task) = entry.tasks.iter_mut().find(|t| t.line == info.line) {
-                task.status.clone_from(&info.status);
+                task.status = info.status;
                 task.done = info.done;
             }
             // Rebuild section task counts from the updated task list.
