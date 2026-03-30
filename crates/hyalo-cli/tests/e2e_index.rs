@@ -1241,6 +1241,12 @@ fn find_property_exact_yaml_array_index_returns_correct_count() {
         "disk scan and index returned different totals for --property 'status=deprecated' \
          with YAML array values (disk={disk_total}, index={index_total})"
     );
+
+    // Both should find exactly the 2 deprecated files.
+    assert_eq!(
+        disk_total, "2",
+        "expected 2 deprecated files from exact match, got {disk_total}"
+    );
 }
 
 // ---------------------------------------------------------------------------
