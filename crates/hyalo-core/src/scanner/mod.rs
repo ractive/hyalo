@@ -33,22 +33,31 @@ pub enum ScanAction {
 
 /// Scan a file with multiple visitors in a single pass.
 ///
-/// Reads the file into memory once with `std::fs::read`, then delegates to
-/// `scan_slice_multi` for SIMD-accelerated line splitting via `memchr`.
+/// Reads the file into memory then delegates to `scan_slice_multi` for
+/// SIMD-accelerated line splitting via `memchr`.
 ///
-/// **Optimization**: if no visitor needs body events (all return `Stop` from
-/// `on_frontmatter` or have `needs_body() == false`), the body is never read.
+/// **Optimization**: when no visitor needs body events, only the first 16 KiB
+/// of the file is read (enough for frontmatter within the 200-line / 8 KiB
+/// limit). This avoids loading large files that only need metadata.
 pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
-    scan_buffer_multi(path, visitors)
-}
-
-/// Read a file into memory and scan it with multiple visitors.
-///
-/// Combines `std::fs::read` with `scan_slice_multi` for a single-read,
-/// zero-copy scanning path.
-pub fn scan_buffer_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
-    let data = std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    scan_slice_multi(&data, visitors)
+    let any_needs_body = visitors.iter().any(|v| v.needs_body());
+    if any_needs_body {
+        let data =
+            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+        scan_slice_multi(&data, visitors)
+    } else {
+        // Frontmatter-only: read a limited prefix to avoid loading the full file.
+        use std::io::Read;
+        const FM_READ_CAP: usize = 16 * 1024;
+        let mut file = std::fs::File::open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        let mut buf = vec![0u8; FM_READ_CAP];
+        let n = file
+            .read(&mut buf)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        buf.truncate(n);
+        scan_slice_multi(&buf, visitors)
+    }
 }
 
 /// Scan a UTF-8 byte slice with multiple visitors in a single pass.
@@ -62,25 +71,43 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
         return Ok(());
     }
 
-    let text = std::str::from_utf8(data).context("file is not valid UTF-8")?;
+    // Validate UTF-8 upfront; if valid we can slice zero-copy.
+    // If invalid, replace bad bytes with U+FFFD (lossy) so scanning continues.
+    let is_valid_utf8 = std::str::from_utf8(data).is_ok();
+    let owned_text = if is_valid_utf8 {
+        None
+    } else {
+        Some(String::from_utf8_lossy(data).into_owned())
+    };
+    let text: &str = match &owned_text {
+        Some(s) => s,
+        // SAFETY: we just validated UTF-8 above.
+        None => unsafe { std::str::from_utf8_unchecked(data) },
+    };
 
     let mut active: Vec<bool> = vec![true; num];
 
-    // Build an iterator of &str lines using memchr for SIMD-accelerated splitting.
-    // Each element is the line content *without* the trailing `\n` (and `\r` if CRLF).
-    // We iterate by tracking byte offsets into `data`/`text`.
+    // Build line-start offsets using memchr for SIMD-accelerated newline finding.
+    // When the file is valid UTF-8, byte offsets into `data` correspond 1:1 to
+    // offsets into `text`. When lossy conversion was used, byte positions may not
+    // align (U+FFFD replacement changes lengths), so we re-split on the converted
+    // string instead.
     let mut line_starts: Vec<usize> = Vec::new();
     line_starts.push(0);
-    for pos in memchr::memchr_iter(b'\n', data) {
-        // Next line starts after the newline.
-        if pos + 1 < data.len() {
-            line_starts.push(pos + 1);
+    if is_valid_utf8 {
+        for pos in memchr::memchr_iter(b'\n', data) {
+            if pos + 1 < data.len() {
+                line_starts.push(pos + 1);
+            }
+        }
+    } else {
+        for pos in memchr::memchr_iter(b'\n', text.as_bytes()) {
+            if pos + 1 < text.len() {
+                line_starts.push(pos + 1);
+            }
         }
     }
 
-    // Produce an iterator of (line_index_0based, &str) pairs.
-    // Each line is the slice from `line_starts[i]` to the next entry (or end),
-    // with trailing `\n` and optional `\r` stripped.
     let line_count = line_starts.len();
     let get_line = |i: usize| -> &str {
         let start = line_starts[i];
@@ -148,7 +175,8 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
                 );
             }
             if let Some(ref mut y) = yaml {
-                if y.len() + trimmed.len() > MAX_FRONTMATTER_BYTES {
+                // +1 accounts for the trailing '\n' appended below.
+                if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
                     anyhow::bail!(
                         "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
                     );
@@ -223,7 +251,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
         let line_end = if line_idx < line_count {
             line_starts[line_idx]
         } else {
-            data.len()
+            text.len()
         };
         if line_end - line_start > MAX_BODY_LINE_BYTES {
             continue;
@@ -319,7 +347,8 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
                 );
             }
             if let Some(ref mut y) = yaml {
-                if y.len() + trimmed.len() > MAX_FRONTMATTER_BYTES {
+                // +1 accounts for the trailing '\n' appended below.
+                if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
                     anyhow::bail!(
                         "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
                     );

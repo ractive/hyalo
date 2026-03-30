@@ -151,10 +151,11 @@ fn bench_content_search(c: &mut Criterion) {
     group.bench_function("with_fast_reject", |b| {
         b.iter(|| {
             let mut total = 0usize;
+            let mut scratch = Vec::new();
             for file in &files {
                 let data = std::fs::read(black_box(file)).unwrap();
                 let lowered_pattern = b"xmlhttprequest";
-                if hyalo_core::content_search::fast_reject(&data, lowered_pattern) {
+                if hyalo_core::content_search::fast_reject(&data, lowered_pattern, &mut scratch) {
                     continue;
                 }
                 let mut visitor = ContentSearchVisitor::new("XMLHttpRequest");

@@ -145,6 +145,10 @@ pub fn find(
     // properties map for entries that lack a frontmatter `title`.
     let has_title_property_filter = property_filters.iter().any(|f| f.key() == Some("title"));
 
+    // Pre-compute lowered pattern and scratch buffer for content search (outside the loop).
+    let lowered_pattern = pattern.map(str::to_ascii_lowercase);
+    let mut fast_reject_scratch: Vec<u8> = Vec::new();
+
     let mut results: Vec<FileObject> = Vec::new();
     let mut total_matching: usize = 0;
 
@@ -258,8 +262,12 @@ pub fn find(
                 // pattern is Some at this point: has_content_search is true and
                 // compiled_regex is None, so pattern must have been provided.
                 let pat = pattern.unwrap();
-                let lowered_pattern = pat.to_ascii_lowercase();
-                if hyalo_core::content_search::fast_reject(&file_data, lowered_pattern.as_bytes()) {
+                let lp = lowered_pattern.as_ref().unwrap();
+                if hyalo_core::content_search::fast_reject(
+                    &file_data,
+                    lp.as_bytes(),
+                    &mut fast_reject_scratch,
+                ) {
                     // File definitely does not contain the pattern — return an empty
                     // match list so the downstream is_empty check filters this entry.
                     Some(vec![])

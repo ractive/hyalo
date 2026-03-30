@@ -27,6 +27,8 @@ pub struct ContentSearchVisitor {
     current_section: String,
     /// Collected matches
     matches: Vec<ContentMatch>,
+    /// Reusable scratch buffer for case-insensitive substring matching.
+    line_scratch: Vec<u8>,
 }
 
 impl ContentSearchVisitor {
@@ -39,6 +41,7 @@ impl ContentSearchVisitor {
             mode: SearchMode::Substring { lowered, finder },
             current_section: String::new(),
             matches: Vec::new(),
+            line_scratch: Vec::new(),
         }
     }
 
@@ -58,6 +61,7 @@ impl ContentSearchVisitor {
             mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
+            line_scratch: Vec::new(),
         })
     }
 
@@ -71,6 +75,7 @@ impl ContentSearchVisitor {
             mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
+            line_scratch: Vec::new(),
         }
     }
 
@@ -95,13 +100,14 @@ impl ContentSearchVisitor {
     }
 
     /// Check whether a line matches the current mode.
-    fn is_match(&self, line: &str) -> bool {
+    fn is_match(&mut self, line: &str) -> bool {
         match &self.mode {
             SearchMode::Substring { finder, .. } => {
-                // Lowercase the line into a temporary buffer then use the SIMD finder.
-                // For short lines the lowercase cost is negligible vs. the search speedup.
-                let lowered: Vec<u8> = line.bytes().map(|b| b.to_ascii_lowercase()).collect();
-                finder.find(&lowered).is_some()
+                // Reuse a scratch buffer to avoid per-line heap allocation.
+                self.line_scratch.clear();
+                self.line_scratch
+                    .extend(line.bytes().map(|b| b.to_ascii_lowercase()));
+                finder.find(&self.line_scratch).is_some()
             }
             SearchMode::Regex(re) => re.is_match(line),
         }
@@ -110,10 +116,13 @@ impl ContentSearchVisitor {
 
 /// Returns `true` if `file_data` definitely does NOT contain `pattern` (case-insensitive ASCII).
 /// Used to skip the full scanner for non-matching files.
-pub fn fast_reject(file_data: &[u8], pattern: &[u8]) -> bool {
+///
+/// `scratch` is a reusable buffer to avoid per-file heap allocations on the hot path.
+pub fn fast_reject(file_data: &[u8], pattern: &[u8], scratch: &mut Vec<u8>) -> bool {
     let finder = memmem::Finder::new(pattern);
-    let lowered: Vec<u8> = file_data.iter().map(u8::to_ascii_lowercase).collect();
-    finder.find(&lowered).is_none()
+    scratch.clear();
+    scratch.extend(file_data.iter().map(u8::to_ascii_lowercase));
+    finder.find(scratch).is_none()
 }
 
 impl FileVisitor for ContentSearchVisitor {
@@ -453,7 +462,7 @@ mod tests {
     #[test]
     fn finder_empty_needle_matches_everything() {
         // Empty pattern: lowered is "", finder on empty bytes matches at pos 0
-        assert!(run_visitor("anything", "").len() == 1);
+        assert_eq!(run_visitor("anything", "").len(), 1);
         assert!(run_visitor("", "").is_empty()); // empty content has no lines
     }
 
@@ -520,28 +529,33 @@ mod tests {
 
     #[test]
     fn fast_reject_no_match_returns_true() {
-        assert!(fast_reject(b"hello world", b"xyz"));
+        let mut scratch = Vec::new();
+        assert!(fast_reject(b"hello world", b"xyz", &mut scratch));
     }
 
     #[test]
     fn fast_reject_match_returns_false() {
-        assert!(!fast_reject(b"hello world", b"world"));
+        let mut scratch = Vec::new();
+        assert!(!fast_reject(b"hello world", b"world", &mut scratch));
     }
 
     #[test]
     fn fast_reject_case_insensitive() {
         // pattern must already be lowercased by the caller
-        assert!(!fast_reject(b"Hello WORLD", b"world"));
-        assert!(!fast_reject(b"Hello WORLD", b"hello"));
+        let mut scratch = Vec::new();
+        assert!(!fast_reject(b"Hello WORLD", b"world", &mut scratch));
+        assert!(!fast_reject(b"Hello WORLD", b"hello", &mut scratch));
     }
 
     #[test]
     fn fast_reject_empty_pattern_never_rejects() {
-        assert!(!fast_reject(b"anything", b""));
+        let mut scratch = Vec::new();
+        assert!(!fast_reject(b"anything", b"", &mut scratch));
     }
 
     #[test]
     fn fast_reject_empty_data_with_nonempty_pattern() {
-        assert!(fast_reject(b"", b"abc"));
+        let mut scratch = Vec::new();
+        assert!(fast_reject(b"", b"abc", &mut scratch));
     }
 }
