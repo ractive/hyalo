@@ -2,7 +2,7 @@
 title: "Iteration 85: Consistent JSON envelope for all commands"
 type: iteration
 date: 2026-03-30
-status: in-progress
+status: completed
 branch: iter-85/json-envelope
 tags:
   - ux
