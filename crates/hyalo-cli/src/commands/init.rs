@@ -11,9 +11,9 @@ use crate::output::CommandOutcome;
 // Embedded skill content
 // ---------------------------------------------------------------------------
 
-const SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo/SKILL.md");
-const TIDY_SKILL_CONTENT: &str = include_str!("../../../../.claude/skills/hyalo-tidy/SKILL.md");
-const RULE_TEMPLATE: &str = include_str!("../../../../.claude/rules/knowledgebase.md");
+const SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo.md");
+const TIDY_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-tidy.md");
+const RULE_TEMPLATE: &str = include_str!("../../templates/rule-knowledgebase.md");
 
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations.\n\
 Examples: `hyalo find --property status=planned --format text`, `hyalo find \"search text\"`, `hyalo find --property 'title~=pattern'`.\n\
