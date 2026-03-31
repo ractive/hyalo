@@ -70,9 +70,10 @@ impl TitleMatcher {
                     )));
                 }
 
-                // Case-insensitive by default
+                // Case-insensitive by default; opt out with (?-i) in pattern
+                let case_insensitive = flags.contains('i') || !inner.contains("(?-i)");
                 match regex::RegexBuilder::new(inner)
-                    .case_insensitive(true)
+                    .case_insensitive(case_insensitive)
                     .size_limit(1 << 20)
                     .build()
                 {

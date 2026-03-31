@@ -59,7 +59,9 @@ enum SectionMatchMode {
 /// Supports three forms:
 /// - `"Tasks"` — case-insensitive substring match at any level
 /// - `"## Tasks"` — level-pinned, substring match on text after stripping `##` prefix
-/// - `"~=/pattern/flags"` — regex match (bare `~=pattern` or `~=/pattern/` or `~=/pattern/i`)
+/// - `"/pattern/"` — regex match (case-insensitive by default)
+/// - `"/pattern/i"` — regex match with explicit case-insensitive flag
+/// - `"/pattern/(?-i)"` — regex match with case-sensitive opt-out inline
 #[derive(Debug, Clone)]
 pub struct SectionFilter {
     /// If `Some`, match only headings at this exact level.
@@ -372,11 +374,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_regex_bare() {
-        let f = SectionFilter::parse("/Tasks/").unwrap();
-        assert!(f.matches(1, "Tasks"));
-        assert!(f.matches(2, "My Tasks"));
-        assert!(!f.matches(1, "Notes"));
+    fn parse_single_slash_falls_through_to_substring() {
+        let f = SectionFilter::parse("/unclosed").unwrap();
+        // No closing slash → treated as substring, not regex
+        assert!(f.matches(1, "/unclosed heading"));
+        assert!(!f.matches(1, "Tasks"));
     }
 
     #[test]
@@ -411,6 +413,15 @@ mod tests {
     fn parse_regex_empty_pattern_errors() {
         assert!(SectionFilter::parse("//").is_err());
         assert!(SectionFilter::parse("/./").is_ok()); // valid
+    }
+
+    #[test]
+    fn parse_regex_unsupported_flag_errors() {
+        let err = SectionFilter::parse("/foo/x").unwrap_err();
+        assert!(
+            err.contains("unsupported"),
+            "expected flag error, got: {err}"
+        );
     }
 
     // --- SectionFilter::matches ---

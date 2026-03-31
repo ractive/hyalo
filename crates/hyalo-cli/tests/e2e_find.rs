@@ -3468,7 +3468,7 @@ fn find_title_delimited_regex_missing_closing_slash() {
 }
 
 #[test]
-fn find_title_warns_on_suspicious_pattern() {
+fn find_title_slash_regex_matches() {
     let tmp = setup_vault();
     // `/^Alpha/` is now valid regex syntax — it should match "Alpha" without a warning
     let out = hyalo_no_hints()
