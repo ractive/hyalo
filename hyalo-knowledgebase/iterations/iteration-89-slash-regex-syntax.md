@@ -1,5 +1,5 @@
 ---
-title: "Replace ~= with /regex/ delimiters for --title and --section"
+title: Replace ~= with /regex/ delimiters for --title and --section
 type: iteration
 date: 2026-03-31
 tags:
@@ -7,7 +7,7 @@ tags:
   - cli
   - ux
   - breaking-change
-status: in-progress
+status: completed
 branch: iter-89/slash-regex-syntax
 ---
 
@@ -33,4 +33,4 @@ Replace the verbose `~=/regex/` prefix syntax with direct `/regex/` delimiters f
 - [x] Update unit tests (heading.rs)
 - [x] Update README.md and SKILL.md
 - [x] Create iteration file
-- [ ] Create PR and review
+- [x] Create PR and review
