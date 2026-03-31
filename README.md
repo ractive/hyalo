@@ -78,7 +78,7 @@ All commands accept these global flags:
 | `--index <PATH>` | Use a pre-built snapshot index (see [Snapshot Index](#snapshot-index)) |
 | `-q/--quiet` | Suppress warnings on stderr |
 
-All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`. Use `--count` to print just the total as a bare integer (e.g. `hyalo find --tag rust --count` outputs `7`). Incompatible with `--jq`.
+All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`.
 
 Most flags have short aliases for quick interactive use:
 
@@ -505,7 +505,7 @@ In JSON mode, hints populate the `"hints"` array in the standard envelope: `{"re
 
 ## Snapshot Index
 
-The snapshot index is a MessagePack file that captures a point-in-time snapshot of the vault's metadata (frontmatter, tags, sections, tasks, links) for faster repeated queries. It is **short-lived and ephemeral** — it becomes stale as soon as any file in the vault is modified.
+The snapshot index is a MessagePack file that captures a point-in-time snapshot of the vault's metadata (frontmatter, tags, sections, tasks, links) for faster repeated queries. It is **short-lived and ephemeral** — it becomes stale as soon as any file in the vault is modified outside of hyalo.
 
 **Usage:**
 
@@ -526,7 +526,7 @@ hyalo drop-index
 
 **Read-only commands** (`find`, `summary`, `tags summary`, `properties summary`, `backlinks`) skip disk scans entirely when using `--index`.
 
-**Mutation commands** (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) still read and write individual files on disk, but when `--index` is provided they also patch the index entry in-place after each mutation — keeping the index current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active.
+**Mutation commands** (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) still read and write individual files on disk, but when `--index` is provided they also patch the index entry in-place after each mutation — keeping the index's file metadata current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active. Note: `mv` does not update the index's link graph for rewritten files — if you rely on link-related queries (`backlinks`, `--broken-links`) after a `mv`, drop and recreate the index.
 
 Never commit `.hyalo-index` files to version control — they are throwaway artifacts.
 
