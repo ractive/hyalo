@@ -271,6 +271,44 @@ impl SnapshotIndex {
             .map(|i| &mut self.entries[i])
     }
 
+    /// Get a mutable reference to the link graph for in-place updates.
+    pub fn graph_mut(&mut self) -> &mut LinkGraph {
+        &mut self.graph
+    }
+
+    /// Re-scan a single file and replace its index entry.
+    ///
+    /// Returns the `FileLinks` for the re-scanned file so the caller can
+    /// update the link graph separately. Returns `Ok(None)` if the file
+    /// is not in the index.
+    pub(crate) fn rescan_entry(&mut self, dir: &Path, rel_path: &str) -> Result<Option<FileLinks>> {
+        if !self.path_index.contains_key(rel_path) {
+            return Ok(None);
+        }
+        let full_path = dir.join(rel_path);
+        let (entry, file_links) = scan_one_file(&full_path, rel_path, true)?;
+        // Replace the existing entry in-place
+        if let Some(&idx) = self.path_index.get(rel_path) {
+            self.entries[idx] = entry;
+        }
+        Ok(file_links)
+    }
+
+    /// Re-scan a single file from disk and replace its index entry in-place.
+    ///
+    /// This updates the entry's properties, tags, sections, tasks, links, and
+    /// modified timestamp. The link graph is **not** touched — callers that
+    /// need graph updates should use [`LinkGraph::rename_path`] separately.
+    ///
+    /// Returns `true` if the entry was found and refreshed, `false` if
+    /// `rel_path` is not in the index.
+    pub fn refresh_entry(&mut self, dir: &Path, rel_path: &str) -> Result<bool> {
+        match self.rescan_entry(dir, rel_path)? {
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+
     /// Rebuild the path → index lookup after insertions/removals.
     fn rebuild_path_index(&mut self) {
         self.path_index = self
@@ -521,7 +559,7 @@ pub fn find_stale_indexes(dir: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
 ///
 /// When `scan_body` is `false`, only frontmatter is read — sections, tasks, and
 /// links are empty, and no `FileLinks` are produced.
-fn scan_one_file(
+pub fn scan_one_file(
     full_path: &Path,
     rel_path: &str,
     scan_body: bool,

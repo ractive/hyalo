@@ -168,6 +168,41 @@ impl LinkGraph {
 
         results
     }
+
+    /// Update the link graph after a file move from `old_rel` to `new_rel`.
+    ///
+    /// Renames target keys and source paths that reference the old vault-relative
+    /// path to use the new path. Both `.md` and stem (without `.md`) variants
+    /// are handled.
+    pub fn rename_path(&mut self, old_rel: &str, new_rel: &str) {
+        let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
+        let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
+
+        // Rename target keys: both stem and full-path (.md) forms.
+        let key_pairs: [(&str, &str); 2] = [(old_stem, new_stem), (old_rel, new_rel)];
+        for (old_key, new_key) in key_pairs {
+            // Only rename if the key actually changed (avoids a spurious
+            // remove+insert when old_rel already lacks an .md suffix).
+            if old_key != new_key
+                && let Some(entries) = self.index.remove(old_key)
+            {
+                self.index.insert(new_key.to_owned(), entries);
+            }
+        }
+
+        // Rename source paths: any BacklinkEntry whose source matches old_rel.
+        // Compare in forward-slash form so the check works cross-platform
+        // regardless of how the PathBuf was originally constructed.
+        let new_path = PathBuf::from(new_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        for entries in self.index.values_mut() {
+            for entry in entries.iter_mut() {
+                let src_fwd = entry.source.to_string_lossy().replace('\\', "/");
+                if src_fwd == old_rel {
+                    entry.source.clone_from(&new_path);
+                }
+            }
+        }
+    }
 }
 
 /// Returns `true` when `entry` is a self-link — i.e. the source file and the
@@ -189,11 +224,11 @@ pub fn is_self_link(entry: &BacklinkEntry, target: &str) -> bool {
 }
 
 /// Per-file link data produced by scanning a single file.
-pub(crate) struct FileLinks {
+pub struct FileLinks {
     /// Relative path of the source file (vault-relative).
-    pub(crate) source: PathBuf,
+    pub source: PathBuf,
     /// Links extracted from the file body, with 1-based line numbers.
-    pub(crate) links: Vec<(usize, Link)>,
+    pub links: Vec<(usize, Link)>,
 }
 
 /// Normalize and insert one file's links into the shared index.
@@ -929,5 +964,58 @@ mod tests {
 
         let bl_b = graph.backlinks("notes/b.md");
         assert_eq!(bl_b.len(), 1, "markdown link to notes/b.md should be found");
+    }
+
+    #[test]
+    fn rename_path_updates_keys_and_sources() {
+        // Build a graph where:
+        //   - "source.md" links to "notes/old" (wikilink → stem key)
+        //   - "other.md"  links to "notes/old.md" (markdown → full key)
+        //   - "notes/old.md" links to "unrelated" (its source should be renamed)
+        let vault = create_vault(&[
+            ("source.md", "See [[notes/old]]\n"),
+            ("other.md", "[link](notes/old.md)\n"),
+            ("notes/old.md", "See [[unrelated]]\n"),
+            ("unrelated.md", "Content\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let mut graph = build.graph;
+
+        graph.rename_path("notes/old.md", "notes/new.md");
+
+        // 1. Old keys must be gone — no backlinks for old stem or old full path.
+        assert!(
+            graph.backlinks("notes/old").is_empty(),
+            "old stem key must be gone"
+        );
+        assert!(
+            graph.backlinks("notes/old.md").is_empty(),
+            "old full key must be gone"
+        );
+
+        // 2. `backlinks("notes/new")` finds both the stem key ("notes/new")
+        //    and the full key ("notes/new.md"), so it returns 2 entries total:
+        //    the wikilink from source.md and the markdown link from other.md.
+        let bl = graph.backlinks("notes/new");
+        assert_eq!(bl.len(), 2, "must find both wikilink and markdown link entries");
+        let sources: Vec<String> = bl
+            .iter()
+            .map(|b| b.source.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert!(sources.contains(&"source.md".to_owned()), "wikilink source; got: {sources:?}");
+        assert!(sources.contains(&"other.md".to_owned()), "markdown link source; got: {sources:?}");
+
+        // 3. The source entry under "unrelated" must now point to "notes/new.md".
+        let bl_unrelated = graph.backlinks("unrelated");
+        assert_eq!(
+            bl_unrelated.len(),
+            1,
+            "unrelated must still have 1 backlink"
+        );
+        let src_fwd = bl_unrelated[0].source.to_string_lossy().replace('\\', "/");
+        assert_eq!(
+            src_fwd, "notes/new.md",
+            "source path must be updated to new path"
+        );
     }
 }
