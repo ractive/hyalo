@@ -1,11 +1,15 @@
 /// Short help (shown by `-h`): one example per feature.
 pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Search for files:             hyalo find --property status=draft
+  Filter by title:              hyalo find --title 'meeting'
   Filter by tag:                hyalo find --tag project
   Filter by task status:        hyalo find --task todo
   Full-text search:             hyalo find 'meeting notes'
-  Regex body search:            hyalo find -e 'perf(ormance)?'
+  Regex body search:            hyalo find -e 'TODO|FIXME'
   Filter by section:            hyalo find --section 'Tasks' --task todo
+  Files with broken links:      hyalo find --broken-links
+  Sort and limit:               hyalo find --sort modified --reverse --limit 10
+  Count matching files:         hyalo find --tag project --count
   Read file content:            hyalo read --file notes/todo.md
   Read a section:               hyalo read --file notes/todo.md --section Proposal
   Set a property:               hyalo set --property status=completed --file notes/todo.md
@@ -19,11 +23,11 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Aggregate tag summary:        hyalo tags summary
   Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag
   Vault overview:               hyalo summary --format text
-  Overview (hints are default):  hyalo summary --format text
   Toggle a task:                hyalo task toggle --file todo.md --line 5
   Find backlinks:               hyalo backlinks --file decision-log.md
   Move a file (update links):   hyalo mv --file old.md --to new.md
   Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run
+  Fix broken links (preview):   hyalo links fix
   Build a snapshot index:       hyalo create-index
   Query using the index:        hyalo find --property status=draft --index .hyalo-index
   Delete the snapshot index:    hyalo drop-index";
@@ -32,7 +36,8 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
 pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
-               [-s/--section HEADING ...] [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [-n/--limit N]
+               [-s/--section HEADING ...] [--title PAT] [--broken-links]
+               [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [--reverse] [-n/--limit N]
 
   Read (display file body content, read-only):
     hyalo read -f/--file F [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]
@@ -66,7 +71,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     hyalo backlinks -f/--file F
 
   Links (link operations):
-    hyalo links fix [--apply] [--threshold T] [-g/--glob G]   Detect and fix broken links (default: dry-run)
+    hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
 
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
@@ -83,10 +88,13 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Global flags (apply to all commands):
     -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)
     --format json|text      Output format (default: json, override via .hyalo.toml)
-    --jq <FILTER>           Apply a jq expression to JSON output
+    --jq <FILTER>           Apply a jq expression to JSON output (incompatible with --format text)
+    --count                 Print total as bare integer (shortcut for --jq '.total'; list commands only)
     --hints                 Force hints on (already the default; suppressed by --jq)
     --no-hints              Disable drill-down hints (enabled by default, override via .hyalo.toml)
     --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
+    --index <PATH>          Use pre-built snapshot index (see create-index)
+    -q/--quiet              Suppress all warnings to stderr
 
 COOKBOOK:
   # Discover what metadata exists in a vault
@@ -123,7 +131,10 @@ COOKBOOK:
   # Regex body search combined with filters
   hyalo find -e 'perf(ormance)?' --tag iteration --property status=completed
 
-  # Count matching files
+  # Count matching files (bare integer output)
+  hyalo find --property status=draft --count
+
+  # Count matching files (alternative via jq)
   hyalo find --property status=draft --jq '.total'
 
   # Find files with open tasks
@@ -137,6 +148,13 @@ COOKBOOK:
 
   # Find broken [[wikilinks]] (fields=links, then filter in jq)
   hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'
+
+  # Filter by title (substring or regex)
+  hyalo find --title 'meeting'
+  hyalo find --title '/^Design/i'
+
+  # Sort by modification time, newest first
+  hyalo find --sort modified --reverse --limit 5
 
   # Exclude draft files with glob negation
   hyalo find --glob '!**/draft-*'
@@ -152,9 +170,6 @@ COOKBOOK:
 
   # Append to a list property
   hyalo append --property aliases='My Note' --file note.md
-
-  # Quick vault overview
-  hyalo summary --format text
 
   # Count tasks across all files
   hyalo summary --jq '.results.tasks.total'
@@ -200,6 +215,12 @@ COOKBOOK:
 
   # Set a custom task status (e.g. cancelled)
   hyalo task set-status --file todo.md --line 5 --status -
+
+  # Fix broken links (dry-run preview)
+  hyalo links fix
+
+  # Fix broken links, skip Hugo template paths
+  hyalo links fix --ignore-target '{{ ref' --apply
 
   # Build a snapshot index for faster repeated queries
   hyalo create-index

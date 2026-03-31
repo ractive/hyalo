@@ -1,12 +1,27 @@
 # hyalo
 
-A high-performance CLI to query, filter, and mutate YAML frontmatter across markdown file collections. Compatible with [Obsidian](https://obsidian.md/) vaults, Zettelkasten systems, and any directory of `.md` files with YAML frontmatter.
+**Your markdown collection deserves a proper query language.**
 
-Hyalo lets you (or your AI agent) manage a markdown-based knowledgebase or second brain. Find files by frontmatter metadata or body content, bulk-update properties across matching files, move files while preserving all links, and detect and auto-repair broken links. All output is structured JSON with `--jq` support, making it easy to integrate into scripts and automation. Set up integration with Claude Code in one command: `hyalo init --claude`.
+If you maintain an [Obsidian](https://obsidian.md/) vault, a Zettelkasten, documentation site, or any folder of `.md` files with YAML frontmatter, you've probably hit the limits of `grep` and manual editing. Hyalo gives you a fast, structured way to search, filter, and bulk-edit your markdown files from the command line.
 
-An optional ephemeral snapshot index (`hyalo create-index`) speeds up repeated queries by caching metadata in memory. The index stays valid as long as all mutations go through hyalo — drop it when you're done (`hyalo drop-index`).
+### What it does
 
-"Hyalo" — like "obsidian" — is a volcanic glass. The project started as a high-performance CLI for Claude Code to maintain knowledgebase directories built to be consumed by [Obsidian](https://obsidian.md/).
+- **Find files** by frontmatter properties, tags, body content (regex), section headings, task status, or title
+- **Bulk-update metadata** — set, remove, or append to properties and tags across hundreds of files at once
+- **Move files safely** — rename or reorganize files and hyalo rewrites all `[[wikilinks]]` and `[markdown](links)` across the vault
+- **Fix broken links** — detect unresolved links and auto-repair them with fuzzy matching
+- **Read content** — extract specific sections or line ranges from files
+- **Get an overview** — see property/tag distributions, task counts, orphan files, and link health at a glance
+
+### Why hyalo?
+
+- **Fast.** Parallel scanning, streaming I/O, optional snapshot index. Handles 10,000+ file vaults in under a second.
+- **Structured output.** JSON by default with built-in `--jq` support. Easy to pipe into scripts, CI, or AI agents.
+- **AI-agent friendly.** Designed as a tool for Claude Code and other LLM coding agents. One command sets up the integration: `hyalo init --claude`.
+- **Safe mutations.** Dry-run mode on all write operations. Preview before committing changes.
+- **Cross-platform.** Works on macOS, Linux, and Windows. No runtime dependencies.
+
+> "Hyalo" — like "obsidian" — is a volcanic glass. The project started as a high-performance CLI for [Claude Code](https://claude.ai/claude-code) to maintain Obsidian-compatible knowledgebases.
 
 ## Installation
 
@@ -50,9 +65,20 @@ cargo build --release
 
 ## Usage
 
-All commands accept `-d/--dir <path>` (default: `.`), `--format json|text` (default: `json`), `--jq <FILTER>` (apply a jq expression to the JSON output), `--hints` (append executable drill-down command suggestions), `--site-prefix <PREFIX>` (override the site prefix used for resolving root-absolute links), and `--index <PATH>` (use a pre-built snapshot index instead of scanning files from disk — read-only commands use it; mutation commands ignore it; falls back to disk scan if the index is incompatible). List commands (`find`, `tags summary`, `properties summary`, `backlinks`) also accept `--count` to print just the total as a bare integer (shortcut for `--jq '.total'`).
+All commands accept these global flags:
 
-All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`. Use `--count` to print just the total as a bare integer (e.g. `hyalo find --tag rust --count` outputs `7`). Incompatible with `--jq`.
+| Flag | Description |
+|------|-------------|
+| `-d/--dir <PATH>` | Root directory (default: `.`, override via `.hyalo.toml`) |
+| `--format json\|text` | Output format (default: `json`, override via `.hyalo.toml`) |
+| `--jq <FILTER>` | Apply a jq expression to the JSON output (incompatible with `--format text`) |
+| `--count` | Print total as bare integer — shortcut for `--jq '.total'` (list commands only) |
+| `--hints` / `--no-hints` | Enable/disable drill-down command hints (default: on) |
+| `--site-prefix <PREFIX>` | Override site prefix for resolving root-absolute links |
+| `--index <PATH>` | Use a pre-built snapshot index (see [Snapshot Index](#snapshot-index)) |
+| `-q/--quiet` | Suppress warnings on stderr |
+
+All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`.
 
 Most flags have short aliases for quick interactive use:
 
@@ -64,12 +90,13 @@ Most flags have short aliases for quick interactive use:
 | `-t` | `--tag` | find, set, remove |
 | `-s` | `--section` | find, read |
 | `-f` | `--file` | find, read, set, remove, append, task, backlinks, mv |
-| `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary |
+| `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary, links fix |
 | `-n` | `--limit` | find |
 | `-n` | `--recent` | summary |
 | `-l` | `--lines` | read |
 | `-l` | `--line` | task read, task toggle, task set-status |
 | `-s` | `--status` | task set-status |
+| `-o` | `--output` | create-index |
 
 Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
 
@@ -81,7 +108,7 @@ Place a `.hyalo.toml` file in your working directory to set defaults for global 
 # .hyalo.toml
 dir = "./my-vault"   # default: "."
 format = "text"      # default: "json"
-hints = true         # default: false
+hints = false        # default: true (set to false to suppress drill-down hints)
 site_prefix = "docs" # override auto-derived prefix for absolute link resolution
 ```
 
@@ -196,9 +223,10 @@ hyalo find --fields properties,backlinks           # combine with other fields
 
 # Sort and limit
 hyalo find --sort modified --limit 10
+hyalo find --sort modified --reverse --limit 5      # newest first
 hyalo find --sort title                             # sort by title (frontmatter or first H1)
 hyalo find --sort date                              # sort by frontmatter date
-hyalo find --sort property:priority                 # sort by any frontmatter property
+hyalo find --sort property:priority --reverse       # highest priority first
 ```
 
 ### read
@@ -424,7 +452,7 @@ Root-absolute links (e.g. `/docs/guides/setup.md`) are also rewritten during a m
 Subcommand group for link operations.
 
 ```sh
-# Preview broken link fixes (dry-run, default)
+# Preview broken link fixes (dry-run is the default)
 hyalo links fix
 
 # Apply fixes to disk
@@ -436,13 +464,16 @@ hyalo links fix --threshold 0.9
 # Scope to specific files
 hyalo links fix --glob "notes/*.md"
 
+# Skip links that contain Hugo/template syntax
+hyalo links fix --ignore-target '{{ ref' --ignore-target '{{ relref'
+
 # Text output
 hyalo links fix --format text
 ```
 
 `links fix` detects broken `[[wikilinks]]` and `[markdown](links)` across the vault and attempts auto-repair using four strategies (in priority order): case-insensitive exact match, extension mismatch (`.md` present/absent), unique stem match anywhere in the vault (shortest-path resolution), and Jaro-Winkler fuzzy match above `--threshold`.
 
-Default is `--dry-run` (preview only). Pass `--apply` to write fixes to disk.
+Default is `--dry-run` (preview only). Pass `--apply` to write fixes to disk. Use `--ignore-target` (repeatable) to skip links containing specific substrings — useful for template syntax, external paths, or anchors that aren't real files.
 
 ### Hints
 
@@ -474,7 +505,7 @@ In JSON mode, hints populate the `"hints"` array in the standard envelope: `{"re
 
 ## Snapshot Index
 
-The snapshot index is a MessagePack file that captures a point-in-time snapshot of the vault's metadata (frontmatter, tags, sections, tasks, links) for faster repeated queries. It is **short-lived and ephemeral** — it becomes stale as soon as any file in the vault is modified.
+The snapshot index is a MessagePack file that captures a point-in-time snapshot of the vault's metadata (frontmatter, tags, sections, tasks, links) for faster repeated queries. It is **short-lived and ephemeral** — it becomes stale as soon as any file in the vault is modified outside of hyalo.
 
 **Usage:**
 
@@ -491,11 +522,24 @@ hyalo tags summary --index .hyalo-index
 hyalo drop-index
 ```
 
-**When to use:** workflows that run many read-only queries in a short window — CI pipelines, automation scripts, LLM tool loops. Create the index at the start, query against it, then drop it.
+**When to use:** workflows that run many queries in a short window — CI pipelines, automation scripts, LLM tool loops. Create the index at the start, query and mutate against it, then drop it.
 
-**Mutations with `--index`:** mutation commands (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) now support `--index`. They still read and write individual files on disk, but after each mutation they patch the index entry in-place and save it back — keeping the index current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active. If your workflow only uses hyalo for mutations, the index stays consistent across interleaved reads and writes.
+**Read-only commands** (`find`, `summary`, `tags summary`, `properties summary`, `backlinks`) skip disk scans entirely when using `--index`.
+
+**Mutation commands** (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) still read and write individual files on disk, but when `--index` is provided they also patch the index entry in-place after each mutation — keeping the index's file metadata current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active. Note: `mv` does not update the index's link graph for rewritten files — if you rely on link-related queries (`backlinks`, `--broken-links`) after a `mv`, drop and recreate the index.
 
 Never commit `.hyalo-index` files to version control — they are throwaway artifacts.
+
+## Common pitfalls
+
+| Mistake | Correct usage |
+|---------|--------------|
+| `--property 'title=~/pat/'` (Perl-style `=~`) | `--property 'title~=/pat/'` (hyalo uses `~=`) |
+| `--property title~=draft` to search all titles | `--title draft` (searches frontmatter title AND H1 headings) |
+| `--tag projects` expecting substring match | `--tag project` (prefix match: matches `project`, `project/backend`, but not `projects`) |
+| `--glob '/absolute/path/*.md'` | `--glob 'relative/*.md'` (globs are relative to `--dir`) |
+| `--format text --jq '.total'` | Remove `--format text` — `--jq` is incompatible with text format |
+| `--count --jq '.results'` | Use one or the other — `--count` is a shortcut for `--jq '.total'` |
 
 ## Benchmarking
 

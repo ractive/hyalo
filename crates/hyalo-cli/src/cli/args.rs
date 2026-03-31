@@ -166,6 +166,10 @@ pub(crate) enum Commands {
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
+            COMMON MISTAKES:\n\
+            - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
+            - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
+            - --tag uses prefix matching: 'project' matches 'project/backend' but NOT 'projects'.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)
@@ -220,13 +224,9 @@ pub(crate) enum Commands {
             specific section by heading (case-insensitive whole-string match; use leading '#' to \
             pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
-            OUTPUT: Defaults to plain text (note: this overrides the global --format json default). \
-            Pass --format json explicitly to get \
-            {\"file\": \"...\", \"content\": \"...\"}.\n\
-            SIDE EFFECTS: None (read-only).\n\
-            FORMAT DEFAULT: Unlike other commands, `read` outputs plain text by default \
-            — the --format flag shown below says 'Default: json' because it is a global flag, \
-            but `read` overrides this to text.")]
+            OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
+            Pass --format json to get {\"results\": {\"file\": \"...\", \"content\": \"...\"}, \"hints\": [...]}.\n\
+            SIDE EFFECTS: None (read-only).")]
     Read {
         /// Target file (relative to --dir)
         #[arg(short, long)]
