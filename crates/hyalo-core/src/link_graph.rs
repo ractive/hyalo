@@ -179,25 +179,40 @@ impl LinkGraph {
         let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
 
         // Rename target keys: both stem and full-path (.md) forms.
+        // Note: when old_rel has no .md suffix, old_stem == old_rel and only
+        // one key is renamed (the guard below skips the duplicate).
         let key_pairs: [(&str, &str); 2] = [(old_stem, new_stem), (old_rel, new_rel)];
         for (old_key, new_key) in key_pairs {
             // Only rename if the key actually changed (avoids a spurious
             // remove+insert when old_rel already lacks an .md suffix).
             if old_key != new_key
-                && let Some(entries) = self.index.remove(old_key)
+                && let Some(mut entries) = self.index.remove(old_key)
             {
-                self.index.insert(new_key.to_owned(), entries);
+                // Update the stored link.target so serialized backlinks
+                // reflect the new target value after the rename.
+                for entry in &mut entries {
+                    if entry.link.target == old_key {
+                        new_key.clone_into(&mut entry.link.target);
+                    }
+                }
+                // Merge with any existing backlinks under new_key rather
+                // than overwriting them (e.g. pre-existing links to the
+                // destination path).
+                self.index
+                    .entry(new_key.to_owned())
+                    .or_default()
+                    .extend(entries);
             }
         }
 
         // Rename source paths: any BacklinkEntry whose source matches old_rel.
-        // Compare in forward-slash form so the check works cross-platform
-        // regardless of how the PathBuf was originally constructed.
+        // Compare as Path to avoid per-entry String allocation; both old_path
+        // and new_path use the platform separator so comparisons match PathBuf.
+        let old_path = PathBuf::from(old_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         let new_path = PathBuf::from(new_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         for entries in self.index.values_mut() {
             for entry in entries.iter_mut() {
-                let src_fwd = entry.source.to_string_lossy().replace('\\', "/");
-                if src_fwd == old_rel {
+                if entry.source == old_path {
                     entry.source.clone_from(&new_path);
                 }
             }
@@ -224,11 +239,11 @@ pub fn is_self_link(entry: &BacklinkEntry, target: &str) -> bool {
 }
 
 /// Per-file link data produced by scanning a single file.
-pub struct FileLinks {
+pub(crate) struct FileLinks {
     /// Relative path of the source file (vault-relative).
-    pub source: PathBuf,
+    pub(crate) source: PathBuf,
     /// Links extracted from the file body, with 1-based line numbers.
-    pub links: Vec<(usize, Link)>,
+    pub(crate) links: Vec<(usize, Link)>,
 }
 
 /// Normalize and insert one file's links into the shared index.

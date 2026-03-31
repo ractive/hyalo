@@ -282,15 +282,12 @@ impl SnapshotIndex {
     /// update the link graph separately. Returns `Ok(None)` if the file
     /// is not in the index.
     pub(crate) fn rescan_entry(&mut self, dir: &Path, rel_path: &str) -> Result<Option<FileLinks>> {
-        if !self.path_index.contains_key(rel_path) {
+        let Some(&idx) = self.path_index.get(rel_path) else {
             return Ok(None);
-        }
+        };
         let full_path = dir.join(rel_path);
         let (entry, file_links) = scan_one_file(&full_path, rel_path, true)?;
-        // Replace the existing entry in-place
-        if let Some(&idx) = self.path_index.get(rel_path) {
-            self.entries[idx] = entry;
-        }
+        self.entries[idx] = entry;
         Ok(file_links)
     }
 
@@ -307,6 +304,25 @@ impl SnapshotIndex {
             Some(_) => Ok(true),
             None => Ok(false),
         }
+    }
+
+    /// Remove an old entry, scan a file at its new path, and insert the result.
+    ///
+    /// This is the move/rename counterpart of [`refresh_entry`]: it removes the
+    /// entry at `old_rel`, scans the file at `new_rel` from disk, and inserts the
+    /// fresh entry. The link graph is **not** touched.
+    ///
+    /// Returns `Ok(true)` if `old_rel` was found and replaced, `Ok(false)` if
+    /// `old_rel` was not in the index (in which case nothing is changed).
+    pub fn replace_entry(&mut self, dir: &Path, old_rel: &str, new_rel: &str) -> Result<bool> {
+        if !self.path_index.contains_key(old_rel) {
+            return Ok(false);
+        }
+        self.remove_entry(old_rel);
+        let full_path = dir.join(new_rel);
+        let (entry, _file_links) = scan_one_file(&full_path, new_rel, true)?;
+        self.insert_entry(entry);
+        Ok(true)
     }
 
     /// Rebuild the path → index lookup after insertions/removals.
@@ -559,7 +575,7 @@ pub fn find_stale_indexes(dir: &Path) -> Result<Vec<(PathBuf, String, u64)>> {
 ///
 /// When `scan_body` is `false`, only frontmatter is read — sections, tasks, and
 /// links are empty, and no `FileLinks` are produced.
-pub fn scan_one_file(
+pub(crate) fn scan_one_file(
     full_path: &Path,
     rel_path: &str,
     scan_body: bool,

@@ -73,20 +73,26 @@ pub fn rename_index_entry(
     };
 
     // 1. Move the entry: remove old key, re-scan the moved file, insert under new key.
-    idx.remove_entry(old_rel);
-    let full_path = dir.join(new_rel);
-    let (entry, _file_links) = hyalo_core::index::scan_one_file(&full_path, new_rel, true)?;
-    idx.insert_entry(entry);
+    //    If old_rel was not in the index, there's nothing to do.
+    if !idx.replace_entry(dir, old_rel, new_rel)? {
+        return Ok(());
+    }
 
     // 2. Re-scan each file that had links rewritten (their outbound links changed).
+    //    The moved file itself may appear in `rewritten_files` (plan_mv sets
+    //    `rel_path = new_rel` for the outbound plan) — skip it since step 1
+    //    already re-scanned it at the new path.
+    //    Errors are best-effort: skip files that fail to refresh.
     for &rel in rewritten_files {
-        if rel == new_rel || rel == old_rel {
+        if rel == new_rel {
             continue;
         }
-        idx.refresh_entry(dir, rel)?;
+        let _ = idx.refresh_entry(dir, rel);
     }
 
     // 3. Update the link graph: rename target keys and source paths.
+    //    Link targets don't change during a move — only the source path and the
+    //    link syntax do — so renaming keys + sources is sufficient.
     idx.graph_mut().rename_path(old_rel, new_rel);
 
     *index_dirty = true;
