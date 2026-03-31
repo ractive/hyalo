@@ -997,13 +997,23 @@ mod tests {
         //    and the full key ("notes/new.md"), so it returns 2 entries total:
         //    the wikilink from source.md and the markdown link from other.md.
         let bl = graph.backlinks("notes/new");
-        assert_eq!(bl.len(), 2, "must find both wikilink and markdown link entries");
+        assert_eq!(
+            bl.len(),
+            2,
+            "must find both wikilink and markdown link entries"
+        );
         let sources: Vec<String> = bl
             .iter()
             .map(|b| b.source.to_string_lossy().replace('\\', "/"))
             .collect();
-        assert!(sources.contains(&"source.md".to_owned()), "wikilink source; got: {sources:?}");
-        assert!(sources.contains(&"other.md".to_owned()), "markdown link source; got: {sources:?}");
+        assert!(
+            sources.contains(&"source.md".to_owned()),
+            "wikilink source; got: {sources:?}"
+        );
+        assert!(
+            sources.contains(&"other.md".to_owned()),
+            "markdown link source; got: {sources:?}"
+        );
 
         // 3. The source entry under "unrelated" must now point to "notes/new.md".
         let bl_unrelated = graph.backlinks("unrelated");
