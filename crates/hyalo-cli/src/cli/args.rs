@@ -218,7 +218,7 @@ pub(crate) enum Commands {
     #[command(long_about = "Read the body content of a markdown file.\n\n\
             Returns the raw text after the YAML frontmatter block. Use --section to extract a \
             specific section by heading (case-insensitive whole-string match; use leading '#' to \
-            pin heading level, e.g. '## Tasks'; nested subsections are included), \
+            pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Defaults to plain text (note: this overrides the global --format json default). \
             Pass --format json explicitly to get \

@@ -3491,7 +3491,7 @@ fn find_title_slash_regex_matches() {
 }
 
 #[test]
-fn find_title_bare_regex_with_anchors() {
+fn find_title_slash_regex_with_anchors() {
     let tmp = setup_vault();
     // /^alpha$/ should match "Alpha" (case-insensitive by default)
     let out = hyalo_no_hints()
