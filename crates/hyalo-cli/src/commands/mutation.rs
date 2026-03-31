@@ -1,11 +1,12 @@
-//! Shared helpers for mutation commands (`set`, `remove`, `append`).
+//! Shared helpers for mutation commands (`set`, `remove`, `append`, `mv`).
 //!
-//! These are pure structural helpers that encapsulate the two patterns all three
-//! commands duplicate identically:
+//! These are pure structural helpers that encapsulate the patterns mutation
+//! commands share:
 //!
 //! 1. Patching a snapshot-index entry in memory after a file is mutated.
-//! 2. Flushing the index to disk when it has been dirtied.
-//! 3. Collapsing a single-element `results` vec to a bare JSON object (vs. an array).
+//! 2. Renaming an index entry after a file move (key change + link graph update).
+//! 3. Flushing the index to disk when it has been dirtied.
+//! 4. Collapsing a single-element `results` vec to a bare JSON object (vs. an array).
 
 use anyhow::Result;
 use indexmap::IndexMap;
@@ -44,6 +45,57 @@ pub fn update_index_entry(
         entry.modified = format_modified(full_path)?;
         *index_dirty = true;
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Index-entry rename (for `mv`)
+// ---------------------------------------------------------------------------
+
+/// Rename an index entry after a file move, updating the link graph and
+/// re-scanning affected files so that backlink/link queries remain accurate.
+///
+/// `rewritten_files` lists the vault-relative paths of files whose links were
+/// rewritten by the move — their index entries are re-scanned to pick up
+/// updated outbound links.
+///
+/// This is a no-op when `snapshot_index` is `None`.
+pub fn rename_index_entry(
+    snapshot_index: &mut Option<SnapshotIndex>,
+    dir: &Path,
+    old_rel: &str,
+    new_rel: &str,
+    rewritten_files: &[&str],
+    index_dirty: &mut bool,
+) -> Result<()> {
+    let Some(idx) = snapshot_index.as_mut() else {
+        return Ok(());
+    };
+
+    // 1. Move the entry: remove old key, re-scan the moved file, insert under new key.
+    //    If old_rel was not in the index, there's nothing to do.
+    if !idx.replace_entry(dir, old_rel, new_rel)? {
+        return Ok(());
+    }
+
+    // 2. Re-scan each file that had links rewritten (their outbound links changed).
+    //    The moved file itself may appear in `rewritten_files` (plan_mv sets
+    //    `rel_path = new_rel` for the outbound plan) — skip it since step 1
+    //    already re-scanned it at the new path.
+    //    Errors are best-effort: skip files that fail to refresh.
+    for &rel in rewritten_files {
+        if rel == new_rel {
+            continue;
+        }
+        let _ = idx.refresh_entry(dir, rel);
+    }
+
+    // 3. Update the link graph: rename target keys and source paths.
+    //    Link targets don't change during a move — only the source path and the
+    //    link syntax do — so renaming keys + sources is sufficient.
+    idx.graph_mut().rename_path(old_rel, new_rel);
+
+    *index_dirty = true;
     Ok(())
 }
 

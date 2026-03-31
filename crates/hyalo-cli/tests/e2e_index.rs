@@ -945,9 +945,22 @@ fn mv_with_index_updates_index_path() {
         "moved file should still be findable by property; got: {files:?}"
     );
 
-    // Note: link graph / backlinks in the index are NOT updated after mv.
-    // This is a known limitation — backlink queries may be stale.
-    // Property, tag, and task queries remain accurate.
+    // Backlinks must reflect the new path: gamma.md linked to [[alpha]],
+    // so after moving to archive/gamma.md the backlink source must be updated.
+    let bl_json = run_with_index(&tmp, &index_path, &["backlinks", "--file", "alpha.md"]);
+    let backlinks = bl_json["results"]["backlinks"].as_array().unwrap();
+    let bl_sources: Vec<&str> = backlinks
+        .iter()
+        .map(|b| b["source"].as_str().unwrap())
+        .collect();
+    assert!(
+        bl_sources.contains(&"archive/gamma.md"),
+        "backlink source should be updated to archive/gamma.md; got: {bl_sources:?}"
+    );
+    assert!(
+        !bl_sources.contains(&"gamma.md"),
+        "old path gamma.md should not appear in backlinks; got: {bl_sources:?}"
+    );
 }
 
 #[test]

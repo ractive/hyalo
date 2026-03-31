@@ -526,7 +526,7 @@ hyalo drop-index
 
 **Read-only commands** (`find`, `summary`, `tags summary`, `properties summary`, `backlinks`) skip disk scans entirely when using `--index`.
 
-**Mutation commands** (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) still read and write individual files on disk, but when `--index` is provided they also patch the index entry in-place after each mutation — keeping the index's file metadata current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active. Note: `mv` does not update the index's link graph for rewritten files — if you rely on link-related queries (`backlinks`, `--broken-links`) after a `mv`, drop and recreate the index.
+**Mutation commands** (`set`, `remove`, `append`, `task`, `mv`, `tags rename`, `properties rename`) still read and write individual files on disk, but when `--index` is provided they also patch the index entry in-place after each mutation — keeping the index current for subsequent queries. This is safe as long as no external tool modifies files in the vault while the index is active.
 
 Never commit `.hyalo-index` files to version control — they are throwaway artifacts.
 

@@ -5,9 +5,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::commands::mutation;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
-use hyalo_core::index::{IndexEntry, SnapshotIndex, format_modified};
+use hyalo_core::index::SnapshotIndex;
 use hyalo_core::link_rewrite::{self, Replacement, RewritePlan};
 
 // ---------------------------------------------------------------------------
@@ -80,26 +81,23 @@ pub fn mv(
         total_links_updated: total_links,
     };
 
-    // 5. If not dry-run, execute the move and rewrites
+    // 5. If not dry-run, execute the move and rewrites, then update the index.
     if !dry_run {
         execute_mv(dir, &old_rel, &new_rel, &plans)?;
 
-        // Patch index: update rel_path for the moved file.
-        // Note: the link graph and per-entry outbound links are NOT updated here —
-        // backlink queries against the index may be stale after mv. This is a known
-        // limitation; property/tag/task queries remain accurate.
-        if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
-            let new_full = dir.join(&new_rel);
-            let old_entry_opt: Option<IndexEntry> = idx.get_mut(&old_rel).cloned();
-            if let Some(old_entry) = old_entry_opt {
-                idx.remove_entry(&old_rel);
-                let mut new_entry = old_entry;
-                new_entry.rel_path.clone_from(&new_rel);
-                new_entry.modified = format_modified(&new_full)?;
-                idx.insert_entry(new_entry);
-            }
-            idx.save_to(idx_path)?;
-        }
+        // Patch index: rename the entry, re-scan files with rewritten links,
+        // and update the link graph so backlink queries stay accurate.
+        let rewritten: Vec<&str> = plans.iter().map(|p| p.rel_path.as_str()).collect();
+        let mut index_dirty = false;
+        mutation::rename_index_entry(
+            snapshot_index,
+            dir,
+            &old_rel,
+            &new_rel,
+            &rewritten,
+            &mut index_dirty,
+        )?;
+        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
     }
 
     // 6. Format output (always JSON internally; pipeline handles user-facing format)
