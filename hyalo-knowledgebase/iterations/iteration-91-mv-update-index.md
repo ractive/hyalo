@@ -6,7 +6,7 @@ tags:
   - index
   - mv
   - refactor
-status: in-progress
+status: completed
 branch: iter-91/mv-update-index
 ---
 
