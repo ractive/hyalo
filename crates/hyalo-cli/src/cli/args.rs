@@ -161,7 +161,7 @@ pub(crate) enum Commands {
             - --section HEADING: section scope filter (exclude files without a matching section; within \
             matching files, restrict tasks and content matches to the section scope; case-insensitive \
             substring (contains) match by default, e.g. 'Tasks' matches 'Tasks [4/4]'; use leading '#' \
-            to pin heading level, e.g. '## Tasks'; use '~=/regex/' for regex matching). Repeatable (OR). \
+            to pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching). Repeatable (OR). \
             Nested subsections are included.\n\n\
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
@@ -184,7 +184,7 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "STATUS")]
         task: Option<String>,
         /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
-        /// prefix '##' to pin heading level; prefix '~=' for regex (e.g. '~=/DEC-03[12]/'). Repeatable (OR)
+        /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR)
         #[arg(short, long = "section", value_name = "HEADING")]
         sections: Vec<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
@@ -209,8 +209,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         broken_links: bool,
         /// Filter by title: case-insensitive substring match against the displayed title
-        /// (frontmatter 'title' property or first H1 heading). Prefix with '~=' for regex
-        /// (e.g. '~=^The' or '~=/^The/i').
+        /// (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
+        /// (e.g. '/^The/' or '/^The/i').
         #[arg(long)]
         title: Option<String>,
     },
@@ -218,7 +218,7 @@ pub(crate) enum Commands {
     #[command(long_about = "Read the body content of a markdown file.\n\n\
             Returns the raw text after the YAML frontmatter block. Use --section to extract a \
             specific section by heading (case-insensitive whole-string match; use leading '#' to \
-            pin heading level, e.g. '## Tasks'; nested subsections are included), \
+            pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Defaults to plain text (note: this overrides the global --format json default). \
             Pass --format json explicitly to get \
@@ -232,7 +232,7 @@ pub(crate) enum Commands {
         #[arg(short, long)]
         file: String,
         /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
-        /// prefix '##' to pin heading level; prefix '~=' for regex. Nested subsections included
+        /// prefix '##' to pin heading level; use '/regex/' for regex. Nested subsections included
         #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
         /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)

@@ -179,7 +179,7 @@ hyalo find --section "Tasks" --task todo          # matches "Tasks", "Tasks [4/4
 hyalo find --section "## Design" "TODO"           # content search scoped to level-2 Design sections
 hyalo find --section "# Introduction" --fields sections  # level-pinned: only # Introduction, not ## Introduction
 hyalo find --section "Tasks" --section "Notes"    # OR: match either section
-hyalo find --section "~=/DEC-03[12]/"             # regex section match
+hyalo find --section "/DEC-03[12]/"               # regex section match
 
 # Scope to file(s) (--file is repeatable)
 hyalo find --file path/to/note.md
