@@ -40,7 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Install security tools
-        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2
+        uses: taiki-e/install-action@a1df9120380005ebdc788c62449b841b205541dd # v2
         with:
           tool: cargo-audit,cargo-deny
 
@@ -88,7 +88,7 @@ jobs:
 
       - name: Install cross
         if: matrix.cross
-        uses: taiki-e/install-action@06203676c62f0d3c765be3f2fcfbebbcb02d09f5 # v2.69.6
+        uses: taiki-e/install-action@a1df9120380005ebdc788c62449b841b205541dd # v2
         with:
           tool: cross
 
