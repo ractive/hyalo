@@ -40,7 +40,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Install security tools
-        run: cargo install cargo-audit cargo-deny --locked
+        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2
+        with:
+          tool: cargo-audit,cargo-deny
 
       - name: Audit dependencies for known vulnerabilities
         run: cargo audit
@@ -308,6 +310,8 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Download SHA256SUMS from release
         env:
           GH_TOKEN: ${{ github.token }}
