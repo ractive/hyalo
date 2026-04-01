@@ -873,3 +873,269 @@ fn init_auto_detects_fuzzy_wiki_dir() {
         "should auto-detect 'project-wiki'; toml: {content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// deinit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deinit_removes_all_init_claude_artifacts() {
+    let tmp = TempDir::new().unwrap();
+
+    // Bootstrap with all Claude artifacts present.
+    let init_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--claude", "--dir", "docs"])
+        .output()
+        .unwrap();
+    let init_stderr = String::from_utf8_lossy(&init_out.stderr);
+    assert!(init_out.status.success(), "init stderr: {init_stderr}");
+
+    // Verify artifacts were actually created before we deinit.
+    assert!(
+        tmp.path().join(".hyalo.toml").exists(),
+        ".hyalo.toml should exist after init"
+    );
+    assert!(
+        tmp.path().join(".claude/skills/hyalo/SKILL.md").exists(),
+        "hyalo SKILL.md should exist after init"
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["deinit"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    assert!(
+        !tmp.path().join(".claude/skills/hyalo/SKILL.md").exists(),
+        "hyalo SKILL.md should have been removed; stdout: {stdout}"
+    );
+    assert!(
+        !tmp.path()
+            .join(".claude/skills/hyalo-tidy/SKILL.md")
+            .exists(),
+        "hyalo-tidy SKILL.md should have been removed; stdout: {stdout}"
+    );
+    assert!(
+        !tmp.path().join(".claude/rules/knowledgebase.md").exists(),
+        "rules/knowledgebase.md should have been removed; stdout: {stdout}"
+    );
+    assert!(
+        !tmp.path().join(".claude/CLAUDE.md").exists(),
+        ".claude/CLAUDE.md should have been removed (only managed section); stdout: {stdout}"
+    );
+    assert!(
+        !tmp.path().join(".hyalo.toml").exists(),
+        ".hyalo.toml should have been removed; stdout: {stdout}"
+    );
+    assert!(
+        !tmp.path().join(".claude").exists(),
+        ".claude/ dir should have been cleaned up; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("removed"),
+        "stdout should mention 'removed' for each file; got: {stdout}"
+    );
+}
+
+#[test]
+fn deinit_preserves_non_managed_claude_md() {
+    let tmp = TempDir::new().unwrap();
+
+    let init_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--claude", "--dir", "docs"])
+        .output()
+        .unwrap();
+    let init_stderr = String::from_utf8_lossy(&init_out.stderr);
+    assert!(init_out.status.success(), "init stderr: {init_stderr}");
+
+    // Prepend user content to .claude/CLAUDE.md so it is not purely managed.
+    let claude_md_path = tmp.path().join(".claude/CLAUDE.md");
+    let existing = fs::read_to_string(&claude_md_path).unwrap();
+    let user_prefix = "# My project notes\n\nCustom content.\n\n";
+    fs::write(&claude_md_path, format!("{user_prefix}{existing}")).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["deinit"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    assert!(
+        claude_md_path.exists(),
+        ".claude/CLAUDE.md should still exist when user content is present; stdout: {stdout}"
+    );
+
+    let content = fs::read_to_string(&claude_md_path).unwrap();
+    assert!(
+        content.contains("My project notes"),
+        "user content 'My project notes' should be preserved; got: {content}"
+    );
+    assert!(
+        content.contains("Custom content"),
+        "user content 'Custom content' should be preserved; got: {content}"
+    );
+    assert!(
+        !content.contains("<!-- hyalo:start -->"),
+        "managed section start marker should have been stripped; got: {content}"
+    );
+    assert!(
+        !content.contains("<!-- hyalo:end -->"),
+        "managed section end marker should have been stripped; got: {content}"
+    );
+    assert!(
+        stdout.contains("stripped managed section"),
+        "stdout should mention 'stripped managed section'; got: {stdout}"
+    );
+}
+
+#[test]
+fn deinit_idempotent() {
+    let tmp = TempDir::new().unwrap();
+
+    let init_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--claude", "--dir", "docs"])
+        .output()
+        .unwrap();
+    let init_stderr = String::from_utf8_lossy(&init_out.stderr);
+    assert!(init_out.status.success(), "init stderr: {init_stderr}");
+
+    // First deinit — should succeed.
+    let first = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["deinit"])
+        .output()
+        .unwrap();
+    let first_stderr = String::from_utf8_lossy(&first.stderr);
+    assert!(
+        first.status.success(),
+        "first deinit stderr: {first_stderr}"
+    );
+
+    // Second deinit — should also succeed with "skipped" messages.
+    let second = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["deinit"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "second deinit stderr: {stderr}");
+    assert!(
+        stdout.contains("skipped"),
+        "second deinit should report 'skipped' for already-removed files; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("skipped") && stdout.contains(".hyalo.toml"),
+        "second deinit should report '.hyalo.toml' as skipped (not found); got: {stdout}"
+    );
+}
+
+#[test]
+fn deinit_removes_hyalo_toml() {
+    let tmp = TempDir::new().unwrap();
+
+    // Init without --claude so only .hyalo.toml is created.
+    let init_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--dir", "docs"])
+        .output()
+        .unwrap();
+    let init_stderr = String::from_utf8_lossy(&init_out.stderr);
+    assert!(init_out.status.success(), "init stderr: {init_stderr}");
+
+    let toml_path = tmp.path().join(".hyalo.toml");
+    assert!(toml_path.exists(), ".hyalo.toml should exist after init");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["deinit"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        !toml_path.exists(),
+        ".hyalo.toml should have been removed; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("removed") && stdout.contains(".hyalo.toml"),
+        "stdout should confirm removal of .hyalo.toml; got: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// init --dir missing directory creation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_dir_creates_missing_directory() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--dir", "my-new-docs"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    assert!(
+        tmp.path().join("my-new-docs").is_dir(),
+        "my-new-docs/ directory should have been created; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("created") && stdout.contains("my-new-docs/"),
+        "stdout should mention 'created  my-new-docs/'; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        content.contains("my-new-docs"),
+        ".hyalo.toml should reference 'my-new-docs'; got: {content}"
+    );
+}
+
+#[test]
+fn init_dir_does_not_create_existing_directory() {
+    let tmp = TempDir::new().unwrap();
+
+    fs::create_dir_all(tmp.path().join("existing-docs")).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--dir", "existing-docs"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    assert!(
+        !stdout.contains("created  existing-docs/"),
+        "stdout should NOT report creating an already-existing dir; got: {stdout}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        content.contains("existing-docs"),
+        ".hyalo.toml should reference 'existing-docs'; got: {content}"
+    );
+}

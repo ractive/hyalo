@@ -506,7 +506,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 Err(e) => Err(e),
             },
         },
-        // `Init` is handled as an early return before dispatch is called.
+        // `Init` and `Deinit` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
+        Commands::Deinit => unreachable!("Deinit is dispatched before this match reached"),
     }
 }
