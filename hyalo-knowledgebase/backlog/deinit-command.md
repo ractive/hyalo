@@ -24,7 +24,7 @@ There is no way to reverse `hyalo init`. If a user wants to remove hyalo's confi
 - Managed section (`<!-- hyalo:start -->` … `<!-- hyalo:end -->`) from `.claude/CLAUDE.md`
 - `.hyalo.toml`
 
-Clean up empty directories left behind (`.claude/skills/`, `.claude/rules/`) but **not** `.claude/` itself since the user likely has other content there.
+Clean up empty directories left behind (`.claude/skills/`, `.claude/rules/`), and remove `.claude/` itself only if it has become empty so that any other user content is preserved.
 
 ## Implementation notes
 

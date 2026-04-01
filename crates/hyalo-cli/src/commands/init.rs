@@ -55,6 +55,12 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
     // Skip "." since the current directory always exists.
     if dir_explicit && dir_value != "." {
         let target = cwd.join(&dir_value);
+        if target.is_file() {
+            anyhow::bail!(
+                "--dir path '{}' is a file, not a directory",
+                target.display()
+            );
+        }
         if !target.exists() {
             fs::create_dir_all(&target)
                 .with_context(|| format!("failed to create directory {}", target.display()))?;
@@ -309,13 +315,16 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
 /// Remove `path` if it exists and append a status line to `summary`.
 /// Returns `Ok(true)` if the file was actually removed.
 fn remove_artifact(path: &Path, label: &str, summary: &mut String) -> Result<bool> {
-    if path.exists() {
-        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
-        writeln!(summary, "removed  {label}").unwrap();
-        Ok(true)
-    } else {
-        writeln!(summary, "skipped  {label} (not found)").unwrap();
-        Ok(false)
+    match fs::remove_file(path) {
+        Ok(()) => {
+            writeln!(summary, "removed  {label}").unwrap();
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            writeln!(summary, "skipped  {label} (not found)").unwrap();
+            Ok(false)
+        }
+        Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
     }
 }
 
@@ -340,11 +349,18 @@ fn remove_dir_if_empty(dir: &Path, label: &str, summary: &mut String) -> Result<
 fn strip_managed_section(content: &str) -> (String, bool) {
     let lines: Vec<&str> = content.lines().collect();
     let start_idx = lines.iter().position(|l| l.contains(SECTION_START));
-    let end_idx = lines.iter().position(|l| l.contains(SECTION_END));
+    // Search for the end marker only after the start marker, so a stray
+    // `<!-- hyalo:end -->` in user content before the managed section
+    // doesn't confuse the match.
+    let end_idx = start_idx.and_then(|s| {
+        lines
+            .iter()
+            .skip(s + 1)
+            .position(|l| l.contains(SECTION_END))
+            .map(|rel| s + 1 + rel)
+    });
 
-    if let (Some(s), Some(e)) = (start_idx, end_idx)
-        && s <= e
-    {
+    if let (Some(s), Some(e)) = (start_idx, end_idx) {
         let mut result = String::new();
         for line in &lines[..s] {
             result.push_str(line);
