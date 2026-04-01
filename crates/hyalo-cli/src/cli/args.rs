@@ -439,6 +439,13 @@ Repeatable (AND).\n\
         #[arg(long)]
         claude: bool,
     },
+    /// Remove hyalo configuration and Claude Code integration artifacts
+    #[command(
+        long_about = "Remove .hyalo.toml and all Claude Code integration artifacts created by `init`.\n\n\
+            Removes skills, rules, and the managed section from .claude/CLAUDE.md.\n\
+            Safe to run when artifacts are already absent (idempotent)."
+    )]
+    Deinit,
     /// Build a snapshot index for faster repeated read-only queries
     #[command(
         name = "create-index",

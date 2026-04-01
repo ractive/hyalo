@@ -51,6 +51,23 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
         None => auto_detect_dir(cwd),
     };
 
+    // Create the target directory if it doesn't exist and --dir was explicit.
+    // Skip "." since the current directory always exists.
+    if dir_explicit && dir_value != "." {
+        let target = cwd.join(&dir_value);
+        if target.is_file() {
+            anyhow::bail!(
+                "--dir path '{}' is a file, not a directory",
+                target.display()
+            );
+        }
+        if !target.exists() {
+            fs::create_dir_all(&target)
+                .with_context(|| format!("failed to create directory {}", target.display()))?;
+            writeln!(summary, "created  {dir_value}/").unwrap();
+        }
+    }
+
     // ------------------------------------------------------------------
     // Step 1: create or update .hyalo.toml
     // ------------------------------------------------------------------
@@ -198,6 +215,171 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
     }
 
     Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()))
+}
+
+// ---------------------------------------------------------------------------
+// Deinit command
+// ---------------------------------------------------------------------------
+
+/// Remove hyalo configuration and Claude Code integration artifacts.
+pub fn run_deinit() -> Result<CommandOutcome> {
+    let cwd = std::env::current_dir().context("failed to determine current working directory")?;
+    run_deinit_in(&cwd)
+}
+
+fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
+    let mut summary = String::new();
+
+    // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
+    let skill_path = cwd
+        .join(".claude")
+        .join("skills")
+        .join("hyalo")
+        .join("SKILL.md");
+    remove_artifact(&skill_path, ".claude/skills/hyalo/SKILL.md", &mut summary)?;
+    let skill_dir = skill_path
+        .parent()
+        .context("skill path has no parent directory")?;
+    remove_dir_if_empty(skill_dir, ".claude/skills/hyalo/", &mut summary)?;
+
+    // Step 2: Remove .claude/skills/hyalo-tidy/SKILL.md and parent dir if empty.
+    let tidy_skill_path = cwd
+        .join(".claude")
+        .join("skills")
+        .join("hyalo-tidy")
+        .join("SKILL.md");
+    remove_artifact(
+        &tidy_skill_path,
+        ".claude/skills/hyalo-tidy/SKILL.md",
+        &mut summary,
+    )?;
+    let tidy_skill_dir = tidy_skill_path
+        .parent()
+        .context("tidy skill path has no parent directory")?;
+    remove_dir_if_empty(tidy_skill_dir, ".claude/skills/hyalo-tidy/", &mut summary)?;
+
+    // Step 3: Remove .claude/rules/knowledgebase.md and parent dir if empty.
+    let rules_path = cwd.join(".claude").join("rules").join("knowledgebase.md");
+    remove_artifact(&rules_path, ".claude/rules/knowledgebase.md", &mut summary)?;
+    let rules_dir = rules_path
+        .parent()
+        .context("rules path has no parent directory")?;
+    remove_dir_if_empty(rules_dir, ".claude/rules/", &mut summary)?;
+
+    // Step 4: Remove .claude/skills/ if empty.
+    let all_skills_dir = cwd.join(".claude").join("skills");
+    remove_dir_if_empty(&all_skills_dir, ".claude/skills/", &mut summary)?;
+
+    // Step 5: Strip the managed section from .claude/CLAUDE.md.
+    let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
+    if claude_md_path.exists() {
+        let content = fs::read_to_string(&claude_md_path)
+            .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
+        let (stripped, was_stripped) = strip_managed_section(&content);
+        if was_stripped {
+            if stripped.is_empty() {
+                fs::remove_file(&claude_md_path)
+                    .with_context(|| format!("failed to remove {}", claude_md_path.display()))?;
+                writeln!(
+                    summary,
+                    "removed  .claude/CLAUDE.md (empty after stripping)"
+                )
+                .unwrap();
+            } else {
+                fs::write(&claude_md_path, &stripped)
+                    .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
+                writeln!(
+                    summary,
+                    "updated  .claude/CLAUDE.md (stripped managed section)"
+                )
+                .unwrap();
+            }
+        } else {
+            writeln!(summary, "skipped  .claude/CLAUDE.md (no managed section)").unwrap();
+        }
+    } else {
+        writeln!(summary, "skipped  .claude/CLAUDE.md (not found)").unwrap();
+    }
+
+    // Clean up .claude/ itself if now empty.
+    let claude_dir = cwd.join(".claude");
+    remove_dir_if_empty(&claude_dir, ".claude/", &mut summary)?;
+
+    // Step 6: Remove .hyalo.toml.
+    let toml_path = cwd.join(".hyalo.toml");
+    remove_artifact(&toml_path, ".hyalo.toml", &mut summary)?;
+
+    Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()))
+}
+
+/// Remove `path` if it exists and append a status line to `summary`.
+/// Returns `Ok(true)` if the file was actually removed.
+fn remove_artifact(path: &Path, label: &str, summary: &mut String) -> Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            writeln!(summary, "removed  {label}").unwrap();
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            writeln!(summary, "skipped  {label} (not found)").unwrap();
+            Ok(false)
+        }
+        Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+/// Remove `dir` if it exists and is empty. Appends a status line to `summary` only if removed.
+fn remove_dir_if_empty(dir: &Path, label: &str, summary: &mut String) -> Result<()> {
+    if dir.is_dir() {
+        let is_empty = fs::read_dir(dir)
+            .with_context(|| format!("failed to read directory {}", dir.display()))?
+            .next()
+            .is_none();
+        if is_empty {
+            fs::remove_dir(dir)
+                .with_context(|| format!("failed to remove directory {}", dir.display()))?;
+            writeln!(summary, "removed  {label}").unwrap();
+        }
+    }
+    Ok(())
+}
+
+/// Remove lines between `<!-- hyalo:start -->` and `<!-- hyalo:end -->` (inclusive).
+/// Returns `(new_content, was_stripped)`.
+fn strip_managed_section(content: &str) -> (String, bool) {
+    let lines: Vec<&str> = content.lines().collect();
+    let start_idx = lines.iter().position(|l| l.contains(SECTION_START));
+    // Search for the end marker only after the start marker, so a stray
+    // `<!-- hyalo:end -->` in user content before the managed section
+    // doesn't confuse the match.
+    let end_idx = start_idx.and_then(|s| {
+        lines
+            .iter()
+            .skip(s + 1)
+            .position(|l| l.contains(SECTION_END))
+            .map(|rel| s + 1 + rel)
+    });
+
+    if let (Some(s), Some(e)) = (start_idx, end_idx) {
+        let mut result = String::new();
+        for line in &lines[..s] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        for line in &lines[e + 1..] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        // Trim trailing blank lines that were separating the section.
+        let trimmed = result.trim_end_matches('\n').to_owned();
+        let final_content = if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("{trimmed}\n")
+        };
+        return (final_content, true);
+    }
+    (content.to_owned(), false)
 }
 
 // ---------------------------------------------------------------------------
@@ -968,6 +1150,39 @@ mod tests {
     }
 
     #[test]
+    fn run_init_creates_missing_dir_when_explicit() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outcome = run_init_in(Some("my-new-docs"), false, tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+        assert!(
+            out.contains("created  my-new-docs/"),
+            "summary mentions created dir"
+        );
+        assert!(
+            tmp.path().join("my-new-docs").is_dir(),
+            "directory was created"
+        );
+    }
+
+    #[test]
+    fn run_init_does_not_create_dir_when_auto_detected() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // No --dir flag, auto-detection falls back to "."
+        let outcome = run_init_in(None, false, tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+        // No directory creation line — only the .hyalo.toml line.
+        // The dir creation line always ends with "/" so check for that form.
+        assert!(
+            !out.contains("created  ./"),
+            "no directory creation line for auto-detected"
+        );
+    }
+
+    #[test]
     fn run_init_overwrites_malformed_toml_non_table() {
         // .hyalo.toml contains valid TOML that is not a table (bare string).
         let tmp = tempfile::TempDir::new().unwrap();
@@ -991,5 +1206,154 @@ mod tests {
             Some("docs"),
             "dir key written correctly"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // strip_managed_section tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn strip_managed_section_removes_markers() {
+        let content = format!("{SECTION_START}\nsome hint\n{SECTION_END}\n");
+        let (result, stripped) = strip_managed_section(&content);
+        assert!(stripped, "should report stripped");
+        assert!(result.is_empty(), "content should be empty after stripping");
+    }
+
+    #[test]
+    fn strip_managed_section_preserves_surrounding() {
+        let content = format!("# Before\n\n{SECTION_START}\nhint\n{SECTION_END}\n\n# After\n");
+        let (result, stripped) = strip_managed_section(&content);
+        assert!(stripped, "should report stripped");
+        assert!(result.contains("# Before"), "before content preserved");
+        assert!(result.contains("# After"), "after content preserved");
+        assert!(!result.contains(SECTION_START), "start marker removed");
+        assert!(!result.contains(SECTION_END), "end marker removed");
+        assert!(!result.contains("hint"), "managed content removed");
+    }
+
+    #[test]
+    fn strip_managed_section_returns_false_when_no_markers() {
+        let content = "# Just a normal file\n\nNo managed section here.\n";
+        let (result, stripped) = strip_managed_section(content);
+        assert!(!stripped, "should not report stripped");
+        assert_eq!(result, content, "content unchanged");
+    }
+
+    #[test]
+    fn strip_managed_section_handles_only_managed_content() {
+        // File contains only the managed section — result should be empty.
+        let content = format!("{SECTION_START}\nhint text\n{SECTION_END}\n");
+        let (result, stripped) = strip_managed_section(&content);
+        assert!(stripped, "should report stripped");
+        assert!(
+            result.is_empty(),
+            "nothing left after stripping entire content"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // run_deinit integration tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn run_deinit_removes_all_artifacts() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Set up all artifacts that init --claude would create.
+        run_init_in(Some("docs"), true, tmp.path()).unwrap();
+
+        let outcome = run_deinit_in(tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+
+        assert!(out.contains("removed  .claude/skills/hyalo/SKILL.md"));
+        assert!(out.contains("removed  .claude/skills/hyalo-tidy/SKILL.md"));
+        assert!(out.contains("removed  .claude/rules/knowledgebase.md"));
+        assert!(
+            out.contains("removed  .claude/CLAUDE.md (empty after stripping)")
+                || out.contains("updated  .claude/CLAUDE.md (stripped managed section)")
+        );
+        assert!(out.contains("removed  .hyalo.toml"));
+
+        // Verify files are gone.
+        assert!(!tmp.path().join(".hyalo.toml").exists());
+        assert!(
+            !tmp.path()
+                .join(".claude")
+                .join("skills")
+                .join("hyalo")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            !tmp.path()
+                .join(".claude")
+                .join("skills")
+                .join("hyalo-tidy")
+                .join("SKILL.md")
+                .exists()
+        );
+        assert!(
+            !tmp.path()
+                .join(".claude")
+                .join("rules")
+                .join("knowledgebase.md")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn run_deinit_idempotent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // First run with artifacts present.
+        run_init_in(Some("docs"), true, tmp.path()).unwrap();
+        run_deinit_in(tmp.path()).unwrap();
+
+        // Second run — no artifacts; must not error and must say "skipped".
+        let outcome = run_deinit_in(tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+        assert!(out.contains("skipped  .claude/skills/hyalo/SKILL.md (not found)"));
+        assert!(out.contains("skipped  .claude/skills/hyalo-tidy/SKILL.md (not found)"));
+        assert!(out.contains("skipped  .claude/rules/knowledgebase.md (not found)"));
+        assert!(out.contains("skipped  .hyalo.toml (not found)"));
+    }
+
+    #[test]
+    fn run_deinit_preserves_non_managed_claude_md() {
+        let tmp = tempfile::TempDir::new().unwrap();
+
+        // Create .claude/CLAUDE.md with user content plus the managed section.
+        let claude_dir = tmp.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        let content = format!(
+            "# My custom instructions\n\nDo not delete me.\n\n{SECTION_START}\nhint\n{SECTION_END}\n"
+        );
+        fs::write(claude_dir.join("CLAUDE.md"), &content).unwrap();
+
+        let outcome = run_deinit_in(tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+        assert!(out.contains("updated  .claude/CLAUDE.md (stripped managed section)"));
+
+        let remaining = fs::read_to_string(claude_dir.join("CLAUDE.md")).unwrap();
+        assert!(
+            remaining.contains("My custom instructions"),
+            "user content preserved"
+        );
+        assert!(
+            remaining.contains("Do not delete me."),
+            "user content preserved"
+        );
+        assert!(
+            !remaining.contains(SECTION_START),
+            "managed section removed"
+        );
+        assert!(!remaining.contains(SECTION_END), "managed section removed");
     }
 }

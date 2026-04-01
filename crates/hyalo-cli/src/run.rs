@@ -157,13 +157,23 @@ fn run_inner() -> Result<(), AppError> {
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
     // Reject --count early — init is not a list command.
-    if cli.count && matches!(cli.command, Commands::Init { .. }) {
+    if cli.count && matches!(cli.command, Commands::Init { .. } | Commands::Deinit) {
         eprintln!("{COUNT_UNSUPPORTED_ERROR}");
         return Err(AppError::Exit(2));
     }
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
         match init_commands::run_init(init_dir, claude) {
+            Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
+                println!("{output}");
+                return Ok(());
+            }
+            Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
+            Err(e) => return Err(AppError::Internal(e)),
+        }
+    }
+    if let Commands::Deinit = cli.command {
+        match init_commands::run_deinit() {
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 println!("{output}");
                 return Ok(());
@@ -476,7 +486,10 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.hints = hints_from_cli;
                 Some(ctx)
             }
-            Commands::Properties { .. } | Commands::Tags { .. } | Commands::Init { .. } => None,
+            Commands::Properties { .. }
+            | Commands::Tags { .. }
+            | Commands::Init { .. }
+            | Commands::Deinit => None,
         }
     } else {
         None
