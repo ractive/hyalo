@@ -1,6 +1,6 @@
 # hyalo
 
-**Your markdown collection deserves a proper query language.**
+**Your markdown collection deserves a powerful tool to manage it.**
 
 If you maintain an [Obsidian](https://obsidian.md/) vault, a Zettelkasten, documentation site, or any folder of `.md` files with YAML frontmatter, you've probably hit the limits of `grep` and manual editing. Hyalo gives you a fast, structured way to search, filter, and bulk-edit your markdown files from the command line.
 
@@ -21,7 +21,7 @@ If you maintain an [Obsidian](https://obsidian.md/) vault, a Zettelkasten, docum
 - **Safe mutations.** Dry-run mode on all write operations. Preview before committing changes.
 - **Cross-platform.** Works on macOS, Linux, and Windows. No runtime dependencies.
 
-> "Hyalo" — like "obsidian" — is a volcanic glass. The project started as a high-performance CLI for [Claude Code](https://claude.ai/claude-code) to maintain Obsidian-compatible knowledgebases.
+> "Hyalo" — short for [hyaloclastite](https://en.wikipedia.org/wiki/Hyaloclastite) — is a volcanic glass, just like obsidian. The project started as a high-performance CLI for [Claude Code](https://claude.ai/claude-code) to maintain Obsidian-compatible knowledgebases.
 
 ## Installation
 
