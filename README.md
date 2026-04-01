@@ -157,11 +157,27 @@ hyalo init --claude
 
 Without `--dir`, hyalo auto-detects common documentation directories (`docs/`, `knowledgebase/`, `wiki/`, `notes/`, `content/`, `pages/`) by looking for a subdirectory that contains `.md` files. Falls back to `.` if none is found.
 
-With `--claude`, hyalo additionally:
-- Creates `.claude/skills/hyalo/SKILL.md` so Claude Code automatically uses hyalo for markdown operations
-- Appends a hyalo usage hint to `.claude/CLAUDE.md`
+With `--claude`, hyalo additionally installs two skills, one rule, and a managed hint section for [Claude Code](https://claude.ai/claude-code):
 
-All steps are idempotent — existing files are skipped, and duplicate hints are not added.
+```
+.claude/
+├── CLAUDE.md                        # managed section appended (hyalo usage hint)
+├── skills/
+│   ├── hyalo/SKILL.md               # auto-triggered skill for knowledgebase operations
+│   └── hyalo-tidy/SKILL.md          # user-invoked skill for knowledgebase consolidation
+└── rules/
+    └── knowledgebase.md             # path-triggered rule for markdown files
+```
+
+**`hyalo` skill** — Automatically triggered whenever Claude Code works with markdown files in your vault. Teaches Claude to use `hyalo find`, `hyalo set`, `hyalo mv`, etc. instead of raw `Read`/`Edit`/`Grep`/`Glob` — giving it structured access to frontmatter, tags, links, and tasks.
+
+**`hyalo-tidy` skill** — Invoked manually with `/hyalo-tidy`. Runs a five-phase knowledgebase consolidation: orients with `hyalo summary`, gathers recent signal from git history, detects structural issues (broken links, orphan files, stale statuses, missing metadata), applies conservative fixes, and reports a health summary.
+
+**`knowledgebase` rule** — A [path-triggered rule](https://docs.anthropic.com/en/docs/claude-code/settings#rules) scoped to `<your-vault>/**`. Whenever Claude Code touches files in the vault directory, this rule reminds it to prefer `hyalo` CLI commands over built-in file tools.
+
+**`.claude/CLAUDE.md` hint** — A managed section (between `<!-- hyalo:start -->` and `<!-- hyalo:end -->` markers) with a short reminder to use `hyalo` for knowledgebase operations.
+
+All steps are idempotent — re-running `hyalo init --claude` overwrites skills and the rule with the latest versions, and the managed section in `CLAUDE.md` is replaced in-place without duplicating.
 
 ### find
 
