@@ -18,7 +18,7 @@ Split the largest files in the codebase into smaller, well-scoped modules so tha
 
 ### Split main.rs (1906 lines)
 
-- [x] Extract CLI structs (`Cli`, `Commands`, sub-enums) into `cli/args.rs` — see [[backlog/split-main-rs]]
+- [x] Extract CLI structs (`Cli`, `Commands`, sub-enums) into `cli/args.rs` — see [[backlog/done/split-main-rs]]
 - [x] Extract help text constants and filtering into `cli/help.rs`
 - [x] Move dispatch + config-merge logic into `run.rs` as `run()` entry point, re-exported from `lib.rs`
 - [x] Shrink `main.rs` to 3 lines
@@ -32,7 +32,7 @@ Split the largest files in the codebase into smaller, well-scoped modules so tha
 
 ### Extract shared mutation helpers
 
-- [x] Extract shared index-update and save helpers from set/remove/append into `commands/mutation.rs` — see [[backlog/shared-mutation-helpers]]
+- [x] Extract shared index-update and save helpers from set/remove/append into `commands/mutation.rs` — see [[backlog/done/shared-mutation-helpers]]
 
 ### Misc structure
 

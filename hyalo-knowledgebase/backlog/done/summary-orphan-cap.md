@@ -6,7 +6,7 @@ tags:
   - backlog
   - ux
 priority: medium
-status: wont-fix
+status: wont-do
 origin: dogfooding legalize-es
 ---
 

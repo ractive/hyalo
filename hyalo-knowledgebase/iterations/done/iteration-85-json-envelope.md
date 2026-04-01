@@ -8,7 +8,7 @@ tags:
   - ux
   - json
   - breaking-change
-  - dogfood
+  - dogfooding
 ---
 
 ## Goal

@@ -4,7 +4,7 @@ type: backlog
 date: 2026-03-30
 origin: dogfood MDN runs 2026-03-30
 priority: high
-status: scheduled
+status: completed
 tags:
   - ux
   - json

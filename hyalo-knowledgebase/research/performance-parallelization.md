@@ -80,7 +80,7 @@ For truly large vaults, a persistent index (SQLite with mtime-based invalidation
 
 ## Iteration 86: memchr + rayon + parallel walk (2026-03-30)
 
-Revisited parallelism with a broader approach combining memchr, rayon, and parallel walk. See [[iterations/iteration-86-high-perf-scanning]].
+Revisited parallelism with a broader approach combining memchr, rayon, and parallel walk. See [[iterations/done/iteration-86-high-perf-scanning]].
 
 ### Changes
 - `memchr::memmem::Finder` for SIMD-accelerated substring search (replaced naive sliding window)
@@ -103,7 +103,7 @@ The combination works where rayon alone didn't (iter-18 gave 1.05x) because:
 3. Parallel walk + parallel scan compound
 
 ### Remaining bottleneck
-`hyalo find "pattern"` still builds a full 4-visitor index (`scan_body: true`) even though content search only needs frontmatter + body text. This redundant work is ~50% of wall time. Tracked in [[backlog/skip-body-index-for-content-search]].
+`hyalo find "pattern"` still builds a full 4-visitor index (`scan_body: true`) even though content search only needs frontmatter + body text. This redundant work is ~50% of wall time. Tracked in [[backlog/done/skip-body-index-for-content-search]].
 
 ## Other Performance Notes
 

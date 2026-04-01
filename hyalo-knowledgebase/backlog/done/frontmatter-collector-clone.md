@@ -2,7 +2,7 @@
 title: FrontmatterCollector clones entire IndexMap per file
 type: backlog
 date: 2026-03-29
-status: done
+status: completed
 origin: codebase review 2026-03-29
 priority: medium
 tags:

@@ -5,7 +5,7 @@ date: 2026-03-30
 tags:
   - ux
   - feature
-  - dogfood
+  - dogfooding
 status: completed
 priority: 2
 branch: iter-80/smarter-hints

@@ -35,7 +35,7 @@ Clean up code quality issues found in the codebase review. Address clippy pedant
 
 ### Scanner optimization
 
-- [x] Eliminate `FrontmatterCollector` clone of full `IndexMap` per file — see [[backlog/frontmatter-collector-clone]]
+- [x] Eliminate `FrontmatterCollector` clone of full `IndexMap` per file — see [[backlog/done/frontmatter-collector-clone]]
 
 ### Quality gate
 

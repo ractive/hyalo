@@ -2,7 +2,7 @@
 title: Skip full-body index build for content-only search
 type: backlog
 date: 2026-03-30
-status: planned
+status: completed
 priority: high
 origin: iterations/iteration-86-high-perf-scanning.md
 tags:
@@ -31,5 +31,5 @@ Decouple `scan_body` from `has_content_search` in `dispatch.rs`. When only conte
 Should roughly halve the time for `hyalo find "pattern"` by eliminating the redundant full-body index scan (~50% of current wall time is index build with 4 visitors).
 
 ## References
-- [[iterations/iteration-86-high-perf-scanning]] — discovered during perf iteration
+- [[iterations/done/iteration-86-high-perf-scanning]] — discovered during perf iteration
 - [[research/performance-parallelization]] — I/O dominance confirmed

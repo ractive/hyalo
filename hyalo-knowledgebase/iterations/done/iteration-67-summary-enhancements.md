@@ -29,7 +29,7 @@ the v0.6.0 tidy round (tested on 3 external repos: docs/content 3520 files, vsco
 - [x] Add e2e tests for dead-end output in both JSON and text formats
 - [x] Dogfood on external repos to verify dead-end counts are reasonable
 
-See [[backlog/summary-dead-ends]]
+See [[backlog/done/summary-dead-ends]]
 
 ### Show total count when --limit truncates
 
@@ -39,7 +39,7 @@ See [[backlog/summary-dead-ends]]
 - [x] Add e2e tests for find JSON envelope (both limited and unlimited) and text --limit total count
 - [x] Verify `--limit` + `--jq` interaction works correctly (jq operates on the envelope)
 
-See [[backlog/find-limit-total-count]]
+See [[backlog/done/find-limit-total-count]]
 
 ### Memory optimisation: find --limit with pre-sorted iteration
 
@@ -50,7 +50,7 @@ See [[backlog/find-limit-total-count]]
 - [x] E2e test: deterministic results with `--sort file --limit N`
 - [x] E2e test: accurate total with filters + `--sort file --limit`
 
-See [[backlog/find-limit-memory-optimization]]
+See [[backlog/done/find-limit-memory-optimization]]
 
 ### Quality gates
 

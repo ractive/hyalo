@@ -4,8 +4,8 @@ type: iteration
 date: 2026-03-30
 tags:
   - ux
-  - dogfood
   - breaking-change
+  - dogfooding
 status: completed
 priority: 2
 branch: iter-79/slim-defaults

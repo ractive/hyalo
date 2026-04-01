@@ -5,7 +5,7 @@ date: 2026-03-30
 tags:
   - ux
   - docs
-  - dogfood
+  - dogfooding
 status: completed
 priority: 3
 branch: iter-77/regexp-help-visibility

@@ -159,5 +159,5 @@ For `tags summary`: always false.
 
 ## References
 
-- [[backlog/find-limit-memory-optimization]] — related performance work
+- [[backlog/done/find-limit-memory-optimization]] — related performance work
 - Codebase review (2026-03-29) identified duplicate vault scans as the #1 and #2 critical performance issue

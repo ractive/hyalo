@@ -1,7 +1,11 @@
 ---
-title: "Property regex doesn't match inside YAML list values"
+title: Property regex doesn't match inside YAML list values
 type: backlog
-tags: [find, frontmatter, regex, dogfood]
+tags:
+  - find
+  - frontmatter
+  - regex
+  - dogfooding
 status: planned
 date: 2026-03-30
 ---

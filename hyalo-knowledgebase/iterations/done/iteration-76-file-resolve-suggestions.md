@@ -4,7 +4,7 @@ type: iteration
 date: 2026-03-30
 tags:
   - ux
-  - dogfood
+  - dogfooding
 status: completed
 priority: 3
 branch: iter-76/file-resolve-suggestions
