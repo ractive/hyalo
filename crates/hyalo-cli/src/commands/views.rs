@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::cli::args::FindFilters;
 use crate::output::CommandOutcome;
@@ -11,19 +11,33 @@ const TOML_PATH: &str = ".hyalo.toml";
 /// Load all views from `.hyalo.toml`.
 /// Returns an empty map if the file doesn't exist or has no views.
 pub(crate) fn load_views() -> HashMap<String, FindFilters> {
-    let Ok(contents) = fs::read_to_string(TOML_PATH) else {
-        return HashMap::new();
+    let contents = match fs::read_to_string(TOML_PATH) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            crate::warn::warn(format!("could not read .hyalo.toml for views: {e}"));
+            return HashMap::new();
+        }
     };
-    let Ok(table) = toml::from_str::<toml::Table>(&contents) else {
-        return HashMap::new();
+    let table: toml::Table = match toml::from_str(&contents) {
+        Ok(t) => t,
+        Err(e) => {
+            crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
+            return HashMap::new();
+        }
     };
     let Some(toml::Value::Table(views_table)) = table.get("views") else {
         return HashMap::new();
     };
     let mut views = HashMap::new();
     for (name, value) in views_table {
-        if let Ok(filters) = value.clone().try_into::<FindFilters>() {
-            views.insert(name.clone(), filters);
+        match value.clone().try_into::<FindFilters>() {
+            Ok(filters) => {
+                views.insert(name.clone(), filters);
+            }
+            Err(e) => {
+                crate::warn::warn(format!("skipping malformed view '{name}': {e}"));
+            }
         }
     }
     views
@@ -58,10 +72,15 @@ pub(crate) fn list_views() -> Result<CommandOutcome> {
 
 /// Save a view to `.hyalo.toml`.
 pub(crate) fn set_view(name: &str, filters: &FindFilters) -> Result<CommandOutcome> {
-    // Validate name: must be non-empty, no whitespace, no dots (TOML key safety)
-    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('.') {
+    // Validate name: alphanumeric, hyphens, and underscores only (TOML bare-key safe)
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Ok(CommandOutcome::UserError(format!(
-            "Error: invalid view name '{name}': must be non-empty, with no whitespace or dots"
+            "Error: invalid view name '{name}': must be non-empty and contain only \
+             alphanumeric characters, hyphens, or underscores"
         )));
     }
 
@@ -84,7 +103,9 @@ pub(crate) fn set_view(name: &str, filters: &FindFilters) -> Result<CommandOutco
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
     let toml::Value::Table(views_table) = views else {
-        bail!("'views' in .hyalo.toml is not a table");
+        return Ok(CommandOutcome::UserError(
+            "Error: 'views' in .hyalo.toml is not a table — check your config file".to_owned(),
+        ));
     };
 
     views_table.insert(name.to_owned(), filters_value);

@@ -226,8 +226,16 @@ impl FindFilters {
             self.task.clone_from(&overlay.task);
         }
         self.sections.extend(overlay.sections.iter().cloned());
-        self.file.extend(overlay.file.iter().cloned());
-        self.glob.extend(overlay.glob.iter().cloned());
+        // file and glob are mutually exclusive (clap enforces this at parse time).
+        // If the overlay provides either, it replaces the base to avoid an invalid
+        // combination where both file and glob are non-empty.
+        if !overlay.file.is_empty() {
+            self.file.extend(overlay.file.iter().cloned());
+            self.glob.clear();
+        } else if !overlay.glob.is_empty() {
+            self.glob.extend(overlay.glob.iter().cloned());
+            self.file.clear();
+        }
         self.fields.extend(overlay.fields.iter().cloned());
         if overlay.sort.is_some() {
             self.sort.clone_from(&overlay.sort);
@@ -634,7 +642,7 @@ pub(crate) enum ViewsAction {
     /// List all saved views
     #[command(
         long_about = "Show all saved views and their filter configurations.\n\n\
-        OUTPUT: JSON array of view objects with name and filters.\n\
+        OUTPUT: JSON envelope with results (array of view objects) and total count.\n\
         SIDE EFFECTS: None (read-only)."
     )]
     List,
