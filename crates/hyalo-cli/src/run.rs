@@ -2,7 +2,7 @@ use std::process;
 
 use clap::{CommandFactory, FromArgMatches};
 
-use crate::cli::args::{Cli, Commands};
+use crate::cli::args::{Cli, Commands, FindFilters, ViewsAction};
 use crate::cli::help::{filter_examples, filter_long_help};
 use crate::commands::init as init_commands;
 use crate::dispatch::{CommandContext, dispatch};
@@ -144,7 +144,7 @@ fn run_inner() -> Result<(), AppError> {
             return Err(AppError::Clap(e));
         }
     };
-    let cli = match Cli::from_arg_matches(&matches) {
+    let mut cli = match Cli::from_arg_matches(&matches) {
         Ok(c) => c,
         Err(e) => return Err(AppError::Clap(e)),
     };
@@ -157,7 +157,12 @@ fn run_inner() -> Result<(), AppError> {
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
     // Reject --count early — init is not a list command.
-    if cli.count && matches!(cli.command, Commands::Init { .. } | Commands::Deinit) {
+    if cli.count
+        && matches!(
+            cli.command,
+            Commands::Init { .. } | Commands::Deinit | Commands::Views { .. }
+        )
+    {
         eprintln!("{COUNT_UNSUPPORTED_ERROR}");
         return Err(AppError::Exit(2));
     }
@@ -180,6 +185,38 @@ fn run_inner() -> Result<(), AppError> {
             }
             Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
             Err(e) => return Err(AppError::Internal(e)),
+        }
+    }
+    if let Commands::Views { ref action } = cli.command {
+        match action {
+            ViewsAction::List => match crate::commands::views::list_views() {
+                Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
+                    println!("{output}");
+                    return Ok(());
+                }
+                Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
+                Err(e) => return Err(AppError::Internal(e)),
+            },
+            ViewsAction::Set { name, filters } => {
+                match crate::commands::views::set_view(name, filters) {
+                    Ok(
+                        CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output),
+                    ) => {
+                        println!("{output}");
+                        return Ok(());
+                    }
+                    Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
+                    Err(e) => return Err(AppError::Internal(e)),
+                }
+            }
+            ViewsAction::Remove { name } => match crate::commands::views::remove_view(name) {
+                Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
+                    println!("{output}");
+                    return Ok(());
+                }
+                Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
+                Err(e) => return Err(AppError::Internal(e)),
+            },
         }
     }
 
@@ -250,6 +287,28 @@ fn run_inner() -> Result<(), AppError> {
     } else {
         config.hints
     };
+
+    // Resolve --view: load the named view from .hyalo.toml and merge CLI overrides.
+    if let Commands::Find {
+        view: Some(ref view_name),
+        ref mut filters,
+        ..
+    } = cli.command
+    {
+        let views = crate::commands::views::load_views();
+        match views.get(view_name) {
+            Some(base) => {
+                let overlay = std::mem::take(filters);
+                *filters = base.clone();
+                filters.merge_from(&overlay);
+            }
+            None => {
+                return Err(AppError::User(format!(
+                    "Error: unknown view '{view_name}'\n\n  tip: run 'hyalo views list' to see available views"
+                )));
+            }
+        }
+    }
 
     // --jq operates on JSON, so it conflicts with an explicit --format text.
     let jq_filter = cli.jq.as_deref();
@@ -336,16 +395,20 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Find {
-                glob,
                 pattern,
-                regexp,
-                properties,
-                tag,
-                task,
-                file,
-                fields,
-                sort,
-                limit,
+                filters:
+                    FindFilters {
+                        glob,
+                        regexp,
+                        properties,
+                        tag,
+                        task,
+                        file,
+                        fields,
+                        sort,
+                        limit,
+                        ..
+                    },
                 ..
             } => {
                 let mut ctx = HintContext::new(HintSource::Find);
@@ -489,7 +552,8 @@ fn run_inner() -> Result<(), AppError> {
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }
-            | Commands::Deinit => None,
+            | Commands::Deinit
+            | Commands::Views { .. } => None,
         }
     } else {
         None
@@ -505,6 +569,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::CreateIndex { .. }
             | Commands::DropIndex { .. }
             | Commands::Read { .. }
+            | Commands::Views { .. }
     );
     let mut snapshot_index: Option<SnapshotIndex> = if uses_index {
         if let Some(ref index_path) = cli.index {

@@ -30,7 +30,12 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Fix broken links (preview):   hyalo links fix
   Build a snapshot index:       hyalo create-index
   Query using the index:        hyalo find --property status=draft --index .hyalo-index
-  Delete the snapshot index:    hyalo drop-index";
+  Delete the snapshot index:    hyalo drop-index
+  Save a view:                  hyalo views set todo --task todo
+  List saved views:             hyalo views list
+  Use a view:                   hyalo find --view todo
+  Use view with overrides:      hyalo find --view todo --limit 5
+  Remove a view:                hyalo views remove todo";
 
 /// Long help (shown by `--help`): command reference, cookbook, and output shapes.
 pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
@@ -75,6 +80,12 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
 
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
+
+  Views (manage saved find queries):
+    hyalo views list                                       List all saved views
+    hyalo views set <NAME> [find filters...]               Save a view (overwrites existing)
+    hyalo views remove <NAME>                              Delete a view
+    hyalo find --view <NAME> [additional filters...]       Use a saved view
 
   Init (configuration, one-time setup):
     hyalo init [--claude] [-d/--dir DIR]

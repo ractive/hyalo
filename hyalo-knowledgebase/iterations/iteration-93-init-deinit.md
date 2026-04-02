@@ -6,7 +6,7 @@ tags:
   - init
   - cli
   - iteration
-status: planned
+status: completed
 branch: iter-93/init-deinit
 ---
 
