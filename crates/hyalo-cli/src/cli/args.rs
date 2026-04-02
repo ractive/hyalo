@@ -4,6 +4,11 @@ use clap::{Parser, Subcommand};
 
 use crate::output::Format;
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
+pub(crate) fn is_false(v: &bool) -> bool {
+    !v
+}
+
 pub(crate) fn parse_limit(s: &str) -> Result<usize, String> {
     let n: usize = s
         .parse()
@@ -145,6 +150,99 @@ pub(crate) struct Cli {
     pub command: Commands,
 }
 
+/// All filter arguments for `hyalo find`, extracted so they can be serialized as views.
+#[derive(Debug, Clone, Default, clap::Args, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct FindFilters {
+    /// Regex body text search (case-insensitive by default; use (?-i) to override). Mutually exclusive with PATTERN
+    #[arg(long, short = 'e', value_name = "REGEX")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regexp: Option<String>,
+    /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent), K~=pat or K~=/pat/i (regex). Repeatable (AND)
+    #[arg(short, long = "property", value_name = "FILTER")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<String>,
+    /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not 'projects'). Repeatable (AND)
+    #[arg(short, long, value_name = "TAG")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tag: Vec<String>,
+    /// Task presence filter: 'todo', 'done', 'any', or a single status character
+    #[arg(long, value_name = "STATUS")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+    /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR)
+    #[arg(short, long = "section", value_name = "HEADING")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<String>,
+    /// Target file(s) (repeatable). Mutually exclusive with --glob
+    #[arg(short, long, conflicts_with = "glob")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file: Vec<String>,
+    /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
+    #[arg(short, long, conflicts_with = "file")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub glob: Vec<String>,
+    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
+    #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    /// Sort order: 'file' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
+    #[arg(long)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    /// Reverse the sort order (ascending becomes descending and vice versa)
+    #[arg(long)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub reverse: bool,
+    /// Maximum number of results to return (must be at least 1)
+    #[arg(short = 'n', long, value_parser = parse_limit)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    /// Only return files with at least one unresolved link (auto-includes links field)
+    #[arg(long)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub broken_links: bool,
+    /// Filter by title: case-insensitive substring match against the displayed title
+    /// (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
+    /// (e.g. '/^The/' or '/^The/i').
+    #[arg(long)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+impl FindFilters {
+    /// Merge CLI overrides onto a view's filters.
+    /// - Vec fields: CLI extends the view
+    /// - Option fields: CLI overrides if Some
+    /// - Bool fields: OR (CLI can turn on, not off)
+    pub(crate) fn merge_from(&mut self, overlay: &Self) {
+        if overlay.regexp.is_some() {
+            self.regexp.clone_from(&overlay.regexp);
+        }
+        self.properties.extend(overlay.properties.iter().cloned());
+        self.tag.extend(overlay.tag.iter().cloned());
+        if overlay.task.is_some() {
+            self.task.clone_from(&overlay.task);
+        }
+        self.sections.extend(overlay.sections.iter().cloned());
+        self.file.extend(overlay.file.iter().cloned());
+        self.glob.extend(overlay.glob.iter().cloned());
+        self.fields.extend(overlay.fields.iter().cloned());
+        if overlay.sort.is_some() {
+            self.sort.clone_from(&overlay.sort);
+        }
+        self.reverse = self.reverse || overlay.reverse;
+        if overlay.limit.is_some() {
+            self.limit = overlay.limit;
+        }
+        self.broken_links = self.broken_links || overlay.broken_links;
+        if overlay.title.is_some() {
+            self.title.clone_from(&overlay.title);
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Search and filter markdown files — returns file objects with metadata, structure, tasks, and links
@@ -175,48 +273,11 @@ pub(crate) enum Commands {
         /// Case-insensitive body text search (searches body only, not frontmatter)
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
-        /// Regex body text search (case-insensitive by default; use (?-i) to override). Mutually exclusive with PATTERN
-        #[arg(long, short = 'e', value_name = "REGEX")]
-        regexp: Option<String>,
-        /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent), K~=pat or K~=/pat/i (regex). Repeatable (AND)
-        #[arg(short, long = "property", value_name = "FILTER")]
-        properties: Vec<String>,
-        /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not 'projects'). Repeatable (AND)
-        #[arg(short, long, value_name = "TAG")]
-        tag: Vec<String>,
-        /// Task presence filter: 'todo', 'done', 'any', or a single status character
-        #[arg(long, value_name = "STATUS")]
-        task: Option<String>,
-        /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
-        /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR)
-        #[arg(short, long = "section", value_name = "HEADING")]
-        sections: Vec<String>,
-        /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with = "glob")]
-        file: Vec<String>,
-        /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
-        #[arg(short, long, conflicts_with = "file")]
-        glob: Vec<String>,
-        /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
-        #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
-        fields: Vec<String>,
-        /// Sort order: 'file' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
-        #[arg(long)]
-        sort: Option<String>,
-        /// Reverse the sort order (ascending becomes descending and vice versa)
-        #[arg(long)]
-        reverse: bool,
-        /// Maximum number of results to return (must be at least 1)
-        #[arg(short = 'n', long, value_parser = parse_limit)]
-        limit: Option<usize>,
-        /// Only return files with at least one unresolved link (auto-includes links field)
-        #[arg(long)]
-        broken_links: bool,
-        /// Filter by title: case-insensitive substring match against the displayed title
-        /// (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
-        /// (e.g. '/^The/' or '/^The/i').
-        #[arg(long)]
-        title: Option<String>,
+        /// Use a saved view (named filter set from .hyalo.toml)
+        #[arg(long, value_name = "NAME")]
+        view: Option<String>,
+        #[command(flatten)]
+        filters: FindFilters,
     },
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(long_about = "Read the body content of a markdown file.\n\n\
@@ -532,6 +593,21 @@ Repeatable (AND).\n\
         #[arg(long)]
         dry_run: bool,
     },
+    /// Manage saved views (named find filter sets stored in .hyalo.toml)
+    #[command(
+        long_about = "Manage saved views — named find queries stored in .hyalo.toml.\n\n\
+            Views let you save frequently used filter combinations under a name\n\
+            and recall them with `hyalo find --view <name>`.\n\n\
+            Subcommands:\n\
+            - list: Show all saved views and their filters.\n\
+            - set: Create or update a view.\n\
+            - remove: Delete a view.\n\n\
+            SIDE EFFECTS: 'set' and 'remove' modify .hyalo.toml. 'list' is read-only."
+    )]
+    Views {
+        #[command(subcommand)]
+        action: ViewsAction,
+    },
     /// Detect and repair broken links across the vault
     #[command(
         long_about = "Detect and repair broken wikilinks and markdown links.\n\n\
@@ -549,6 +625,38 @@ Repeatable (AND).\n\
     Links {
         #[command(subcommand)]
         action: LinksAction,
+    },
+}
+
+#[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // Set variant holds FindFilters by design; boxing would complicate dispatch
+pub(crate) enum ViewsAction {
+    /// List all saved views
+    #[command(
+        long_about = "Show all saved views and their filter configurations.\n\n\
+        OUTPUT: JSON array of view objects with name and filters.\n\
+        SIDE EFFECTS: None (read-only)."
+    )]
+    List,
+    /// Create or update a saved view
+    #[command(long_about = "Save a combination of find filters under a name.\n\n\
+        The view is stored in .hyalo.toml and can be recalled with `hyalo find --view <name>`.\n\
+        Overwrites if the view already exists.\n\n\
+        SIDE EFFECTS: Modifies .hyalo.toml.")]
+    Set {
+        /// View name
+        #[arg(value_name = "NAME")]
+        name: String,
+        #[command(flatten)]
+        filters: FindFilters,
+    },
+    /// Delete a saved view
+    #[command(long_about = "Remove a saved view from .hyalo.toml.\n\n\
+        SIDE EFFECTS: Modifies .hyalo.toml.")]
+    Remove {
+        /// View name to delete
+        #[arg(value_name = "NAME")]
+        name: String,
     },
 }
 

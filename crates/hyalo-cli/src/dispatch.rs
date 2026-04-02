@@ -2,7 +2,9 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::cli::args::{Commands, LinksAction, PropertiesAction, TagsAction, TaskAction};
+use crate::cli::args::{
+    Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction,
+};
 use crate::commands::{
     ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
@@ -54,19 +56,23 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     match command {
         Commands::Find {
             pattern,
-            regexp,
-            properties,
-            tag,
-            task,
-            sections,
-            file,
-            glob,
-            fields,
-            sort,
-            reverse,
-            limit,
-            broken_links,
-            title,
+            view: _, // resolved before dispatch
+            filters:
+                FindFilters {
+                    regexp,
+                    properties,
+                    tag,
+                    task,
+                    sections,
+                    file,
+                    glob,
+                    fields,
+                    sort,
+                    reverse,
+                    limit,
+                    broken_links,
+                    title,
+                },
         } => {
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
@@ -506,8 +512,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 Err(e) => Err(e),
             },
         },
-        // `Init` and `Deinit` are handled as early returns before dispatch is called.
+        // `Init`, `Deinit`, and `Views` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
         Commands::Deinit => unreachable!("Deinit is dispatched before this match reached"),
+        Commands::Views { .. } => unreachable!("Views is dispatched before this match reached"),
     }
 }

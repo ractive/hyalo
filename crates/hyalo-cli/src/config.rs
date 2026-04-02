@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -17,6 +18,11 @@ struct ConfigFile {
     /// (e.g. `/docs/page.md`).  When set, this takes precedence over the
     /// auto-derived value (last component of the resolved `dir`).
     site_prefix: Option<String>,
+    /// Named find-filter sets. Stored so `deny_unknown_fields` does not reject
+    /// configs that contain `[views.*]` tables. The views module reads these
+    /// directly from the TOML file; they are not propagated to `ResolvedDefaults`.
+    #[allow(dead_code)]
+    views: Option<HashMap<String, toml::Value>>,
 }
 
 /// Resolved configuration with all defaults applied.
