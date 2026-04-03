@@ -1,12 +1,12 @@
 ---
-title: "Add hyalo deinit command"
+title: Add hyalo deinit command
 type: backlog
 date: 2026-04-01
 tags:
   - init
   - ux
   - cli
-status: planned
+status: completed
 priority: low
 ---
 

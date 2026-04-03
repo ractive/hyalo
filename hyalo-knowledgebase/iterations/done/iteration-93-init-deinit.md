@@ -37,5 +37,5 @@ Round out the `init` / `deinit` lifecycle: add `hyalo deinit` to cleanly reverse
 
 ## Related
 
-- [[backlog/deinit-command]]
-- [[backlog/init-create-missing-dir]]
+- [[backlog/done/deinit-command]]
+- [[backlog/done/init-create-missing-dir]]
