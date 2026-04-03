@@ -179,6 +179,23 @@ With `--claude`, hyalo additionally installs two skills, one rule, and a managed
 
 All steps are idempotent — re-running `hyalo init --claude` overwrites skills and the rule with the latest versions, and the managed section in `CLAUDE.md` is replaced in-place without duplicating.
 
+### deinit
+
+Remove all artifacts created by `init`. The inverse of `hyalo init --claude`.
+
+```sh
+hyalo deinit
+```
+
+Removes:
+- `.hyalo.toml`
+- `.claude/rules/knowledgebase.md`
+- `.claude/skills/hyalo/SKILL.md`
+- `.claude/skills/hyalo-tidy/SKILL.md`
+- The managed section (between `<!-- hyalo:start -->` and `<!-- hyalo:end -->` markers) from `.claude/CLAUDE.md`
+
+Empty parent directories left behind by the removal are cleaned up automatically. The command is idempotent — safe to run when some or all artifacts are already absent.
+
 ### find
 
 Search and filter files. Returns a JSON envelope `{"results": [...], "total": N, "hints": [...]}` where each item in `results` contains frontmatter properties, tags, sections, tasks, and links.
@@ -243,6 +260,48 @@ hyalo find --sort modified --reverse --limit 5      # newest first
 hyalo find --sort title                             # sort by title (frontmatter or first H1)
 hyalo find --sort date                              # sort by frontmatter date
 hyalo find --sort property:priority --reverse       # highest priority first
+```
+
+### views
+
+Manage saved views — named filter sets stored in `.hyalo.toml` and recalled with `hyalo find --view <name>`.
+
+```sh
+# List all saved views
+hyalo views list
+
+# Save a view (create or overwrite)
+hyalo views set drafts --property status=draft
+hyalo views set recent-todos --tag project --task todo --sort modified --reverse --limit 20
+
+# Delete a view
+hyalo views remove drafts
+
+# Use a saved view
+hyalo find --view drafts
+hyalo find --view recent-todos --tag rust   # extend the view with additional filters
+```
+
+**Merge behavior when combining `--view` with extra flags:**
+
+| Field type | Behavior |
+|------------|----------|
+| Vec fields (`--property`, `--tag`, `--section`, `--file`, `--glob`) | Extended — extra filters are ANDed on top of the view |
+| Option fields (`--sort`, `--limit`, `--regexp`, `--title`, `--task`, `--fields`) | Override — CLI value takes precedence over the view |
+| Bool fields (`--broken-links`, `--reverse`) | OR'd — enabled if either the view or the CLI sets them |
+
+**Storage:** Views are persisted as TOML tables in `.hyalo.toml` under `[views.<name>]`:
+
+```toml
+[views.drafts]
+properties = ["status=draft"]
+
+[views.recent-todos]
+tags = ["project"]
+task = "todo"
+sort = "modified"
+reverse = true
+limit = 20
 ```
 
 ### read

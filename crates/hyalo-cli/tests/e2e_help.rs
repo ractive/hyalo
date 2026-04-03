@@ -69,6 +69,10 @@ fn long_help_command_reference_lists_all_commands() {
         "hyalo task toggle",
         "hyalo task set-status",
         "hyalo init",
+        "hyalo deinit",
+        "hyalo views list",
+        "hyalo views set",
+        "hyalo views remove",
     ];
 
     for cmd in expected {

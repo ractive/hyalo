@@ -92,18 +92,18 @@ Use `toml::Table` for read-modify-write (same pattern as `init.rs`):
 
 ## Tasks
 
-- [ ] Extract `FindFilters` struct in `args.rs`, flatten into `Commands::Find` with `--view` flag
-- [ ] Update `dispatch.rs` to destructure from `filters` field
-- [ ] Update `run.rs` hint context to read from `filters.*`
-- [ ] Verify pure refactor: `cargo check && cargo test` pass with no behavior change
-- [ ] Add `views: HashMap<String, FindFilters>` to `ConfigFile` and `ResolvedDefaults` in `config.rs`
-- [ ] Add `Views` command + `ViewsAction::{List, Set, Remove}` enum to `args.rs`
-- [ ] Implement `commands/views.rs` — list, set, remove (TOML read/modify/write)
-- [ ] Wire `Views` early dispatch in `run.rs`
-- [ ] Implement `--view` merge in `run.rs` with `FindFilters::merge_from`
-- [ ] Add views examples to help text
-- [ ] E2E tests: views set/list/remove, find --view, find --view + overrides, unknown view error
-- [ ] Code quality gates: `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
+- [x] Extract `FindFilters` struct in `args.rs`, flatten into `Commands::Find` with `--view` flag
+- [x] Update `dispatch.rs` to destructure from `filters` field
+- [x] Update `run.rs` hint context to read from `filters.*`
+- [x] Verify pure refactor: `cargo check && cargo test` pass with no behavior change
+- [x] Add `views: HashMap<String, FindFilters>` to `ConfigFile` and `ResolvedDefaults` in `config.rs`
+- [x] Add `Views` command + `ViewsAction::{List, Set, Remove}` enum to `args.rs`
+- [x] Implement `commands/views.rs` — list, set, remove (TOML read/modify/write)
+- [x] Wire `Views` early dispatch in `run.rs`
+- [x] Implement `--view` merge in `run.rs` with `FindFilters::merge_from`
+- [x] Add views examples to help text
+- [x] E2E tests: views set/list/remove, find --view, find --view + overrides, unknown view error
+- [x] Code quality gates: `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 
 ## Files to modify
 

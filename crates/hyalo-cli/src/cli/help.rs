@@ -90,6 +90,9 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Init (configuration, one-time setup):
     hyalo init [--claude] [-d/--dir DIR]
 
+  Deinit (remove hyalo configuration):
+    hyalo deinit
+
   Create-index (build snapshot for faster queries):
     hyalo create-index [-o/--output PATH]
 
