@@ -87,7 +87,7 @@ impl OutputPipeline<'_> {
                         && total == Some(0)
                         && value.as_array().is_some_and(Vec::is_empty)
                     {
-                        eprintln!("No files matched");
+                        eprintln!("No results");
                     }
                 }
                 0
