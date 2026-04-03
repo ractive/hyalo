@@ -310,9 +310,9 @@ impl SnapshotIndex {
     /// and insert the result — rebuilding the path index only once.
     ///
     /// This is the preferred move/rename counterpart of [`refresh_entry`].
-    /// Unlike [`replace_entry`], which calls [`remove_entry`] then
-    /// [`insert_entry`] (two path-index rebuilds), this method defers the
-    /// rebuild until both the removal and insertion are complete.
+    /// Unlike calling [`remove_entry`] followed by [`insert_entry`] (two
+    /// path-index rebuilds), this method defers the rebuild until both the
+    /// removal and insertion are complete.
     ///
     /// The link graph is **not** touched — callers must update it separately
     /// via [`LinkGraph::rename_path`].
@@ -323,12 +323,13 @@ impl SnapshotIndex {
         let Some(&old_idx) = self.path_index.get(old_rel) else {
             return Ok(false);
         };
-        // Remove without triggering a path-index rebuild.
-        self.entries.remove(old_idx);
 
-        // Scan the file at its new path.
+        // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
         let (entry, _file_links) = scan_one_file(&full_path, new_rel, true)?;
+
+        // Remove without triggering a path-index rebuild.
+        self.entries.remove(old_idx);
 
         // Insert in sorted order.
         let pos = self

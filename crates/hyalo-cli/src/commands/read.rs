@@ -412,6 +412,82 @@ mod tests {
         assert!(parse_line_range("a:b").is_err());
     }
 
+    // -- inline line-range slicing (truncate + drain) --
+
+    /// Mirror the inlined truncate/drain logic for testability.
+    fn apply_range(lines: &[String], range: &LineRange) -> Vec<String> {
+        let mut v = lines.to_vec();
+        let len = v.len();
+        let start_idx = range.start.unwrap_or(1).saturating_sub(1).min(len);
+        let end_idx = range.end.unwrap_or(len).min(len);
+        if start_idx >= end_idx {
+            v.clear();
+        } else {
+            v.truncate(end_idx);
+            v.drain(..start_idx);
+        }
+        v
+    }
+
+    #[test]
+    fn line_range_middle_slice() {
+        let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
+        let range = LineRange {
+            start: Some(3),
+            end: Some(5),
+        };
+        let result = apply_range(&lines, &range);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "line 3");
+        assert_eq!(result[2], "line 5");
+    }
+
+    #[test]
+    fn line_range_clamps_high_end() {
+        let lines: Vec<String> = (1..=3).map(|i| format!("line {i}")).collect();
+        let range = LineRange {
+            start: Some(2),
+            end: Some(100),
+        };
+        let result = apply_range(&lines, &range);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn line_range_empty_input() {
+        let lines: Vec<String> = Vec::new();
+        let range = LineRange {
+            start: Some(1),
+            end: Some(5),
+        };
+        let result = apply_range(&lines, &range);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn line_range_open_start() {
+        let lines: Vec<String> = (1..=5).map(|i| format!("line {i}")).collect();
+        let range = LineRange {
+            start: None,
+            end: Some(3),
+        };
+        let result = apply_range(&lines, &range);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "line 1");
+    }
+
+    #[test]
+    fn line_range_open_end() {
+        let lines: Vec<String> = (1..=5).map(|i| format!("line {i}")).collect();
+        let range = LineRange {
+            start: Some(3),
+            end: None,
+        };
+        let result = apply_range(&lines, &range);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "line 3");
+    }
+
     // -- extract_sections --
 
     #[test]
