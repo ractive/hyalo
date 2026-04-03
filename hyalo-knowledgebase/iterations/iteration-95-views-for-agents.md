@@ -2,7 +2,7 @@
 title: "Iteration 95: Views for AI Agents"
 type: iteration
 date: 2026-04-03
-status: in-progress
+status: completed
 branch: iter-95/views-for-agents
 tags:
   - iteration
