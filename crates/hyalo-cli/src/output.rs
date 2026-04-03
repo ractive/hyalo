@@ -370,6 +370,14 @@ const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
 const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.from) → \(.to)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)""#;
 
+/// `ViewsListEntry`: `{filters, name}`
+/// Format: `name  key=value key=value ...` — compact one-line summary of the view and its filters.
+const VIEWS_LIST_ENTRY_FILTER: &str = r#""\(.name)\t\(.filters | to_entries | map("\(.key)=\(.value | if type == "array" then join(",") else tostring end)") | join(" "))""#;
+
+/// `ViewsMutationResult`: `{action, name}`
+/// Format: `action: name`
+const VIEWS_MUTATION_RESULT_FILTER: &str = r#""\(.action): \(.name)""#;
+
 // ---------------------------------------------------------------------------
 // Shape-based filter lookup
 // ---------------------------------------------------------------------------
@@ -433,6 +441,10 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "dry_run,from,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)
         }
+        // ViewsListEntry
+        "filters,name" => Some(VIEWS_LIST_ENTRY_FILTER),
+        // ViewsMutationResult
+        "action,name" => Some(VIEWS_MUTATION_RESULT_FILTER),
         _ => None,
     }
 }

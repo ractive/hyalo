@@ -1,1 +1,13 @@
 dir = "hyalo-knowledgebase"
+
+[views.missing-status]
+properties = ['\!status']
+
+[views.open-tasks]
+task = "todo"
+
+[views.planned]
+properties = ["status=planned"]
+
+[views.stale-in-progress]
+properties = ["status=in-progress"]

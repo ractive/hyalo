@@ -58,16 +58,9 @@ pub(crate) fn list_views() -> Result<CommandOutcome> {
             "filters": filters_json,
         }));
     }
-    let total = items.len();
-    let output = serde_json::to_string_pretty(&serde_json::json!({
-        "results": items,
-        "total": total,
-    }))
-    .context("failed to serialize views list")?;
-    Ok(CommandOutcome::Success {
-        output,
-        total: Some(total as u64),
-    })
+    let total = items.len() as u64;
+    let output = serde_json::to_string_pretty(&items).context("failed to serialize views list")?;
+    Ok(CommandOutcome::success_with_total(output, total))
 }
 
 /// Save a view to `.hyalo.toml`.
@@ -113,16 +106,11 @@ pub(crate) fn set_view(name: &str, filters: &FindFilters) -> Result<CommandOutco
     write_toml_table(&table)?;
 
     let output = serde_json::to_string_pretty(&serde_json::json!({
-        "results": {
-            "action": "set",
-            "name": name,
-        }
+        "action": "set",
+        "name": name,
     }))
     .context("failed to serialize result")?;
-    Ok(CommandOutcome::Success {
-        output,
-        total: None,
-    })
+    Ok(CommandOutcome::success(output))
 }
 
 /// Remove a view from `.hyalo.toml`.
@@ -149,16 +137,11 @@ pub(crate) fn remove_view(name: &str) -> Result<CommandOutcome> {
     write_toml_table(&table)?;
 
     let output = serde_json::to_string_pretty(&serde_json::json!({
-        "results": {
-            "action": "removed",
-            "name": name,
-        }
+        "action": "removed",
+        "name": name,
     }))
     .context("failed to serialize result")?;
-    Ok(CommandOutcome::Success {
-        output,
-        total: None,
-    })
+    Ok(CommandOutcome::success(output))
 }
 
 /// Read `.hyalo.toml` as a TOML table, creating an empty table if the file doesn't exist.

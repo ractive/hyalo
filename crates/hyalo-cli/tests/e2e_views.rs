@@ -6,6 +6,17 @@ use common::{hyalo, hyalo_no_hints, write_md};
 use serde_json::Value;
 use tempfile::TempDir;
 
+/// Set a "drafts" view and return the temp dir.
+fn setup_with_view() -> TempDir {
+    let tmp = setup();
+    hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+    tmp
+}
+
 fn setup() -> TempDir {
     let tmp = tempfile::tempdir().unwrap();
     write_md(
@@ -246,6 +257,152 @@ fn hint_does_not_suggest_view_for_single_filter() {
         !has_view_hint,
         "should not suggest view for single-filter query, got: {hints:?}"
     );
+}
+
+#[test]
+fn views_no_subcommand_defaults_to_list() {
+    let tmp = setup_with_view();
+
+    let list_output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "list"])
+        .output()
+        .unwrap();
+    let default_output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views"])
+        .output()
+        .unwrap();
+
+    assert!(list_output.status.success());
+    assert!(default_output.status.success());
+    assert_eq!(
+        list_output.stdout, default_output.stdout,
+        "`hyalo views` should produce same output as `hyalo views list`"
+    );
+}
+
+#[test]
+fn views_list_format_text() {
+    let tmp = setup_with_view();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "list", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Text output should not start with '{' (JSON object)
+    assert!(
+        !text.trim_start().starts_with('{'),
+        "expected text output, got JSON-like: {text}"
+    );
+    // Should contain the view name
+    assert!(
+        text.contains("drafts"),
+        "expected 'drafts' in text output: {text}"
+    );
+}
+
+#[test]
+fn views_set_format_text() {
+    let tmp = setup();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "views",
+            "set",
+            "my-view",
+            "--property",
+            "status=draft",
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Text output should not start with '{'
+    assert!(
+        !text.trim_start().starts_with('{'),
+        "expected text output, got JSON-like: {text}"
+    );
+    // Should mention the action and view name
+    assert!(
+        text.contains("set") && text.contains("my-view"),
+        "expected action and name in text output: {text}"
+    );
+}
+
+#[test]
+fn views_remove_format_text() {
+    let tmp = setup_with_view();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "remove", "drafts", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !text.trim_start().starts_with('{'),
+        "expected text output, got JSON-like: {text}"
+    );
+    assert!(
+        text.contains("removed") && text.contains("drafts"),
+        "expected action and name in text output: {text}"
+    );
+}
+
+#[test]
+fn views_list_jq_total() {
+    let tmp = setup_with_view();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "list", "--jq", ".total"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert_eq!(text, "1", "expected total=1, got: {text}");
+}
+
+#[test]
+fn views_list_jq_results() {
+    let tmp = setup_with_view();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "list", "--jq", ".results[0].name"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert_eq!(text, "drafts", "expected view name, got: {text}");
 }
 
 #[test]
