@@ -1,5 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::path::Path;
 
@@ -56,7 +56,7 @@ pub fn backlinks(
     let total = items.len() as u64;
     let result = serde_json::json!({ "file": rel, "backlinks": items });
     Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&result).unwrap_or_default(),
+        serde_json::to_string_pretty(&result).context("failed to serialize")?,
         total,
     ))
 }

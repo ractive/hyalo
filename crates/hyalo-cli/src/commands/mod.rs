@@ -140,10 +140,19 @@ impl ResolvedIndex<'_> {
     }
 }
 
+/// Outcome of [`resolve_index`]: the index is ready, or resolution produced a
+/// user-facing error that should be returned early to the caller.
+pub(crate) enum IndexResolution<'a> {
+    /// The vault index was resolved successfully and is ready to query.
+    Resolved(ResolvedIndex<'a>),
+    /// File/glob resolution failed with a user-facing error; propagate as-is.
+    Outcome(CommandOutcome),
+}
+
 /// Resolve the vault index: use the snapshot if available, otherwise scan from disk.
 ///
-/// Returns `Ok(Ok(ResolvedIndex))` on success.
-/// Returns `Ok(Err(CommandOutcome))` when file resolution produced a user-facing error.
+/// Returns `Ok(IndexResolution::Resolved(_))` on success.
+/// Returns `Ok(IndexResolution::Outcome(_))` when file resolution produced a user-facing error.
 /// Returns `Err(e)` for unexpected I/O or parse errors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_index<'a>(
@@ -155,9 +164,9 @@ pub(crate) fn resolve_index<'a>(
     site_prefix: Option<&str>,
     needs_full_vault: bool,
     options: ScanOptions,
-) -> Result<Result<ResolvedIndex<'a>, CommandOutcome>> {
+) -> Result<IndexResolution<'a>> {
     if let Some(idx) = snapshot {
-        return Ok(Ok(ResolvedIndex::Snapshot(idx)));
+        return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)));
     }
     let outcome = build_scanned_index(
         dir,
@@ -169,8 +178,10 @@ pub(crate) fn resolve_index<'a>(
         &options,
     )?;
     match outcome {
-        ScannedIndexOutcome::Index(build) => Ok(Ok(ResolvedIndex::Scanned(build))),
-        ScannedIndexOutcome::Outcome(o) => Ok(Err(o)),
+        ScannedIndexOutcome::Index(build) => {
+            Ok(IndexResolution::Resolved(ResolvedIndex::Scanned(build)))
+        }
+        ScannedIndexOutcome::Outcome(o) => Ok(IndexResolution::Outcome(o)),
     }
 }
 

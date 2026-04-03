@@ -6,12 +6,34 @@ mod types;
 pub use parse::{hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
 pub use types::{infer_type, parse_value};
 
-/// Returns true if the error is a frontmatter parse/structure error (bad YAML, frontmatter
-/// too large) as opposed to an I/O error. Parse errors can be safely skipped when processing
-/// multiple files; I/O errors should be propagated.
+/// A typed error for frontmatter parse and structural failures.
+///
+/// Covers bad YAML, unclosed `---` delimiters, oversized frontmatter blocks, and
+/// any other condition where the file content itself is the problem. These errors
+/// can be safely skipped (with a warning) when processing multiple files.
+///
+/// I/O errors are **not** represented here — they propagate as plain `anyhow::Error`
+/// wrapping `std::io::Error`, so callers can still distinguish them via
+/// [`is_parse_error`] or by downcasting directly.
+#[derive(Debug)]
+pub struct FrontmatterError(pub(crate) String);
+
+impl std::fmt::Display for FrontmatterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FrontmatterError {}
+
+/// Returns `true` if the error originates from a frontmatter parse or structural problem
+/// (bad YAML, unclosed delimiter, oversized frontmatter) rather than an I/O failure.
+///
+/// Parse errors can be safely skipped when processing multiple files; I/O errors
+/// should be propagated to the caller.
 pub fn is_parse_error(err: &anyhow::Error) -> bool {
-    !err.chain()
-        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
+    err.chain()
+        .any(|cause| cause.downcast_ref::<FrontmatterError>().is_some())
 }
 
 #[cfg(test)]
@@ -417,9 +439,31 @@ Body.
     }
 
     #[test]
+    fn is_parse_error_true_for_unclosed_frontmatter() {
+        let err = read_frontmatter_from_reader("---\ntitle: Broken\n".as_bytes()).unwrap_err();
+        assert!(
+            is_parse_error(&err),
+            "unclosed frontmatter should be a parse error: {err}"
+        );
+    }
+
+    #[test]
     fn is_parse_error_false_for_io_error() {
         let err = read_frontmatter(Path::new("/nonexistent/path/file.md")).unwrap_err();
         assert!(!is_parse_error(&err), "expected I/O error: {err}");
+    }
+
+    #[test]
+    fn frontmatter_error_is_directly_downcastable() {
+        let err =
+            read_frontmatter_from_reader("---\n: invalid [[[{\n---\n".as_bytes()).unwrap_err();
+        let found = err
+            .chain()
+            .any(|cause| cause.downcast_ref::<FrontmatterError>().is_some());
+        assert!(
+            found,
+            "FrontmatterError should be downcastable from anyhow::Error: {err}"
+        );
     }
 
     #[test]

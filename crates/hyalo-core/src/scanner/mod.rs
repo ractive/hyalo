@@ -170,16 +170,20 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 
             // Content line count is fm_line_count - 1 (excludes the opening `---`).
             if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
-                anyhow::bail!(
-                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
-                );
+                return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
+                    format!(
+                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                    ),
+                )));
             }
             if let Some(ref mut y) = yaml {
                 // +1 accounts for the trailing '\n' appended below.
                 if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
-                    anyhow::bail!(
-                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
-                    );
+                    return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
+                        format!(
+                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                        ),
+                    )));
                 }
                 y.push_str(trimmed);
                 y.push('\n');
@@ -187,13 +191,18 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
         }
 
         if !found_close {
-            anyhow::bail!("unclosed frontmatter (no closing `---` found)");
+            return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
+                "unclosed frontmatter (no closing `---` found)".to_string(),
+            )));
         }
 
         let props: IndexMap<String, Value> = match yaml {
             Some(ref y) if !y.trim().is_empty() => {
-                serde_saphyr::from_str_with_options(y, hyalo_options())
-                    .context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str_with_options(y, hyalo_options()).map_err(|e| {
+                    anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
+                        "failed to parse YAML frontmatter: {e}"
+                    )))
+                })?
             }
             _ => IndexMap::new(),
         };
@@ -342,28 +351,37 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
             // Apply the line-count limit unconditionally so that files with huge
             // frontmatter are rejected even when no visitor needs the YAML content.
             if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
-                anyhow::bail!(
-                    "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
-                );
+                return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
+                    format!(
+                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                    ),
+                )));
             }
             if let Some(ref mut y) = yaml {
                 // +1 accounts for the trailing '\n' appended below.
                 if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
-                    anyhow::bail!(
-                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
-                    );
+                    return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
+                        format!(
+                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                        ),
+                    )));
                 }
                 y.push_str(trimmed);
                 y.push('\n');
             }
         }
         if !found_close {
-            anyhow::bail!("unclosed frontmatter (no closing `---` found)");
+            return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
+                "unclosed frontmatter (no closing `---` found)".to_string(),
+            )));
         }
         let props: IndexMap<String, Value> = match yaml {
             Some(ref y) if !y.trim().is_empty() => {
-                serde_saphyr::from_str_with_options(y, hyalo_options())
-                    .context("failed to parse YAML frontmatter")?
+                serde_saphyr::from_str_with_options(y, hyalo_options()).map_err(|e| {
+                    anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
+                        "failed to parse YAML frontmatter: {e}"
+                    )))
+                })?
             }
             _ => IndexMap::new(),
         };

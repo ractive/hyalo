@@ -113,7 +113,8 @@ impl Format {
 #[must_use]
 pub fn format_success(format: Format, value: &serde_json::Value) -> String {
     match format {
-        Format::Json => serde_json::to_string_pretty(value).unwrap_or_default(),
+        Format::Json => serde_json::to_string_pretty(value)
+            .expect("serializing serde_json::Value is infallible"),
         Format::Text => {
             let mut cache = JaqFilterCache::new();
             format_value_as_text(value, &mut cache)
@@ -169,7 +170,8 @@ pub fn format_envelope(
     match format {
         Format::Json => {
             let envelope = build_envelope_value(value, total, hints);
-            serde_json::to_string_pretty(&envelope).unwrap_or_default()
+            serde_json::to_string_pretty(&envelope)
+                .expect("serializing serde_json::Value is infallible")
         }
         Format::Text => {
             let mut cache = JaqFilterCache::new();
@@ -252,7 +254,7 @@ pub fn format_error(
             if let Some(c) = cause {
                 obj["cause"] = json!(c);
             }
-            serde_json::to_string_pretty(&obj).unwrap_or_default()
+            serde_json::to_string_pretty(&obj).expect("serializing serde_json::Value is infallible")
         }
         Format::Text => {
             let mut msg = format!("Error: {error}");

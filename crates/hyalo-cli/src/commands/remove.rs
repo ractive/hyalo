@@ -17,27 +17,27 @@ use hyalo_core::index::SnapshotIndex;
 
 /// Result of a `remove --property K` (or `K=V`) operation across files.
 #[derive(Debug, Serialize)]
-pub struct RemovePropertyResult {
-    pub property: String,
+pub(crate) struct RemovePropertyResult {
+    pub(crate) property: String,
     /// Present when `remove --property K=V` was used.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    pub modified: Vec<String>,
-    pub skipped: Vec<String>,
-    pub total: usize,
-    pub scanned: usize,
-    pub dry_run: bool,
+    pub(crate) value: Option<String>,
+    pub(crate) modified: Vec<String>,
+    pub(crate) skipped: Vec<String>,
+    pub(crate) total: usize,
+    pub(crate) scanned: usize,
+    pub(crate) dry_run: bool,
 }
 
 /// Result of a `remove --tag T` operation across files.
 #[derive(Debug, Serialize)]
-pub struct RemoveTagResult {
-    pub tag: String,
-    pub modified: Vec<String>,
-    pub skipped: Vec<String>,
-    pub total: usize,
-    pub scanned: usize,
-    pub dry_run: bool,
+pub(crate) struct RemoveTagResult {
+    pub(crate) tag: String,
+    pub(crate) modified: Vec<String>,
+    pub(crate) skipped: Vec<String>,
+    pub(crate) total: usize,
+    pub(crate) scanned: usize,
+    pub(crate) dry_run: bool,
 }
 
 // ---------------------------------------------------------------------------

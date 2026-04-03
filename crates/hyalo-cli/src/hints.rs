@@ -73,6 +73,19 @@ pub struct HintContext {
     pub index_path: Option<String>,
 }
 
+/// Common global flags captured once per command dispatch and threaded into
+/// every `HintContext`. Avoids repeating the same three field assignments in
+/// every `match` arm of `run.rs`.
+pub struct CommonHintFlags {
+    /// `--dir` value when explicitly passed on the CLI; `None` when inherited
+    /// from `.hyalo.toml` (the hint can omit it and rely on config).
+    pub dir: Option<String>,
+    /// `--format` value when explicitly passed on the CLI.
+    pub format: Option<String>,
+    /// Whether `--hints` was explicitly passed on the CLI.
+    pub hints: bool,
+}
+
 impl HintContext {
     pub fn new(source: HintSource) -> Self {
         Self {
@@ -93,6 +106,19 @@ impl HintContext {
             dry_run: false,
             index_path: None,
         }
+    }
+
+    /// Construct a `HintContext` with the common global flags pre-populated.
+    ///
+    /// Equivalent to calling `new(source)` followed by assigning `dir`,
+    /// `format`, and `hints` — extracted here so every `match` arm in
+    /// `run.rs` does not repeat those three lines.
+    pub fn from_common(source: HintSource, common: &CommonHintFlags) -> Self {
+        let mut ctx = Self::new(source);
+        ctx.dir.clone_from(&common.dir);
+        ctx.format.clone_from(&common.format);
+        ctx.hints = common.hints;
+        ctx
     }
 }
 

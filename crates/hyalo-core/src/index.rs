@@ -306,22 +306,40 @@ impl SnapshotIndex {
         }
     }
 
-    /// Remove an old entry, scan a file at its new path, and insert the result.
+    /// Rename an entry: remove the old entry, scan the file at its new path,
+    /// and insert the result — rebuilding the path index only once.
     ///
-    /// This is the move/rename counterpart of [`refresh_entry`]: it removes the
-    /// entry at `old_rel`, scans the file at `new_rel` from disk, and inserts the
-    /// fresh entry. The link graph is **not** touched.
+    /// This is the preferred move/rename counterpart of [`refresh_entry`].
+    /// Unlike calling [`remove_entry`] followed by [`insert_entry`] (two
+    /// path-index rebuilds), this method defers the rebuild until both the
+    /// removal and insertion are complete.
+    ///
+    /// The link graph is **not** touched — callers must update it separately
+    /// via [`LinkGraph::rename_path`].
     ///
     /// Returns `Ok(true)` if `old_rel` was found and replaced, `Ok(false)` if
     /// `old_rel` was not in the index (in which case nothing is changed).
-    pub fn replace_entry(&mut self, dir: &Path, old_rel: &str, new_rel: &str) -> Result<bool> {
-        if !self.path_index.contains_key(old_rel) {
+    pub fn rename_entry(&mut self, dir: &Path, old_rel: &str, new_rel: &str) -> Result<bool> {
+        let Some(&old_idx) = self.path_index.get(old_rel) else {
             return Ok(false);
-        }
-        self.remove_entry(old_rel);
+        };
+
+        // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
         let (entry, _file_links) = scan_one_file(&full_path, new_rel, true)?;
-        self.insert_entry(entry);
+
+        // Remove without triggering a path-index rebuild.
+        self.entries.remove(old_idx);
+
+        // Insert in sorted order.
+        let pos = self
+            .entries
+            .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
+            .unwrap_or_else(|i| i);
+        self.entries.insert(pos, entry);
+
+        // Single rebuild covering both the removal and the insertion.
+        self.rebuild_path_index();
         Ok(true)
     }
 
@@ -635,10 +653,16 @@ pub fn format_modified(path: &Path) -> Result<String> {
     let mtime = meta
         .modified()
         .with_context(|| format!("mtime not available for {}", path.display()))?;
-    let secs = mtime
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let secs = mtime.duration_since(SystemTime::UNIX_EPOCH).map_or_else(
+        |_| {
+            eprintln!(
+                "warning: mtime for {} is before 1970-01-01; using epoch as fallback",
+                path.display()
+            );
+            0
+        },
+        |d| d.as_secs(),
+    );
     Ok(format_iso8601(secs))
 }
 

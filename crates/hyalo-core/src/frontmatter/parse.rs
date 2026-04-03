@@ -7,6 +7,18 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use super::FrontmatterError;
+
+/// Convenience macro: return a [`FrontmatterError`] wrapped in `anyhow::Error`.
+///
+/// Use this for all parse/structural errors so that callers can distinguish them
+/// from I/O errors via [`super::is_parse_error`].
+macro_rules! parse_bail {
+    ($($arg:tt)*) => {
+        return Err(anyhow::Error::new(FrontmatterError(format!($($arg)*))))
+    };
+}
+
 /// Shared parser options for all YAML frontmatter parsing in hyalo.
 ///
 /// Enforces tight limits via a `Budget` to harden the parser against
@@ -128,8 +140,11 @@ impl Document {
             Some(yaml) if !yaml.trim().is_empty() => {
                 let compact = detect_list_indent_style(yaml);
                 let props: IndexMap<String, Value> =
-                    serde_saphyr::from_str_with_options(yaml, hyalo_options())
-                        .context("failed to parse YAML frontmatter")?;
+                    serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
+                        anyhow::Error::new(FrontmatterError(format!(
+                            "failed to parse YAML frontmatter: {e}"
+                        )))
+                    })?;
                 (props, compact)
             }
             _ => (IndexMap::new(), false),
@@ -285,7 +300,7 @@ fn find_body_offset(file: &mut File) -> Result<u64> {
         line.clear();
         let n = reader.read_line(&mut line).context("failed to read line")?;
         if n == 0 {
-            anyhow::bail!(
+            parse_bail!(
                 "unclosed frontmatter: file starts with `---` but no closing `---` was found"
             );
         }
@@ -297,7 +312,7 @@ fn find_body_offset(file: &mut File) -> Result<u64> {
         line_count += 1;
         content_bytes += n;
         if line_count > MAX_FRONTMATTER_LINES || content_bytes > MAX_FRONTMATTER_BYTES {
-            anyhow::bail!(
+            parse_bail!(
                 "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
             );
         }
@@ -328,7 +343,7 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
         buf.clear();
         let n = reader.read_line(&mut buf).context("failed to read line")?;
         if n == 0 {
-            anyhow::bail!(
+            parse_bail!(
                 "unclosed frontmatter: file starts with `---` but no closing `---` was found"
             );
         }
@@ -339,7 +354,7 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
         }
         total_bytes += n;
         if line_count - 1 > MAX_FRONTMATTER_LINES || total_bytes > MAX_FRONTMATTER_BYTES {
-            anyhow::bail!(
+            parse_bail!(
                 "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
             );
         }
@@ -383,7 +398,7 @@ pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
         }
         line_count += 1;
         if line_count > MAX_FRONTMATTER_LINES || yaml.len() + line.len() > MAX_FRONTMATTER_BYTES {
-            anyhow::bail!(
+            parse_bail!(
                 "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
             );
         }
@@ -400,17 +415,18 @@ pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
         if !has_content_lines {
             return Ok(IndexMap::new());
         }
-        anyhow::bail!(
-            "unclosed frontmatter: file starts with `---` but no closing `---` was found"
-        );
+        parse_bail!("unclosed frontmatter: file starts with `---` but no closing `---` was found");
     }
 
     if yaml.trim().is_empty() {
         return Ok(IndexMap::new());
     }
 
-    serde_saphyr::from_str_with_options(&yaml, hyalo_options())
-        .context("failed to parse YAML frontmatter")
+    serde_saphyr::from_str_with_options(&yaml, hyalo_options()).map_err(|e| {
+        anyhow::Error::new(FrontmatterError(format!(
+            "failed to parse YAML frontmatter: {e}"
+        )))
+    })
 }
 
 /// Extract frontmatter YAML string and the body from a markdown document.
@@ -463,7 +479,7 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
         // Opening `---` found but no closing delimiter — this is malformed frontmatter.
         // Returning an error prevents mutation commands from corrupting the file by
         // writing a new frontmatter block on top of the unclosed one.
-        anyhow::bail!("unclosed frontmatter: file starts with `---` but no closing `---` was found")
+        parse_bail!("unclosed frontmatter: file starts with `---` but no closing `---` was found")
     }
 }
 

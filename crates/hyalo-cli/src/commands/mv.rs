@@ -101,9 +101,8 @@ pub fn mv(
     }
 
     // 6. Format output (always JSON internally; pipeline handles user-facing format)
-    let _ = format;
     Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&result).unwrap_or_default(),
+        serde_json::to_string_pretty(&result).context("failed to serialize")?,
     ))
 }
 

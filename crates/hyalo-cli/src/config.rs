@@ -27,12 +27,12 @@ struct ConfigFile {
 
 /// Resolved configuration with all defaults applied.
 #[derive(Debug, PartialEq)]
-pub struct ResolvedDefaults {
-    pub dir: PathBuf,
-    pub format: String,
-    pub hints: bool,
+pub(crate) struct ResolvedDefaults {
+    pub(crate) dir: PathBuf,
+    pub(crate) format: String,
+    pub(crate) hints: bool,
     /// Explicit site-prefix override from `.hyalo.toml`, if any.
-    pub site_prefix: Option<String>,
+    pub(crate) site_prefix: Option<String>,
 }
 
 impl ResolvedDefaults {
@@ -52,7 +52,7 @@ impl ResolvedDefaults {
 /// I/O error (not NotFound) → prints a warning, returns defaults.
 /// Malformed TOML or unknown fields → prints a warning, returns defaults.
 /// Valid config → merges with defaults (config values take precedence).
-pub fn load_config() -> ResolvedDefaults {
+pub(crate) fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
         Ok(cwd) => load_config_from(&cwd),
         Err(e) => {
@@ -68,7 +68,7 @@ pub fn load_config() -> ResolvedDefaults {
 ///
 /// This variant accepts an explicit directory to make it testable without
 /// relying on the process working directory.
-pub fn load_config_from(dir: &Path) -> ResolvedDefaults {
+pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let path = dir.join(".hyalo.toml");
 
     let contents = match std::fs::read_to_string(&path) {

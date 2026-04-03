@@ -73,8 +73,9 @@ pub fn rename_index_entry(
     };
 
     // 1. Move the entry: remove old key, re-scan the moved file, insert under new key.
+    //    Uses rename_entry to rebuild the path index only once (not twice).
     //    If old_rel was not in the index, there's nothing to do.
-    if !idx.replace_entry(dir, old_rel, new_rel)? {
+    if !idx.rename_entry(dir, old_rel, new_rel)? {
         return Ok(());
     }
 

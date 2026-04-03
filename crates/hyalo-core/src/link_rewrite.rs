@@ -194,7 +194,7 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
             plan.path.display()
         );
 
-        std::fs::write(&plan.path, &plan.rewritten_content)
+        crate::fs_util::atomic_write(&plan.path, plan.rewritten_content.as_bytes())
             .with_context(|| format!("writing {}", plan.path.display()))?;
     }
     Ok(())

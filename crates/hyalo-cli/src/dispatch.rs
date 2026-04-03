@@ -6,7 +6,7 @@ use crate::cli::args::{
     Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction,
 };
 use crate::commands::{
-    ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
+    IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, mv as mv_commands, properties,
     read as read_commands, remove as remove_commands, resolve_index, set as set_commands,
@@ -153,8 +153,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 site_prefix,
                 needs_full_vault,
                 ScanOptions { scan_body },
-            ) {
-                Ok(Ok(resolved)) => find_commands::find(
+            )? {
+                IndexResolution::Resolved(resolved) => find_commands::find(
                     resolved.as_index(),
                     dir,
                     site_prefix,
@@ -174,8 +174,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     title.as_deref(),
                     effective_format,
                 ),
-                Ok(Err(outcome)) => Ok(outcome),
-                Err(e) => Err(e),
+                IndexResolution::Outcome(outcome) => Ok(outcome),
             }
         }
         Commands::Read {
@@ -204,8 +203,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     site_prefix,
                     false,
                     ScanOptions { scan_body: false },
-                ) {
-                    Ok(Ok(ResolvedIndex::Snapshot(idx))) => {
+                )? {
+                    IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
                         let filtered =
                             find_commands::filter_index_entries(idx.entries(), &[], glob);
                         match filtered {
@@ -222,11 +221,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             }
                         }
                     }
-                    Ok(Ok(ResolvedIndex::Scanned(build))) => {
+                    IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
                         properties::properties_summary(&build.index, None, effective_format)
                     }
-                    Ok(Err(outcome)) => Ok(outcome),
-                    Err(e) => Err(e),
+                    IndexResolution::Outcome(outcome) => Ok(outcome),
                 },
                 PropertiesAction::Rename { from, to, glob } => properties::properties_rename(
                     dir,
@@ -251,8 +249,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     site_prefix,
                     false,
                     ScanOptions { scan_body: false },
-                ) {
-                    Ok(Ok(ResolvedIndex::Snapshot(idx))) => {
+                )? {
+                    IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
                         let filtered =
                             find_commands::filter_index_entries(idx.entries(), &[], glob);
                         match filtered {
@@ -269,11 +267,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             }
                         }
                     }
-                    Ok(Ok(ResolvedIndex::Scanned(build))) => {
+                    IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
                         tag_commands::tags_summary(&build.index, None, effective_format)
                     }
-                    Ok(Err(outcome)) => Ok(outcome),
-                    Err(e) => Err(e),
+                    IndexResolution::Outcome(outcome) => Ok(outcome),
                 },
                 TagsAction::Rename { from, to, glob } => tag_commands::tags_rename(
                     dir,
@@ -309,11 +306,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     );
                     return Ok(CommandOutcome::UserError(out));
                 }
-                // SAFETY: we checked chars().count() == 1 above.
+                // chars().count() == 1 guarantees next() returns Some.
                 let ch = status
                     .chars()
                     .next()
-                    .expect("count==1 implies at least one char");
+                    .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
                 task_commands::task_set_status(
                     dir,
                     &file,
@@ -338,8 +335,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             site_prefix,
             true,
             ScanOptions { scan_body: true },
-        ) {
-            Ok(Ok(resolved)) => summary_commands::summary(
+        )? {
+            IndexResolution::Resolved(resolved) => summary_commands::summary(
                 dir,
                 resolved.as_index(),
                 &glob,
@@ -348,8 +345,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 site_prefix,
                 effective_format,
             ),
-            Ok(Err(outcome)) => Ok(outcome),
-            Err(e) => Err(e),
+            IndexResolution::Outcome(outcome) => Ok(outcome),
         },
         Commands::Set {
             properties,
@@ -445,12 +441,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             site_prefix,
             true,
             ScanOptions { scan_body: true },
-        ) {
-            Ok(Ok(resolved)) => {
+        )? {
+            IndexResolution::Resolved(resolved) => {
                 backlinks_commands::backlinks(resolved.as_index(), &file, dir, effective_format)
             }
-            Ok(Err(outcome)) => Ok(outcome),
-            Err(e) => Err(e),
+            IndexResolution::Outcome(outcome) => Ok(outcome),
         },
         Commands::Mv { file, to, dry_run } => mv_commands::mv(
             dir,
@@ -497,8 +492,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 site_prefix,
                 true,
                 ScanOptions { scan_body: true },
-            ) {
-                Ok(Ok(resolved)) => links_commands::links_fix(
+            )? {
+                IndexResolution::Resolved(resolved) => links_commands::links_fix(
                     resolved.as_index(),
                     dir,
                     site_prefix,
@@ -508,8 +503,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &ignore_target,
                     effective_format,
                 ),
-                Ok(Err(outcome)) => Ok(outcome),
-                Err(e) => Err(e),
+                IndexResolution::Outcome(outcome) => Ok(outcome),
             },
         },
         // `Init`, `Deinit`, and `Views` are handled as early returns before dispatch is called.
