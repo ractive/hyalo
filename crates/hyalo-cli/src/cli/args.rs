@@ -272,6 +272,10 @@ pub(crate) enum Commands {
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
+            VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
+            merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
+            lists; scalar filters (--regexp, --sort, --limit, --title, --task) override; bool \
+            flags (--broken-links, --reverse) OR. Example: hyalo find --view drafts --limit 5\n\
             COMMON MISTAKES:\n\
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
@@ -281,7 +285,9 @@ pub(crate) enum Commands {
         /// Case-insensitive body text search (searches body only, not frontmatter)
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
-        /// Use a saved view (named filter set from .hyalo.toml)
+        /// Use a saved view (named filter set from .hyalo.toml). Additional CLI filters
+        /// are merged on top: list filters (--property, --tag, --section, --glob) extend
+        /// the view; scalar filters (--sort, --limit, --regexp, --title, --task) override it
         #[arg(long, value_name = "NAME")]
         view: Option<String>,
         #[command(flatten)]
@@ -605,7 +611,8 @@ Repeatable (AND).\n\
     #[command(
         long_about = "Manage saved views — named find queries stored in .hyalo.toml.\n\n\
             Views let you save frequently used filter combinations under a name\n\
-            and recall them with `hyalo find --view <name>`.\n\n\
+            and recall them with `hyalo find --view <name>`. CLI flags passed alongside\n\
+            --view are merged on top — list filters extend, scalars override.\n\n\
             Subcommands:\n\
             - list: Show all saved views and their filters.\n\
             - set: Create or update a view.\n\
@@ -649,6 +656,7 @@ pub(crate) enum ViewsAction {
     /// Create or update a saved view
     #[command(long_about = "Save a combination of find filters under a name.\n\n\
         The view is stored in .hyalo.toml and can be recalled with `hyalo find --view <name>`.\n\
+        You can combine --view with additional CLI filters to extend or override the saved set.\n\
         Overwrites if the view already exists.\n\n\
         SIDE EFFECTS: Modifies .hyalo.toml.")]
     Set {

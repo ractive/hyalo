@@ -397,6 +397,7 @@ fn run_inner() -> Result<(), AppError> {
             }
             Commands::Find {
                 pattern,
+                view,
                 filters:
                     FindFilters {
                         glob,
@@ -410,7 +411,6 @@ fn run_inner() -> Result<(), AppError> {
                         limit,
                         ..
                     },
-                ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Find, &common);
                 ctx.glob.clone_from(glob);
@@ -423,6 +423,7 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.tag_filters.clone_from(tag);
                 ctx.task_filter.clone_from(task);
                 ctx.file_targets.clone_from(file);
+                ctx.view_name.clone_from(view);
                 Some(ctx)
             }
             Commands::Set {

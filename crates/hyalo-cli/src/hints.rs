@@ -67,6 +67,10 @@ pub struct HintContext {
     pub tag_filters: Vec<String>,
     pub task_filter: Option<String>,
     pub file_targets: Vec<String>,
+    /// Set when the query was produced by `--view <name>`; suppresses the
+    /// "save as view" hint to avoid suggesting the user save a view they
+    /// already have.
+    pub view_name: Option<String>,
     // Mutation context
     pub dry_run: bool,
     // Index context
@@ -103,6 +107,7 @@ impl HintContext {
             tag_filters: vec![],
             task_filter: None,
             file_targets: vec![],
+            view_name: None,
             dry_run: false,
             index_path: None,
         }
@@ -395,6 +400,107 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
         .collect()
 }
 
+/// Slugify a string to the charset valid for view names: `[a-z0-9_-]`.
+/// Replaces invalid chars with `-`, collapses runs of `-`, and trims leading/trailing `-`.
+fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            // Replace any non-allowed char with a hyphen (collapsed below).
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        }
+    }
+    out.trim_matches('-').to_owned()
+}
+
+/// Derive a short, human-readable name from the active filters.
+fn auto_view_name(ctx: &HintContext) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    for pf in &ctx.property_filters {
+        if let Some(pos) = pf.find("~=") {
+            // Regex filter (K~=pattern): use the key, not the pattern.
+            let key = &pf[..pos];
+            parts.push(key.to_lowercase());
+        } else if let Some(pos) = pf.find('=') {
+            let val = &pf[pos + 1..];
+            if !val.is_empty() {
+                parts.push(val.to_lowercase());
+            }
+        } else if let Some(stripped) = pf.strip_prefix('!') {
+            parts.push(format!("no-{stripped}"));
+        }
+    }
+
+    for tf in &ctx.tag_filters {
+        parts.push(tf.to_lowercase());
+    }
+
+    if let Some(task) = &ctx.task_filter {
+        parts.push(task.to_lowercase());
+    }
+
+    let slug = slugify(&parts.join("-"));
+    let truncated: String = slug.chars().take(40).collect();
+    // Trim any trailing `-` left by truncation mid-word.
+    let trimmed = truncated.trim_end_matches('-');
+    if trimmed.is_empty() {
+        "my-view".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Build the `hyalo views set <name> <filters…>` command string.
+fn build_views_set_command(ctx: &HintContext, view_name: &str) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    push_global_flags(&mut parts, ctx);
+    parts.push("views".to_owned());
+    parts.push("set".to_owned());
+    parts.push(shell_quote(view_name));
+    for pf in &ctx.property_filters {
+        parts.push("--property".to_owned());
+        parts.push(shell_quote(pf));
+    }
+    for tf in &ctx.tag_filters {
+        parts.push("--tag".to_owned());
+        parts.push(shell_quote(tf));
+    }
+    if let Some(task) = &ctx.task_filter {
+        parts.push("--task".to_owned());
+        parts.push(shell_quote(task));
+    }
+    parts.join(" ")
+}
+
+/// Suggest saving the current query as a view when at least two
+/// view-serializable filter dimensions are active and the query did not
+/// itself come from a view. Excludes body/regex search since the actual
+/// pattern value is not available in `HintContext`.
+fn suggest_save_as_view(ctx: &HintContext) -> Option<Hint> {
+    if ctx.view_name.is_some() {
+        return None;
+    }
+
+    // Only count filters that can be round-tripped into a `views set` command.
+    // Body/regex search is excluded because HintContext only stores a bool,
+    // not the actual pattern string.
+    let filter_count =
+        ctx.property_filters.len() + ctx.tag_filters.len() + usize::from(ctx.task_filter.is_some());
+
+    if filter_count < 2 {
+        return None;
+    }
+
+    let name = auto_view_name(ctx);
+    let cmd = build_views_set_command(ctx, &name);
+    Some(Hint::new("Save this query as a view", cmd))
+}
+
 fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     // find returns a bare array as the raw command output (the envelope is built later).
     let Some(results) = data.as_array() else {
@@ -547,6 +653,14 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
                     build_find_command_preserving_filters(ctx, &["--limit", "10"]),
                 ));
             }
+        }
+    }
+
+    // Suggest saving as a view for non-trivial queries (independent of result count).
+    if let Some(view_hint) = suggest_save_as_view(ctx) {
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(view_hint);
         }
     }
 

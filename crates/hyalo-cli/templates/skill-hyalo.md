@@ -171,6 +171,34 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **backlinks** — reverse link lookup: lists all files that link to a given file
 - **create-index** — build a snapshot index for faster repeated read-only queries
 - **drop-index** — delete a snapshot index file created with create-index
+- **views list** — show all saved views and their filters
+- **views set** — save a find query as a named view (`hyalo views set todo --task todo`)
+- **views remove** — delete a saved view
+
+## Views — saved find queries
+
+Views save frequently-used filter combinations under a name in `.hyalo.toml`.
+They compose: CLI flags passed alongside `--view` extend or override the saved filters.
+
+**Before constructing a complex `hyalo find`, check if a matching view exists:**
+```bash
+hyalo views list --format text
+```
+
+**If you run the same multi-filter find command 3+ times, save it as a view:**
+```bash
+hyalo views set stale-iterations --property type=iteration --property status=in-progress
+hyalo find --view stale-iterations                    # reuse later
+hyalo find --view stale-iterations --limit 5          # compose with overrides
+```
+
+hyalo suggests saving non-trivial queries as views in its hint output — follow those hints.
+
+**Manage views:**
+- `hyalo views list` — show all saved views
+- `hyalo views set <name> [filters...]` — create or update a view
+- `hyalo views remove <name>` — delete a view
+- `hyalo find --view <name> [extra filters...]` — use a view, optionally with overrides
 
 ## The --format text flag
 
