@@ -7,7 +7,7 @@ tags:
   - cli
   - find
   - views
-status: in-progress
+status: completed
 branch: iter-94/views
 ---
 

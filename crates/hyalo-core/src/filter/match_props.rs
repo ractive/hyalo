@@ -96,6 +96,56 @@ impl PropertyFilter {
             }
         }
     }
+
+    /// Evaluate the filter against an already-resolved value, bypassing the
+    /// property map lookup.
+    ///
+    /// This is used when the caller has already derived the value for a key
+    /// (e.g. a synthetic title from an H1 heading) and wants to avoid cloning
+    /// the entire map just to inject the value for filter evaluation.
+    ///
+    /// Semantics by variant:
+    /// - `Absent`     — the value is present (caller supplied it), so returns `false`.
+    /// - `RegexMatch` — evaluates `pattern` against `value`.
+    /// - `Scalar`     — evaluates the comparison against `value`; `Exists` returns `true`
+    ///   because the caller only calls this when a value exists.
+    #[must_use]
+    pub fn matches_value(&self, value: &Value) -> bool {
+        match self {
+            // The key is present (caller derived a value), so absence filter fails.
+            PropertyFilter::Absent { .. } => false,
+            PropertyFilter::RegexMatch { pattern, .. } => yaml_value_regex_match(value, pattern),
+            PropertyFilter::Scalar {
+                op,
+                value: filter_value,
+                ..
+            } => {
+                if *op == FilterOp::Exists {
+                    // Key is present — existence check passes.
+                    return true;
+                }
+                let filter_val = filter_value.as_deref().unwrap_or("");
+                match op {
+                    FilterOp::Eq => yaml_value_eq(value, filter_val),
+                    FilterOp::NotEq => !yaml_value_eq(value, filter_val),
+                    FilterOp::Gt => {
+                        yaml_cmp(value, filter_val) == Some(std::cmp::Ordering::Greater)
+                    }
+                    FilterOp::Gte => matches!(
+                        yaml_cmp(value, filter_val),
+                        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                    ),
+                    FilterOp::Lt => yaml_cmp(value, filter_val) == Some(std::cmp::Ordering::Less),
+                    FilterOp::Lte => matches!(
+                        yaml_cmp(value, filter_val),
+                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                    ),
+                    // SAFETY: Exists is handled by the early return above
+                    FilterOp::Exists => unreachable!("Exists handled by early return"),
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -30,7 +30,8 @@ static QUIET: AtomicBool = AtomicBool::new(false);
 
 /// Per-message suppression counters.
 /// Key: warning message string.
-/// Value: number of times the message was suppressed (i.e. seen after the first).
+/// Value: number of times the message was suppressed (i.e. seen *after* the first print).
+///        Inserted as 0 on the first occurrence; incremented on each subsequent one.
 static SUPPRESSED: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 
 /// Initialise the warning system.
@@ -70,8 +71,8 @@ pub fn warn(msg: impl AsRef<str>) {
             *count += 1;
             return;
         }
-        // First occurrence: insert and fall through to print.
-        map.insert(msg.to_owned(), 1);
+        // First occurrence: insert with suppression count 0, fall through to print.
+        map.insert(msg.to_owned(), 0);
         // guard.is_none() means init() hasn't been called yet — fall through to print.
     }
 
@@ -101,7 +102,7 @@ pub fn suppressed_count_for(msg: &str) -> usize {
         .lock()
         .ok()
         .and_then(|g| g.as_ref().and_then(|m| m.get(msg).copied()))
-        .map_or(0, |seen| seen.saturating_sub(1))
+        .unwrap_or(0)
 }
 
 /// Return whether the given message was tracked at least once after `init()`.
@@ -125,13 +126,7 @@ pub fn total_suppressed() -> usize {
     SUPPRESSED
         .lock()
         .ok()
-        .and_then(|g| {
-            g.as_ref().map(|m| {
-                m.values()
-                    .map(|&seen| seen.saturating_sub(1))
-                    .sum::<usize>()
-            })
-        })
+        .and_then(|g| g.as_ref().map(|m| m.values().sum::<usize>()))
         .unwrap_or(0)
 }
 
@@ -210,13 +205,7 @@ pub fn warn_glob_dir_overlap(dir: &std::path::Path, globs: &[String], matched_co
 /// If no warnings were suppressed (or `init` was never called) this is a no-op.
 pub fn flush_summary() {
     let total_suppressed: usize = match SUPPRESSED.lock() {
-        Ok(guard) => guard.as_ref().map_or(0, |map| {
-            map.values()
-                // Each entry counts: first print is not suppressed, so suppress count
-                // is (total_seen - 1). We stored total_seen in the map entry.
-                .map(|&seen| seen.saturating_sub(1))
-                .sum()
-        }),
+        Ok(guard) => guard.as_ref().map_or(0, |map| map.values().sum()),
         Err(_) => return,
     };
 

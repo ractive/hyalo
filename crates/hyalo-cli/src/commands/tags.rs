@@ -1,5 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -86,7 +86,7 @@ pub fn tags_summary(
     let total = tags.len() as u64;
     let _ = format; // format is applied by the output pipeline
     Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&tags).unwrap_or_default(),
+        serde_json::to_string_pretty(&tags).context("failed to serialize")?,
         total,
     ))
 }

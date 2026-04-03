@@ -155,34 +155,55 @@ pub fn find(
     for entry in &scoped_entries {
         // --- Metadata filters using pre-indexed data ---
         // When a property filter targets "title" and the entry has no
-        // frontmatter title (or a non-string title), inject the derived
-        // title (from H1 heading) so that `--property 'title~=...'`
-        // matches derived titles too.  The gate mirrors `extract_title()`
-        // which only treats a frontmatter title as authoritative when it
-        // is a String.
-        let props_with_derived_title;
-        let effective_props = if has_title_property_filter
+        // frontmatter title (or a non-string title), we need to match title
+        // filters against the derived title (from an H1 heading).  Rather than
+        // cloning the whole properties map to inject the derived value, we
+        // split the filters: title-targeting ones are evaluated directly against
+        // the derived value via `PropertyFilter::matches_value`; all others run
+        // against the real properties map.  The gate mirrors `extract_title()`
+        // which only treats a frontmatter string as authoritative.
+        let has_missing_fm_title = has_title_property_filter
             && !matches!(
                 entry.properties.get("title"),
                 Some(serde_json::Value::String(_))
-            ) {
-            let derived = extract_title(&entry.properties, Some(&entry.sections));
-            if derived.is_null() {
-                &entry.properties
-            } else {
-                props_with_derived_title = {
-                    let mut p = entry.properties.clone();
-                    p.insert("title".to_owned(), derived);
-                    p
-                };
-                &props_with_derived_title
-            }
-        } else {
-            &entry.properties
-        };
+            );
 
-        if !filter::matches_filters_with_tags(
-            effective_props,
+        if has_missing_fm_title {
+            let derived = extract_title(&entry.properties, Some(&entry.sections));
+            // Evaluate title filters against the derived value; non-title filters
+            // against the real map.  Both sets must pass (AND semantics).
+            let title_ok = property_filters
+                .iter()
+                .filter(|f| f.key() == Some("title"))
+                .all(|f| {
+                    if derived.is_null() {
+                        // No derived title — treat as absent: Absent filter passes,
+                        // all others fail (no value to compare against).
+                        matches!(f, filter::PropertyFilter::Absent { .. })
+                    } else {
+                        f.matches_value(&derived)
+                    }
+                });
+            if !title_ok {
+                continue;
+            }
+            let non_title_ok = property_filters
+                .iter()
+                .filter(|f| f.key() != Some("title"))
+                .all(|f| f.matches(&entry.properties));
+            if !non_title_ok {
+                continue;
+            }
+            // Check tag filters separately (matches_filters_with_tags was bypassed).
+            if !tag_filters.is_empty()
+                && !tag_filters
+                    .iter()
+                    .all(|q| entry.tags.iter().any(|t| filter::tag_matches(t, q)))
+            {
+                continue;
+            }
+        } else if !filter::matches_filters_with_tags(
+            &entry.properties,
             property_filters,
             &entry.tags,
             tag_filters,

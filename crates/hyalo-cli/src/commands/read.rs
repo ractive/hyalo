@@ -67,21 +67,6 @@ fn parse_line_range(s: &str) -> Result<LineRange, String> {
     }
 }
 
-/// Apply a line range to a slice of lines, returning the selected sub-slice.
-/// Line numbers are 1-based and inclusive. Out-of-range values are clamped.
-fn apply_line_range<'a>(lines: &'a [String], range: &LineRange) -> &'a [String] {
-    let len = lines.len();
-    if len == 0 {
-        return lines;
-    }
-    let start_idx = range.start.unwrap_or(1).saturating_sub(1).min(len);
-    let end_idx = range.end.unwrap_or(len).min(len);
-    if start_idx >= end_idx {
-        return &lines[0..0];
-    }
-    &lines[start_idx..end_idx]
-}
-
 // ---------------------------------------------------------------------------
 // Section extraction
 // ---------------------------------------------------------------------------
@@ -295,10 +280,17 @@ pub fn run(
         }
     }
 
-    // Apply line range
+    // Apply line range — truncate/drain in place to avoid cloning.
     if let Some(ref range) = line_range {
-        let sliced = apply_line_range(&content_lines, range);
-        content_lines = sliced.to_vec();
+        let len = content_lines.len();
+        let start_idx = range.start.unwrap_or(1).saturating_sub(1).min(len);
+        let end_idx = range.end.unwrap_or(len).min(len);
+        if start_idx >= end_idx {
+            content_lines.clear();
+        } else {
+            content_lines.truncate(end_idx);
+            content_lines.drain(..start_idx);
+        }
     }
 
     // Format output
@@ -319,7 +311,7 @@ pub fn run(
     // For text user format: return raw text (bypasses pipeline).
     if user_format == Format::Json {
         return Ok(CommandOutcome::success(
-            serde_json::to_string_pretty(&obj).unwrap_or_default(),
+            serde_json::to_string_pretty(&obj).context("failed to serialize")?,
         ));
     }
 
@@ -418,43 +410,6 @@ mod tests {
     fn range_non_numeric_is_error() {
         assert!(parse_line_range("abc").is_err());
         assert!(parse_line_range("a:b").is_err());
-    }
-
-    // -- apply_line_range --
-
-    #[test]
-    fn apply_range_to_lines() {
-        let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
-        let range = LineRange {
-            start: Some(3),
-            end: Some(5),
-        };
-        let result = apply_line_range(&lines, &range);
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "line 3");
-        assert_eq!(result[2], "line 5");
-    }
-
-    #[test]
-    fn apply_range_clamps_high_end() {
-        let lines: Vec<String> = (1..=3).map(|i| format!("line {i}")).collect();
-        let range = LineRange {
-            start: Some(2),
-            end: Some(100),
-        };
-        let result = apply_line_range(&lines, &range);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn apply_range_empty_lines() {
-        let lines: Vec<String> = Vec::new();
-        let range = LineRange {
-            start: Some(1),
-            end: Some(5),
-        };
-        let result = apply_line_range(&lines, &range);
-        assert!(result.is_empty());
     }
 
     // -- extract_sections --

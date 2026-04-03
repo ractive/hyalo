@@ -1,7 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
@@ -85,7 +85,7 @@ pub fn links_fix(
 
     let _ = format;
     Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&output).unwrap_or_default(),
+        serde_json::to_string_pretty(&output).context("failed to serialize")?,
     ))
 }
 

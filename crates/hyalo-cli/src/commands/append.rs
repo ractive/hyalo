@@ -17,14 +17,14 @@ use hyalo_core::index::SnapshotIndex;
 
 /// Result of an `append --property K=V` operation across files.
 #[derive(Debug, Serialize)]
-pub struct AppendPropertyResult {
-    pub property: String,
-    pub value: String,
-    pub modified: Vec<String>,
-    pub skipped: Vec<String>,
-    pub total: usize,
-    pub scanned: usize,
-    pub dry_run: bool,
+pub(crate) struct AppendPropertyResult {
+    pub(crate) property: String,
+    pub(crate) value: String,
+    pub(crate) modified: Vec<String>,
+    pub(crate) skipped: Vec<String>,
+    pub(crate) total: usize,
+    pub(crate) scanned: usize,
+    pub(crate) dry_run: bool,
 }
 
 // ---------------------------------------------------------------------------

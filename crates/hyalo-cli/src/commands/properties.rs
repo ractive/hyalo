@@ -1,5 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
@@ -53,7 +53,7 @@ pub fn properties_summary(
     let total = result.len() as u64;
     let _ = format;
     Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&result).unwrap_or_default(),
+        serde_json::to_string_pretty(&result).context("failed to serialize")?,
         total,
     ))
 }
@@ -161,7 +161,7 @@ pub fn properties_rename(
 
     let _ = format;
     Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&result).unwrap_or_default(),
+        serde_json::to_string_pretty(&result).context("failed to serialize")?,
     ))
 }
 

@@ -11,20 +11,19 @@ use crate::util::levenshtein;
 /// Collect all `.md` files under the given directory, respecting `.gitignore` and skipping hidden dirs.
 pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel();
-    let walk_errors: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (err_tx, err_rx) = mpsc::channel::<String>();
     WalkBuilder::new(dir)
         .hidden(true) // skip hidden files/dirs
         .git_ignore(true)
         .build_parallel()
         .run(|| {
             let tx = tx.clone();
-            let errs = walk_errors.clone();
+            let err_tx = err_tx.clone();
             Box::new(move |entry| {
                 let entry = match entry {
                     Ok(e) => e,
                     Err(e) => {
-                        errs.lock().unwrap().push(format!("{e}"));
+                        let _ = err_tx.send(format!("{e}"));
                         return ignore::WalkState::Continue;
                     }
                 };
@@ -36,14 +35,11 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
             })
         });
     drop(tx); // close sender so rx iterator terminates
+    drop(err_tx); // close error sender so err_rx iterator terminates
 
-    let errors = walk_errors.lock().unwrap();
-    if !errors.is_empty() {
-        for e in errors.iter() {
-            eprintln!("warning: directory walk error: {e}");
-        }
+    for e in err_rx {
+        eprintln!("warning: directory walk error: {e}");
     }
-    drop(errors);
 
     let mut files: Vec<PathBuf> = rx.into_iter().collect();
 
