@@ -42,6 +42,13 @@ hyalo summary --format text
 
 # 2. Create snapshot index (one scan, reused by all subsequent queries)
 hyalo create-index
+
+# 3. Save recurring diagnostic queries as views for reuse
+hyalo views set stale-in-progress --property status=in-progress --fields tasks
+hyalo views set missing-status --property '!status'
+hyalo views set missing-type --property '!type'
+hyalo views set orphans --fields backlinks
+hyalo views set completed-with-todos --property status=completed --task todo --fields tasks
 ```
 
 The snapshot index captures every file's metadata in a binary file (`.hyalo-index`).
@@ -133,13 +140,13 @@ Focus on **actionable orphans**: active/planned items that should be cross-refer
 ### Stale statuses
 ```bash
 # In-progress items — should any be completed?
-hyalo find --property status=in-progress --index .hyalo-index --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
+hyalo find --view stale-in-progress --index .hyalo-index --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
 
 # Planned items where all tasks are done
 hyalo find --property status=planned --index .hyalo-index --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
 
 # In-progress items sorted by date (oldest first — possibly stale)
-hyalo find --property status=in-progress --index .hyalo-index --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
+hyalo find --view stale-in-progress --index .hyalo-index --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
 ```
 Cross-reference with git merges from Phase 2. If the branch was merged, update status.
 
@@ -153,8 +160,8 @@ flag it.
 
 ### Missing metadata
 ```bash
-hyalo find --property '!status' --index .hyalo-index --jq 'map(.file)'
-hyalo find --property '!type' --index .hyalo-index --jq 'map(.file)'
+hyalo find --view missing-status --index .hyalo-index --jq '.results | map(.file)'
+hyalo find --view missing-type --index .hyalo-index --jq '.results | map(.file)'
 ```
 
 ### Tag inconsistencies
@@ -166,7 +173,7 @@ more files.
 ### Task completion vs status mismatch
 ```bash
 # Completed items with unchecked tasks — systemic or one-off?
-hyalo find --property status=completed --task todo --index .hyalo-index --jq 'map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
+hyalo find --view completed-with-todos --index .hyalo-index --jq 'map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
 ```
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.

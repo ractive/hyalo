@@ -3,6 +3,7 @@ mod common;
 use std::fs;
 
 use common::{hyalo, hyalo_no_hints, write_md};
+use serde_json::Value;
 use tempfile::TempDir;
 
 fn setup() -> TempDir {
@@ -195,5 +196,90 @@ fn views_set_preserves_existing_config() {
     assert!(
         content.contains("[views.drafts]"),
         "view not written: {content}"
+    );
+}
+
+#[test]
+fn hint_suggests_saving_non_trivial_query_as_view() {
+    let tmp = setup();
+    // Two filters = non-trivial → should suggest saving as a view
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "--property",
+            "status=draft",
+            "--tag",
+            "project",
+            "--hints",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = json["hints"].as_array().unwrap();
+    let has_view_hint = hints
+        .iter()
+        .any(|h| h["cmd"].as_str().unwrap_or("").contains("views set"));
+    assert!(
+        has_view_hint,
+        "expected 'views set' hint for non-trivial query, got: {hints:?}"
+    );
+}
+
+#[test]
+fn hint_does_not_suggest_view_for_single_filter() {
+    let tmp = setup();
+    // Single filter = trivial → should NOT suggest saving as a view
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["find", "--property", "status=draft", "--hints"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = json["hints"].as_array().unwrap();
+    let has_view_hint = hints
+        .iter()
+        .any(|h| h["cmd"].as_str().unwrap_or("").contains("views set"));
+    assert!(
+        !has_view_hint,
+        "should not suggest view for single-filter query, got: {hints:?}"
+    );
+}
+
+#[test]
+fn hint_does_not_suggest_view_when_using_view() {
+    let tmp = setup();
+    // Create a view with two filters
+    hyalo()
+        .current_dir(tmp.path())
+        .args([
+            "views",
+            "set",
+            "drafts",
+            "--property",
+            "status=draft",
+            "--tag",
+            "project",
+        ])
+        .output()
+        .unwrap();
+
+    // Use it — should NOT suggest saving again
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "drafts", "--hints"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = json["hints"].as_array().unwrap();
+    let has_view_hint = hints
+        .iter()
+        .any(|h| h["cmd"].as_str().unwrap_or("").contains("views set"));
+    assert!(
+        !has_view_hint,
+        "should not suggest view when already using --view, got: {hints:?}"
     );
 }
