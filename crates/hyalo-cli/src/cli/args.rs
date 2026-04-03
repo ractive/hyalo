@@ -273,9 +273,9 @@ pub(crate) enum Commands {
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
-merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
-lists; scalar filters (--regexp, --sort, --limit, --title, --task) override; bool \
-flags (--broken-links, --reverse) OR. Example: hyalo find --view drafts --limit 5\n\
+            merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
+            lists; scalar filters (--regexp, --sort, --limit, --title, --task) override; bool \
+            flags (--broken-links, --reverse) OR. Example: hyalo find --view drafts --limit 5\n\
             COMMON MISTAKES:\n\
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\

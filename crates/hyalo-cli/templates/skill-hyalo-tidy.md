@@ -128,7 +128,7 @@ Note the counts for the health dashboard. Actual fixes happen in Phase 4.
 
 ### Orphan files
 ```bash
-hyalo find --fields backlinks --index .hyalo-index --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
+hyalo find --view orphans --index .hyalo-index --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
 ```
 Not all orphans are problems. Expect these to be legitimately orphaned:
 - Top-level files (SEED.md, project-pitch.md, decision-log.md)
@@ -173,7 +173,7 @@ more files.
 ### Task completion vs status mismatch
 ```bash
 # Completed items with unchecked tasks — systemic or one-off?
-hyalo find --view completed-with-todos --index .hyalo-index --jq 'map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
+hyalo find --view completed-with-todos --index .hyalo-index --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
 ```
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.

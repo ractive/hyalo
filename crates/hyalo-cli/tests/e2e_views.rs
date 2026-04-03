@@ -252,7 +252,7 @@ fn hint_does_not_suggest_view_for_single_filter() {
 fn hint_does_not_suggest_view_when_using_view() {
     let tmp = setup();
     // Create a view with two filters
-    hyalo()
+    let set_output = hyalo()
         .current_dir(tmp.path())
         .args([
             "views",
@@ -265,6 +265,11 @@ fn hint_does_not_suggest_view_when_using_view() {
         ])
         .output()
         .unwrap();
+    assert!(
+        set_output.status.success(),
+        "views set failed: {}",
+        String::from_utf8_lossy(&set_output.stderr)
+    );
 
     // Use it — should NOT suggest saving again
     let output = hyalo()

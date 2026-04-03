@@ -400,12 +400,33 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
         .collect()
 }
 
+/// Slugify a string to the charset valid for view names: `[a-z0-9_-]`.
+/// Replaces invalid chars with `-`, collapses runs of `-`, and trims leading/trailing `-`.
+fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            // Replace any non-allowed char with a hyphen (collapsed below).
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        }
+    }
+    out.trim_matches('-').to_owned()
+}
+
 /// Derive a short, human-readable name from the active filters.
 fn auto_view_name(ctx: &HintContext) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     for pf in &ctx.property_filters {
-        if let Some(pos) = pf.find('=') {
+        if let Some(pos) = pf.find("~=") {
+            // Regex filter (K~=pattern): use the key, not the pattern.
+            let key = &pf[..pos];
+            parts.push(key.to_lowercase());
+        } else if let Some(pos) = pf.find('=') {
             let val = &pf[pos + 1..];
             if !val.is_empty() {
                 parts.push(val.to_lowercase());
@@ -423,27 +444,24 @@ fn auto_view_name(ctx: &HintContext) -> String {
         parts.push(task.to_lowercase());
     }
 
-    if ctx.has_regex_search {
-        parts.push("regex".to_owned());
-    }
-
-    let name = parts.join("-");
-    let name: String = name.chars().take(40).collect();
-    if name.is_empty() {
+    let slug = slugify(&parts.join("-"));
+    let truncated: String = slug.chars().take(40).collect();
+    // Trim any trailing `-` left by truncation mid-word.
+    let trimmed = truncated.trim_end_matches('-');
+    if trimmed.is_empty() {
         "my-view".to_owned()
     } else {
-        name
+        trimmed.to_owned()
     }
 }
 
 /// Build the `hyalo views set <name> <filters…>` command string.
 fn build_views_set_command(ctx: &HintContext, view_name: &str) -> String {
-    let mut parts: Vec<String> = vec![
-        "hyalo".to_owned(),
-        "views".to_owned(),
-        "set".to_owned(),
-        shell_quote(view_name),
-    ];
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    push_global_flags(&mut parts, ctx);
+    parts.push("views".to_owned());
+    parts.push("set".to_owned());
+    parts.push(shell_quote(view_name));
     for pf in &ctx.property_filters {
         parts.push("--property".to_owned());
         parts.push(shell_quote(pf));
@@ -459,17 +477,20 @@ fn build_views_set_command(ctx: &HintContext, view_name: &str) -> String {
     parts.join(" ")
 }
 
-/// Suggest saving the current query as a view when at least two filter
-/// dimensions are active and the query did not itself come from a view.
+/// Suggest saving the current query as a view when at least two
+/// view-serializable filter dimensions are active and the query did not
+/// itself come from a view. Excludes body/regex search since the actual
+/// pattern value is not available in `HintContext`.
 fn suggest_save_as_view(ctx: &HintContext) -> Option<Hint> {
     if ctx.view_name.is_some() {
         return None;
     }
 
-    let filter_count = ctx.property_filters.len()
-        + ctx.tag_filters.len()
-        + usize::from(ctx.task_filter.is_some())
-        + usize::from(ctx.has_regex_search);
+    // Only count filters that can be round-tripped into a `views set` command.
+    // Body/regex search is excluded because HintContext only stores a bool,
+    // not the actual pattern string.
+    let filter_count =
+        ctx.property_filters.len() + ctx.tag_filters.len() + usize::from(ctx.task_filter.is_some());
 
     if filter_count < 2 {
         return None;
