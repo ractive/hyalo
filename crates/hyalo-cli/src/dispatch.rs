@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::cli::args::{
-    Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction,
+    Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction, ViewsAction,
 };
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
@@ -506,9 +506,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             },
         },
-        // `Init`, `Deinit`, and `Views` are handled as early returns before dispatch is called.
+        // `Init` and `Deinit` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
         Commands::Deinit => unreachable!("Deinit is dispatched before this match reached"),
-        Commands::Views { .. } => unreachable!("Views is dispatched before this match reached"),
+        Commands::Views { action } => {
+            let action = action.unwrap_or(ViewsAction::List);
+            match action {
+                ViewsAction::List => crate::commands::views::list_views(),
+                ViewsAction::Set { name, filters } => {
+                    crate::commands::views::set_view(&name, &filters)
+                }
+                ViewsAction::Remove { name } => crate::commands::views::remove_view(&name),
+            }
+        }
     }
 }

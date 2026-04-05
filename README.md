@@ -267,7 +267,7 @@ hyalo find --sort property:priority --reverse       # highest priority first
 Manage saved views — named filter sets stored in `.hyalo.toml` and recalled with `hyalo find --view <name>`.
 
 ```sh
-# List all saved views
+# List all saved views (bare `hyalo views` also works)
 hyalo views list
 
 # Save a view (create or overwrite)

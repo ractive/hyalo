@@ -613,15 +613,16 @@ Repeatable (AND).\n\
             Views let you save frequently used filter combinations under a name\n\
             and recall them with `hyalo find --view <name>`. CLI flags passed alongside\n\
             --view are merged on top — list filters extend, scalars override.\n\n\
+            Calling `hyalo views` without a subcommand defaults to `hyalo views list`.\n\n\
             Subcommands:\n\
-            - list: Show all saved views and their filters.\n\
+            - list: Show all saved views and their filters (default).\n\
             - set: Create or update a view.\n\
             - remove: Delete a view.\n\n\
             SIDE EFFECTS: 'set' and 'remove' modify .hyalo.toml. 'list' is read-only."
     )]
     Views {
         #[command(subcommand)]
-        action: ViewsAction,
+        action: Option<ViewsAction>,
     },
     /// Detect and repair broken links across the vault
     #[command(
