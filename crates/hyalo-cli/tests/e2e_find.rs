@@ -1647,8 +1647,8 @@ fn empty_text_result_prints_notice_on_stderr() {
         "stdout should be empty for zero results, got: {stdout:?}"
     );
     assert!(
-        stderr.contains("No files matched"),
-        "stderr should contain 'No files matched' notice, got: {stderr}"
+        stderr.contains("No results"),
+        "stderr should contain 'No results' notice, got: {stderr}"
     );
 }
 
@@ -1673,8 +1673,8 @@ fn empty_json_result_returns_empty_array_no_stderr() {
     assert_eq!(json["total"].as_u64().unwrap(), 0);
     assert!(json["results"].as_array().unwrap().is_empty());
     assert!(
-        !stderr.contains("No files matched"),
-        "JSON mode should not print 'No files matched' notice"
+        !stderr.contains("No results"),
+        "JSON mode should not print 'No results' notice"
     );
 }
 

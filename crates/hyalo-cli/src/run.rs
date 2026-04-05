@@ -2,7 +2,7 @@ use std::process;
 
 use clap::{CommandFactory, FromArgMatches};
 
-use crate::cli::args::{Cli, Commands, FindFilters, ViewsAction};
+use crate::cli::args::{Cli, Commands, FindFilters};
 use crate::cli::help::{filter_examples, filter_long_help};
 use crate::commands::init as init_commands;
 use crate::dispatch::{CommandContext, dispatch};
@@ -157,12 +157,7 @@ fn run_inner() -> Result<(), AppError> {
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
     // Reject --count early — init is not a list command.
-    if cli.count
-        && matches!(
-            cli.command,
-            Commands::Init { .. } | Commands::Deinit | Commands::Views { .. }
-        )
-    {
+    if cli.count && matches!(cli.command, Commands::Init { .. } | Commands::Deinit) {
         eprintln!("{COUNT_UNSUPPORTED_ERROR}");
         return Err(AppError::Exit(2));
     }
@@ -187,39 +182,6 @@ fn run_inner() -> Result<(), AppError> {
             Err(e) => return Err(AppError::Internal(e)),
         }
     }
-    if let Commands::Views { ref action } = cli.command {
-        match action {
-            ViewsAction::List => match crate::commands::views::list_views() {
-                Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
-                    println!("{output}");
-                    return Ok(());
-                }
-                Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
-                Err(e) => return Err(AppError::Internal(e)),
-            },
-            ViewsAction::Set { name, filters } => {
-                match crate::commands::views::set_view(name, filters) {
-                    Ok(
-                        CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output),
-                    ) => {
-                        println!("{output}");
-                        return Ok(());
-                    }
-                    Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
-                    Err(e) => return Err(AppError::Internal(e)),
-                }
-            }
-            ViewsAction::Remove { name } => match crate::commands::views::remove_view(name) {
-                Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
-                    println!("{output}");
-                    return Ok(());
-                }
-                Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
-                Err(e) => return Err(AppError::Internal(e)),
-            },
-        }
-    }
-
     // Merge: CLI args override config, config overrides hardcoded defaults.
     // Track whether --dir was explicitly passed (not from config) so hints
     // can omit it when the user relies on .hyalo.toml.
