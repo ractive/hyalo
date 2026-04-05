@@ -9,11 +9,16 @@ use tempfile::TempDir;
 /// Set a "drafts" view and return the temp dir.
 fn setup_with_view() -> TempDir {
     let tmp = setup();
-    hyalo()
+    let output = hyalo()
         .current_dir(tmp.path())
         .args(["views", "set", "drafts", "--property", "status=draft"])
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "views set failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     tmp
 }
 
@@ -403,6 +408,24 @@ fn views_list_jq_results() {
     );
     let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     assert_eq!(text, "drafts", "expected view name, got: {text}");
+}
+
+#[test]
+fn views_list_count() {
+    let tmp = setup_with_view();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "list", "--count"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    assert_eq!(text, "1", "expected count=1, got: {text}");
 }
 
 #[test]
