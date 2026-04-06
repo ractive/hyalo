@@ -909,7 +909,12 @@ fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
                 }
             }
         }
-        return hints;
+        // For "all" and "section:" selectors, return early — the bulk hints are sufficient.
+        // For "lines" selector, fall through to the single-task hint path which handles
+        // individual line-based suggestions.
+        if selector != "lines" {
+            return hints;
+        }
     }
 
     // Single-task read path (backward compatible).

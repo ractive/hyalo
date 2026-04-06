@@ -712,7 +712,7 @@ pub(crate) enum TaskAction {
     /// Show task details for one or more tasks (read-only)
     #[command(long_about = "Show task details for one or more tasks.\n\n\
         INPUT: --file and one of: --line (repeatable), --section <heading>, or --all.\n\
-        OUTPUT: single task object when one line resolved; {\"results\":[...],\"total\":N} for multiple.\n\
+        OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: None (read-only).\n\
         USE WHEN: You need to inspect task status before toggling or updating.\n\n\
         EXAMPLES:\n  \
@@ -738,7 +738,7 @@ pub(crate) enum TaskAction {
     #[command(
         long_about = "Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x].\n\n\
         INPUT: --file and one of: --line (repeatable), --section <heading>, or --all.\n\
-        OUTPUT: single task object when one line resolved; {\"results\":[...],\"total\":N} for multiple.\n\
+        OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
         USE WHEN: You need to mark tasks as done or re-open completed tasks.\n\n\
         EXAMPLES:\n  \
@@ -766,7 +766,7 @@ pub(crate) enum TaskAction {
         name = "set-status",
         long_about = "Set a custom single-character status on one or more task checkboxes.\n\n\
         INPUT: --file, --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
-        OUTPUT: single task object when one line resolved; {\"results\":[...],\"total\":N} for multiple.\n\
+        OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
         USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
         EXAMPLES:\n  \

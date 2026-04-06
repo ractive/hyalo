@@ -742,7 +742,7 @@ fn task_toggle_all() {
     assert!(status.success(), "stderr: {stderr}");
 
     let results = json["results"].as_array().expect("expected results array");
-    // 5 tasks total in the file: Task A, Task B, AC one, AC two, AC three, Other task = 6
+    // 6 tasks total in the file: Task A, Task B, AC one, AC two, AC three, Other task
     assert_eq!(results.len(), 6, "expected 6 tasks in file");
 
     let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
@@ -852,12 +852,16 @@ fn task_single_line_returns_flat_object() {
     assert!(status.success(), "stderr: {stderr}");
 
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    // Should NOT have a "results" key — it's a flat object
+    // Single-line result is still wrapped in the output envelope with a "results" key,
+    // but the value is a single object (not an array).
     assert!(
         json.get("results").is_some(),
         "single-line result should be in envelope with results"
     );
-    // The results field should be the task itself (not an array)
+    assert!(
+        !json["results"].is_array(),
+        "single-line result should be a flat object, not an array"
+    );
     assert_eq!(json["results"]["text"], "Task A");
 }
 

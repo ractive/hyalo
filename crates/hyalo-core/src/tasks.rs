@@ -168,7 +168,7 @@ impl FileVisitor for TaskCounter {
 
 /// Visitor that collects tasks with section context for the `find` command.
 /// Tracks the current ATX heading to populate `FindTaskInfo.section`.
-pub struct TaskExtractor {
+pub(crate) struct TaskExtractor {
     current_section: String,
     tasks: Vec<crate::types::FindTaskInfo>,
 }
@@ -509,6 +509,7 @@ pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
 }
 
 /// Toggle multiple tasks in one atomic read-modify-write pass. Lines are 1-based.
+/// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Errors if any line is not a task checkbox.
 pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
     let content = std::fs::read_to_string(path)
@@ -520,10 +521,14 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
         file_lines.len()
     };
 
-    let mut results = Vec::with_capacity(lines.len());
-    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(lines.len());
+    let mut deduped = lines.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
 
-    for &line in lines {
+    let mut results = Vec::with_capacity(deduped.len());
+    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
+
+    for &line in &deduped {
         if line == 0 || line > line_count {
             bail!("line {line} is out of range (file has {line_count} lines)");
         }
@@ -549,6 +554,7 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
 }
 
 /// Set a custom status character on multiple tasks in one atomic read-modify-write pass.
+/// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Lines are 1-based. Errors if any line is not a task checkbox.
 pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Vec<TaskInfo>> {
     let content = std::fs::read_to_string(path)
@@ -560,10 +566,14 @@ pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Ve
         file_lines.len()
     };
 
-    let mut results = Vec::with_capacity(lines.len());
-    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(lines.len());
+    let mut deduped = lines.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
 
-    for &line in lines {
+    let mut results = Vec::with_capacity(deduped.len());
+    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
+
+    for &line in &deduped {
         if line == 0 || line > line_count {
             bail!("line {line} is out of range (file has {line_count} lines)");
         }
@@ -586,12 +596,16 @@ pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Ve
 /// Build a new file content string by applying line replacements.
 /// `replacements` is a list of (1-based line number, new line content).
 fn build_new_content(original: &str, lines: &[&str], replacements: &[(usize, String)]) -> String {
+    let repl_map: std::collections::HashMap<usize, &str> = replacements
+        .iter()
+        .map(|(ln, s)| (*ln, s.as_str()))
+        .collect();
     let mut buf = String::with_capacity(original.len());
     for (i, &l) in lines.iter().enumerate() {
         if i > 0 {
             buf.push('\n');
         }
-        if let Some((_, repl)) = replacements.iter().find(|(ln, _)| *ln == i + 1) {
+        if let Some(repl) = repl_map.get(&(i + 1)) {
             buf.push_str(repl);
         } else {
             buf.push_str(l);

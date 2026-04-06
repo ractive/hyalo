@@ -68,8 +68,7 @@ fn resolve_task_lines(
 }
 
 /// Format results: single object when exactly 1 task, Vec when multiple.
-/// `format_output` wraps in the standard `{"results": ..., "hints": [...]}` envelope,
-/// so we just pass the raw value (single object or Vec).
+/// The output pipeline later wraps this in the `{"results": ..., "hints": [...]}` envelope.
 fn format_results(results: &[TaskReadResult], format: Format) -> String {
     if let [single] = results {
         crate::output::format_output(format, single)
