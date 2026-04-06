@@ -88,7 +88,7 @@ fn subcommand_help_unchanged_by_enriched_root() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
-        stdout.contains("Read, toggle, or set status on a single task"),
+        stdout.contains("Read, toggle, or set status on task checkboxes"),
         "subcommand --help should contain its own long_about"
     );
     assert!(

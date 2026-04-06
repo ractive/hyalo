@@ -462,21 +462,7 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
     let (modified_line, info) = mutate_task_line(target, line, new_status)
         .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
 
-    let new_content = {
-        let mut buf = String::with_capacity(content.len() + modified_line.len());
-        for (i, l) in lines.iter().enumerate() {
-            if i > 0 {
-                buf.push('\n');
-            }
-            if i == line - 1 {
-                buf.push_str(&modified_line);
-            } else {
-                buf.push_str(l);
-            }
-        }
-        buf
-    };
-
+    let new_content = build_new_content(&content, &lines, &[(line, modified_line)]);
     crate::fs_util::atomic_write(path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
@@ -507,25 +493,125 @@ pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInf
     let (modified_line, info) = mutate_task_line(target, line, status)
         .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
 
-    let new_content = {
-        let mut buf = String::with_capacity(content.len() + modified_line.len());
-        for (i, l) in lines.iter().enumerate() {
-            if i > 0 {
-                buf.push('\n');
-            }
-            if i == line - 1 {
-                buf.push_str(&modified_line);
-            } else {
-                buf.push_str(l);
-            }
-        }
-        buf
-    };
-
+    let new_content = build_new_content(&content, &lines, &[(line, modified_line)]);
     crate::fs_util::atomic_write(path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(info)
+}
+
+/// Scan a file and return all task lines with section context.
+/// Skips frontmatter, fenced code blocks, and comment blocks.
+pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
+    let mut extractor = TaskExtractor::new();
+    scanner::scan_file_multi(path, &mut [&mut extractor])?;
+    Ok(extractor.into_tasks())
+}
+
+/// Toggle multiple tasks in one atomic read-modify-write pass. Lines are 1-based.
+/// Duplicate lines are deduplicated; results are returned in sorted line order.
+/// Errors if any line is not a task checkbox.
+pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let file_lines: Vec<&str> = content.split('\n').collect();
+    let line_count = if file_lines.last() == Some(&"") {
+        file_lines.len() - 1
+    } else {
+        file_lines.len()
+    };
+
+    let mut deduped = lines.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
+
+    let mut results = Vec::with_capacity(deduped.len());
+    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
+
+    for &line in &deduped {
+        if line == 0 || line > line_count {
+            bail!("line {line} is out of range (file has {line_count} lines)");
+        }
+        let target = file_lines[line - 1];
+        let (current_status, _done) = detect_task_checkbox(target)
+            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
+        let new_status = if current_status == 'x' || current_status == 'X' {
+            ' '
+        } else {
+            'x'
+        };
+        let (modified_line, info) = mutate_task_line(target, line, new_status)
+            .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
+        replacements.push((line, modified_line));
+        results.push(info);
+    }
+
+    let new_content = build_new_content(&content, &file_lines, &replacements);
+    crate::fs_util::atomic_write(path, new_content.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(results)
+}
+
+/// Set a custom status character on multiple tasks in one atomic read-modify-write pass.
+/// Duplicate lines are deduplicated; results are returned in sorted line order.
+/// Lines are 1-based. Errors if any line is not a task checkbox.
+pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Vec<TaskInfo>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let file_lines: Vec<&str> = content.split('\n').collect();
+    let line_count = if file_lines.last() == Some(&"") {
+        file_lines.len() - 1
+    } else {
+        file_lines.len()
+    };
+
+    let mut deduped = lines.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
+
+    let mut results = Vec::with_capacity(deduped.len());
+    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
+
+    for &line in &deduped {
+        if line == 0 || line > line_count {
+            bail!("line {line} is out of range (file has {line_count} lines)");
+        }
+        let target = file_lines[line - 1];
+        detect_task_checkbox(target)
+            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
+        let (modified_line, info) = mutate_task_line(target, line, status)
+            .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
+        replacements.push((line, modified_line));
+        results.push(info);
+    }
+
+    let new_content = build_new_content(&content, &file_lines, &replacements);
+    crate::fs_util::atomic_write(path, new_content.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
+    Ok(results)
+}
+
+/// Build a new file content string by applying line replacements.
+/// `replacements` is a list of (1-based line number, new line content).
+fn build_new_content(original: &str, lines: &[&str], replacements: &[(usize, String)]) -> String {
+    let repl_map: std::collections::HashMap<usize, &str> = replacements
+        .iter()
+        .map(|(ln, s)| (*ln, s.as_str()))
+        .collect();
+    let mut buf = String::with_capacity(original.len());
+    for (i, &l) in lines.iter().enumerate() {
+        if i > 0 {
+            buf.push('\n');
+        }
+        if let Some(repl) = repl_map.get(&(i + 1)) {
+            buf.push_str(repl);
+        } else {
+            buf.push_str(l);
+        }
+    }
+    buf
 }
 
 // ---------------------------------------------------------------------------

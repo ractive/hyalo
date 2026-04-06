@@ -67,10 +67,14 @@ pub struct HintContext {
     pub tag_filters: Vec<String>,
     pub task_filter: Option<String>,
     pub file_targets: Vec<String>,
+    pub section_filters: Vec<String>,
     /// Set when the query was produced by `--view <name>`; suppresses the
     /// "save as view" hint to avoid suggesting the user save a view they
     /// already have.
     pub view_name: Option<String>,
+    /// Task selector used: "all", "section:<name>", or "lines" (for multi-line).
+    /// `None` means single-line or no task context.
+    pub task_selector: Option<String>,
     // Mutation context
     pub dry_run: bool,
     // Index context
@@ -107,7 +111,9 @@ impl HintContext {
             tag_filters: vec![],
             task_filter: None,
             file_targets: vec![],
+            section_filters: vec![],
             view_name: None,
+            task_selector: None,
             dry_run: false,
             index_path: None,
         }
@@ -533,6 +539,40 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         ));
     }
 
+    // --- Task bulk operation hints ---
+    // When find results target a single file and include task data, suggest bulk task ops.
+    if ctx.file_targets.len() == 1 {
+        let file = &ctx.file_targets[0];
+        let has_open_tasks = results.iter().any(|item| {
+            item.get("tasks")
+                .and_then(|t| t.as_array())
+                .is_some_and(|tasks| {
+                    tasks
+                        .iter()
+                        .any(|t| t.get("done") == Some(&serde_json::Value::Bool(false)))
+                })
+        });
+        if has_open_tasks {
+            let remaining = MAX_HINTS.saturating_sub(hints.len());
+            if remaining > 0 {
+                if let Some(section) = ctx.section_filters.first() {
+                    hints.push(Hint::new(
+                        format!("Toggle all tasks in section \"{section}\""),
+                        build_command_no_glob(
+                            ctx,
+                            &["task", "toggle", "--file", file, "--section", section],
+                        ),
+                    ));
+                } else {
+                    hints.push(Hint::new(
+                        "Toggle all tasks in this file",
+                        build_command_no_glob(ctx, &["task", "toggle", "--file", file, "--all"]),
+                    ));
+                }
+            }
+        }
+    }
+
     // --- Broad query → suggest summary ---
     let has_no_filters = ctx.property_filters.is_empty()
         && ctx.tag_filters.is_empty()
@@ -832,10 +872,52 @@ fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     hints
 }
 
+/// Check if task output data (single or array) contains any open (not done) tasks.
+fn task_result_has_open(data: &serde_json::Value) -> bool {
+    // Array case (bulk result)
+    if let Some(arr) = data.as_array() {
+        return arr
+            .iter()
+            .any(|t| t.get("done") == Some(&serde_json::Value::Bool(false)));
+    }
+    // Single task case
+    data.get("done") == Some(&serde_json::Value::Bool(false))
+}
+
 /// Hints for `task read` — suggest toggling or viewing remaining tasks.
 fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
+    // For bulk reads (--all / --section), suggest toggling the same scope.
+    if let Some(selector) = &ctx.task_selector {
+        if let Some(file) = ctx.file_targets.first() {
+            let has_open = task_result_has_open(data);
+            if has_open {
+                if selector == "all" {
+                    hints.push(Hint::new(
+                        "Toggle all tasks in this file",
+                        build_command_no_glob(ctx, &["task", "toggle", "--file", file, "--all"]),
+                    ));
+                } else if let Some(section) = selector.strip_prefix("section:") {
+                    hints.push(Hint::new(
+                        format!("Toggle all tasks in section \"{section}\""),
+                        build_command_no_glob(
+                            ctx,
+                            &["task", "toggle", "--file", file, "--section", section],
+                        ),
+                    ));
+                }
+            }
+        }
+        // For "all" and "section:" selectors, return early — the bulk hints are sufficient.
+        // For "lines" selector, fall through to the single-task hint path which handles
+        // individual line-based suggestions.
+        if selector != "lines" {
+            return hints;
+        }
+    }
+
+    // Single-task read path (backward compatible).
     let file = data.get("file").and_then(|f| f.as_str());
     let line = data.get("line").and_then(serde_json::Value::as_u64);
     let done = data
@@ -871,9 +953,31 @@ fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
 fn hints_for_task_mutation(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
-    let file = data.get("file").and_then(|f| f.as_str());
+    let file = ctx
+        .file_targets
+        .first()
+        .map(String::as_str)
+        .or_else(|| data.get("file").and_then(|f| f.as_str()));
 
     if let Some(file) = file {
+        // Suggest reading the scope that was just mutated.
+        if let Some(selector) = &ctx.task_selector {
+            if selector == "all" {
+                hints.push(Hint::new(
+                    "Read all tasks in this file",
+                    build_command_no_glob(ctx, &["task", "read", "--file", file, "--all"]),
+                ));
+            } else if let Some(section) = selector.strip_prefix("section:") {
+                hints.push(Hint::new(
+                    format!("Read tasks in section \"{section}\""),
+                    build_command_no_glob(
+                        ctx,
+                        &["task", "read", "--file", file, "--section", section],
+                    ),
+                ));
+            }
+        }
+
         hints.push(Hint::new(
             "See remaining open tasks",
             build_command_no_glob(

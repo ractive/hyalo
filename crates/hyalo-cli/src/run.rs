@@ -12,6 +12,19 @@ use crate::output::{CommandOutcome, Format};
 use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
 use hyalo_core::index::SnapshotIndex;
 
+/// Derive the task selector string for hint context.
+fn task_selector(line: &[usize], section: Option<&String>, all: bool) -> Option<String> {
+    if all {
+        Some("all".to_owned())
+    } else if let Some(s) = section {
+        Some(format!("section:{s}"))
+    } else if line.len() > 1 {
+        Some("lines".to_owned())
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn run() {
     match run_inner() {
@@ -371,6 +384,7 @@ fn run_inner() -> Result<(), AppError> {
                         fields,
                         sort,
                         limit,
+                        sections,
                         ..
                     },
             } => {
@@ -385,6 +399,7 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.tag_filters.clone_from(tag);
                 ctx.task_filter.clone_from(task);
                 ctx.file_targets.clone_from(file);
+                ctx.section_filters.clone_from(sections);
                 ctx.view_name.clone_from(view);
                 Some(ctx)
             }
@@ -440,23 +455,45 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
-            Commands::Task { action } => match action {
-                crate::cli::args::TaskAction::Toggle { file, .. } => {
-                    let mut ctx = HintContext::from_common(HintSource::TaskToggle, &common);
-                    ctx.file_targets = vec![file.clone()];
-                    Some(ctx)
-                }
-                crate::cli::args::TaskAction::SetStatus { file, .. } => {
-                    let mut ctx = HintContext::from_common(HintSource::TaskSetStatus, &common);
-                    ctx.file_targets = vec![file.clone()];
-                    Some(ctx)
-                }
-                crate::cli::args::TaskAction::Read { file, .. } => {
-                    let mut ctx = HintContext::from_common(HintSource::TaskRead, &common);
-                    ctx.file_targets = vec![file.clone()];
-                    Some(ctx)
-                }
-            },
+            Commands::Task { action } => {
+                let (source, file, selector) = match action {
+                    crate::cli::args::TaskAction::Toggle {
+                        file,
+                        line,
+                        section,
+                        all,
+                    } => (
+                        HintSource::TaskToggle,
+                        file,
+                        task_selector(line, section.as_ref(), *all),
+                    ),
+                    crate::cli::args::TaskAction::SetStatus {
+                        file,
+                        line,
+                        section,
+                        all,
+                        ..
+                    } => (
+                        HintSource::TaskSetStatus,
+                        file,
+                        task_selector(line, section.as_ref(), *all),
+                    ),
+                    crate::cli::args::TaskAction::Read {
+                        file,
+                        line,
+                        section,
+                        all,
+                    } => (
+                        HintSource::TaskRead,
+                        file,
+                        task_selector(line, section.as_ref(), *all),
+                    ),
+                };
+                let mut ctx = HintContext::from_common(source, &common);
+                ctx.file_targets = vec![file.clone()];
+                ctx.task_selector = selector;
+                Some(ctx)
+            }
             Commands::Links { action } => match action {
                 crate::cli::args::LinksAction::Fix { apply, glob, .. } => {
                     let mut ctx = HintContext::from_common(HintSource::LinksFix, &common);

@@ -440,6 +440,432 @@ fn task_set_status_empty_string_exits_1() {
 }
 
 // ---------------------------------------------------------------------------
+// Bulk operations fixture
+// ---------------------------------------------------------------------------
+
+/// Multi-section fixture for bulk operation tests.
+///
+/// ```text
+///  1: ---
+///  2: title: Bulk Test
+///  3: ---
+///  4: # Tasks
+///  5: - [ ] Task A
+///  6: - [ ] Task B
+///  7:
+///  8: ## Acceptance criteria
+///  9: - [ ] AC one
+/// 10: - [ ] AC two
+/// 11: - [x] AC three
+/// 12:
+/// 13: ## Other section
+/// 14: - [ ] Other task
+/// ```
+fn setup_bulk_file(tmp: &tempfile::TempDir) {
+    let content = "---\ntitle: Bulk Test\n---\n# Tasks\n- [ ] Task A\n- [ ] Task B\n\n## Acceptance criteria\n- [ ] AC one\n- [ ] AC two\n- [x] AC three\n\n## Other section\n- [ ] Other task\n";
+    write_md(tmp.path(), "bulk.md", content);
+}
+
+// ---------------------------------------------------------------------------
+// Helper: run arbitrary task subcommand with extra args
+// ---------------------------------------------------------------------------
+
+fn run_task_cmd(
+    tmp: &tempfile::TempDir,
+    args: &[&str],
+) -> (std::process::ExitStatus, String, String) {
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(args);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    (output.status, stdout, stderr)
+}
+
+fn run_task_cmd_json(
+    tmp: &tempfile::TempDir,
+    args: &[&str],
+) -> (std::process::ExitStatus, serde_json::Value, String) {
+    let (status, stdout, stderr) = run_task_cmd(tmp, args);
+    let json: serde_json::Value = if status.success() {
+        serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}"))
+    } else {
+        serde_json::Value::Null
+    };
+    (status, json, stderr)
+}
+
+// ---------------------------------------------------------------------------
+// Bulk: repeatable --line
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_multiple_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task", "toggle", "--file", "bulk.md", "--line", "5", "--line", "6",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["status"], "x");
+    assert_eq!(results[0]["text"], "Task A");
+    assert_eq!(results[1]["status"], "x");
+    assert_eq!(results[1]["text"], "Task B");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+}
+
+#[test]
+fn task_read_multiple_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task", "read", "--file", "bulk.md", "--line", "9", "--line", "10",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["text"], "AC one");
+    assert_eq!(results[1]["text"], "AC two");
+}
+
+#[test]
+fn task_toggle_comma_separated_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &["task", "toggle", "--file", "bulk.md", "--line", "5,6"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["status"], "x");
+    assert_eq!(results[0]["text"], "Task A");
+    assert_eq!(results[1]["status"], "x");
+    assert_eq!(results[1]["text"], "Task B");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+}
+
+#[test]
+fn task_set_status_multiple_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "set-status",
+            "--file",
+            "bulk.md",
+            "--line",
+            "5",
+            "--line",
+            "6",
+            "--status",
+            "?",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["status"], "?");
+    assert_eq!(results[1]["status"], "?");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [?] Task A"));
+    assert!(content.contains("- [?] Task B"));
+}
+
+// ---------------------------------------------------------------------------
+// Bulk: --section
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--file",
+            "bulk.md",
+            "--section",
+            "Acceptance criteria",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 3, "section has 3 tasks");
+    // [ ] -> [x], [ ] -> [x], [x] -> [ ]
+    assert_eq!(results[0]["status"], "x");
+    assert_eq!(results[1]["status"], "x");
+    assert_eq!(results[2]["status"], " ");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] AC one"));
+    assert!(content.contains("- [x] AC two"));
+    assert!(content.contains("- [ ] AC three"));
+    // Other section untouched
+    assert!(content.contains("- [ ] Other task"));
+}
+
+#[test]
+fn task_read_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "read",
+            "--file",
+            "bulk.md",
+            "--section",
+            "Acceptance criteria",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["text"], "AC one");
+    assert_eq!(results[1]["text"], "AC two");
+    assert_eq!(results[2]["text"], "AC three");
+}
+
+#[test]
+fn task_set_status_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, _json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "set-status",
+            "--file",
+            "bulk.md",
+            "--section",
+            "Other section",
+            "--status",
+            "-",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [-] Other task"));
+}
+
+#[test]
+fn task_section_substring_match() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    // "Acceptance" is a substring of "Acceptance criteria"
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "read",
+            "--file",
+            "bulk.md",
+            "--section",
+            "Acceptance",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn task_section_no_match_exits_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, _stdout, _stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task",
+            "read",
+            "--file",
+            "bulk.md",
+            "--section",
+            "Nonexistent",
+        ],
+    );
+    assert!(!status.success());
+}
+
+// ---------------------------------------------------------------------------
+// Bulk: --all
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_all() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) =
+        run_task_cmd_json(&tmp, &["task", "toggle", "--file", "bulk.md", "--all"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    // 6 tasks total in the file: Task A, Task B, AC one, AC two, AC three, Other task
+    assert_eq!(results.len(), 6, "expected 6 tasks in file");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    // All [ ] become [x], the one [x] becomes [ ]
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+    assert!(content.contains("- [x] AC one"));
+    assert!(content.contains("- [x] AC two"));
+    assert!(content.contains("- [ ] AC three"));
+    assert!(content.contains("- [x] Other task"));
+}
+
+#[test]
+fn task_read_all() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) =
+        run_task_cmd_json(&tmp, &["task", "read", "--file", "bulk.md", "--all"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 6);
+}
+
+#[test]
+fn task_set_status_all() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, _json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "set-status",
+            "--file",
+            "bulk.md",
+            "--all",
+            "--status",
+            "x",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+    assert!(content.contains("- [x] AC one"));
+    assert!(content.contains("- [x] AC two"));
+    assert!(content.contains("- [x] AC three"));
+    assert!(content.contains("- [x] Other task"));
+}
+
+// ---------------------------------------------------------------------------
+// Bulk: error cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_no_selector_exits_2() {
+    // No --line, --section, or --all -> clap should reject or dispatch should error
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, _stdout, _stderr) = run_task_cmd(&tmp, &["task", "toggle", "--file", "bulk.md"]);
+    assert!(!status.success());
+}
+
+#[test]
+fn task_conflicting_selectors_exits_2() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, _stdout, _stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task", "toggle", "--file", "bulk.md", "--line", "5", "--all",
+        ],
+    );
+    assert!(!status.success());
+}
+
+#[test]
+fn task_all_on_empty_file_exits_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "empty.md",
+        "---\ntitle: Empty\n---\nNo tasks here.\n",
+    );
+
+    let (status, _stdout, _stderr) =
+        run_task_cmd(&tmp, &["task", "toggle", "--file", "empty.md", "--all"]);
+    assert!(!status.success());
+}
+
+// ---------------------------------------------------------------------------
+// Backward compatibility: single --line returns single object (no results wrapper)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_single_line_returns_flat_object() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, stdout, stderr) =
+        run_task_cmd(&tmp, &["task", "read", "--file", "bulk.md", "--line", "5"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    // Single-line result is still wrapped in the output envelope with a "results" key,
+    // but the value is a single object (not an array).
+    assert!(
+        json.get("results").is_some(),
+        "single-line result should be in envelope with results"
+    );
+    assert!(
+        !json["results"].is_array(),
+        "single-line result should be a flat object, not an array"
+    );
+    assert_eq!(json["results"]["text"], "Task A");
+}
+
+// ---------------------------------------------------------------------------
 // task read — line 0 boundary case
 // ---------------------------------------------------------------------------
 

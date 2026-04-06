@@ -166,7 +166,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; `--file` is repeatable)
 - **remove** — delete properties or tags
 - **append** — add to list properties
-- **task** — read, toggle, or set status on checkboxes
+- **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`)
 - **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
 - **create-index** — build a snapshot index for faster repeated read-only queries
