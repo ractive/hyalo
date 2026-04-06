@@ -126,6 +126,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
             }
 
+            // Strip the dir prefix from --file args so that
+            // filter_index_entries matches vault-relative paths.
+            let file: Vec<String> = file
+                .into_iter()
+                .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
+                .collect();
+
             let sort_needs_backlinks =
                 matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
             let sort_needs_links =

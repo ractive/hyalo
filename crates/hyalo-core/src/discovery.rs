@@ -96,7 +96,14 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
         });
     }
 
-    let normalized = normalize_path(path_arg);
+    let mut normalized = normalize_path(path_arg);
+
+    // Strip the dir prefix if present.  Users often pass CWD-relative paths
+    // like `hyalo-knowledgebase/foo.md` when dir is `hyalo-knowledgebase`.
+    // This is equivalent to `foo.md` — strip it before any further checks.
+    if let Some(stripped) = strip_dir_prefix(dir, &normalized) {
+        normalized = stripped;
+    }
 
     // Reject path traversal attempts — use `OutsideVault` so the user
     // understands the path was rejected because it escapes the vault, not
@@ -235,6 +242,31 @@ pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<b
     let canonical_full = dunce::canonicalize(full)
         .with_context(|| format!("failed to canonicalize path: {}", full.display()))?;
     Ok(canonical_full.starts_with(canonical_dir))
+}
+
+/// Strip the vault `dir` prefix from a path if present.
+///
+/// Compares path components so `dir = "docs"` matches the leading `docs/` in
+/// `docs/notes/foo.md` but does NOT match `docs-old/foo.md`.  Returns the
+/// remaining path after the prefix, or `None` if the path doesn't start with
+/// the `dir` components.
+///
+/// When `dir` is an absolute path (e.g. `/home/user/docs`), only the last
+/// component (`docs`) is used for matching — the user's `--file` argument is
+/// always relative, so only the directory name matters.
+pub fn strip_dir_prefix(dir: &Path, normalized: &str) -> Option<String> {
+    let norm_path = Path::new(normalized);
+
+    // For relative dirs (the common case from .hyalo.toml), try a direct
+    // component-wise strip.  For absolute dirs, fall back to the last
+    // component so that e.g. dir="/tmp/kb" matches "kb/note.md".
+    let stripped = norm_path.strip_prefix(dir).ok().or_else(|| {
+        let last = dir.file_name()?;
+        norm_path.strip_prefix(last).ok()
+    })?;
+
+    let s = stripped.to_string_lossy().replace('\\', "/");
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
@@ -829,6 +861,109 @@ mod tests {
         let files = discover_files(tmp.path()).unwrap();
         let patterns: Vec<String> = vec!["!".to_owned()];
         assert!(match_globs(tmp.path(), &files, &patterns).is_err());
+    }
+
+    // ── strip_dir_prefix unit tests ──────────────────────────────────
+
+    #[test]
+    fn strip_dir_prefix_matches_single_component() {
+        let dir = Path::new("docs");
+        assert_eq!(
+            strip_dir_prefix(dir, "docs/notes/foo.md"),
+            Some("notes/foo.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn strip_dir_prefix_matches_multi_component() {
+        let dir = Path::new("my/docs");
+        assert_eq!(
+            strip_dir_prefix(dir, "my/docs/foo.md"),
+            Some("foo.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn strip_dir_prefix_no_match() {
+        let dir = Path::new("docs");
+        assert_eq!(strip_dir_prefix(dir, "notes/foo.md"), None);
+    }
+
+    #[test]
+    fn strip_dir_prefix_partial_component_no_match() {
+        // "docs-old/foo.md" should NOT match dir = "docs"
+        let dir = Path::new("docs");
+        assert_eq!(strip_dir_prefix(dir, "docs-old/foo.md"), None);
+    }
+
+    #[test]
+    fn strip_dir_prefix_exact_match_returns_none() {
+        // The path IS the dir — nothing remains after stripping
+        let dir = Path::new("docs");
+        assert_eq!(strip_dir_prefix(dir, "docs"), None);
+    }
+
+    // ── resolve_file CWD-relative fallback tests ──────────────────────
+
+    #[test]
+    fn resolve_file_cwd_relative_fallback() {
+        // Simulate: dir = "kb", user passes "kb/note.md"
+        let tmp = tempfile::tempdir().unwrap();
+        let kb = tmp.path().join("kb");
+        fs::create_dir_all(&kb).unwrap();
+        fs::write(kb.join("note.md"), "# Note").unwrap();
+
+        let (path, rel) = resolve_file(&kb, "kb/note.md").unwrap();
+        assert!(path.is_file());
+        assert_eq!(rel, "note.md");
+    }
+
+    #[test]
+    fn resolve_file_cwd_relative_nested() {
+        // dir = "kb", user passes "kb/sub/deep.md"
+        let tmp = tempfile::tempdir().unwrap();
+        let kb = tmp.path().join("kb");
+        fs::create_dir_all(kb.join("sub")).unwrap();
+        fs::write(kb.join("sub/deep.md"), "").unwrap();
+
+        let (path, rel) = resolve_file(&kb, "kb/sub/deep.md").unwrap();
+        assert!(path.is_file());
+        assert_eq!(rel, "sub/deep.md");
+    }
+
+    #[test]
+    fn resolve_file_cwd_relative_always_strips_prefix() {
+        // dir = "kb", KB contains both "note.md" and "kb/note.md".
+        // Passing "kb/note.md" always strips to "note.md" because the
+        // prefix is removed during normalization (before existence check).
+        let tmp = tempfile::tempdir().unwrap();
+        let kb = tmp.path().join("kb");
+        fs::create_dir_all(kb.join("kb")).unwrap();
+        fs::write(kb.join("note.md"), "top").unwrap();
+        fs::write(kb.join("kb/note.md"), "nested").unwrap();
+
+        let (path, rel) = resolve_file(&kb, "kb/note.md").unwrap();
+        assert!(path.is_file());
+        // Prefix is stripped unconditionally: resolves to "note.md"
+        assert_eq!(rel, "note.md");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "top",
+            "should resolve to the stripped (vault-relative) file"
+        );
+    }
+
+    #[test]
+    fn resolve_file_cwd_relative_not_found_still_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let kb = tmp.path().join("kb");
+        fs::create_dir_all(&kb).unwrap();
+        // No file at all
+        let err = resolve_file(&kb, "kb/nonexistent.md").unwrap_err();
+        assert!(
+            matches!(err, FileResolveError::NotFound { .. }),
+            "expected NotFound, got {err:?}"
+        );
     }
 
     fn make_files(dir: &Path, paths: &[&str]) {
