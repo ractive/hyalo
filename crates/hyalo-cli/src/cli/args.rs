@@ -335,17 +335,15 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: Option<TagsAction>,
     },
-    /// Read, toggle, or set status on a single task checkbox
-    #[command(
-        long_about = "Read, toggle, or set status on a single task checkbox.\n\n\
+    /// Read, toggle, or set status on task checkboxes (single, bulk, or by section)
+    #[command(long_about = "Read, toggle, or set status on task checkboxes.\n\n\
             Subcommands:\n\
-            - read: Show task details at a specific line number.\n\
+            - read: Show task details for one or more tasks.\n\
             - toggle: Flip completion state ([ ] <-> [x], custom -> [x]).\n\
             - set-status: Set an arbitrary single-character status.\n\n\
-            INPUT: File (--file) and line number (--line).\n\
+            INPUT: --file and one of: --line (repeatable/comma-separated), --section <heading>, or --all.\n\
             SCOPE: Single file only.\n\
-            SIDE EFFECTS: 'toggle' and 'set-status' modify the file on disk. 'read' is read-only."
-    )]
+            SIDE EFFECTS: 'toggle' and 'set-status' modify the file on disk. 'read' is read-only.")]
     Task {
         #[command(subcommand)]
         action: TaskAction,
