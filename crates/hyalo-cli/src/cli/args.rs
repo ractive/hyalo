@@ -709,52 +709,83 @@ pub(crate) enum LinksAction {
 
 #[derive(Subcommand)]
 pub(crate) enum TaskAction {
-    /// Show task details at a specific line number (read-only)
-    #[command(long_about = "Show task details at a specific line number.\n\n\
-        INPUT: --file and --line (1-based, counting from line 1 of the file including frontmatter).\n\
-        OUTPUT: {\"file\": \"...\", \"line\": N, \"status\": \"x\", \"text\": \"...\", \"done\": true}\n\
+    /// Show task details for one or more tasks (read-only)
+    #[command(long_about = "Show task details for one or more tasks.\n\n\
+        INPUT: --file and one of: --line (repeatable), --section <heading>, or --all.\n\
+        OUTPUT: single task object when one line resolved; {\"results\":[...],\"total\":N} for multiple.\n\
         SIDE EFFECTS: None (read-only).\n\
-        USE WHEN: You need to inspect a task's current status before toggling or updating it.")]
+        USE WHEN: You need to inspect task status before toggling or updating.\n\n\
+        EXAMPLES:\n  \
+          hyalo task read --file note.md --line 5\n  \
+          hyalo task read --file note.md --line 5 --line 7\n  \
+          hyalo task read --file note.md --section Tasks\n  \
+          hyalo task read --file note.md --all")]
     Read {
-        /// File containing the task (relative to --dir)
+        /// File containing the task(s) (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter). Use 'hyalo find --task todo' to discover task line numbers
-        #[arg(short, long)]
-        line: usize,
+        /// 1-based line number of a task. Repeatable: --line 5 --line 7
+        #[arg(short, long, action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        line: Vec<usize>,
+        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+        #[arg(long, conflicts_with_all = ["line", "all"])]
+        section: Option<String>,
+        /// Select all tasks in the file
+        #[arg(long, conflicts_with_all = ["line", "section"])]
+        all: bool,
     },
     /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
     #[command(
         long_about = "Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x].\n\n\
-        INPUT: --file and --line (1-based, counting from line 1 of the file including frontmatter).\n\
-        OUTPUT: {\"file\": \"...\", \"line\": N, \"status\": \"x\", \"text\": \"...\", \"done\": true}\n\
+        INPUT: --file and one of: --line (repeatable), --section <heading>, or --all.\n\
+        OUTPUT: single task object when one line resolved; {\"results\":[...],\"total\":N} for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
-        USE WHEN: You need to mark a task as done or re-open a completed task."
+        USE WHEN: You need to mark tasks as done or re-open completed tasks.\n\n\
+        EXAMPLES:\n  \
+          hyalo task toggle --file note.md --line 5\n  \
+          hyalo task toggle --file note.md --section Tasks\n  \
+          hyalo task toggle --file note.md --all"
     )]
     Toggle {
-        /// File containing the task (relative to --dir)
+        /// File containing the task(s) (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter). Use 'hyalo find --task todo' to discover task line numbers
-        #[arg(short, long)]
-        line: usize,
+        /// 1-based line number of a task. Repeatable: --line 5 --line 7
+        #[arg(short, long, action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        line: Vec<usize>,
+        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+        #[arg(long, conflicts_with_all = ["line", "all"])]
+        section: Option<String>,
+        /// Select all tasks in the file
+        #[arg(long, conflicts_with_all = ["line", "section"])]
+        all: bool,
     },
-    /// Set a custom single-character status on a task
+    /// Set a custom single-character status on one or more tasks
     #[command(
         name = "set-status",
-        long_about = "Set a custom single-character status on a task checkbox.\n\n\
-        INPUT: --file, --line (1-based, counting from line 1 of the file including frontmatter), and --status (single char).\n\
-        OUTPUT: {\"file\": \"...\", \"line\": N, \"status\": \"?\", \"text\": \"...\", \"done\": false}\n\
+        long_about = "Set a custom single-character status on one or more task checkboxes.\n\n\
+        INPUT: --file, --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
+        OUTPUT: single task object when one line resolved; {\"results\":[...],\"total\":N} for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
-        USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important)."
+        USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
+        EXAMPLES:\n  \
+          hyalo task set-status --file note.md --line 5 --status '?'\n  \
+          hyalo task set-status --file note.md --section Tasks --status '-'\n  \
+          hyalo task set-status --file note.md --all --status x"
     )]
     SetStatus {
-        /// File containing the task (relative to --dir)
+        /// File containing the task(s) (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of the task (counted from line 1 of the file, including frontmatter). Use 'hyalo find --task todo' to discover task line numbers
-        #[arg(short, long)]
-        line: usize,
+        /// 1-based line number of a task. Repeatable: --line 5 --line 7
+        #[arg(short, long, action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        line: Vec<usize>,
+        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+        #[arg(long, conflicts_with_all = ["line", "all"])]
+        section: Option<String>,
+        /// Select all tasks in the file
+        #[arg(long, conflicts_with_all = ["line", "section"])]
+        all: bool,
         /// Single character to set as the task status (e.g. '?', '-', '!')
         #[arg(short, long)]
         status: String,

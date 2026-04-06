@@ -284,18 +284,41 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             }
         }
         Commands::Task { action } => match action {
-            TaskAction::Read { file, line } => {
-                task_commands::task_read(dir, &file, line, effective_format)
-            }
-            TaskAction::Toggle { file, line } => task_commands::task_toggle(
+            TaskAction::Read {
+                file,
+                line,
+                section,
+                all,
+            } => task_commands::task_read(
                 dir,
                 &file,
+                &line,
+                section.as_deref(),
+                all,
+                effective_format,
+            ),
+            TaskAction::Toggle {
+                file,
                 line,
+                section,
+                all,
+            } => task_commands::task_toggle(
+                dir,
+                &file,
+                &line,
+                section.as_deref(),
+                all,
                 effective_format,
                 snapshot_index,
                 index_path,
             ),
-            TaskAction::SetStatus { file, line, status } => {
+            TaskAction::SetStatus {
+                file,
+                line,
+                section,
+                all,
+                status,
+            } => {
                 if status.chars().count() != 1 {
                     let out = crate::output::format_error(
                         effective_format,
@@ -314,7 +337,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 task_commands::task_set_status(
                     dir,
                     &file,
-                    line,
+                    &line,
+                    section.as_deref(),
+                    all,
                     ch,
                     effective_format,
                     snapshot_index,
