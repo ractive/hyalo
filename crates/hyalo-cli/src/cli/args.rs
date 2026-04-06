@@ -717,15 +717,15 @@ pub(crate) enum TaskAction {
         USE WHEN: You need to inspect task status before toggling or updating.\n\n\
         EXAMPLES:\n  \
           hyalo task read --file note.md --line 5\n  \
-          hyalo task read --file note.md --line 5 --line 7\n  \
+          hyalo task read --file note.md --line 5,7,9\n  \
           hyalo task read --file note.md --section Tasks\n  \
           hyalo task read --file note.md --all")]
     Read {
         /// File containing the task(s) (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of a task. Repeatable: --line 5 --line 7
-        #[arg(short, long, action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
         /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
         #[arg(long, conflicts_with_all = ["line", "all"])]
@@ -743,6 +743,7 @@ pub(crate) enum TaskAction {
         USE WHEN: You need to mark tasks as done or re-open completed tasks.\n\n\
         EXAMPLES:\n  \
           hyalo task toggle --file note.md --line 5\n  \
+          hyalo task toggle --file note.md --line 5,7,9\n  \
           hyalo task toggle --file note.md --section Tasks\n  \
           hyalo task toggle --file note.md --all"
     )]
@@ -750,8 +751,8 @@ pub(crate) enum TaskAction {
         /// File containing the task(s) (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of a task. Repeatable: --line 5 --line 7
-        #[arg(short, long, action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
         /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
         #[arg(long, conflicts_with_all = ["line", "all"])]
@@ -770,6 +771,7 @@ pub(crate) enum TaskAction {
         USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
         EXAMPLES:\n  \
           hyalo task set-status --file note.md --line 5 --status '?'\n  \
+          hyalo task set-status --file note.md --line 5,7 --status '-'\n  \
           hyalo task set-status --file note.md --section Tasks --status '-'\n  \
           hyalo task set-status --file note.md --all --status x"
     )]
@@ -777,8 +779,8 @@ pub(crate) enum TaskAction {
         /// File containing the task(s) (relative to --dir)
         #[arg(short, long)]
         file: String,
-        /// 1-based line number of a task. Repeatable: --line 5 --line 7
-        #[arg(short, long, action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
         /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
         #[arg(long, conflicts_with_all = ["line", "all"])]

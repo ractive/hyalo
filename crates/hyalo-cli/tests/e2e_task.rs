@@ -546,6 +546,29 @@ fn task_read_multiple_lines() {
 }
 
 #[test]
+fn task_toggle_comma_separated_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &["task", "toggle", "--file", "bulk.md", "--line", "5,6"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["status"], "x");
+    assert_eq!(results[0]["text"], "Task A");
+    assert_eq!(results[1]["status"], "x");
+    assert_eq!(results[1]["text"], "Task B");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+}
+
+#[test]
 fn task_set_status_multiple_lines() {
     let tmp = tempfile::tempdir().unwrap();
     setup_bulk_file(&tmp);

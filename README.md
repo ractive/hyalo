@@ -425,15 +425,28 @@ hyalo append --property aliases=old-name --where-tag renamed --glob '**/*.md'
 
 ### task
 
-Read, toggle, or set the status of a single task checkbox by line number.
+Read, toggle, or set the status of task checkboxes. Supports three mutually exclusive selectors: `--line` (single, comma-separated, or repeatable), `--section`, and `--all`.
 
 ```sh
-hyalo task read --file path/to/note.md --line 42
-hyalo task toggle --file path/to/note.md --line 42
-hyalo task set-status --file path/to/note.md --line 42 --status /
+# Single task
+hyalo task read --file note.md --line 42
+hyalo task toggle --file note.md --line 42
+
+# Multiple tasks by line number (comma-separated or repeatable)
+hyalo task toggle --file note.md --line 5,7,9
+hyalo task toggle --file note.md --line 5 --line 7 --line 9
+
+# All tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+hyalo task toggle --file note.md --section "Acceptance criteria"
+
+# Every task in the file
+hyalo task toggle --file note.md --all
+
+# Set custom status on all tasks in a section
+hyalo task set-status --file note.md --section Tasks --status /
 ```
 
-Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored.
+Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored. Bulk mutations use a single atomic read-modify-write pass.
 
 ### backlinks
 
