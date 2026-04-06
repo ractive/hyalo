@@ -585,15 +585,15 @@ fn find_with_hints_shows_suggestions() {
         stdout.contains("  -> hyalo"),
         "should have hint lines with arrow prefix: {stdout}"
     );
-    // Should suggest reading the first result.
+    // Should suggest reading the first result (positional file arg, no --file flag).
     assert!(
-        stdout.contains("read --file"),
-        "should suggest read --file for first result: {stdout}"
+        stdout.contains("hyalo read ") && stdout.contains(".md"),
+        "should suggest read <file> for first result: {stdout}"
     );
-    // Should suggest backlinks for the first result.
+    // Should suggest backlinks for the first result (positional file arg, no --file flag).
     assert!(
-        stdout.contains("backlinks --file"),
-        "should suggest backlinks --file for first result: {stdout}"
+        stdout.contains("hyalo backlinks ") && stdout.contains(".md"),
+        "should suggest backlinks <file> for first result: {stdout}"
     );
 }
 

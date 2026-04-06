@@ -205,12 +205,12 @@ leave them and report them in Phase 5.
 ### Update stale statuses
 If an iteration's branch was merged:
 ```bash
-hyalo set --property status=completed --file <path> --index .hyalo-index
+hyalo set <path> --property status=completed --index .hyalo-index
 ```
 
 If a backlog item's feature clearly shipped:
 ```bash
-hyalo set --property status=completed --file <path> --index .hyalo-index
+hyalo set <path> --property status=completed --index .hyalo-index
 ```
 
 Only update when the evidence is clear. When uncertain, flag it in the report.
@@ -218,7 +218,7 @@ Only update when the evidence is clear. When uncertain, flag it in the report.
 ### Archive completed items
 If completed items are in a top-level directory and a `done/` subfolder exists:
 ```bash
-hyalo mv --file <old-path> --to <done-subdir/filename> --dry-run --index .hyalo-index
+hyalo mv <old-path> --to <done-subdir/filename> --dry-run --index .hyalo-index
 ```
 Review the dry-run output. If correct, execute without `--dry-run`.
 

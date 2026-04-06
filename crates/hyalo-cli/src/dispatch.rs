@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::cli::args::{
     Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction, ViewsAction,
+    resolve_single_file,
 };
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
@@ -56,24 +57,32 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     match command {
         Commands::Find {
             pattern,
+            file_positional,
             view: _, // resolved before dispatch
-            filters:
-                FindFilters {
-                    regexp,
-                    properties,
-                    tag,
-                    task,
-                    sections,
-                    file,
-                    glob,
-                    fields,
-                    sort,
-                    reverse,
-                    limit,
-                    broken_links,
-                    title,
-                },
+            filters: mut filters_raw,
         } => {
+            // Merge positional files into filters.file before destructuring
+            if !file_positional.is_empty() {
+                if !filters_raw.file.is_empty() {
+                    anyhow::bail!("cannot specify both positional files and --file");
+                }
+                filters_raw.file = file_positional;
+            }
+            let FindFilters {
+                regexp,
+                properties,
+                tag,
+                task,
+                sections,
+                file,
+                glob,
+                fields,
+                sort,
+                reverse,
+                limit,
+                broken_links,
+                title,
+            } = filters_raw;
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
                 .iter()
@@ -185,19 +194,23 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             }
         }
         Commands::Read {
+            file_positional,
             file,
             section,
             lines,
             frontmatter,
-        } => read_commands::run(
-            dir,
-            &file,
-            section.as_deref(),
-            lines.as_deref(),
-            frontmatter,
-            effective_format,
-            ctx.user_format,
-        ),
+        } => {
+            let file = resolve_single_file(file_positional, file)?;
+            read_commands::run(
+                dir,
+                &file,
+                section.as_deref(),
+                lines.as_deref(),
+                frontmatter,
+                effective_format,
+                ctx.user_format,
+            )
+        }
         Commands::Properties { action } => {
             let action = action.unwrap_or(PropertiesAction::Summary { glob: vec![] });
             match action {
@@ -292,40 +305,50 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         }
         Commands::Task { action } => match action {
             TaskAction::Read {
+                file_positional,
                 file,
                 line,
                 section,
                 all,
-            } => task_commands::task_read(
-                dir,
-                &file,
-                &line,
-                section.as_deref(),
-                all,
-                effective_format,
-            ),
+            } => {
+                let file = resolve_single_file(file_positional, file)?;
+                task_commands::task_read(
+                    dir,
+                    &file,
+                    &line,
+                    section.as_deref(),
+                    all,
+                    effective_format,
+                )
+            }
             TaskAction::Toggle {
+                file_positional,
                 file,
                 line,
                 section,
                 all,
-            } => task_commands::task_toggle(
-                dir,
-                &file,
-                &line,
-                section.as_deref(),
-                all,
-                effective_format,
-                snapshot_index,
-                index_path,
-            ),
+            } => {
+                let file = resolve_single_file(file_positional, file)?;
+                task_commands::task_toggle(
+                    dir,
+                    &file,
+                    &line,
+                    section.as_deref(),
+                    all,
+                    effective_format,
+                    snapshot_index,
+                    index_path,
+                )
+            }
             TaskAction::SetStatus {
+                file_positional,
                 file,
                 line,
                 section,
                 all,
                 status,
             } => {
+                let file = resolve_single_file(file_positional, file)?;
                 if status.chars().count() != 1 {
                     let out = crate::output::format_error(
                         effective_format,
@@ -380,14 +403,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             IndexResolution::Outcome(outcome) => Ok(outcome),
         },
         Commands::Set {
+            file_positional,
             properties,
             tag,
-            file,
+            mut file,
             glob,
             where_properties,
             where_tags,
             dry_run,
         } => {
+            if !file_positional.is_empty() {
+                file = file_positional;
+            }
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
@@ -409,14 +436,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )
         }
         Commands::Remove {
+            file_positional,
             properties,
             tag,
-            file,
+            mut file,
             glob,
             where_properties,
             where_tags,
             dry_run,
         } => {
+            if !file_positional.is_empty() {
+                file = file_positional;
+            }
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
@@ -438,13 +469,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )
         }
         Commands::Append {
+            file_positional,
             properties,
-            file,
+            mut file,
             glob,
             where_properties,
             where_tags,
             dry_run,
         } => {
+            if !file_positional.is_empty() {
+                file = file_positional;
+            }
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
@@ -464,31 +499,45 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 dry_run,
             )
         }
-        Commands::Backlinks { file } => match resolve_index(
-            snapshot_index.as_ref(),
-            dir,
-            &[],
-            &[],
-            effective_format,
-            site_prefix,
-            true,
-            ScanOptions { scan_body: true },
-        )? {
-            IndexResolution::Resolved(resolved) => {
-                backlinks_commands::backlinks(resolved.as_index(), &file, dir, effective_format)
+        Commands::Backlinks {
+            file_positional,
+            file,
+        } => {
+            let file = resolve_single_file(file_positional, file)?;
+            match resolve_index(
+                snapshot_index.as_ref(),
+                dir,
+                &[],
+                &[],
+                effective_format,
+                site_prefix,
+                true,
+                ScanOptions { scan_body: true },
+            )? {
+                IndexResolution::Resolved(resolved) => {
+                    backlinks_commands::backlinks(resolved.as_index(), &file, dir, effective_format)
+                }
+                IndexResolution::Outcome(outcome) => Ok(outcome),
             }
-            IndexResolution::Outcome(outcome) => Ok(outcome),
-        },
-        Commands::Mv { file, to, dry_run } => mv_commands::mv(
-            dir,
-            &file,
-            &to,
+        }
+        Commands::Mv {
+            file_positional,
+            file,
+            to,
             dry_run,
-            effective_format,
-            site_prefix,
-            snapshot_index,
-            index_path,
-        ),
+        } => {
+            let file = resolve_single_file(file_positional, file)?;
+            mv_commands::mv(
+                dir,
+                &file,
+                &to,
+                dry_run,
+                effective_format,
+                site_prefix,
+                snapshot_index,
+                index_path,
+            )
+        }
         Commands::CreateIndex {
             output,
             allow_outside_vault,
