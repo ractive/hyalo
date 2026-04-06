@@ -20,27 +20,28 @@ resolve the file correctly, instead of failing with "not found".
 
 ## Design
 
-In `resolve_file()`, after the current `dir.join(normalized)` fails:
+Treat the `dir` prefix as normalization — like stripping `./`. In `resolve_file()`,
+`strip_dir_prefix()` removes the prefix unconditionally during normalization, before
+any existence checks. One code path, no branching.
 
-1. Check if `normalized` starts with the `dir` prefix (as path components, not substring)
-2. If so, strip the prefix and retry `dir.join(stripped)`
-3. If both the original and stripped paths resolve to existing files (ambiguous case), prefer
-   dir-relative (backwards-compatible) — no warning needed since the original succeeded
+For `find`, the `filter_index_entries` function matches `--file` args by string equality
+against index entries. A lightweight `strip_dir_prefix` call in the dispatch normalizes
+the args before they reach the filter.
 
-This only applies to relative paths — absolute paths remain rejected as today.
+Only relative paths are affected — absolute paths remain rejected as before.
 
-### Ambiguity analysis
+### Ambiguity
 
-The ambiguity occurs when `dir = "docs"` and the KB contains a `docs/` subfolder with a file
-that also exists at the top level. E.g., both `docs/file.md` and `docs/docs/file.md` exist.
-Then `--file docs/file.md` could mean either. We prefer the dir-relative interpretation
-(current behavior) since it resolves first.
+When `dir = "kb"` and the vault contains both `note.md` and `kb/note.md`, passing
+`--file kb/note.md` resolves to `note.md` (the prefix is always stripped). This edge case
+requires a subdirectory named identically to the vault dir, which is extremely unlikely.
 
 ## Tasks
 
 - [x] Add `strip_dir_prefix()` helper in `discovery.rs`
-- [x] Integrate prefix stripping into `resolve_file()` as fallback
-- [x] Add `resolve_file_args()` for early resolution in `find` dispatch
-- [x] Add unit tests for the new path resolution (5 unit + 4 integration)
-- [x] Add e2e tests covering CWD-relative paths (4 tests: find, nested find, set, ambiguity)
-- [x] Run quality gates (fmt, clippy, test) — 530 tests pass
+- [x] Strip prefix in `resolve_file()` during normalization
+- [x] Strip prefix in `find` dispatch for `filter_index_entries`
+- [x] Add unit tests (5 for strip_dir_prefix, 4 for resolve_file)
+- [x] Add e2e tests (find, nested find, set, ambiguity)
+- [x] Update help text (PATH RESOLUTION in `--help`)
+- [x] Run quality gates — 530 tests pass
