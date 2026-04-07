@@ -43,7 +43,9 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         with YAML frontmatter. Also resolves [[wikilinks]] and manages task checkboxes.\n\n\
         SCOPE: Hyalo operates on a directory of .md files. It can query and mutate frontmatter \
         properties, tags, tasks, and links.\n\n\
-        PATH RESOLUTION: All --file and --glob paths are relative to --dir (defaults to \".\"). \
+        PATH RESOLUTION: --file and --glob paths are relative to --dir (defaults to \".\"). \
+        If a --file path starts with the --dir prefix, it is stripped automatically \
+        (e.g. --file docs/note.md resolves to note.md when --dir is docs). \
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). All JSON is wrapped in a consistent envelope:\n\
         \u{00a0} {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\

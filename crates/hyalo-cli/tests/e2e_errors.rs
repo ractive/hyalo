@@ -425,3 +425,153 @@ title: Test
         "expected hint about --file; got: {stderr}"
     );
 }
+
+// ── CWD-relative path fallback (iteration 97) ─────────────────────
+
+/// When --file includes the dir prefix (CWD-relative), hyalo should strip it
+/// and resolve correctly.
+#[test]
+fn cwd_relative_file_path_resolved() {
+    let tmp = TempDir::new().unwrap();
+    let kb = tmp.path().join("kb");
+    write_md(
+        &kb,
+        "note.md",
+        md!(r"
+---
+title: Hello
+---
+# Body
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", kb.to_str().unwrap()])
+        .args(["find", "--file", "kb/note.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected CWD-relative path to resolve; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0]["file"], "note.md",
+        "returned path should be dir-relative"
+    );
+}
+
+/// CWD-relative fallback works for nested paths too.
+#[test]
+fn cwd_relative_nested_file_path_resolved() {
+    let tmp = TempDir::new().unwrap();
+    let kb = tmp.path().join("kb");
+    write_md(
+        &kb,
+        "sub/deep.md",
+        md!(r"
+---
+title: Deep
+---
+# Body
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", kb.to_str().unwrap()])
+        .args(["find", "--file", "kb/sub/deep.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected CWD-relative nested path to resolve; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["file"], "sub/deep.md");
+}
+
+/// When both dir-relative and CWD-relative interpretations exist, the prefix
+/// is stripped unconditionally (CWD-relative wins).
+#[test]
+fn cwd_relative_strips_prefix_unconditionally() {
+    let tmp = TempDir::new().unwrap();
+    let kb = tmp.path().join("kb");
+    // Create kb/note.md (vault-relative: note.md)
+    write_md(
+        &kb,
+        "note.md",
+        md!(r"
+---
+title: Top
+---
+"),
+    );
+    // Create kb/kb/note.md (vault-relative: kb/note.md)
+    write_md(
+        &kb,
+        "kb/note.md",
+        md!(r"
+---
+title: Nested
+---
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", kb.to_str().unwrap()])
+        .args(["find", "--file", "kb/note.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    // Prefix stripped unconditionally: resolves to note.md (title: Top)
+    assert_eq!(results[0]["file"], "note.md");
+    assert_eq!(results[0]["properties"]["title"], "Top");
+}
+
+/// Mutation commands (set) also accept CWD-relative paths.
+#[test]
+fn cwd_relative_path_works_with_set() {
+    let tmp = TempDir::new().unwrap();
+    let kb = tmp.path().join("kb");
+    write_md(
+        &kb,
+        "note.md",
+        md!(r"
+---
+title: Hello
+---
+# Body
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", kb.to_str().unwrap()])
+        .args(["set", "--file", "kb/note.md", "--property", "status=done"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "set with CWD-relative path should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the property was actually set
+    let content = std::fs::read_to_string(kb.join("note.md")).unwrap();
+    assert!(
+        content.contains("status: done"),
+        "property should be set in file"
+    );
+}
