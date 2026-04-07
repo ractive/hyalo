@@ -170,7 +170,12 @@ fn run_inner() -> Result<(), AppError> {
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
     // Reject --count early — init is not a list command.
-    if cli.count && matches!(cli.command, Commands::Init { .. } | Commands::Deinit) {
+    if cli.count
+        && matches!(
+            cli.command,
+            Commands::Init { .. } | Commands::Deinit | Commands::Completion { .. }
+        )
+    {
         eprintln!("{COUNT_UNSUPPORTED_ERROR}");
         return Err(AppError::Exit(2));
     }
@@ -194,6 +199,11 @@ fn run_inner() -> Result<(), AppError> {
             Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
             Err(e) => return Err(AppError::Internal(e)),
         }
+    }
+    if let Commands::Completion { shell } = cli.command {
+        let mut cmd = Cli::command();
+        clap_complete::generate(shell, &mut cmd, "hyalo", &mut std::io::stdout());
+        return Ok(());
     }
     // Merge: CLI args override config, config overrides hardcoded defaults.
     // Track whether --dir was explicitly passed (not from config) so hints
@@ -565,6 +575,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Tags { .. }
             | Commands::Init { .. }
             | Commands::Deinit
+            | Commands::Completion { .. }
             | Commands::Views { .. } => None,
         }
     } else {

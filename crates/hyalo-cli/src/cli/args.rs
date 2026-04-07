@@ -680,6 +680,25 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: LinksAction,
     },
+    /// Generate shell completions for the given shell
+    #[command(
+        display_order = 900,
+        long_about = "Generate shell completion scripts.\n\n\
+            Prints a completion script for the specified shell to stdout.\n\
+            Source or install the output in your shell's completion directory.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} bash:        hyalo completion bash  > ~/.local/share/bash-completion/completions/hyalo\n\
+            \u{00a0} zsh:         hyalo completion zsh   > ~/.local/share/zsh/site-functions/_hyalo\n\
+            \u{00a0} fish:        hyalo completion fish  > ~/.config/fish/completions/hyalo.fish\n\
+            \u{00a0} elvish:      hyalo completion elvish > ~/.config/elvish/lib/completions/hyalo.elv\n\
+            \u{00a0} powershell:  hyalo completion powershell > _hyalo.ps1\n\n\
+            SIDE EFFECTS: None (prints to stdout)."
+    )]
+    Completion {
+        /// Target shell
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
