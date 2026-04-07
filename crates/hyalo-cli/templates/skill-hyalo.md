@@ -54,7 +54,7 @@ scanning all files to build the link graph. Each backlink entry contains `source
 `line` (line number), and an optional `label`.
 
 ```bash
-hyalo find --fields backlinks --file my-note.md       # see who links to this note
+hyalo find --fields backlinks --file my-note.md       # see who links to this note (--file required: positional is PATTERN)
 hyalo find --fields backlinks --jq '.results | map(select(.backlinks | length == 0))' # find orphan notes
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
@@ -117,10 +117,10 @@ silently break links throughout the knowledgebase.
 
 ```bash
 # Move a file to a subfolder (updates all links vault-wide)
-hyalo mv --file backlog/my-item.md --to backlog/done/my-item.md
+hyalo mv backlog/my-item.md --to backlog/done/my-item.md
 
 # Preview what would change without writing
-hyalo mv --file old-path.md --to new-path.md --dry-run
+hyalo mv old-path.md --to new-path.md --dry-run
 ```
 
 ## Absolute link resolution (site prefix)
@@ -163,7 +163,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts
 - **tags rename** — bulk rename a tag across files (`--from old --to new`)
-- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; `--file` is repeatable)
+- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; file arg is positional or `--file`, repeatable)
 - **remove** — delete properties or tags
 - **append** — add to list properties
 - **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`)
@@ -211,16 +211,17 @@ If you just need a quick readable overview, use `--format text` (without `--jq`)
 
 ## The backlinks command
 
-Use `hyalo backlinks --file <path>` to find all files that link to a given file (reverse link
+Use `hyalo backlinks <path>` to find all files that link to a given file (reverse link
 lookup). This builds an in-memory link graph by scanning all `.md` files in the directory,
-detecting both `[[wikilinks]]` and `[markdown](links)`.
+detecting both `[[wikilinks]]` and `[markdown](links)`. The file can be passed positionally
+or with `--file`.
 
 ```bash
 # Which files reference iteration-37?
-hyalo backlinks --file iterations/iteration-37-bulk-mutations.md
+hyalo backlinks iterations/iteration-37-bulk-mutations.md
 
 # JSON output for programmatic use
-hyalo backlinks --file iterations/iteration-37-bulk-mutations.md --format json
+hyalo backlinks iterations/iteration-37-bulk-mutations.md --format json
 ```
 
 Supports `--format text` (default, compact) and `--format json`. Useful for impact analysis
@@ -246,11 +247,11 @@ hyalo create-index
 hyalo find --property status=in-progress --index .hyalo-index
 hyalo summary --index .hyalo-index
 hyalo tags summary --index .hyalo-index
-hyalo backlinks --file some-note.md --index .hyalo-index
+hyalo backlinks some-note.md --index .hyalo-index
 
 # Mutations also work with --index — they patch the index after each write
-hyalo set --property status=completed --file note.md --index .hyalo-index
-hyalo task toggle --file note.md --line 5 --index .hyalo-index
+hyalo set note.md --property status=completed --index .hyalo-index
+hyalo task toggle note.md --line 5 --index .hyalo-index
 
 # Drop the index when done
 hyalo drop-index

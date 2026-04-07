@@ -372,6 +372,7 @@ fn run_inner() -> Result<(), AppError> {
             }
             Commands::Find {
                 pattern,
+                file_positional,
                 view,
                 filters:
                     FindFilters {
@@ -388,6 +389,12 @@ fn run_inner() -> Result<(), AppError> {
                         ..
                     },
             } => {
+                // Merge positional files for hint context (view merging happens later)
+                let file = if file_positional.is_empty() {
+                    file
+                } else {
+                    file_positional
+                };
                 let mut ctx = HintContext::from_common(HintSource::Find, &common);
                 ctx.glob.clone_from(glob);
                 ctx.fields.clone_from(fields);
@@ -404,6 +411,7 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Set {
+                file_positional,
                 file,
                 glob,
                 dry_run,
@@ -411,11 +419,17 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Set, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets.clone_from(file);
+                let src = if file_positional.is_empty() {
+                    file
+                } else {
+                    file_positional
+                };
+                ctx.file_targets.clone_from(src);
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
             Commands::Remove {
+                file_positional,
                 file,
                 glob,
                 dry_run,
@@ -423,11 +437,17 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Remove, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets.clone_from(file);
+                let src = if file_positional.is_empty() {
+                    file
+                } else {
+                    file_positional
+                };
+                ctx.file_targets.clone_from(src);
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
             Commands::Append {
+                file_positional,
                 file,
                 glob,
                 dry_run,
@@ -435,39 +455,65 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Append, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets.clone_from(file);
+                let src = if file_positional.is_empty() {
+                    file
+                } else {
+                    file_positional
+                };
+                ctx.file_targets.clone_from(src);
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
-            Commands::Read { file, .. } => {
+            Commands::Read {
+                file_positional,
+                file,
+                ..
+            } => {
                 let mut ctx = HintContext::from_common(HintSource::Read, &common);
-                ctx.file_targets = vec![file.clone()];
+                if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
+                    ctx.file_targets = vec![f.clone()];
+                }
                 Some(ctx)
             }
-            Commands::Backlinks { file } => {
+            Commands::Backlinks {
+                file_positional,
+                file,
+            } => {
                 let mut ctx = HintContext::from_common(HintSource::Backlinks, &common);
-                ctx.file_targets = vec![file.clone()];
+                if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
+                    ctx.file_targets = vec![f.clone()];
+                }
                 Some(ctx)
             }
-            Commands::Mv { file, dry_run, .. } => {
+            Commands::Mv {
+                file_positional,
+                file,
+                dry_run,
+                ..
+            } => {
                 let mut ctx = HintContext::from_common(HintSource::Mv, &common);
-                ctx.file_targets = vec![file.clone()];
+                if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
+                    ctx.file_targets = vec![f.clone()];
+                }
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
             Commands::Task { action } => {
-                let (source, file, selector) = match action {
+                let (source, file_pos, file_flag, selector) = match action {
                     crate::cli::args::TaskAction::Toggle {
+                        file_positional,
                         file,
                         line,
                         section,
                         all,
                     } => (
                         HintSource::TaskToggle,
+                        file_positional,
                         file,
                         task_selector(line, section.as_ref(), *all),
                     ),
                     crate::cli::args::TaskAction::SetStatus {
+                        file_positional,
                         file,
                         line,
                         section,
@@ -475,22 +521,27 @@ fn run_inner() -> Result<(), AppError> {
                         ..
                     } => (
                         HintSource::TaskSetStatus,
+                        file_positional,
                         file,
                         task_selector(line, section.as_ref(), *all),
                     ),
                     crate::cli::args::TaskAction::Read {
+                        file_positional,
                         file,
                         line,
                         section,
                         all,
                     } => (
                         HintSource::TaskRead,
+                        file_positional,
                         file,
                         task_selector(line, section.as_ref(), *all),
                     ),
                 };
                 let mut ctx = HintContext::from_common(source, &common);
-                ctx.file_targets = vec![file.clone()];
+                if let Some(f) = file_pos.as_ref().or(file_flag.as_ref()) {
+                    ctx.file_targets = vec![f.clone()];
+                }
                 ctx.task_selector = selector;
                 Some(ctx)
             }

@@ -33,6 +33,20 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
     }
 }
 
+/// Resolve a file argument that can be passed as positional or --file flag.
+/// Returns an error if neither is provided.
+pub(crate) fn resolve_single_file(
+    positional: Option<String>,
+    flag: Option<String>,
+) -> anyhow::Result<String> {
+    match (positional, flag) {
+        (Some(f), None) | (None, Some(f)) => Ok(f),
+        (None, None) => anyhow::bail!("required argument missing: provide <FILE> or --file <FILE>"),
+        // conflicts_with prevents this at parse time; defensive fallback.
+        (Some(_), Some(_)) => anyhow::bail!("cannot specify both <FILE> and --file"),
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "hyalo",
@@ -43,8 +57,8 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         with YAML frontmatter. Also resolves [[wikilinks]] and manages task checkboxes.\n\n\
         SCOPE: Hyalo operates on a directory of .md files. It can query and mutate frontmatter \
         properties, tags, tasks, and links.\n\n\
-        PATH RESOLUTION: --file and --glob paths are relative to --dir (defaults to \".\"). \
-        If a --file path starts with the --dir prefix, it is stripped automatically \
+        PATH RESOLUTION: All file and --glob paths are relative to --dir (defaults to \".\"). \
+        If a file path starts with the --dir prefix, it is stripped automatically \
         (e.g. --file docs/note.md resolves to note.md when --dir is docs). \
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Returns JSON by default (--format json). All JSON is wrapped in a consistent envelope:\n\
@@ -67,7 +81,7 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         See COMMAND REFERENCE below for full syntax of each command."
 )]
 pub(crate) struct Cli {
-    /// Root directory for resolving all --file and --glob paths.
+    /// Root directory for resolving all file and --glob paths.
     /// Default: "." (Override via .hyalo.toml)
     #[arg(short, long, global = true)]
     pub dir: Option<PathBuf>,
@@ -282,11 +296,17 @@ pub(crate) enum Commands {
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
             - --tag uses prefix matching: 'project' matches 'project/backend' but NOT 'projects'.\n\
+            POSITIONAL ARGUMENTS: The first positional argument is always PATTERN (body text search), not a file path. \
+            Subsequent positional arguments are treated as FILE targets. \
+            To filter by file without a body search, use --file instead of a positional argument.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
+        /// Target file(s) as positional args — alternative to --file (repeatable after PATTERN)
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        file_positional: Vec<String>,
         /// Use a saved view (named filter set from .hyalo.toml). Additional CLI filters
         /// are merged on top: list filters (--property, --tag, --section, --glob) extend
         /// the view; scalar filters (--sort, --limit, --regexp, --title, --task) override it
@@ -305,9 +325,12 @@ pub(crate) enum Commands {
             Pass --format json to get {\"results\": {\"file\": \"...\", \"content\": \"...\"}, \"hints\": [...]}.\n\
             SIDE EFFECTS: None (read-only).")]
     Read {
-        /// Target file (relative to --dir)
-        #[arg(short, long)]
-        file: String,
+        /// Target file (relative to --dir) — positional form
+        #[arg(value_name = "FILE")]
+        file_positional: Option<String>,
+        /// Target file (relative to --dir) — flag form
+        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        file: Option<String>,
         /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
         /// prefix '##' to pin heading level; use '/regex/' for regex. Nested subsections included
         #[arg(short, long, value_name = "HEADING")]
@@ -343,7 +366,7 @@ pub(crate) enum Commands {
             - read: Show task details for one or more tasks.\n\
             - toggle: Flip completion state ([ ] <-> [x], custom -> [x]).\n\
             - set-status: Set an arbitrary single-character status.\n\n\
-            INPUT: --file and one of: --line (repeatable/comma-separated), --section <heading>, or --all.\n\
+            INPUT: FILE (positional or --file) and one of: --line (repeatable/comma-separated), --section <heading>, or --all.\n\
             SCOPE: Single file only.\n\
             SIDE EFFECTS: 'toggle' and 'set-status' modify the file on disk. 'read' is read-only.")]
     Task {
@@ -381,9 +404,12 @@ pub(crate) enum Commands {
             SIDE EFFECTS: None (read-only)."
     )]
     Backlinks {
-        /// Target file to find backlinks for (relative to --dir)
-        #[arg(short, long)]
-        file: String,
+        /// Target file to find backlinks for (relative to --dir) — positional form
+        #[arg(value_name = "FILE")]
+        file_positional: Option<String>,
+        /// Target file to find backlinks for (relative to --dir) — flag form
+        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        file: Option<String>,
     },
     /// Move/rename a file and update all inbound and outbound links
     #[command(
@@ -397,9 +423,12 @@ pub(crate) enum Commands {
             SIDE EFFECTS: Moves the file and modifies files containing links (unless --dry-run)."
     )]
     Mv {
-        /// Source file to move (relative to --dir)
-        #[arg(short, long)]
-        file: String,
+        /// Source file to move (relative to --dir) — positional form
+        #[arg(value_name = "FILE")]
+        file_positional: Option<String>,
+        /// Source file to move (relative to --dir) — flag form
+        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        file: Option<String>,
         /// Destination path (relative to --dir, must end with .md)
         #[arg(long)]
         to: String,
@@ -410,7 +439,7 @@ pub(crate) enum Commands {
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
     #[command(
         long_about = "Set (create or overwrite) frontmatter properties and/or add tags across file(s).\n\n\
-            INPUT: One or more --property K=V arguments and/or --tag T arguments, with --file or --glob.\n\
+            INPUT: One or more --property K=V arguments and/or --tag T arguments, with FILE (positional or --file) or --glob.\n\
             BEHAVIOR:\n\
             - --property K=V: creates or overwrites the property. Type is auto-inferred from V \
               (number, bool, text). Use K=[a,b,c] to create a YAML list; values are comma-split and trimmed. \
@@ -433,6 +462,9 @@ Repeatable (AND).\n\
             possibly across many files at once."
     )]
     Set {
+        /// Target file(s) as positional argument(s) — alternative to --file
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        file_positional: Vec<String>,
         /// Property to set: K=V (type inferred from V). Repeatable
         #[arg(short, long = "property", value_name = "K=V")]
         properties: Vec<String>,
@@ -458,7 +490,7 @@ Repeatable (AND).\n\
     /// Remove frontmatter properties and/or tags from file(s)
     #[command(
         long_about = "Remove frontmatter properties and/or tags from file(s).\n\n\
-            INPUT: One or more --property K or K=V arguments and/or --tag T arguments, with --file or --glob.\n\
+            INPUT: One or more --property K or K=V arguments and/or --tag T arguments, with FILE (positional or --file) or --glob.\n\
             BEHAVIOR:\n\
             - --property K: removes the entire key from frontmatter. Skips files where it is absent.\n\
             - --property K=V: if the property is a list, removes V from the list; if it is a scalar \
@@ -480,6 +512,9 @@ Repeatable (AND).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files."
     )]
     Remove {
+        /// Target file(s) as positional argument(s) — alternative to --file
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        file_positional: Vec<String>,
         /// Property to remove: K (removes key) or K=V (removes value from list/scalar). Repeatable
         #[arg(short, long = "property", value_name = "K or K=V")]
         properties: Vec<String>,
@@ -565,7 +600,7 @@ Repeatable (AND).\n\
     /// Append values to list properties in file(s) frontmatter, promoting scalars to lists
     #[command(
         long_about = "Append values to list properties in file(s) frontmatter.\n\n\
-            INPUT: One or more --property K=V arguments, with --file or --glob.\n\
+            INPUT: One or more --property K=V arguments, with FILE (positional or --file) or --glob.\n\
             Note: --tag is not available on append (tags are atomic, not lists). Use 'hyalo set --tag T' to add tags.\n\
             BEHAVIOR:\n\
             - Property absent or null: creates it as a single-element list [V].\n\
@@ -588,6 +623,9 @@ Repeatable (AND).\n\
             without overwriting the existing list."
     )]
     Append {
+        /// Target file(s) as positional argument(s) — alternative to --file
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        file_positional: Vec<String>,
         /// Property to append to: K=V. Repeatable
         #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
@@ -711,19 +749,23 @@ pub(crate) enum LinksAction {
 pub(crate) enum TaskAction {
     /// Show task details for one or more tasks (read-only)
     #[command(long_about = "Show task details for one or more tasks.\n\n\
-        INPUT: --file and one of: --line (repeatable), --section <heading>, or --all.\n\
+        INPUT: FILE (positional or --file) and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: None (read-only).\n\
         USE WHEN: You need to inspect task status before toggling or updating.\n\n\
         EXAMPLES:\n  \
-          hyalo task read --file note.md --line 5\n  \
-          hyalo task read --file note.md --line 5,7,9\n  \
-          hyalo task read --file note.md --section Tasks\n  \
-          hyalo task read --file note.md --all")]
+          hyalo task read note.md --line 5\n  \
+          hyalo task read note.md --line 5,7,9\n  \
+          hyalo task read note.md --section Tasks\n  \
+          hyalo task read note.md --all\n  \
+          hyalo task read --file note.md --line 5")]
     Read {
-        /// File containing the task(s) (relative to --dir)
-        #[arg(short, long)]
-        file: String,
+        /// File containing the task(s) (relative to --dir) — positional form
+        #[arg(value_name = "FILE")]
+        file_positional: Option<String>,
+        /// File containing the task(s) (relative to --dir) — flag form
+        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        file: Option<String>,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
@@ -737,20 +779,24 @@ pub(crate) enum TaskAction {
     /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
     #[command(
         long_about = "Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x].\n\n\
-        INPUT: --file and one of: --line (repeatable), --section <heading>, or --all.\n\
+        INPUT: FILE (positional or --file) and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
         USE WHEN: You need to mark tasks as done or re-open completed tasks.\n\n\
         EXAMPLES:\n  \
-          hyalo task toggle --file note.md --line 5\n  \
-          hyalo task toggle --file note.md --line 5,7,9\n  \
-          hyalo task toggle --file note.md --section Tasks\n  \
-          hyalo task toggle --file note.md --all"
+          hyalo task toggle note.md --line 5\n  \
+          hyalo task toggle note.md --line 5,7,9\n  \
+          hyalo task toggle note.md --section Tasks\n  \
+          hyalo task toggle note.md --all\n  \
+          hyalo task toggle --file note.md --line 5"
     )]
     Toggle {
-        /// File containing the task(s) (relative to --dir)
-        #[arg(short, long)]
-        file: String,
+        /// File containing the task(s) (relative to --dir) — positional form
+        #[arg(value_name = "FILE")]
+        file_positional: Option<String>,
+        /// File containing the task(s) (relative to --dir) — flag form
+        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        file: Option<String>,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
@@ -765,20 +811,24 @@ pub(crate) enum TaskAction {
     #[command(
         name = "set-status",
         long_about = "Set a custom single-character status on one or more task checkboxes.\n\n\
-        INPUT: --file, --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
+        INPUT: FILE (positional or --file), --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
         USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
         EXAMPLES:\n  \
-          hyalo task set-status --file note.md --line 5 --status '?'\n  \
-          hyalo task set-status --file note.md --line 5,7 --status '-'\n  \
-          hyalo task set-status --file note.md --section Tasks --status '-'\n  \
-          hyalo task set-status --file note.md --all --status x"
+          hyalo task set-status note.md --line 5 --status '?'\n  \
+          hyalo task set-status note.md --line 5,7 --status '-'\n  \
+          hyalo task set-status note.md --section Tasks --status '-'\n  \
+          hyalo task set-status note.md --all --status x\n  \
+          hyalo task set-status --file note.md --line 5 --status '?'"
     )]
     SetStatus {
-        /// File containing the task(s) (relative to --dir)
-        #[arg(short, long)]
-        file: String,
+        /// File containing the task(s) (relative to --dir) — positional form
+        #[arg(value_name = "FILE")]
+        file_positional: Option<String>,
+        /// File containing the task(s) (relative to --dir) — flag form
+        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        file: Option<String>,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,

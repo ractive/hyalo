@@ -6,8 +6,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Search/filter**: `hyalo find --property status=planned --tag iteration --format text`
 - **Body search**: `hyalo find "broken links" --format text`
 - **Title regex**: `hyalo find --property 'title~=link' --format text`
-- **Read frontmatter/metadata**: `hyalo find --file`, `hyalo properties`, `hyalo tags`
-- **Read content/sections**: `hyalo read --file <path>` or `hyalo read --section "Heading"`
+- **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
+- **Read content/sections**: `hyalo read <path>` or `hyalo read <path> --section "Heading"`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`
 - **Move/rename**: `hyalo mv` (rewrites links across the vault)
 
