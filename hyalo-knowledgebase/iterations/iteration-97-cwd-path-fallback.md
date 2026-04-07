@@ -6,7 +6,7 @@ tags:
   - iteration
   - ux
   - path-resolution
-status: in-progress
+status: completed
 branch: iter-97/cwd-path-fallback
 ---
 

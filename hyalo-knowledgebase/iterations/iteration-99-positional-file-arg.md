@@ -1,12 +1,12 @@
 ---
-title: "Positional file arguments for all commands"
+title: Positional file arguments for all commands
 type: iteration
 date: 2026-04-07
 tags:
   - iteration
   - cli
   - ergonomics
-status: in-progress
+status: completed
 branch: iter-99/positional-file-arg
 ---
 
