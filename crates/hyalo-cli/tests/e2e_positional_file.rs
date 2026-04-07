@@ -122,7 +122,7 @@ fn read_no_file_at_all_errors() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("FILE") || stderr.contains("file"),
+        stderr.contains("required argument missing"),
         "expected missing file error, got: {stderr}"
     );
 }
@@ -369,4 +369,81 @@ fn task_set_status_positional_file() {
     );
     let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(content.contains("- [?] First task"));
+}
+
+// ---------------------------------------------------------------------------
+// find: two positionals — first is pattern, second is file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_two_positionals_first_is_pattern() {
+    let tmp = setup();
+    // "note.md" is passed as the first positional (PATTERN) and "other.md" as the
+    // second (FILE). The pattern "note.md" should not match the body of other.md,
+    // so total should be 0 — verifying that other.md is treated as a file filter,
+    // not a second pattern.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "note.md", "other.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // other.md body is "See [[note]] for details." — "note.md" does not appear verbatim
+    assert_eq!(
+        envelope["total"], 0,
+        "first positional is pattern (not a file), second is file filter: {envelope}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// set: multiple positional files
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_multiple_positional_files() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["set", "note.md", "other.md", "--property", "reviewed=true"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let note = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    let other = fs::read_to_string(tmp.path().join("other.md")).unwrap();
+    assert!(
+        note.contains("reviewed: true"),
+        "note.md not updated: {note}"
+    );
+    assert!(
+        other.contains("reviewed: true"),
+        "other.md not updated: {other}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// set: positional file conflicts with --file flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_positional_conflicts_with_file_flag() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["set", "note.md", "--file", "other.md", "--property", "k=v"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "expected conflict error, got: {stderr}"
+    );
 }

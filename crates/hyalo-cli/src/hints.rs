@@ -186,6 +186,28 @@ fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
     parts.join(" ")
 }
 
+/// Build a command where `file_arg` is a positional file path following `subcommand_args`.
+///
+/// If `file_arg` starts with `-`, emits `--file <path>` instead of the bare positional
+/// to prevent clap from interpreting the filename as a flag.
+fn build_command_with_file(
+    ctx: &HintContext,
+    subcommand_args: &[&str],
+    file_arg: &str,
+    trailing_args: &[&str],
+) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    for arg in subcommand_args {
+        parts.push(shell_quote(arg));
+    }
+    push_file_positional(&mut parts, file_arg);
+    for arg in trailing_args {
+        parts.push(shell_quote(arg));
+    }
+    push_global_flags(&mut parts, ctx);
+    parts.join(" ")
+}
+
 /// Build a command that propagates `--glob` when present.
 fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
@@ -230,6 +252,19 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
         parts.push(shell_quote(glob));
     }
     parts.join(" ")
+}
+
+/// Push a file argument that is safe as a positional arg.
+///
+/// If the filename starts with `-`, clap would interpret it as a flag.
+/// In that case, emit `--file <path>` (flag form) instead of the bare positional.
+fn push_file_positional(parts: &mut Vec<String>, file: &str) {
+    if file.starts_with('-') {
+        parts.push("--file".to_owned());
+        parts.push(shell_quote(file));
+    } else {
+        parts.push(shell_quote(file));
+    }
 }
 
 /// Wrap a string in single-quotes if it contains any shell-special characters.
@@ -525,7 +560,7 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     if let Some(first_file) = results[0].get("file").and_then(|f| f.as_str()) {
         hints.push(Hint::new(
             "Read this file's content",
-            build_command_no_glob(ctx, &["read", first_file]),
+            build_command_with_file(ctx, &["read"], first_file, &[]),
         ));
         if is_single {
             hints.push(Hint::new(
@@ -535,7 +570,7 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         }
         hints.push(Hint::new(
             "See what links to this file",
-            build_command_no_glob(ctx, &["backlinks", first_file]),
+            build_command_with_file(ctx, &["backlinks"], first_file, &[]),
         ));
     }
 
@@ -558,12 +593,17 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
                 if let Some(section) = ctx.section_filters.first() {
                     hints.push(Hint::new(
                         format!("Toggle all tasks in section \"{section}\""),
-                        build_command_no_glob(ctx, &["task", "toggle", file, "--section", section]),
+                        build_command_with_file(
+                            ctx,
+                            &["task", "toggle"],
+                            file,
+                            &["--section", section],
+                        ),
                     ));
                 } else {
                     hints.push(Hint::new(
                         "Toggle all tasks in this file",
-                        build_command_no_glob(ctx, &["task", "toggle", file, "--all"]),
+                        build_command_with_file(ctx, &["task", "toggle"], file, &["--all"]),
                     ));
                 }
             }
@@ -798,7 +838,7 @@ fn hints_for_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         ));
         hints.push(Hint::new(
             "See what links to this file",
-            build_command_no_glob(ctx, &["backlinks", file]),
+            build_command_with_file(ctx, &["backlinks"], file, &[]),
         ));
     }
 
@@ -813,7 +853,7 @@ fn hints_for_backlinks(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
     if let Some(file) = file {
         hints.push(Hint::new(
             "Read this file's content",
-            build_command_no_glob(ctx, &["read", file]),
+            build_command_with_file(ctx, &["read"], file, &[]),
         ));
         hints.push(Hint::new(
             "See this file's outgoing links",
@@ -830,7 +870,7 @@ fn hints_for_backlinks(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
     {
         hints.push(Hint::new(
             format!("Read linking file: {first_source}"),
-            build_command_no_glob(ctx, &["read", first_source]),
+            build_command_with_file(ctx, &["read"], first_source, &[]),
         ));
     }
 
@@ -851,17 +891,17 @@ fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             if let Some(from_path) = data.get("from").and_then(|f| f.as_str()) {
                 hints.push(Hint::new(
                     "Apply this move",
-                    build_command_no_glob(ctx, &["mv", from_path, "--to", to_path]),
+                    build_command_with_file(ctx, &["mv"], from_path, &["--to", to_path]),
                 ));
             }
         } else {
             hints.push(Hint::new(
                 "Read the moved file",
-                build_command_no_glob(ctx, &["read", to_path]),
+                build_command_with_file(ctx, &["read"], to_path, &[]),
             ));
             hints.push(Hint::new(
                 "Verify backlinks updated",
-                build_command_no_glob(ctx, &["backlinks", to_path]),
+                build_command_with_file(ctx, &["backlinks"], to_path, &[]),
             ));
         }
     }
@@ -893,12 +933,17 @@ fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
                 if selector == "all" {
                     hints.push(Hint::new(
                         "Toggle all tasks in this file",
-                        build_command_no_glob(ctx, &["task", "toggle", file, "--all"]),
+                        build_command_with_file(ctx, &["task", "toggle"], file, &["--all"]),
                     ));
                 } else if let Some(section) = selector.strip_prefix("section:") {
                     hints.push(Hint::new(
                         format!("Toggle all tasks in section \"{section}\""),
-                        build_command_no_glob(ctx, &["task", "toggle", file, "--section", section]),
+                        build_command_with_file(
+                            ctx,
+                            &["task", "toggle"],
+                            file,
+                            &["--section", section],
+                        ),
                     ));
                 }
             }
@@ -924,7 +969,7 @@ fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         if !done {
             hints.push(Hint::new(
                 "Toggle this task to done",
-                build_command_no_glob(ctx, &["task", "toggle", file, "--line", &line_str]),
+                build_command_with_file(ctx, &["task", "toggle"], file, &["--line", &line_str]),
             ));
         }
         hints.push(Hint::new(
@@ -956,12 +1001,12 @@ fn hints_for_task_mutation(ctx: &HintContext, data: &serde_json::Value) -> Vec<H
             if selector == "all" {
                 hints.push(Hint::new(
                     "Read all tasks in this file",
-                    build_command_no_glob(ctx, &["task", "read", file, "--all"]),
+                    build_command_with_file(ctx, &["task", "read"], file, &["--all"]),
                 ));
             } else if let Some(section) = selector.strip_prefix("section:") {
                 hints.push(Hint::new(
                     format!("Read tasks in section \"{section}\""),
-                    build_command_no_glob(ctx, &["task", "read", file, "--section", section]),
+                    build_command_with_file(ctx, &["task", "read"], file, &["--section", section]),
                 ));
             }
         }
@@ -977,7 +1022,7 @@ fn hints_for_task_mutation(ctx: &HintContext, data: &serde_json::Value) -> Vec<H
         ));
         hints.push(Hint::new(
             "Read the file",
-            build_command_no_glob(ctx, &["read", file]),
+            build_command_with_file(ctx, &["read"], file, &[]),
         ));
     }
 

@@ -419,11 +419,12 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Set, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets = if file_positional.is_empty() {
-                    file.clone()
+                let src = if file_positional.is_empty() {
+                    file
                 } else {
-                    file_positional.clone()
+                    file_positional
                 };
+                ctx.file_targets.clone_from(src);
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
@@ -436,11 +437,12 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Remove, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets = if file_positional.is_empty() {
-                    file.clone()
+                let src = if file_positional.is_empty() {
+                    file
                 } else {
-                    file_positional.clone()
+                    file_positional
                 };
+                ctx.file_targets.clone_from(src);
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
@@ -453,11 +455,12 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Append, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets = if file_positional.is_empty() {
-                    file.clone()
+                let src = if file_positional.is_empty() {
+                    file
                 } else {
-                    file_positional.clone()
+                    file_positional
                 };
+                ctx.file_targets.clone_from(src);
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }

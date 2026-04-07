@@ -995,17 +995,24 @@ Body content here.
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-        panic!(
-            "invalid JSON: {e}\n{}",
-            String::from_utf8_lossy(&output.stdout)
-        )
-    });
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
     assert!(
         parsed.get("results").is_some(),
         "expected 'results' key: {parsed}"
     );
     assert_hints_present(&parsed);
+    // Hints should use positional file form, not --file flag
+    let hints_str = serde_json::to_string(&parsed["hints"]).unwrap();
+    assert!(
+        !hints_str.contains("read --file"),
+        "read hint should use positional form, not --file: {hints_str}"
+    );
+    assert!(
+        !hints_str.contains("backlinks --file"),
+        "backlinks hint should use positional form, not --file: {hints_str}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,17 +1055,24 @@ See [[target]].
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-        panic!(
-            "invalid JSON: {e}\n{}",
-            String::from_utf8_lossy(&output.stdout)
-        )
-    });
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
     assert!(
         parsed.get("results").is_some(),
         "expected 'results' key: {parsed}"
     );
     assert_hints_present(&parsed);
+    // Hints should use positional file form, not --file flag
+    let hints_str = serde_json::to_string(&parsed["hints"]).unwrap();
+    assert!(
+        !hints_str.contains("read --file"),
+        "read hint should use positional form, not --file: {hints_str}"
+    );
+    assert!(
+        !hints_str.contains("backlinks --file"),
+        "backlinks hint should use positional form, not --file: {hints_str}"
+    );
 }
 
 // ---------------------------------------------------------------------------

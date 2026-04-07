@@ -296,6 +296,9 @@ pub(crate) enum Commands {
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
             - --tag uses prefix matching: 'project' matches 'project/backend' but NOT 'projects'.\n\
+            POSITIONAL ARGUMENTS: The first positional argument is always PATTERN (body text search), not a file path. \
+            Subsequent positional arguments are treated as FILE targets. \
+            To filter by file without a body search, use --file instead of a positional argument.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
         /// Case-insensitive body text search (searches body only, not frontmatter)

@@ -64,6 +64,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // Merge positional files into filters (clap prevents positional+--file
             // and positional+--glob at parse time; a view may have set glob though).
             if !file_positional.is_empty() {
+                if !filters_raw.glob.is_empty() {
+                    crate::warn::warn(
+                        "positional file arguments override the view's --glob; \
+                         glob filter has been ignored",
+                    );
+                }
                 filters_raw.file = file_positional;
                 filters_raw.glob.clear(); // file overrides view's glob
             }
@@ -199,7 +205,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             lines,
             frontmatter,
         } => {
-            let file = resolve_single_file(file_positional, file)?;
+            let file = match resolve_single_file(file_positional, file) {
+                Ok(f) => f,
+                Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+            };
             read_commands::run(
                 dir,
                 &file,
@@ -310,7 +319,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 section,
                 all,
             } => {
-                let file = resolve_single_file(file_positional, file)?;
+                let file = match resolve_single_file(file_positional, file) {
+                    Ok(f) => f,
+                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+                };
                 task_commands::task_read(
                     dir,
                     &file,
@@ -327,7 +339,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 section,
                 all,
             } => {
-                let file = resolve_single_file(file_positional, file)?;
+                let file = match resolve_single_file(file_positional, file) {
+                    Ok(f) => f,
+                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+                };
                 task_commands::task_toggle(
                     dir,
                     &file,
@@ -347,7 +362,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 all,
                 status,
             } => {
-                let file = resolve_single_file(file_positional, file)?;
+                let file = match resolve_single_file(file_positional, file) {
+                    Ok(f) => f,
+                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+                };
                 if status.chars().count() != 1 {
                     let out = crate::output::format_error(
                         effective_format,
@@ -502,7 +520,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             file,
         } => {
-            let file = resolve_single_file(file_positional, file)?;
+            let file = match resolve_single_file(file_positional, file) {
+                Ok(f) => f,
+                Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+            };
             match resolve_index(
                 snapshot_index.as_ref(),
                 dir,
@@ -525,7 +546,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             to,
             dry_run,
         } => {
-            let file = resolve_single_file(file_positional, file)?;
+            let file = match resolve_single_file(file_positional, file) {
+                Ok(f) => f,
+                Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+            };
             mv_commands::mv(
                 dir,
                 &file,
