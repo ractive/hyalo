@@ -41,8 +41,9 @@ pub(crate) fn resolve_single_file(
 ) -> anyhow::Result<String> {
     match (positional, flag) {
         (Some(f), None) | (None, Some(f)) => Ok(f),
-        (None, None) => anyhow::bail!("required argument <FILE> or --file <FILE> missing"),
-        (Some(_), Some(_)) => unreachable!(), // conflicts_with prevents this
+        (None, None) => anyhow::bail!("required argument missing: provide <FILE> or --file <FILE>"),
+        // conflicts_with prevents this at parse time; defensive fallback.
+        (Some(_), Some(_)) => anyhow::bail!("cannot specify both <FILE> and --file"),
     }
 }
 
@@ -301,7 +302,7 @@ pub(crate) enum Commands {
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
         /// Target file(s) as positional args — alternative to --file (repeatable after PATTERN)
-        #[arg(value_name = "FILE", conflicts_with = "glob")]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
         file_positional: Vec<String>,
         /// Use a saved view (named filter set from .hyalo.toml). Additional CLI filters
         /// are merged on top: list filters (--property, --tag, --section, --glob) extend

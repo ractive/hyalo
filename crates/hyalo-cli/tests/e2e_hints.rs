@@ -590,10 +590,18 @@ fn find_with_hints_shows_suggestions() {
         stdout.contains("hyalo read ") && stdout.contains(".md"),
         "should suggest read <file> for first result: {stdout}"
     );
+    assert!(
+        !stdout.contains("read --file"),
+        "read hint should use positional form, not --file: {stdout}"
+    );
     // Should suggest backlinks for the first result (positional file arg, no --file flag).
     assert!(
         stdout.contains("hyalo backlinks ") && stdout.contains(".md"),
         "should suggest backlinks <file> for first result: {stdout}"
+    );
+    assert!(
+        !stdout.contains("backlinks --file"),
+        "backlinks hint should use positional form, not --file: {stdout}"
     );
 }
 

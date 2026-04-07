@@ -107,6 +107,48 @@ fn read_positional_and_flag_conflicts() {
 }
 
 // ---------------------------------------------------------------------------
+// read: no file at all → error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_no_file_at_all_errors() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FILE") || stderr.contains("file"),
+        "expected missing file error, got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// find: positional file + --file flag conflicts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_positional_file_and_flag_conflicts() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "pattern", "note.md", "--file", "other.md"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "expected conflict error, got: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // backlinks: positional file
 // ---------------------------------------------------------------------------
 

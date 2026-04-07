@@ -61,12 +61,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             view: _, // resolved before dispatch
             filters: mut filters_raw,
         } => {
-            // Merge positional files into filters.file before destructuring
+            // Merge positional files into filters (clap prevents positional+--file
+            // and positional+--glob at parse time; a view may have set glob though).
             if !file_positional.is_empty() {
-                if !filters_raw.file.is_empty() {
-                    anyhow::bail!("cannot specify both positional files and --file");
-                }
                 filters_raw.file = file_positional;
+                filters_raw.glob.clear(); // file overrides view's glob
             }
             let FindFilters {
                 regexp,

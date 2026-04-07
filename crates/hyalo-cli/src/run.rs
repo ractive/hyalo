@@ -411,6 +411,7 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Set {
+                file_positional,
                 file,
                 glob,
                 dry_run,
@@ -418,11 +419,16 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Set, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets.clone_from(file);
+                ctx.file_targets = if file_positional.is_empty() {
+                    file.clone()
+                } else {
+                    file_positional.clone()
+                };
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
             Commands::Remove {
+                file_positional,
                 file,
                 glob,
                 dry_run,
@@ -430,11 +436,16 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Remove, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets.clone_from(file);
+                ctx.file_targets = if file_positional.is_empty() {
+                    file.clone()
+                } else {
+                    file_positional.clone()
+                };
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
             Commands::Append {
+                file_positional,
                 file,
                 glob,
                 dry_run,
@@ -442,7 +453,11 @@ fn run_inner() -> Result<(), AppError> {
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Append, &common);
                 ctx.glob.clone_from(glob);
-                ctx.file_targets.clone_from(file);
+                ctx.file_targets = if file_positional.is_empty() {
+                    file.clone()
+                } else {
+                    file_positional.clone()
+                };
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
