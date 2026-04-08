@@ -610,9 +610,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             },
         },
-        // `Init` and `Deinit` are handled as early returns before dispatch is called.
+        // `Init`, `Deinit`, and `Completion` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
         Commands::Deinit => unreachable!("Deinit is dispatched before this match reached"),
+        Commands::Completion { .. } => {
+            unreachable!("Completion is dispatched before this match reached")
+        }
         Commands::Views { action } => {
             let action = action.unwrap_or(ViewsAction::List);
             match action {
