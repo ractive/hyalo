@@ -71,7 +71,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Task (single-task operations):
     hyalo task read       -f/--file F -l/--line N           Read task at a line
     hyalo task toggle     -f/--file F -l/--line N           Toggle completion
-    hyalo task set-status -f/--file F -l/--line N -s/--status C
+    hyalo task set        -f/--file F -l/--line N -s/--status C
 
   Backlinks (reverse link lookup, read-only):
     hyalo backlinks -f/--file F
@@ -232,7 +232,7 @@ COOKBOOK:
   hyalo task toggle --file todo.md --line 5
 
   # Set a custom task status (e.g. cancelled)
-  hyalo task set-status --file todo.md --line 5 --status -
+  hyalo task set --file todo.md --line 5 --status -
 
   # Fix broken links (dry-run preview)
   hyalo links fix
@@ -281,7 +281,7 @@ OUTPUT SHAPES (JSON, default):
   # tags rename
   {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
 
-  # task read / toggle / set-status
+  # task read / toggle / set
   {\"results\": {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}, \"hints\": [...]}
 
   # summary

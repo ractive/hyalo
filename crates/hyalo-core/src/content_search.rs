@@ -38,7 +38,10 @@ impl ContentSearchVisitor {
         let lowered = pattern.to_ascii_lowercase();
         let finder = memmem::Finder::new(lowered.as_bytes()).into_owned();
         Self {
-            mode: SearchMode::Substring { lowered, finder: Box::new(finder) },
+            mode: SearchMode::Substring {
+                lowered,
+                finder: Box::new(finder),
+            },
             current_section: String::new(),
             matches: Vec::new(),
             line_scratch: Vec::new(),

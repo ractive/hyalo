@@ -341,7 +341,7 @@ fn task_toggle_positional_file() {
 }
 
 // ---------------------------------------------------------------------------
-// task set-status: positional file
+// task set: positional file
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -350,15 +350,7 @@ fn task_set_status_positional_file() {
     // Set line 13 (- [ ] First task) to status '?'
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "task",
-            "set-status",
-            "note.md",
-            "--line",
-            "13",
-            "--status",
-            "?",
-        ])
+        .args(["task", "set", "note.md", "--line", "13", "--status", "?"])
         .output()
         .unwrap();
 

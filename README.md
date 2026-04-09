@@ -94,8 +94,8 @@ Most flags have short aliases for quick interactive use:
 | `-n` | `--limit` | find |
 | `-n` | `--recent` | summary |
 | `-l` | `--lines` | read |
-| `-l` | `--line` | task read, task toggle, task set-status |
-| `-s` | `--status` | task set-status |
+| `-l` | `--line` | task read, task toggle, task set |
+| `-s` | `--status` | task set |
 | `-o` | `--output` | create-index |
 
 Glob patterns use standard shell semantics: `*` matches within a single directory, `**` matches across directory boundaries. For example, `*.md` matches top-level files only, while `**/*.md` matches all `.md` files recursively.
@@ -443,7 +443,7 @@ hyalo task toggle --file note.md --section "Acceptance criteria"
 hyalo task toggle --file note.md --all
 
 # Set custom status on all tasks in a section
-hyalo task set-status --file note.md --section Tasks --status /
+hyalo task set --file note.md --section Tasks --status /
 ```
 
 Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored. Bulk mutations use a single atomic read-modify-write pass.

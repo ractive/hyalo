@@ -522,7 +522,7 @@ fn run_inner() -> Result<(), AppError> {
                         file,
                         task_selector(line, section.as_ref(), *all),
                     ),
-                    crate::cli::args::TaskAction::SetStatus {
+                    crate::cli::args::TaskAction::Set {
                         file_positional,
                         file,
                         line,

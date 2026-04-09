@@ -67,18 +67,10 @@ pub fn suggest_subcommand_correction(args: &[String], cmd: &clap::Command) -> Op
         .get_subcommands()
         .find(|s| s.get_name() == parent_name)?;
 
-    // Collect sub-subcommand names from the parent.
-    let sub_names: Vec<&str> = parent_cmd
-        .get_subcommands()
-        .map(clap::Command::get_name)
-        .collect();
+    parent_cmd.get_subcommands().next()?;
 
-    if sub_names.is_empty() {
-        return None;
-    }
-
-    // Scan args after the parent for `--<name>` where `<name>` matches a sub-subcommand.
-    // Also skip flag values here for consistency.
+    // Scan args after the parent for `--<name>` where `<name>` matches a sub-subcommand
+    // name or alias. Also skip flag values here for consistency.
     let mut found_flag_pos: Option<usize> = None;
     let mut found_sub_name: Option<&str> = None;
     skip_next = false;
@@ -92,9 +84,14 @@ pub fn suggest_subcommand_correction(args: &[String], cmd: &clap::Command) -> Op
             break;
         }
         if let Some(flag_value) = arg.strip_prefix("--") {
-            if let Some(name) = sub_names.iter().find(|&&n| n == flag_value) {
+            // Match against the canonical name first, then any aliases (including hidden).
+            let matched = parent_cmd.get_subcommands().find(|sub| {
+                sub.get_name() == flag_value
+                    || sub.get_all_aliases().any(|alias| alias == flag_value)
+            });
+            if let Some(sub) = matched {
                 found_flag_pos = Some(i);
-                found_sub_name = Some(name);
+                found_sub_name = Some(sub.get_name());
                 break;
             }
             // Check if this flag takes a value (look in parent_cmd's args too)
@@ -153,7 +150,7 @@ mod tests {
                     .arg(Arg::new("line").short('l').long("line").num_args(1))
                     .subcommand(Command::new("read"))
                     .subcommand(Command::new("toggle"))
-                    .subcommand(Command::new("set-status")),
+                    .subcommand(Command::new("set").alias("set-status")),
             )
             .subcommand(
                 Command::new("properties")
@@ -210,7 +207,7 @@ mod tests {
 
     #[test]
     fn set_status_hyphenated() {
-        // hyalo task --set-status --file f --line 1 --status ? -> hyalo task set-status --file f --line 1 --status ?
+        // hyalo task --set-status --file f --line 1 --status ? -> hyalo task set --file f --line 1 --status ?
         let cmd = make_cmd();
         let result = suggest_subcommand_correction(
             &args("hyalo task --set-status --file f --line 1 --status ?"),
@@ -218,7 +215,7 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some("hyalo task set-status --file f --line 1 --status '?'".to_owned())
+            Some("hyalo task set --file f --line 1 --status '?'".to_owned())
         );
     }
 
