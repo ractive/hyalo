@@ -67,15 +67,7 @@ pub fn suggest_subcommand_correction(args: &[String], cmd: &clap::Command) -> Op
         .get_subcommands()
         .find(|s| s.get_name() == parent_name)?;
 
-    // Collect sub-subcommand names from the parent.
-    let sub_names: Vec<&str> = parent_cmd
-        .get_subcommands()
-        .map(clap::Command::get_name)
-        .collect();
-
-    if sub_names.is_empty() {
-        return None;
-    }
+    parent_cmd.get_subcommands().next()?;
 
     // Scan args after the parent for `--<name>` where `<name>` matches a sub-subcommand
     // name or alias. Also skip flag values here for consistency.

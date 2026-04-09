@@ -354,7 +354,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     index_path,
                 )
             }
-            TaskAction::SetStatus {
+            TaskAction::Set {
                 file_positional,
                 file,
                 line,

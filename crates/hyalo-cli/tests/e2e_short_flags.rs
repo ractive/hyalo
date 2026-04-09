@@ -392,12 +392,33 @@ fn task_toggle_short_f_l() {
 }
 
 #[test]
-fn task_set_status_short_f_l_s() {
+fn task_set_short_f_l_s() {
     let dir = setup();
     let output = hyalo_no_hints()
         .args([
             "task",
             "set",
+            "-f",
+            "note.md",
+            "-l",
+            "11",
+            "-s",
+            "/",
+            "-d",
+            dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+}
+
+#[test]
+fn task_set_status_alias_short_flags() {
+    let dir = setup();
+    let output = hyalo_no_hints()
+        .args([
+            "task",
+            "set-status",
             "-f",
             "note.md",
             "-l",

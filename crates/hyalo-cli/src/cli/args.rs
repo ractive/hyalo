@@ -842,7 +842,7 @@ pub(crate) enum TaskAction {
           hyalo task set note.md --all --status x\n  \
           hyalo task set --file note.md --line 5 --status '?'"
     )]
-    SetStatus {
+    Set {
         /// File containing the task(s) (relative to --dir) — positional form
         #[arg(value_name = "FILE")]
         file_positional: Option<String>,
