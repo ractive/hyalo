@@ -365,10 +365,10 @@ pub(crate) enum Commands {
             Subcommands:\n\
             - read: Show task details for one or more tasks.\n\
             - toggle: Flip completion state ([ ] <-> [x], custom -> [x]).\n\
-            - set-status: Set an arbitrary single-character status.\n\n\
+            - set: Set an arbitrary single-character status.\n\n\
             INPUT: FILE (positional or --file) and one of: --line (repeatable/comma-separated), --section <heading>, or --all.\n\
             SCOPE: Single file only.\n\
-            SIDE EFFECTS: 'toggle' and 'set-status' modify the file on disk. 'read' is read-only.")]
+            SIDE EFFECTS: 'toggle' and 'set' modify the file on disk. 'read' is read-only.")]
     Task {
         #[command(subcommand)]
         action: TaskAction,
@@ -828,18 +828,19 @@ pub(crate) enum TaskAction {
     },
     /// Set a custom single-character status on one or more tasks
     #[command(
-        name = "set-status",
+        name = "set",
+        alias = "set-status",
         long_about = "Set a custom single-character status on one or more task checkboxes.\n\n\
         INPUT: FILE (positional or --file), --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
         USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
         EXAMPLES:\n  \
-          hyalo task set-status note.md --line 5 --status '?'\n  \
-          hyalo task set-status note.md --line 5,7 --status '-'\n  \
-          hyalo task set-status note.md --section Tasks --status '-'\n  \
-          hyalo task set-status note.md --all --status x\n  \
-          hyalo task set-status --file note.md --line 5 --status '?'"
+          hyalo task set note.md --line 5 --status '?'\n  \
+          hyalo task set note.md --line 5,7 --status '-'\n  \
+          hyalo task set note.md --section Tasks --status '-'\n  \
+          hyalo task set note.md --all --status x\n  \
+          hyalo task set --file note.md --line 5 --status '?'"
     )]
     SetStatus {
         /// File containing the task(s) (relative to --dir) — positional form

@@ -101,7 +101,7 @@ pub struct OutlineSection {
 // ---------------------------------------------------------------------------
 
 /// A single task (checkbox) with its location and state.
-/// Used by `task read`, `task toggle`, `task set-status`.
+/// Used by `task read`, `task toggle`, `task set`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub line: usize,
@@ -111,7 +111,7 @@ pub struct TaskInfo {
 }
 
 /// Result of reading or mutating a single task.
-/// Used by `task read`, `task toggle`, `task set-status`.
+/// Used by `task read`, `task toggle`, `task set`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskReadResult {
     pub file: String,

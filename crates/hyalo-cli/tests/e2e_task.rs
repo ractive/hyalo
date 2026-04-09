@@ -103,7 +103,7 @@ fn run_task_toggle(
 }
 
 // ---------------------------------------------------------------------------
-// Helper: run `task set-status`
+// Helper: run `task set`
 // ---------------------------------------------------------------------------
 
 fn run_task_set_status(
@@ -116,7 +116,7 @@ fn run_task_set_status(
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
-        "set-status",
+        "set",
         "--file",
         file,
         "--line",
@@ -302,7 +302,7 @@ fn task_toggle_non_task_line_exits_1() {
 }
 
 // ---------------------------------------------------------------------------
-// task set-status — success cases
+// task set — success cases
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -357,7 +357,7 @@ fn task_set_status_x_sets_done_true() {
 }
 
 // ---------------------------------------------------------------------------
-// task set-status — error cases
+// task set — error cases
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -369,7 +369,7 @@ fn task_set_status_non_task_line_exits_1() {
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
-        "set-status",
+        "set",
         "--file",
         "tasks.md",
         "--line",
@@ -392,7 +392,7 @@ fn task_set_status_multi_char_status_exits_1() {
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
-        "set-status",
+        "set",
         "--file",
         "tasks.md",
         "--line",
@@ -420,7 +420,7 @@ fn task_set_status_empty_string_exits_1() {
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args([
         "task",
-        "set-status",
+        "set",
         "--file",
         "tasks.md",
         "--line",
@@ -576,16 +576,7 @@ fn task_set_status_multiple_lines() {
     let (status, json, stderr) = run_task_cmd_json(
         &tmp,
         &[
-            "task",
-            "set-status",
-            "--file",
-            "bulk.md",
-            "--line",
-            "5",
-            "--line",
-            "6",
-            "--status",
-            "?",
+            "task", "set", "--file", "bulk.md", "--line", "5", "--line", "6", "--status", "?",
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
@@ -671,7 +662,7 @@ fn task_set_status_section() {
         &tmp,
         &[
             "task",
-            "set-status",
+            "set",
             "--file",
             "bulk.md",
             "--section",
@@ -775,15 +766,7 @@ fn task_set_status_all() {
 
     let (status, _json, stderr) = run_task_cmd_json(
         &tmp,
-        &[
-            "task",
-            "set-status",
-            "--file",
-            "bulk.md",
-            "--all",
-            "--status",
-            "x",
-        ],
+        &["task", "set", "--file", "bulk.md", "--all", "--status", "x"],
     );
     assert!(status.success(), "stderr: {stderr}");
 

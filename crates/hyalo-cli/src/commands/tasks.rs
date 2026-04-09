@@ -209,7 +209,7 @@ pub fn task_toggle(
 }
 
 // ---------------------------------------------------------------------------
-// `hyalo task set-status` — set custom status character
+// `hyalo task set` — set custom status character
 // ---------------------------------------------------------------------------
 
 /// Set status on one or more tasks by line selector.

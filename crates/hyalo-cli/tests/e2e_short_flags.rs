@@ -397,7 +397,7 @@ fn task_set_status_short_f_l_s() {
     let output = hyalo_no_hints()
         .args([
             "task",
-            "set-status",
+            "set",
             "-f",
             "note.md",
             "-l",
