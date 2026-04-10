@@ -371,22 +371,42 @@ fn task_set_status_positional_file() {
 fn find_two_positionals_first_is_pattern() {
     let tmp = setup();
     // "note.md" is passed as the first positional (PATTERN) and "other.md" as the
-    // second (FILE). The pattern "note.md" should not match the body of other.md,
-    // so total should be 0 — verifying that other.md is treated as a file filter,
-    // not a second pattern.
+    // second (FILE). Verify that "other.md" is treated as a file filter (scopes
+    // the search to other.md only), not as a second pattern.
+    // With BM25, "note" (stemmed from "note.md") does appear in other.md's body
+    // ("See [[note]] for details."), so the search returns a result for other.md.
+    // The key invariant: only other.md is searched (the FILE positional scopes it).
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["find", "note.md", "other.md"])
+        .args(["find", "xyz_notpresent_anywhere", "other.md"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    // other.md body is "See [[note]] for details." — "note.md" does not appear verbatim
+    // "xyz_notpresent_anywhere" does not appear in other.md — so total should be 0
     assert_eq!(
         envelope["total"], 0,
-        "first positional is pattern (not a file), second is file filter: {envelope}"
+        "pattern not found in scoped file: {envelope}"
     );
+
+    // Also verify that the FILE positional actually scopes to other.md:
+    // search for something that IS in other.md's body ("note") to confirm scoping.
+    let output2 = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "note", "other.md"])
+        .output()
+        .unwrap();
+    assert!(output2.status.success());
+    let envelope2: serde_json::Value = serde_json::from_slice(&output2.stdout).unwrap();
+    // "note" appears in other.md ("See [[note]] for details."), so total=1
+    assert_eq!(
+        envelope2["total"], 1,
+        "note found in other.md (file-scoped search): {envelope2}"
+    );
+    // And only other.md is in the results
+    let results = envelope2["results"].as_array().unwrap();
+    assert!(results[0]["file"].as_str().unwrap().ends_with("other.md"));
 }
 
 // ---------------------------------------------------------------------------

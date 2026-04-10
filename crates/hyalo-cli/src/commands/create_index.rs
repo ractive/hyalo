@@ -60,7 +60,14 @@ pub fn create_index(
         .collect();
 
     // Build the scanned index
-    let build = ScannedIndex::build(&files, site_prefix, &ScanOptions { scan_body: true })?;
+    let build = ScannedIndex::build(
+        &files,
+        site_prefix,
+        &ScanOptions {
+            scan_body: true,
+            bm25_tokenize: true,
+        },
+    )?;
 
     // Warn about skipped files
     for w in &build.warnings {

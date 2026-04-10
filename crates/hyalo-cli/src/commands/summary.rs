@@ -403,8 +403,14 @@ mod tests {
                 (p, rel)
             })
             .collect();
-        let build =
-            ScannedIndex::build(&file_pairs, site_prefix, &ScanOptions { scan_body: true })?;
+        let build = ScannedIndex::build(
+            &file_pairs,
+            site_prefix,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+            },
+        )?;
         summary(dir, &build.index, globs, recent, depth, site_prefix, format)
     }
 
@@ -872,7 +878,15 @@ Body.
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&files, prefix, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            prefix,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+            },
+        )
+        .unwrap();
         let index_path = dir.join(".hyalo-index");
         SnapshotIndex::save(
             &build.index,
@@ -984,7 +998,15 @@ Body.
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+            },
+        )
+        .unwrap();
         let index_path = dir.join(".hyalo-index");
         SnapshotIndex::save(&build.index, &index_path, &dir.display().to_string(), None).unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();

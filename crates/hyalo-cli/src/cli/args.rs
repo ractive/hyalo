@@ -225,6 +225,10 @@ pub(crate) struct FindFilters {
     #[arg(long)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Stemming language for BM25 body search (default: english). Supported: arabic, danish, dutch, english, finnish, french, german, greek, hungarian, italian, norwegian, portuguese, romanian, russian, spanish, swedish, tamil, turkish
+    #[arg(long, value_name = "LANG")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 impl FindFilters {
@@ -264,6 +268,9 @@ impl FindFilters {
         if overlay.title.is_some() {
             self.title.clone_from(&overlay.title);
         }
+        if overlay.language.is_some() {
+            self.language.clone_from(&overlay.language);
+        }
     }
 }
 
@@ -274,9 +281,25 @@ pub(crate) enum Commands {
             Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
             Each item in results contains the file path, modified time, \
             and optionally: frontmatter properties, tags, document sections, tasks, and links.\n\n\
+            SEARCH MODES:\n\
+            - PATTERN (positional): BM25 ranked full-text search with stemming. Results are sorted by \
+            relevance score (highest first) unless --sort is specified. Each result includes a numeric \
+            'score' field in the output. Stemming normalises words to their root: 'running' matches \
+            documents containing 'run', 'runner', 'running', etc.\n\
+            - --regexp/-e REGEX: regex body text search (case-insensitive by default; unranked; \
+            results include per-line 'matches' instead of 'score'). Mutually exclusive with PATTERN.\n\n\
+            QUERY SYNTAX (for PATTERN):\n\
+            - Multiple words: all terms contribute to BM25 relevance scoring; documents matching \
+            more terms rank higher (e.g. 'rust programming' ranks docs about Rust programming highest)\n\
+            - -term: exclude documents containing this term (e.g. 'rust -javascript' finds Rust docs \
+            that don't mention javascript; stemming applies, so '-running' also excludes 'run')\n\
+            - Combine freely: 'systems programming -garbage -collector'\n\n\
+            LANGUAGE: The --language flag (or [search] language in .hyalo.toml, or frontmatter \
+            'language' property per file) selects the Snowball stemmer for tokenization. Default: english. \
+            Supported: arabic, danish, dutch, english, finnish, french, german, greek, hungarian, \
+            italian, norwegian, portuguese, romanian, russian, spanish, swedish, tamil, turkish. \
+            Language precedence: frontmatter > --language > config > english.\n\n\
             FILTERS: All filters are AND'd together.\n\
-            - PATTERN (positional): case-insensitive body text search\n\
-            - --regexp/-e REGEX: regex body text search (case-insensitive by default; mutually exclusive with PATTERN)\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
             - --tag T: tag filter (exact or prefix via '/': 'project' matches 'project/backend' but NOT 'projects' — no substring or fuzzy matching)\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
@@ -290,7 +313,7 @@ pub(crate) enum Commands {
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
             merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
-            lists; scalar filters (--regexp, --sort, --limit, --title, --task) override; bool \
+            lists; scalar filters (--regexp, --sort, --limit, --title, --task, --language) override; bool \
             flags (--broken-links, --reverse) OR. Example: hyalo find --view drafts --limit 5\n\
             COMMON MISTAKES:\n\
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
@@ -301,7 +324,7 @@ pub(crate) enum Commands {
             To filter by file without a body search, use --file instead of a positional argument.\n\
             SIDE EFFECTS: None (read-only).")]
     Find {
-        /// Case-insensitive body text search (searches body only, not frontmatter)
+        /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran"); results sorted by relevance
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
         /// Target file(s) as positional args — alternative to --file (repeatable after PATTERN)

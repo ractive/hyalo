@@ -80,7 +80,7 @@ fn bench_scan_file(c: &mut Criterion) {
         b.iter(|| {
             for file in &files {
                 let mut counter = TaskCounter::new();
-                let mut search = ContentSearchVisitor::new("XMLHttpRequest");
+                let mut search = ContentSearchVisitor::regex("XMLHttpRequest").unwrap();
                 let visitors: &mut [&mut dyn FileVisitor] = &mut [&mut counter, &mut search];
                 scan_file_multi(black_box(file), visitors).unwrap();
             }
@@ -106,7 +106,10 @@ fn bench_scan_file(c: &mut Criterion) {
 fn bench_index_build(c: &mut Criterion) {
     let Some(vault) = vault_path() else { return };
     let files = prepare_files(&vault);
-    let options = ScanOptions { scan_body: true };
+    let options = ScanOptions {
+        scan_body: true,
+        bm25_tokenize: false,
+    };
 
     let mut group = c.benchmark_group("index_build");
     group.sample_size(10);
@@ -147,32 +150,27 @@ fn bench_content_search(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(20));
 
-    // With fast-reject: read file, check if pattern exists, only scan if so
-    group.bench_function("with_fast_reject", |b| {
+    // Regex scan: always run full scan (substring fast-reject path removed; BM25 handles that now)
+    group.bench_function("regex_scan", |b| {
         b.iter(|| {
             let mut total = 0usize;
-            let mut scratch = Vec::new();
             for file in &files {
-                let data = std::fs::read(black_box(file)).unwrap();
-                let lowered_pattern = b"xmlhttprequest";
-                if hyalo_core::content_search::fast_reject(&data, lowered_pattern, &mut scratch) {
-                    continue;
-                }
-                let mut visitor = ContentSearchVisitor::new("XMLHttpRequest");
-                scan_slice_multi(&data, &mut [&mut visitor]).unwrap();
+                let mut visitor = ContentSearchVisitor::regex("XMLHttpRequest").unwrap();
+                scan_file_multi(black_box(file), &mut [&mut visitor]).unwrap();
                 total += visitor.into_matches().len();
             }
             total
         });
     });
 
-    // Without fast-reject: always run full scan
-    group.bench_function("without_fast_reject", |b| {
+    // Slice-based regex scan: read entire file then scan buffer
+    group.bench_function("regex_slice_scan", |b| {
         b.iter(|| {
             let mut total = 0usize;
             for file in &files {
-                let mut visitor = ContentSearchVisitor::new("XMLHttpRequest");
-                scan_file_multi(black_box(file), &mut [&mut visitor]).unwrap();
+                let data = std::fs::read(black_box(file)).unwrap();
+                let mut visitor = ContentSearchVisitor::regex("XMLHttpRequest").unwrap();
+                scan_slice_multi(&data, &mut [&mut visitor]).unwrap();
                 total += visitor.into_matches().len();
             }
             total

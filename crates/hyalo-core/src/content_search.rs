@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use memchr::memmem;
 use regex::{Regex, RegexBuilder};
 
 use crate::heading::parse_atx_heading;
@@ -9,16 +8,11 @@ use crate::types::ContentMatch;
 /// How the visitor matches body lines.
 #[derive(Debug)]
 enum SearchMode {
-    /// Case-insensitive substring (lowercased pattern + pre-built SIMD finder).
-    Substring {
-        lowered: String,
-        finder: Box<memmem::Finder<'static>>,
-    },
     /// Compiled regular expression.
     Regex(Regex),
 }
 
-/// Visitor that searches body lines for content matches.
+/// Visitor that searches body lines for content matches using a regular expression.
 /// Tracks current section heading for context in matches.
 #[derive(Debug)]
 pub struct ContentSearchVisitor {
@@ -27,27 +21,9 @@ pub struct ContentSearchVisitor {
     current_section: String,
     /// Collected matches
     matches: Vec<ContentMatch>,
-    /// Reusable scratch buffer for case-insensitive substring matching.
-    line_scratch: Vec<u8>,
 }
 
 impl ContentSearchVisitor {
-    /// Create a visitor that does **case-insensitive substring** search.
-    #[must_use]
-    pub fn new(pattern: &str) -> Self {
-        let lowered = pattern.to_ascii_lowercase();
-        let finder = memmem::Finder::new(lowered.as_bytes()).into_owned();
-        Self {
-            mode: SearchMode::Substring {
-                lowered,
-                finder: Box::new(finder),
-            },
-            current_section: String::new(),
-            matches: Vec::new(),
-            line_scratch: Vec::new(),
-        }
-    }
-
     /// Compile a **regular expression** for content search.
     ///
     /// The pattern is always prefixed with `(?i)` to make it case-insensitive
@@ -64,7 +40,6 @@ impl ContentSearchVisitor {
             mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
-            line_scratch: Vec::new(),
         })
     }
 
@@ -78,7 +53,6 @@ impl ContentSearchVisitor {
             mode: SearchMode::Regex(re),
             current_section: String::new(),
             matches: Vec::new(),
-            line_scratch: Vec::new(),
         }
     }
 
@@ -94,38 +68,12 @@ impl ContentSearchVisitor {
         self.matches
     }
 
-    /// Returns the lowered pattern bytes for fast-reject, if in substring mode.
-    pub fn pattern_bytes(&self) -> Option<&[u8]> {
-        match &self.mode {
-            SearchMode::Substring { lowered, .. } => Some(lowered.as_bytes()),
-            SearchMode::Regex(_) => None,
-        }
-    }
-
     /// Check whether a line matches the current mode.
-    fn is_match(&mut self, line: &str) -> bool {
+    fn is_match(&self, line: &str) -> bool {
         match &self.mode {
-            SearchMode::Substring { finder, .. } => {
-                // Reuse a scratch buffer to avoid per-line heap allocation.
-                self.line_scratch.clear();
-                self.line_scratch
-                    .extend(line.bytes().map(|b| b.to_ascii_lowercase()));
-                finder.find(&self.line_scratch).is_some()
-            }
             SearchMode::Regex(re) => re.is_match(line),
         }
     }
-}
-
-/// Returns `true` if `file_data` definitely does NOT contain `pattern` (case-insensitive ASCII).
-/// Used to skip the full scanner for non-matching files.
-///
-/// `scratch` is a reusable buffer to avoid per-file heap allocations on the hot path.
-pub fn fast_reject(file_data: &[u8], pattern: &[u8], scratch: &mut Vec<u8>) -> bool {
-    let finder = memmem::Finder::new(pattern);
-    scratch.clear();
-    scratch.extend(file_data.iter().map(u8::to_ascii_lowercase));
-    finder.find(scratch).is_none()
 }
 
 impl FileVisitor for ContentSearchVisitor {
@@ -173,16 +121,6 @@ impl FileVisitor for ContentSearchVisitor {
 mod tests {
     use super::*;
 
-    fn run_visitor(content: &str, pattern: &str) -> Vec<ContentMatch> {
-        let mut visitor = ContentSearchVisitor::new(pattern);
-        let lines: Vec<&str> = content.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            // Test helpers pass raw == cleaned (no stripping needed in unit tests).
-            visitor.on_body_line(line, line, i + 1);
-        }
-        visitor.into_matches()
-    }
-
     fn run_regex_visitor(content: &str, pattern: &str) -> Vec<ContentMatch> {
         let mut visitor = ContentSearchVisitor::regex(pattern).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -191,129 +129,6 @@ mod tests {
             visitor.on_body_line(line, line, i + 1);
         }
         visitor.into_matches()
-    }
-
-    // --- substring mode (existing behaviour) ---
-
-    #[test]
-    fn finds_exact_match() {
-        let matches = run_visitor("Hello world\nnothing here\n", "world");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].line, 1);
-        assert_eq!(matches[0].text, "Hello world");
-    }
-
-    #[test]
-    fn case_insensitive_match() {
-        let matches = run_visitor("Hello WORLD\nGoodbye world\n", "world");
-        assert_eq!(matches.len(), 2);
-    }
-
-    #[test]
-    fn uppercase_pattern_matches_lowercase_line() {
-        let matches = run_visitor("foo bar baz\n", "BAR");
-        assert_eq!(matches.len(), 1);
-    }
-
-    #[test]
-    fn no_match_returns_empty() {
-        let matches = run_visitor("Nothing relevant here\n", "zzz");
-        assert!(matches.is_empty());
-    }
-
-    #[test]
-    fn has_matches_false_when_empty() {
-        let visitor = ContentSearchVisitor::new("x");
-        assert!(!visitor.has_matches());
-    }
-
-    #[test]
-    fn has_matches_true_after_match() {
-        let mut visitor = ContentSearchVisitor::new("hello");
-        visitor.on_body_line("say hello", "say hello", 1);
-        assert!(visitor.has_matches());
-    }
-
-    #[test]
-    fn correct_line_numbers() {
-        let content = "line one\nline two\nline three\n";
-        let matches = run_visitor(content, "two");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].line, 2);
-    }
-
-    #[test]
-    fn section_tracking_updates_on_heading() {
-        let content = "## Design\nsome text\n### Sub\nother text\n";
-        let matches = run_visitor(content, "text");
-        assert_eq!(matches.len(), 2);
-        assert_eq!(matches[0].section, "## Design");
-        assert_eq!(matches[1].section, "### Sub");
-    }
-
-    #[test]
-    fn section_empty_before_first_heading() {
-        let matches = run_visitor("intro text\n## Section\n", "intro");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].section, "");
-    }
-
-    #[test]
-    fn heading_line_itself_can_be_matched() {
-        let matches = run_visitor("## Design Goals\n", "design");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].text, "## Design Goals");
-        assert_eq!(matches[0].section, "## Design Goals");
-    }
-
-    #[test]
-    fn heading_not_matched_when_no_pattern() {
-        let matches = run_visitor("## Design\nsome content\n", "content");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].section, "## Design");
-    }
-
-    #[test]
-    fn into_matches_consumes_visitor() {
-        let mut visitor = ContentSearchVisitor::new("hello");
-        visitor.on_body_line("say hello", "say hello", 1);
-        visitor.on_body_line("hello again", "hello again", 2);
-        let matches = visitor.into_matches();
-        assert_eq!(matches.len(), 2);
-    }
-
-    #[test]
-    fn level_1_heading_tracked() {
-        let matches = run_visitor("# Top Level\nbody\n", "body");
-        assert_eq!(matches[0].section, "# Top Level");
-    }
-
-    #[test]
-    fn invalid_atx_heading_not_tracked() {
-        let matches = run_visitor("#NoSpace\nbody\n", "body");
-        assert_eq!(matches[0].section, "");
-    }
-
-    #[test]
-    fn heading_with_inline_code_span_preserved_in_section() {
-        // The heading `## The \`versions\` field` must appear verbatim in the
-        // section context — not with the code span replaced by spaces.
-        //
-        // This test drives raw text directly to on_body_line to isolate the
-        // ContentSearchVisitor from dispatch_body_line's stripping logic.
-        let content = "## The `versions` field\nsome text\n";
-        let matches = run_visitor(content, "text");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].section, "## The `versions` field");
-    }
-
-    #[test]
-    fn heading_with_inline_code_span_is_matchable() {
-        // Users should be able to search for content inside a code span in a heading.
-        let content = "## The `versions` field\n";
-        let matches = run_visitor(content, "versions");
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].text, "## The `versions` field");
     }
 
     // --- regex mode ---
@@ -408,11 +223,85 @@ mod tests {
         assert!(result.is_err(), "oversized pattern should be rejected");
     }
 
+    #[test]
+    fn has_matches_false_when_empty() {
+        let visitor = ContentSearchVisitor::regex("x").unwrap();
+        assert!(!visitor.has_matches());
+    }
+
+    #[test]
+    fn has_matches_true_after_match() {
+        let mut visitor = ContentSearchVisitor::regex("hello").unwrap();
+        visitor.on_body_line("say hello", "say hello", 1);
+        assert!(visitor.has_matches());
+    }
+
+    #[test]
+    fn into_matches_consumes_visitor() {
+        let mut visitor = ContentSearchVisitor::regex("hello").unwrap();
+        visitor.on_body_line("say hello", "say hello", 1);
+        visitor.on_body_line("hello again", "hello again", 2);
+        let matches = visitor.into_matches();
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn section_tracking_updates_on_heading() {
+        let content = "## Design\nsome text\n### Sub\nother text\n";
+        let matches = run_regex_visitor(content, "text");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].section, "## Design");
+        assert_eq!(matches[1].section, "### Sub");
+    }
+
+    #[test]
+    fn section_empty_before_first_heading() {
+        let matches = run_regex_visitor("intro text\n## Section\n", "intro");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].section, "");
+    }
+
+    #[test]
+    fn heading_line_itself_can_be_matched() {
+        let matches = run_regex_visitor("## Design Goals\n", "design");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "## Design Goals");
+        assert_eq!(matches[0].section, "## Design Goals");
+    }
+
+    #[test]
+    fn level_1_heading_tracked() {
+        let matches = run_regex_visitor("# Top Level\nbody\n", "body");
+        assert_eq!(matches[0].section, "# Top Level");
+    }
+
+    #[test]
+    fn invalid_atx_heading_not_tracked() {
+        let matches = run_regex_visitor("#NoSpace\nbody\n", "body");
+        assert_eq!(matches[0].section, "");
+    }
+
+    #[test]
+    fn heading_with_inline_code_span_preserved_in_section() {
+        let content = "## The `versions` field\nsome text\n";
+        let matches = run_regex_visitor(content, "text");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].section, "## The `versions` field");
+    }
+
+    #[test]
+    fn heading_with_inline_code_span_is_matchable() {
+        let content = "## The `versions` field\n";
+        let matches = run_regex_visitor(content, "versions");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].text, "## The `versions` field");
+    }
+
     // --- full pipeline (code block coverage) ---
 
-    fn run_full_scan(content: &str, pattern: &str) -> Vec<ContentMatch> {
+    fn run_full_scan_regex(content: &str, pattern: &str) -> Vec<ContentMatch> {
         use crate::scanner::scan_reader_multi;
-        let mut visitor = ContentSearchVisitor::new(pattern);
+        let mut visitor = ContentSearchVisitor::regex(pattern).unwrap();
         scan_reader_multi(content.as_bytes(), &mut [&mut visitor]).unwrap();
         visitor.into_matches()
     }
@@ -420,7 +309,7 @@ mod tests {
     #[test]
     fn finds_match_inside_code_block() {
         let content = "---\n---\n## Code\n```rust\nlet typescript = 42;\n```\n";
-        let matches = run_full_scan(content, "typescript");
+        let matches = run_full_scan_regex(content, "typescript");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line, 5);
         assert_eq!(matches[0].section, "## Code");
@@ -439,126 +328,22 @@ mod tests {
     #[test]
     fn code_block_match_outside_and_inside() {
         let content = "---\n---\nhello world\n```\nhello code\n```\n";
-        let matches = run_full_scan(content, "hello");
+        let matches = run_full_scan_regex(content, "hello");
         assert_eq!(matches.len(), 2);
     }
 
     #[test]
     fn heading_inside_code_block_not_tracked_as_section() {
-        // A `#` line inside a code block must not change current_section
         let content = "---\n---\n## Real Section\n```\n# not a heading\nfoo\n```\nbar\n";
-        let matches = run_full_scan(content, "bar");
+        let matches = run_full_scan_regex(content, "bar");
         assert_eq!(matches.len(), 1);
-        // section should still be the last real heading, not the code block `#`
         assert_eq!(matches[0].section, "## Real Section");
     }
 
     #[test]
     fn no_match_inside_code_block_when_pattern_absent() {
         let content = "---\n---\n```\nsome code here\n```\n";
-        let matches = run_full_scan(content, "zzz");
+        let matches = run_full_scan_regex(content, "zzz");
         assert!(matches.is_empty());
-    }
-
-    // --- finder-based substring search ---
-
-    #[test]
-    fn finder_empty_needle_matches_everything() {
-        // Empty pattern: lowered is "", finder on empty bytes matches at pos 0
-        assert_eq!(run_visitor("anything", "").len(), 1);
-        assert!(run_visitor("", "").is_empty()); // empty content has no lines
-    }
-
-    #[test]
-    fn finder_needle_longer_than_haystack() {
-        let matches = run_visitor("ab", "abc");
-        assert!(matches.is_empty());
-    }
-
-    #[test]
-    fn finder_exact_match() {
-        let matches = run_visitor("hello", "hello");
-        assert_eq!(matches.len(), 1);
-    }
-
-    #[test]
-    fn finder_mixed_case_match() {
-        let matches = run_visitor("Hello WORLD", "lo wor");
-        assert_eq!(matches.len(), 1);
-    }
-
-    #[test]
-    fn finder_no_match() {
-        let matches = run_visitor("hello world", "xyz");
-        assert!(matches.is_empty());
-    }
-
-    #[test]
-    fn finder_multibyte_utf8_in_haystack() {
-        // Multi-byte chars in the haystack should not break the search
-        let matches = run_visitor("café latte", "latte");
-        assert_eq!(matches.len(), 1);
-        let matches2 = run_visitor("über cool", "cool");
-        assert_eq!(matches2.len(), 1);
-    }
-
-    #[test]
-    fn finder_match_at_end() {
-        let matches = run_visitor("say HELLO", "hello");
-        assert_eq!(matches.len(), 1);
-    }
-
-    #[test]
-    fn finder_single_char() {
-        assert_eq!(run_visitor("A", "a").len(), 1);
-        assert!(run_visitor("A", "b").is_empty());
-    }
-
-    // --- pattern_bytes ---
-
-    #[test]
-    fn pattern_bytes_substring_mode() {
-        let visitor = ContentSearchVisitor::new("Hello");
-        assert_eq!(visitor.pattern_bytes(), Some(b"hello".as_ref()));
-    }
-
-    #[test]
-    fn pattern_bytes_regex_mode() {
-        let visitor = ContentSearchVisitor::regex("world").unwrap();
-        assert_eq!(visitor.pattern_bytes(), None);
-    }
-
-    // --- fast_reject ---
-
-    #[test]
-    fn fast_reject_no_match_returns_true() {
-        let mut scratch = Vec::new();
-        assert!(fast_reject(b"hello world", b"xyz", &mut scratch));
-    }
-
-    #[test]
-    fn fast_reject_match_returns_false() {
-        let mut scratch = Vec::new();
-        assert!(!fast_reject(b"hello world", b"world", &mut scratch));
-    }
-
-    #[test]
-    fn fast_reject_case_insensitive() {
-        // pattern must already be lowercased by the caller
-        let mut scratch = Vec::new();
-        assert!(!fast_reject(b"Hello WORLD", b"world", &mut scratch));
-        assert!(!fast_reject(b"Hello WORLD", b"hello", &mut scratch));
-    }
-
-    #[test]
-    fn fast_reject_empty_pattern_never_rejects() {
-        let mut scratch = Vec::new();
-        assert!(!fast_reject(b"anything", b"", &mut scratch));
-    }
-
-    #[test]
-    fn fast_reject_empty_data_with_nonempty_pattern() {
-        let mut scratch = Vec::new();
-        assert!(fast_reject(b"", b"abc", &mut scratch));
     }
 }

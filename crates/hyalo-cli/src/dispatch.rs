@@ -28,6 +28,8 @@ pub(crate) struct CommandContext<'a> {
     pub user_format: Format,
     pub snapshot_index: &'a mut Option<SnapshotIndex>,
     pub index_path: Option<&'a Path>,
+    /// Default stemming language from `[search] language` in `.hyalo.toml`.
+    pub config_language: Option<&'a str>,
 }
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
@@ -87,6 +89,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 limit,
                 broken_links,
                 title,
+                language,
             } = filters_raw;
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
@@ -155,12 +158,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let has_task_filter = task_filter.is_some();
             let has_section_filter = !section_filters.is_empty();
             let has_title_filter = title.is_some();
+            // BM25 pattern search requires reading file bodies for each candidate.
+            let has_bm25_search = pattern.is_some();
             let needs_body =
                 find_commands::needs_body(&parsed_fields, has_task_filter, has_section_filter)
                     || sort_needs_links
                     || sort_needs_title
                     || broken_links
-                    || has_title_filter;
+                    || has_title_filter
+                    || has_bm25_search;
             let needs_full_vault = parsed_fields.backlinks || sort_needs_backlinks;
             // The link graph is only built when scan_body is true, so
             // backlinks / backlink-sort always require body scanning.
@@ -173,7 +179,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 needs_full_vault,
-                ScanOptions { scan_body },
+                ScanOptions {
+                    scan_body,
+                    bm25_tokenize: false,
+                },
             )? {
                 IndexResolution::Resolved(resolved) => find_commands::find(
                     resolved.as_index(),
@@ -194,6 +203,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     broken_links,
                     title.as_deref(),
                     effective_format,
+                    language.as_deref(),
+                    ctx.config_language,
                 ),
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }
@@ -230,7 +241,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     site_prefix,
                     false,
-                    ScanOptions { scan_body: false },
+                    ScanOptions {
+                        scan_body: false,
+                        bm25_tokenize: false,
+                    },
                 )? {
                     IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
                         let filtered =
@@ -276,7 +290,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     site_prefix,
                     false,
-                    ScanOptions { scan_body: false },
+                    ScanOptions {
+                        scan_body: false,
+                        bm25_tokenize: false,
+                    },
                 )? {
                     IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
                         let filtered =
@@ -406,7 +423,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             effective_format,
             site_prefix,
             true,
-            ScanOptions { scan_body: true },
+            ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+            },
         )? {
             IndexResolution::Resolved(resolved) => summary_commands::summary(
                 dir,
@@ -532,7 +552,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 true,
-                ScanOptions { scan_body: true },
+                ScanOptions {
+                    scan_body: true,
+                    bm25_tokenize: false,
+                },
             )? {
                 IndexResolution::Resolved(resolved) => {
                     backlinks_commands::backlinks(resolved.as_index(), &file, dir, effective_format)
@@ -595,7 +618,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 true,
-                ScanOptions { scan_body: true },
+                ScanOptions {
+                    scan_body: true,
+                    bm25_tokenize: false,
+                },
             )? {
                 IndexResolution::Resolved(resolved) => links_commands::links_fix(
                     resolved.as_index(),

@@ -28,6 +28,8 @@ serde-saphyr = { workspace = true }
 serde_json = { workspace = true }
 strsim = { workspace = true }
 tempfile = { workspace = true }
+bm25 = { workspace = true }
+rust-stemmers = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

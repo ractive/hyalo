@@ -11,6 +11,8 @@ pub enum SortField {
     Title,
     /// Sort by a frontmatter property value (e.g. `date`, or any key via `property:KEY`).
     Property(String),
+    /// Sort by BM25 relevance score (highest first). Set automatically when a PATTERN is provided.
+    Score,
 }
 
 /// Parse a sort field from a string.
@@ -26,6 +28,7 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
         "links_count" => Ok(SortField::LinksCount),
         "title" => Ok(SortField::Title),
         "date" => Ok(SortField::Property("date".to_owned())),
+        "score" => Ok(SortField::Score),
         other => {
             if let Some(key) = other.strip_prefix("property:") {
                 if key.is_empty() {
@@ -35,7 +38,7 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
             } else {
                 bail!(
                     "unknown sort field {other:?}: valid values are 'file', 'modified', \
-                     'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>'"
+                     'backlinks_count', 'links_count', 'title', 'date', 'score', or 'property:<KEY>'"
                 )
             }
         }

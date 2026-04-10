@@ -628,6 +628,7 @@ fn run_inner() -> Result<(), AppError> {
         None
     };
 
+    let config_language_owned = config.search_language.clone();
     let mut ctx = CommandContext {
         dir: &dir,
         site_prefix,
@@ -635,6 +636,7 @@ fn run_inner() -> Result<(), AppError> {
         user_format: format,
         snapshot_index: &mut snapshot_index,
         index_path: cli.index.as_deref(),
+        config_language: config_language_owned.as_deref(),
     };
     let result = dispatch(cli.command, &mut ctx);
 

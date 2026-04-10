@@ -32,7 +32,14 @@ fn run_find(
             (p, rel)
         })
         .collect();
-    let build = ScannedIndex::build(&file_pairs, site_prefix, &ScanOptions { scan_body: true })?;
+    let build = ScannedIndex::build(
+        &file_pairs,
+        site_prefix,
+        &ScanOptions {
+            scan_body: true,
+            bm25_tokenize: false,
+        },
+    )?;
     find(
         &build.index,
         dir,
@@ -52,6 +59,8 @@ fn run_find(
         broken_links,
         title_filter,
         format,
+        None, // language
+        None, // config_language
     )
 }
 
@@ -422,10 +431,14 @@ fn find_pattern_includes_matches_field() {
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     let arr = parsed.as_array().unwrap();
-    // beta has "Rust programming" in body; alpha has no Rust in body
-    // (tags are in frontmatter which is not scanned for content)
+    // BM25 search: beta has "Rust programming" in body; alpha has "rust" only in frontmatter
+    // (frontmatter is not indexed for BM25 body search).
+    // All results should have a relevance score.
+    assert!(!arr.is_empty(), "should have at least one result");
     for entry in arr {
-        assert!(entry["matches"].is_array(), "matches field missing");
+        let score = entry["score"].as_f64();
+        assert!(score.is_some(), "BM25 result should have a score field");
+        assert!(score.unwrap() > 0.0, "score should be positive");
     }
 }
 
@@ -1478,7 +1491,15 @@ fn content_search_works_with_frontmatter_only_index() {
             (p, rel)
         })
         .collect();
-    let build = ScannedIndex::build(&file_pairs, None, &ScanOptions { scan_body: false }).unwrap();
+    let build = ScannedIndex::build(
+        &file_pairs,
+        None,
+        &ScanOptions {
+            scan_body: false,
+            bm25_tokenize: false,
+        },
+    )
+    .unwrap();
 
     let fields = Fields::default();
     let out = unwrap_success(
@@ -1501,14 +1522,20 @@ fn content_search_works_with_frontmatter_only_index() {
             false,
             None,
             Format::Json,
+            None,
+            None,
         )
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     let arr = parsed.as_array().unwrap();
-    assert_eq!(arr.len(), 1, "should find beta.md via content search");
+    assert_eq!(arr.len(), 1, "should find beta.md via BM25 content search");
     assert!(arr[0]["file"].as_str().unwrap().contains("beta"));
-    // Verify content match details are present
-    let matches = arr[0]["matches"].as_array().unwrap();
-    assert!(!matches.is_empty(), "should include match details");
+    // BM25 search produces a relevance score (no line-level matches)
+    let score = arr[0]["score"].as_f64();
+    assert!(
+        score.is_some(),
+        "BM25 result should include a relevance score"
+    );
+    assert!(score.unwrap() > 0.0, "score should be positive");
 }
