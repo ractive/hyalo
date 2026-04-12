@@ -3,11 +3,11 @@ title: BM25 Index Persistence — Crate Survey & DIY Analysis
 type: research
 date: 2026-04-10
 tags:
-  - full-text-search
   - bm25
   - performance
   - serialization
   - index
+  - fts
 status: active
 supersedes: "[[research/fts-lightweight-alternatives]]"
 ---

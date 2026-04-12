@@ -3,9 +3,9 @@ title: Lightweight FTS alternatives to tantivy
 type: research
 date: 2026-04-06
 tags:
-  - full-text-search
   - dependencies
   - performance
+  - fts
 status: completed
 ---
 

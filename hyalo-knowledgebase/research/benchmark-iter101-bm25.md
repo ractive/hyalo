@@ -3,10 +3,10 @@ title: "Benchmark: Iteration 101 — BM25 Ranked Search"
 type: research
 date: 2026-04-10
 tags:
-  - benchmark
   - performance
   - bm25
   - search
+  - benchmarking
 related:
   - "[[iterations/iteration-101-bm25-ranked-search]]"
 ---

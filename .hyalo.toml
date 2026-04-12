@@ -1,13 +1,25 @@
 dir = "hyalo-knowledgebase"
 
+[views.completed-with-todos]
+fields = ["tasks"]
+properties = ["status=completed"]
+task = "todo"
+
 [views.missing-status]
-properties = ['!status']
+properties = ["!status"]
+
+[views.missing-type]
+properties = ["!type"]
 
 [views.open-tasks]
 task = "todo"
+
+[views.orphans]
+fields = ["backlinks"]
 
 [views.planned]
 properties = ["status=planned"]
 
 [views.stale-in-progress]
+fields = ["tasks"]
 properties = ["status=in-progress"]
