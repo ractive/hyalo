@@ -682,6 +682,7 @@ pub(crate) fn scan_one_file(
     default_language: Option<&str>,
 ) -> Result<(IndexEntry, Option<FileLinks>)> {
     let mut fm = FrontmatterCollector::new(scan_body);
+    let mut body_collector = BodyCollector::new(bm25_tokenize);
 
     let (sections, tasks, links, file_links) = if scan_body {
         let mut section_scanner = SectionScanner::new();
@@ -695,6 +696,7 @@ pub(crate) fn scan_one_file(
                 &mut section_scanner,
                 &mut task_extractor,
                 &mut link_visitor,
+                &mut body_collector,
             ],
         )?;
 
@@ -708,7 +710,7 @@ pub(crate) fn scan_one_file(
             .collect();
         (sections, tasks, links_clone, Some(fl))
     } else {
-        scanner::scan_file_multi(full_path, &mut [&mut fm])?;
+        scanner::scan_file_multi(full_path, &mut [&mut fm, &mut body_collector])?;
         (Vec::new(), Vec::new(), Vec::new(), None)
     };
 
@@ -716,48 +718,33 @@ pub(crate) fn scan_one_file(
     let tags = extract_tags(&props);
     let modified = format_modified(full_path)?;
 
-    // Populate BM25 pre-tokenized data only during index creation.
-    // Reading the file a second time here is intentional: the scanner visits
-    // line-by-line and does not retain the raw body text. The extra I/O is
-    // acceptable during index creation (a write-path operation), and the
-    // tokens are stored in the snapshot to avoid repeated reads at query time.
+    // Populate BM25 pre-tokenized data during index creation.
+    // The body text was accumulated by `BodyCollector` during the scan pass above —
+    // no second file read is needed.
     let (bm25_tokens, bm25_language) = if bm25_tokenize {
-        match std::fs::read_to_string(full_path) {
-            Ok(content) => {
-                let body = frontmatter::body_only(&content);
+        let body = body_collector.into_body();
 
-                // Resolve title: frontmatter property > first H1 heading.
-                let title: &str =
-                    props
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_else(|| {
-                            sections
-                                .iter()
-                                .find(|s| s.level == 1)
-                                .and_then(|s| s.heading.as_deref())
-                                .unwrap_or("")
-                        });
+        // Resolve title: frontmatter property > first H1 heading.
+        let title: &str = props
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| {
+                sections
+                    .iter()
+                    .find(|s| s.level == 1)
+                    .and_then(|s| s.heading.as_deref())
+                    .unwrap_or("")
+            });
 
-                // Resolve stemming language: frontmatter > config default > English.
-                let fm_lang = props.get("language").and_then(|v| v.as_str());
-                let lang = resolve_language(fm_lang, None, default_language);
+        // Resolve stemming language: frontmatter > config default > English.
+        let fm_lang = props.get("language").and_then(|v| v.as_str());
+        let lang = resolve_language(fm_lang, None, default_language);
 
-                let combined = format!("{title} {body}");
-                let stemmer = rust_stemmers::Stemmer::create(lang.to_algorithm());
-                let tokens = tokenize(&combined, &stemmer);
+        let combined = format!("{title} {body}");
+        let stemmer = rust_stemmers::Stemmer::create(lang.to_algorithm());
+        let tokens = tokenize(&combined, &stemmer);
 
-                (Some(tokens), Some(lang.canonical_name().to_owned()))
-            }
-            Err(e) => {
-                // Non-fatal: log and leave tokens empty so the entry is still indexed.
-                eprintln!(
-                    "warning: could not read {} for BM25 tokenization: {e}",
-                    full_path.display()
-                );
-                (None, None)
-            }
-        }
+        (Some(tokens), Some(lang.canonical_name().to_owned()))
     } else {
         (None, None)
     };
@@ -786,10 +773,10 @@ pub fn format_modified(path: &Path) -> Result<String> {
         .with_context(|| format!("mtime not available for {}", path.display()))?;
     let secs = mtime.duration_since(SystemTime::UNIX_EPOCH).map_or_else(
         |_| {
-            eprintln!(
-                "warning: mtime for {} is before 1970-01-01; using epoch as fallback",
+            crate::warn::warn(format!(
+                "mtime for {} is before 1970-01-01; using epoch as fallback",
                 path.display()
-            );
+            ));
             0
         },
         |d| d.as_secs(),
@@ -875,6 +862,58 @@ impl SectionBuilder {
             tasks,
             code_blocks: self.code_blocks,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BodyCollector visitor
+// ---------------------------------------------------------------------------
+
+/// Visitor that accumulates raw body lines into a single `String`.
+///
+/// Used during BM25 tokenization to capture body text in the same scan pass
+/// as frontmatter/section/link extraction, avoiding a second file read.
+///
+/// When `active` is `false` (constructed via `BodyCollector::new(false)`),
+/// the visitor is a no-op and produces an empty string.
+struct BodyCollector {
+    active: bool,
+    buf: String,
+}
+
+impl BodyCollector {
+    fn new(active: bool) -> Self {
+        Self {
+            active,
+            buf: String::new(),
+        }
+    }
+
+    /// Consume the collector and return the accumulated body text.
+    fn into_body(self) -> String {
+        self.buf
+    }
+}
+
+impl FileVisitor for BodyCollector {
+    fn needs_body(&self) -> bool {
+        self.active
+    }
+
+    fn on_body_line(&mut self, raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
+        if !self.buf.is_empty() {
+            self.buf.push('\n');
+        }
+        self.buf.push_str(raw);
+        ScanAction::Continue
+    }
+
+    fn on_code_block_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+        if !self.buf.is_empty() {
+            self.buf.push('\n');
+        }
+        self.buf.push_str(raw);
+        ScanAction::Continue
     }
 }
 

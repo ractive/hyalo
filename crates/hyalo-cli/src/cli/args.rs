@@ -289,11 +289,17 @@ pub(crate) enum Commands {
             - --regexp/-e REGEX: regex body text search (case-insensitive by default; unranked; \
             results include per-line 'matches' instead of 'score'). Mutually exclusive with PATTERN.\n\n\
             QUERY SYNTAX (for PATTERN):\n\
-            - Multiple words: all terms contribute to BM25 relevance scoring; documents matching \
-            more terms rank higher (e.g. 'rust programming' ranks docs about Rust programming highest)\n\
+            - Multiple words: implicit AND — all terms required (e.g. 'rust programming' returns \
+            only documents containing both words)\n\
+            - OR keyword: explicit OR — either term matches (e.g. 'rust OR golang' returns docs with \
+            either word, ranked by combined BM25 score). Case-insensitive ('or' also works). When OR \
+            is present, all non-negated terms become OR alternatives.\n\
+            - \"quoted phrase\": exact consecutive match after stemming (e.g. '\"javascript promises\"' \
+            matches only documents with that exact phrase)\n\
             - -term: exclude documents containing this term (e.g. 'rust -javascript' finds Rust docs \
             that don't mention javascript; stemming applies, so '-running' also excludes 'run')\n\
-            - Combine freely: 'systems programming -garbage -collector'\n\n\
+            - AND keyword: accepted but optional (implicit between terms)\n\
+            - Combine freely: 'rust -java', 'rust OR golang', '\"error handling\" -panic'\n\n\
             LANGUAGE: The --language flag (or [search] language in .hyalo.toml, or frontmatter \
             'language' property per file) selects the Snowball stemmer for tokenization. Default: english. \
             Supported: arabic, danish, dutch, english, finnish, french, german, greek, hungarian, \
