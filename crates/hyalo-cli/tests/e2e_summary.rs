@@ -987,7 +987,6 @@ No links.
     );
 
     // Index-based summary
-    let index_path = tmp.path().join(".hyalo-index");
     let idx_out = hyalo_no_hints()
         .args([
             "--dir",
@@ -995,7 +994,6 @@ No links.
             "--site-prefix",
             "docs",
             "--index",
-            index_path.to_str().unwrap(),
             "--format",
             "json",
         ])
@@ -1245,17 +1243,8 @@ fn summary_dead_end_parity_disk_vs_index() {
     );
 
     // Index-based summary
-    let index_path = tmp.path().join(".hyalo-index");
     let idx_out = hyalo_no_hints()
-        .args([
-            "--dir",
-            dir_str,
-            "--index",
-            index_path.to_str().unwrap(),
-            "summary",
-            "--format",
-            "json",
-        ])
+        .args(["--dir", dir_str, "--index", "summary", "--format", "json"])
         .output()
         .unwrap();
     assert!(

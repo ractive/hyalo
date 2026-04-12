@@ -264,15 +264,15 @@ hyalo summary --format text
 # Step 2: Create index if >500 files (one scan, reused by all subsequent queries)
 hyalo create-index
 
-# Step 3: Use --index on ALL subsequent commands
-hyalo find --property status=in-progress --index .hyalo-index
-hyalo summary --index .hyalo-index
-hyalo tags summary --index .hyalo-index
-hyalo backlinks some-note.md --index .hyalo-index
+# Step 3: Use --index on ALL subsequent commands (defaults to .hyalo-index in vault dir)
+hyalo find --property status=in-progress --index
+hyalo summary --index
+hyalo tags summary --index
+hyalo backlinks some-note.md --index
 
 # Mutations also work with --index — they patch the index after each write
-hyalo set note.md --property status=completed --index .hyalo-index
-hyalo task toggle note.md --line 5 --index .hyalo-index
+hyalo set note.md --property status=completed --index
+hyalo task toggle note.md --line 5 --index
 
 # Drop the index when done
 hyalo drop-index

@@ -605,9 +605,10 @@ The snapshot index is a MessagePack file that captures a point-in-time snapshot 
 hyalo create-index
 
 # Run read-only queries against the index (no disk scan)
-hyalo find --property status=in-progress --index .hyalo-index
-hyalo summary --index .hyalo-index
-hyalo tags summary --index .hyalo-index
+# --index alone defaults to .hyalo-index in the vault directory
+hyalo find --property status=in-progress --index
+hyalo summary --index
+hyalo tags summary --index
 
 # Drop the index when done
 hyalo drop-index

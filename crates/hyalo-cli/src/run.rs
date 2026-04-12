@@ -587,6 +587,14 @@ fn run_inner() -> Result<(), AppError> {
     // Read-only commands use it to skip disk scans. Mutation commands use it to
     // keep the index up-to-date after each file write (they still read/write
     // individual files on disk, but patch the index entry in-place).
+    //
+    // Resolve relative --index paths against the vault directory so that
+    // `--index .hyalo-index` (the default) works regardless of CWD.
+    if let Some(ref p) = cli.index
+        && p.is_relative()
+    {
+        cli.index = Some(dir.join(p));
+    }
     let uses_index = !matches!(
         &cli.command,
         Commands::Init { .. }

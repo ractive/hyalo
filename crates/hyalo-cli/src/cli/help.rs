@@ -29,7 +29,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run
   Fix broken links (preview):   hyalo links fix
   Build a snapshot index:       hyalo create-index
-  Query using the index:        hyalo find --property status=draft --index .hyalo-index
+  Query using the index:        hyalo find --property status=draft --index
   Delete the snapshot index:    hyalo drop-index
   Save a view:                  hyalo views set todo --task todo
   List saved views:             hyalo views list
@@ -111,7 +111,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     --hints                 Force hints on (already the default; suppressed by --jq)
     --no-hints              Disable drill-down hints (enabled by default, override via .hyalo.toml)
     --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
-    --index <PATH>          Use pre-built snapshot index (see create-index)
+    --index[=PATH]          Use pre-built snapshot index (default: .hyalo-index in vault dir)
     -q/--quiet              Suppress all warnings to stderr
 
 COOKBOOK:
@@ -243,8 +243,8 @@ COOKBOOK:
   # Build a snapshot index for faster repeated queries
   hyalo create-index
 
-  # Use the index for a find query
-  hyalo find --property status=draft --index .hyalo-index
+  # Use the index for a find query (defaults to .hyalo-index in vault dir)
+  hyalo find --property status=draft --index
 
   # Clean up the index after use
   hyalo drop-index
