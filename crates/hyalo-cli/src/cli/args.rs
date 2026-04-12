@@ -173,6 +173,10 @@ pub(crate) struct Cli {
 #[derive(Debug, Clone, Default, clap::Args, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct FindFilters {
+    /// BM25 search pattern (stored in views, not a CLI arg on find — find uses a positional arg instead)
+    #[arg(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
     /// Regex body text search (case-insensitive by default; use (?-i) to override). Mutually exclusive with PATTERN
     #[arg(long, short = 'e', value_name = "REGEX")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -248,6 +252,9 @@ impl FindFilters {
     /// - Option fields: CLI overrides if Some
     /// - Bool fields: OR (CLI can turn on, not off)
     pub(crate) fn merge_from(&mut self, overlay: &Self) {
+        if overlay.pattern.is_some() {
+            self.pattern.clone_from(&overlay.pattern);
+        }
         if overlay.regexp.is_some() {
             self.regexp.clone_from(&overlay.regexp);
         }
@@ -763,9 +770,13 @@ pub(crate) enum ViewsAction {
         Overwrites if the view already exists.\n\n\
         SIDE EFFECTS: Modifies .hyalo.toml.")]
     Set {
-        /// View name
+        /// View name (first positional arg)
         #[arg(value_name = "NAME")]
         name: String,
+        /// Optional BM25 search pattern to save with the view (second positional arg).
+        /// Example: `hyalo views set my-view "search terms" --tag foo`
+        #[arg(value_name = "PATTERN")]
+        pattern: Option<String>,
         #[command(flatten)]
         filters: FindFilters,
     },

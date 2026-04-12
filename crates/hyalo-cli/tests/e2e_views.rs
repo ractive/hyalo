@@ -468,3 +468,92 @@ fn hint_does_not_suggest_view_when_using_view() {
         "should not suggest view when already using --view, got: {hints:?}"
     );
 }
+
+#[test]
+fn views_set_with_bm25_pattern_and_find() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // File that contains the search term and matching tag
+    write_md(
+        tmp.path(),
+        "relevant.md",
+        "---\nstatus: active\ntags:\n  - sometag\n---\nThis document discusses fermentation in detail.",
+    );
+    // File with matching tag but no search term in body
+    write_md(
+        tmp.path(),
+        "other.md",
+        "---\nstatus: active\ntags:\n  - sometag\n---\nThis document is about something else entirely.",
+    );
+    // File with the search term but wrong tag
+    write_md(
+        tmp.path(),
+        "untagged.md",
+        "---\nstatus: active\ntags:\n  - othertag\n---\nThis document discusses fermentation as well.",
+    );
+
+    // Set a view with a BM25 pattern and tag filter
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args([
+            "views",
+            "set",
+            "test-pattern",
+            "fermentation",
+            "--tag",
+            "sometag",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "views set with pattern failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the view appears in views list with the pattern stored in filters
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "views list failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    let view = &json["results"][0];
+    assert_eq!(view["name"], "test-pattern");
+    assert_eq!(
+        view["filters"]["pattern"], "fermentation",
+        "pattern should be stored in view filters"
+    );
+    assert!(
+        view["filters"]["tag"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("sometag".to_owned())),
+        "tag filter should be stored in view"
+    );
+
+    // Use the view with find — should return only the file with the term AND the tag
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "test-pattern"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "find --view test-pattern failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "expected exactly one result: {results:?}");
+    assert!(
+        results[0]["file"].as_str().unwrap().contains("relevant"),
+        "expected relevant.md in results: {results:?}"
+    );
+}

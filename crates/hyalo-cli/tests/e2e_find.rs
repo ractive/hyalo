@@ -3728,3 +3728,34 @@ fn find_dead_end_composes_with_glob() {
     // Only notes/c.md matches the glob
     assert_eq!(files, vec!["notes/c.md"]);
 }
+
+#[test]
+fn find_orphan_and_dead_end_warns_mutually_exclusive() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nContent.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--orphan",
+            "--dead-end",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mutually exclusive"),
+        "expected mutually exclusive warning in stderr, got: {stderr}"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert!(
+        results.is_empty(),
+        "orphan+dead-end should return no results"
+    );
+}

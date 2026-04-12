@@ -510,6 +510,11 @@ impl Bm25InvertedIndex {
         self.ranked_matches(query, stemmer)
     }
 
+    /// Returns the total number of documents in the index.
+    pub fn doc_count(&self) -> usize {
+        self.doc_paths.len()
+    }
+
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
@@ -694,6 +699,25 @@ impl Bm25InvertedIndex {
         }
         false
     }
+}
+
+/// Returns `true` if the BM25 results suggest the query has low discriminative power
+/// (e.g. all terms are very common stop-words). Heuristic: more than 80% of documents
+/// matched and the top score is below 1.0.
+pub fn is_low_discriminative(matches: &[Bm25Match], total_docs: usize) -> bool {
+    if total_docs == 0 || matches.is_empty() {
+        return false;
+    }
+    debug_assert!(
+        matches.len() <= total_docs,
+        "matches ({}) exceeds total_docs ({})",
+        matches.len(),
+        total_docs
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let match_ratio = matches.len() as f64 / total_docs as f64;
+    let max_score = matches.iter().map(|m| m.score).fold(0.0_f64, f64::max);
+    match_ratio > 0.8 && max_score < 1.0
 }
 
 // ---------------------------------------------------------------------------
@@ -1423,5 +1447,55 @@ mod tests {
             Bm25InvertedIndex::build_from_entries(&entries).is_none(),
             "no tokens → should return None"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // is_low_discriminative
+    // ------------------------------------------------------------------
+
+    fn make_match(rel_path: &str, score: f64) -> Bm25Match {
+        Bm25Match {
+            rel_path: rel_path.to_owned(),
+            score,
+        }
+    }
+
+    #[test]
+    fn test_low_discriminative_empty_matches_returns_false() {
+        assert!(!is_low_discriminative(&[], 10));
+    }
+
+    #[test]
+    fn test_low_discriminative_zero_total_docs_returns_false() {
+        let matches = vec![make_match("a.md", 0.5)];
+        assert!(!is_low_discriminative(&matches, 0));
+    }
+
+    #[test]
+    fn test_low_discriminative_high_ratio_low_scores_returns_true() {
+        // 9 matches out of 10 docs = 90% ratio; all scores below 1.0
+        let matches: Vec<Bm25Match> = (0..9)
+            .map(|i| make_match(&format!("{i}.md"), 0.5))
+            .collect();
+        assert!(is_low_discriminative(&matches, 10));
+    }
+
+    #[test]
+    fn test_low_discriminative_low_ratio_returns_false() {
+        // 3 matches out of 10 docs = 30% ratio → not low discriminative
+        let matches: Vec<Bm25Match> = (0..3)
+            .map(|i| make_match(&format!("{i}.md"), 0.5))
+            .collect();
+        assert!(!is_low_discriminative(&matches, 10));
+    }
+
+    #[test]
+    fn test_low_discriminative_high_ratio_high_scores_returns_false() {
+        // 9 matches out of 10 docs = 90% ratio, but top score >= 1.0 → not low discriminative
+        let mut matches: Vec<Bm25Match> = (0..8)
+            .map(|i| make_match(&format!("{i}.md"), 0.5))
+            .collect();
+        matches.push(make_match("high.md", 2.5));
+        assert!(!is_low_discriminative(&matches, 10));
     }
 }

@@ -303,6 +303,21 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
+    // If the CLI didn't supply a pattern but the view did, propagate it.
+    // Skip when --regexp is active — BM25 pattern and regex are mutually exclusive
+    // (clap enforces this for CLI args, but a view's pattern bypasses clap).
+    if let Commands::Find {
+        ref mut pattern,
+        ref filters,
+        ..
+    } = cli.command
+        && pattern.is_none()
+        && filters.regexp.is_none()
+        && let Some(ref view_pattern) = filters.pattern
+    {
+        *pattern = Some(view_pattern.clone());
+    }
+
     // --jq operates on JSON, so it conflicts with an explicit --format text.
     let jq_filter = cli.jq.as_deref();
 

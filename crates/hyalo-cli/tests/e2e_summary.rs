@@ -1156,3 +1156,69 @@ fn summary_dead_end_parity_disk_vs_index() {
     );
     assert_eq!(disk_dead_ends, 1);
 }
+
+#[test]
+fn summary_status_sorted_by_count_descending() {
+    let tmp = TempDir::new().unwrap();
+
+    // 3 files with status=done, 1 with status=planned
+    write_md(tmp.path(), "done1.md", "---\nstatus: done\n---\nBody one.");
+    write_md(tmp.path(), "done2.md", "---\nstatus: done\n---\nBody two.");
+    write_md(
+        tmp.path(),
+        "done3.md",
+        "---\nstatus: done\n---\nBody three.",
+    );
+    write_md(
+        tmp.path(),
+        "planned1.md",
+        "---\nstatus: planned\n---\nBody four.",
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "summary failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let status = json["results"]["status"]
+        .as_array()
+        .expect("field 'status' should be an array");
+
+    // There must be at least two entries
+    assert!(
+        status.len() >= 2,
+        "expected at least 2 status groups, got: {status:?}"
+    );
+
+    // The first entry should be "done" (count=3) before "planned" (count=1)
+    assert_eq!(
+        status[0]["value"], "done",
+        "first status entry should be 'done' (highest count), got: {status:?}"
+    );
+    assert_eq!(
+        status[0]["count"].as_u64().unwrap(),
+        3,
+        "done count should be 3"
+    );
+    assert_eq!(
+        status[1]["value"], "planned",
+        "second status entry should be 'planned', got: {status:?}"
+    );
+    assert_eq!(
+        status[1]["count"].as_u64().unwrap(),
+        1,
+        "planned count should be 1"
+    );
+}

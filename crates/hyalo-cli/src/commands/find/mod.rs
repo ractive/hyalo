@@ -12,8 +12,8 @@ use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::{
-    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, parse_language,
-    resolve_language, tokenize_document,
+    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, is_low_discriminative,
+    parse_language, resolve_language, tokenize_document,
 };
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
@@ -281,6 +281,22 @@ pub fn find(
                     .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
                     .map(|m| (m.rel_path, m.score))
                     .collect();
+                // Check after filtering to candidates — use candidate count as
+                // denominator so the heuristic matches the slow path and doesn't
+                // false-positive when metadata filters narrow the result set.
+                let filtered: Vec<_> = map
+                    .iter()
+                    .map(|(p, &s)| hyalo_core::bm25::Bm25Match {
+                        rel_path: p.clone(),
+                        score: s,
+                    })
+                    .collect();
+                if is_low_discriminative(&filtered, candidate_paths.len()) {
+                    crate::warn::warn(
+                        "BM25 search: query matched most documents with low scores — \
+                         try more specific search terms",
+                    );
+                }
                 break 'bm25 Some(map);
             }
 
@@ -407,6 +423,15 @@ pub fn find(
                 let corpus = Bm25InvertedIndex::build_from_tokens(all_pre_tok);
                 corpus.score(pat, &stemmer)
             };
+
+            // Warn if the query has low discriminative power (matches most docs with low scores).
+            let total_corpus_docs = candidates.len();
+            if is_low_discriminative(&scored, total_corpus_docs) {
+                crate::warn::warn(
+                    "BM25 search: query matched most documents with low scores — \
+                     try more specific search terms",
+                );
+            }
 
             // Build a map from rel_path → score (only entries with score > 0).
             let map: HashMap<String, f64> =
