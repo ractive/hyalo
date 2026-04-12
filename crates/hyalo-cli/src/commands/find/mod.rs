@@ -12,8 +12,8 @@ use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::{
-    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, parse_language,
-    resolve_language, tokenize_document,
+    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, is_low_discriminative,
+    parse_language, resolve_language, tokenize_document,
 };
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
@@ -276,6 +276,12 @@ pub fn find(
             // filter is active. Score all docs, then intersect with metadata-passing candidates.
             if !has_section_filter && let Some(bm25_idx) = index.bm25_index() {
                 let all_scored = bm25_idx.score(pat, &stemmer);
+                if is_low_discriminative(&all_scored, bm25_idx.doc_count()) {
+                    crate::warn::warn(
+                        "BM25 search: query matched most documents with low scores — \
+                         try more specific search terms",
+                    );
+                }
                 let map: HashMap<String, f64> = all_scored
                     .into_iter()
                     .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
@@ -407,6 +413,15 @@ pub fn find(
                 let corpus = Bm25InvertedIndex::build_from_tokens(all_pre_tok);
                 corpus.score(pat, &stemmer)
             };
+
+            // Warn if the query has low discriminative power (matches most docs with low scores).
+            let total_corpus_docs = candidates.len();
+            if is_low_discriminative(&scored, total_corpus_docs) {
+                crate::warn::warn(
+                    "BM25 search: query matched most documents with low scores — \
+                     try more specific search terms",
+                );
+            }
 
             // Build a map from rel_path → score (only entries with score > 0).
             let map: HashMap<String, f64> =

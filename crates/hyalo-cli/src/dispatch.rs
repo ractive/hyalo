@@ -77,6 +77,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 filters_raw.glob.clear(); // file overrides view's glob
             }
             let FindFilters {
+                pattern: _, // pattern is handled in run.rs before dispatch
                 regexp,
                 properties,
                 tag,
@@ -94,6 +95,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 title,
                 language,
             } = filters_raw;
+            if orphan && dead_end {
+                crate::warn::warn(
+                    "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
+                );
+            }
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
                 .iter()
@@ -677,7 +683,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let action = action.unwrap_or(ViewsAction::List);
             match action {
                 ViewsAction::List => crate::commands::views::list_views(),
-                ViewsAction::Set { name, filters } => {
+                ViewsAction::Set {
+                    name,
+                    pattern,
+                    mut filters,
+                } => {
+                    filters.pattern = pattern;
                     crate::commands::views::set_view(&name, &filters)
                 }
                 ViewsAction::Remove { name } => crate::commands::views::remove_view(&name),

@@ -510,6 +510,11 @@ impl Bm25InvertedIndex {
         self.ranked_matches(query, stemmer)
     }
 
+    /// Returns the total number of documents in the index.
+    pub fn doc_count(&self) -> usize {
+        self.doc_paths.len()
+    }
+
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
@@ -694,6 +699,19 @@ impl Bm25InvertedIndex {
         }
         false
     }
+}
+
+/// Returns `true` if the BM25 results suggest the query has low discriminative power
+/// (e.g. all terms are very common stop-words). Heuristic: more than 80% of documents
+/// matched and the top score is below 1.0.
+pub fn is_low_discriminative(matches: &[Bm25Match], total_docs: usize) -> bool {
+    if total_docs == 0 || matches.is_empty() {
+        return false;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let match_ratio = matches.len() as f64 / total_docs as f64;
+    let max_score = matches.iter().map(|m| m.score).fold(0.0_f64, f64::max);
+    match_ratio > 0.8 && max_score < 1.0
 }
 
 // ---------------------------------------------------------------------------

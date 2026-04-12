@@ -252,10 +252,11 @@ pub fn summary(
     };
 
     // Build status groups (counts only)
-    let status: Vec<StatusGroup> = status_groups
+    let mut status: Vec<StatusGroup> = status_groups
         .into_iter()
         .map(|(value, count)| StatusGroup { value, count })
         .collect();
+    status.sort_by(|a, b| b.count.cmp(&a.count).then(a.value.cmp(&b.value)));
 
     let tasks = TaskCount {
         total: total_tasks,
