@@ -8,7 +8,7 @@ tags:
   - bm25
   - performance
   - serialization
-status: in-progress
+status: completed
 branch: iter-101/bm25-index-integration
 related:
   - "[[iterations/iteration-101-bm25-ranked-search]]"

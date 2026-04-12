@@ -23,12 +23,32 @@ in directories of markdown files. Its killer features are combined filtering (e.
 replicate with Grep/Glob, and bulk mutations (`hyalo set --where-property`) that replace
 multiple Read + Edit calls.
 
-Filters combine freely — content regex + property conditions + tag + section + task status
+Filters combine freely — content search + property conditions + tag + section + task status
 in a single call, something impossible with Grep/Glob alone:
 
 ```bash
-hyalo find -e "pattern" --property status!=completed --tag iteration --section "Tasks" --task todo
+hyalo find "error handling" --property status!=completed --tag iteration --section "Tasks" --task todo
 ```
+
+## BM25 Full-Text Search
+
+The positional argument to `find` triggers BM25 ranked full-text search with automatic
+stemming ("running" matches "run", "runner", etc.). Results are sorted by relevance score.
+
+```bash
+hyalo find "rust"                        # single term, stemmed
+hyalo find "rust programming"            # AND: both terms required (implicit)
+hyalo find "rust OR golang"              # OR: either term matches
+hyalo find "rust -java"                  # NOT: exclude documents with "java"
+hyalo find '"error handling"'            # Phrase: exact consecutive match (after stemming)
+hyalo find '"error handling" -panic'     # Phrase + negation combined
+hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obsolete
+```
+
+For literal pattern matching (not stemmed), use regex: `hyalo find -e "exact_string"`.
+
+Language support: `--language french` selects the French stemmer. Per-file override via
+frontmatter `language: french`. Config default via `[search] language = "french"` in `.hyalo.toml`.
 
 Property filters support: `K=V` (eq), `K!=V` (neq), `K>=V`/`K<=V`/`K>V`/`K<V` (comparison),
 `K` (existence), `!K` (absence — files missing the property), `K~=pattern` or `K~=/pattern/flags`
@@ -156,7 +176,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 ## Available commands
 
-- **find** — search/filter by text, regex, property, tag, task status
+- **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
 - **read** — extract body content, a section, or line range
 - **summary** — directory overview: file counts, tags, tasks, recent files (use `--depth N` to limit directory listing)
 - **properties summary** — list property names and types
