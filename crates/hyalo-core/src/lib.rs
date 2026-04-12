@@ -1,3 +1,4 @@
+pub mod bm25;
 pub mod content_search;
 pub mod discovery;
 pub mod filter;

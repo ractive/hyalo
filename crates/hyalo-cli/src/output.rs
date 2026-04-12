@@ -665,6 +665,11 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
         );
     }
 
+    // Score: "  score: <value>" — BM25 relevance score when pattern search was used
+    if map.contains_key("score") {
+        parts.push(r#""  score: \(.score)""#.to_owned());
+    }
+
     // Links: header then each as "    \"target\" → \"path\"" or "    \"target\" (unresolved)"
     if map.contains_key("links") {
         parts.push(

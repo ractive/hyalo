@@ -197,6 +197,18 @@ impl Document {
     }
 }
 
+/// Return only the body portion of a markdown document (everything after the YAML frontmatter).
+///
+/// If the content has no frontmatter block (does not start with `---`), the entire content
+/// is returned unchanged. If frontmatter is present but malformed (no closing `---`), the
+/// full content string is returned as a fallback so that the caller can still index the file.
+pub fn body_only(content: &str) -> &str {
+    match extract_frontmatter(content) {
+        Ok((_, body)) => body,
+        Err(_) => content, // malformed frontmatter: fall back to full content
+    }
+}
+
 /// Read only the YAML frontmatter from a file, stopping as soon as the closing `---` is found.
 /// The body is never read into memory. Use this for read-only property operations.
 pub fn read_frontmatter(path: &Path) -> Result<IndexMap<String, Value>> {

@@ -3,6 +3,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// Search-specific configuration from `[search]` in `.hyalo.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchConfig {
+    language: Option<String>,
+}
+
 /// Raw deserialized representation of `.hyalo.toml`.
 ///
 /// All fields are optional so that a partial config file is valid.
@@ -23,6 +30,8 @@ struct ConfigFile {
     /// directly from the TOML file; they are not propagated to `ResolvedDefaults`.
     #[allow(dead_code)]
     views: Option<HashMap<String, toml::Value>>,
+    /// Search configuration (BM25 stemming language, etc.)
+    search: Option<SearchConfig>,
 }
 
 /// Resolved configuration with all defaults applied.
@@ -33,6 +42,8 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) hints: bool,
     /// Explicit site-prefix override from `.hyalo.toml`, if any.
     pub(crate) site_prefix: Option<String>,
+    /// Default stemming language for BM25 search from `[search] language` in `.hyalo.toml`.
+    pub(crate) search_language: Option<String>,
 }
 
 impl ResolvedDefaults {
@@ -42,6 +53,7 @@ impl ResolvedDefaults {
             format: "json".to_owned(),
             hints: true,
             site_prefix: None,
+            search_language: None,
         }
     }
 }
@@ -96,6 +108,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         format: cfg.format.unwrap_or(defaults.format),
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
+        search_language: cfg.search.and_then(|s| s.language),
     }
 }
 
@@ -197,5 +210,36 @@ site_prefix = "docs"
         assert_eq!(resolved.format, "xml");
         assert_eq!(resolved.dir, PathBuf::from("."));
         assert!(resolved.hints);
+    }
+
+    #[test]
+    fn search_language_config() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[search]\nlanguage = \"french\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.search_language, Some("french".to_owned()));
+    }
+
+    #[test]
+    fn search_language_absent() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.search_language, None);
+    }
+
+    #[test]
+    fn search_language_empty_section() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "[search]\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.search_language, None);
     }
 }

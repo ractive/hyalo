@@ -374,17 +374,21 @@ fn find_pattern_no_match_returns_empty_array() {
 }
 
 #[test]
-fn find_pattern_includes_matches_field() {
+fn find_pattern_includes_score_field() {
     let tmp = setup_vault();
     let (status, json, stderr) = find_json(&tmp, &["Rust programming"]);
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
+    // BM25 search produces a relevance score (not line-level matches)
+    let score = arr[0]["score"].as_f64();
     assert!(
-        arr[0]["matches"].is_array(),
-        "matches field should be present when pattern given"
+        score.is_some(),
+        "BM25 result should have a score field, got: {}",
+        arr[0]
     );
+    assert!(score.unwrap() > 0.0, "score should be positive");
 }
 
 #[test]
@@ -1042,7 +1046,7 @@ fn find_text_format_file_object_structure() {
     );
 }
 
-// Text format: content search shows matches with line numbers
+// Text format: BM25 search shows score (not line-level matches)
 #[test]
 fn find_text_format_content_matches() {
     let tmp = setup_vault();
@@ -1055,12 +1059,9 @@ fn find_text_format_content_matches() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
+    // BM25 search: beta.md should appear with a score
     assert!(stdout.contains("beta.md"), "file header: {stdout}");
-    assert!(stdout.contains("matches:"), "matches header: {stdout}");
-    assert!(
-        stdout.contains("Rust programming is great"),
-        "match text: {stdout}"
-    );
+    assert!(stdout.contains("score:"), "score field: {stdout}");
 }
 
 // Text format: multiple FileObjects separated by blank lines
@@ -1590,18 +1591,16 @@ fn section_filter_content_search_scoped() {
     let (status, json, _) = find_json(&tmp, &["--section", "Notes", "TODO", "--file", "doc.md"]);
     assert!(status.success());
     let arr = unwrap_results(&json);
+    // doc.md has "TODO" in the Notes section — BM25 should find it with section-scoped body
     assert_eq!(arr.len(), 1);
-    let matches = arr[0]["matches"]
-        .as_array()
-        .expect("field 'matches' should be an array");
-    // The TODO in Notes section should be found
-    assert_eq!(matches.len(), 1);
-    assert_eq!(
-        matches[0]["section"]
-            .as_str()
-            .expect("field 'section' should be a string"),
-        "## Notes"
+    // BM25 produces a relevance score (not line-level matches)
+    let score = arr[0]["score"].as_f64();
+    assert!(
+        score.is_some(),
+        "BM25 result should have a score field, got: {}",
+        arr[0]
     );
+    assert!(score.unwrap() > 0.0, "score should be positive");
 }
 
 #[test]
@@ -2421,18 +2420,19 @@ Some content about versions.
 "),
     );
 
+    // BM25 search: "content about" should match the file (phrase is in the body)
     let (status, json, stderr) = find_json(&tmp, &["content about"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
-    let matches = arr[0]["matches"].as_array().unwrap();
-    assert_eq!(matches.len(), 1);
-    // Section should preserve the backtick content
-    let section = matches[0]["section"].as_str().unwrap();
+    // BM25 produces a relevance score (not line-level matches with section info)
+    let score = arr[0]["score"].as_f64();
     assert!(
-        section.contains("versions"),
-        "heading code span should be preserved, got: {section}"
+        score.is_some(),
+        "BM25 result should have a score field, got: {}",
+        arr[0]
     );
+    assert!(score.unwrap() > 0.0, "score should be positive");
 }
 
 // ---------------------------------------------------------------------------

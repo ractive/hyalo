@@ -13,6 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::bm25::{Bm25InvertedIndex, resolve_language, tokenize};
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
@@ -42,6 +43,16 @@ pub struct IndexEntry {
     pub tasks: Vec<FindTaskInfo>,
     /// Outbound links with 1-based line numbers.
     pub links: Vec<(usize, Link)>,
+    /// Pre-tokenized BM25 tokens (body + title, stemmed). Populated by `create-index`
+    /// when `scan_body` is `true`. `None` when the index was created before BM25
+    /// support or with `scan_body = false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_tokens: Option<Vec<String>>,
+    /// Stemming language used when producing [`bm25_tokens`]. Matches the
+    /// `language` frontmatter property of this document (or `"english"` as the
+    /// default). `None` when [`bm25_tokens`] is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_language: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +70,15 @@ pub trait VaultIndex {
 
     /// The pre-built link graph for backlink lookups.
     fn link_graph(&self) -> &LinkGraph;
+
+    /// Return the persisted BM25 inverted index, if available.
+    ///
+    /// Returns `Some` only for [`SnapshotIndex`] instances that were saved with
+    /// `bm25_tokenize = true`. Returns `None` for live [`ScannedIndex`] instances
+    /// and for snapshots built without BM25 tokenization.
+    fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -73,9 +93,18 @@ pub trait VaultIndex {
 /// frontmatter data (e.g. `properties summary`, `tags summary`,
 /// `find --property status=planned` without body fields).
 #[derive(Debug, Clone, Copy)]
-pub struct ScanOptions {
+pub struct ScanOptions<'a> {
     /// When false, only frontmatter is read.
     pub scan_body: bool,
+    /// When true, pre-tokenize file content for BM25 search and store tokens
+    /// in each [`IndexEntry`]. This requires an extra file read per document
+    /// and is intended only for `create-index` (the write path), not for live
+    /// scanning at query time.
+    pub bm25_tokenize: bool,
+    /// Default stemming language from `[search] language` in `.hyalo.toml`.
+    /// Used as the fallback language when a document has no `language` frontmatter
+    /// property. `None` falls back to English.
+    pub default_language: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,15 +152,24 @@ impl ScannedIndex {
     pub fn build(
         files: &[(PathBuf, String)],
         site_prefix: Option<&str>,
-        options: &ScanOptions,
+        options: &ScanOptions<'_>,
     ) -> Result<ScannedIndexBuild> {
         let mut entries = Vec::with_capacity(files.len());
         let mut file_links_vec: Vec<FileLinks> = Vec::with_capacity(files.len());
         let mut warnings: Vec<IndexWarning> = Vec::new();
 
+        let default_language = options.default_language;
         let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> = files
             .par_iter()
-            .map(|(full_path, rel_path)| scan_one_file(full_path, rel_path, options.scan_body))
+            .map(|(full_path, rel_path)| {
+                scan_one_file(
+                    full_path,
+                    rel_path,
+                    options.scan_body,
+                    options.bm25_tokenize,
+                    default_language,
+                )
+            })
             .collect();
 
         for (i, result) in results.into_iter().enumerate() {
@@ -212,12 +250,14 @@ struct SnapshotHeader {
     pid: u32,
 }
 
-/// Internal serialization envelope — header + entries + graph.
+/// Internal serialization envelope — header + entries + graph + optional BM25 index.
 #[derive(Serialize, Deserialize)]
 struct SnapshotData {
     header: SnapshotHeader,
     entries: Vec<IndexEntry>,
     graph: LinkGraph,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bm25_index: Option<Bm25InvertedIndex>,
 }
 
 /// Borrowed variant used only for serialization — avoids cloning all entries.
@@ -226,6 +266,8 @@ struct SnapshotDataRef<'a> {
     header: SnapshotHeader,
     entries: &'a [IndexEntry],
     graph: &'a LinkGraph,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bm25_index: Option<&'a Bm25InvertedIndex>,
 }
 
 /// A vault index loaded from a MessagePack snapshot file.
@@ -238,6 +280,8 @@ pub struct SnapshotIndex {
     path_index: HashMap<String, usize>,
     graph: LinkGraph,
     header: SnapshotHeader,
+    /// Persisted BM25 inverted index (if the snapshot was built with `bm25_tokenize = true`).
+    bm25_index: Option<Bm25InvertedIndex>,
 }
 
 impl SnapshotIndex {
@@ -286,7 +330,7 @@ impl SnapshotIndex {
             return Ok(None);
         };
         let full_path = dir.join(rel_path);
-        let (entry, file_links) = scan_one_file(&full_path, rel_path, true)?;
+        let (entry, file_links) = scan_one_file(&full_path, rel_path, true, false, None)?;
         self.entries[idx] = entry;
         Ok(file_links)
     }
@@ -326,7 +370,7 @@ impl SnapshotIndex {
 
         // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
-        let (entry, _file_links) = scan_one_file(&full_path, new_rel, true)?;
+        let (entry, _file_links) = scan_one_file(&full_path, new_rel, true, false, None)?;
 
         // Remove without triggering a path-index rebuild.
         self.entries.remove(old_idx);
@@ -362,6 +406,7 @@ impl SnapshotIndex {
             path,
             &self.header.vault_dir,
             self.header.site_prefix.as_deref(),
+            self.bm25_index.as_ref(),
         )
     }
 
@@ -392,6 +437,7 @@ impl SnapshotIndex {
                     path_index,
                     graph: data.graph,
                     header: data.header,
+                    bm25_index: data.bm25_index,
                 })
             }
             Err(e) => {
@@ -440,13 +486,22 @@ impl SnapshotIndex {
     ///
     /// `vault_dir` and `site_prefix` are stored in the header for informational
     /// purposes (shown by `create-index` on load; not validated on subsequent loads).
+    ///
+    /// `bm25_index` is an optional pre-built BM25 inverted index to persist alongside
+    /// the entries. When `Some`, subsequent loads will expose it via [`VaultIndex::bm25_index`].
     pub fn save(
         index: &dyn VaultIndex,
         path: &Path,
         vault_dir: &str,
         site_prefix: Option<&str>,
+        bm25_index: Option<&Bm25InvertedIndex>,
     ) -> Result<()> {
-        write_snapshot(index, path, vault_dir, site_prefix)
+        write_snapshot(index, path, vault_dir, site_prefix, bm25_index)
+    }
+
+    /// Return the persisted BM25 inverted index, if present.
+    pub fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
+        self.bm25_index.as_ref()
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -468,6 +523,7 @@ fn write_snapshot(
     path: &Path,
     vault_dir: &str,
     site_prefix: Option<&str>,
+    bm25_index: Option<&Bm25InvertedIndex>,
 ) -> Result<()> {
     let header = SnapshotHeader {
         vault_dir: vault_dir.to_owned(),
@@ -478,10 +534,31 @@ fn write_snapshot(
             .unwrap_or(0),
         pid: std::process::id(),
     };
+    // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
+    // avoid duplicating the same data (the inverted index already encodes it).
+    // This roughly halves the snapshot size on large vaults.
+    let stripped_entries: Vec<IndexEntry>;
+    let entries: &[IndexEntry] = if bm25_index.is_some() {
+        stripped_entries = index
+            .entries()
+            .iter()
+            .map(|e| {
+                let mut e = e.clone();
+                e.bm25_tokens = None;
+                e.bm25_language = None;
+                e
+            })
+            .collect();
+        &stripped_entries
+    } else {
+        index.entries()
+    };
+
     let data = SnapshotDataRef {
         header,
-        entries: index.entries(),
+        entries,
         graph: index.link_graph(),
+        bm25_index,
     };
     let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
     // Use a kernel-assigned temp-file name in the same directory as the
@@ -514,6 +591,10 @@ impl VaultIndex for SnapshotIndex {
 
     fn link_graph(&self) -> &LinkGraph {
         &self.graph
+    }
+
+    fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
+        self.bm25_index.as_ref()
     }
 }
 
@@ -597,6 +678,8 @@ pub(crate) fn scan_one_file(
     full_path: &Path,
     rel_path: &str,
     scan_body: bool,
+    bm25_tokenize: bool,
+    default_language: Option<&str>,
 ) -> Result<(IndexEntry, Option<FileLinks>)> {
     let mut fm = FrontmatterCollector::new(scan_body);
 
@@ -633,6 +716,52 @@ pub(crate) fn scan_one_file(
     let tags = extract_tags(&props);
     let modified = format_modified(full_path)?;
 
+    // Populate BM25 pre-tokenized data only during index creation.
+    // Reading the file a second time here is intentional: the scanner visits
+    // line-by-line and does not retain the raw body text. The extra I/O is
+    // acceptable during index creation (a write-path operation), and the
+    // tokens are stored in the snapshot to avoid repeated reads at query time.
+    let (bm25_tokens, bm25_language) = if bm25_tokenize {
+        match std::fs::read_to_string(full_path) {
+            Ok(content) => {
+                let body = frontmatter::body_only(&content);
+
+                // Resolve title: frontmatter property > first H1 heading.
+                let title: &str =
+                    props
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            sections
+                                .iter()
+                                .find(|s| s.level == 1)
+                                .and_then(|s| s.heading.as_deref())
+                                .unwrap_or("")
+                        });
+
+                // Resolve stemming language: frontmatter > config default > English.
+                let fm_lang = props.get("language").and_then(|v| v.as_str());
+                let lang = resolve_language(fm_lang, None, default_language);
+
+                let combined = format!("{title} {body}");
+                let stemmer = rust_stemmers::Stemmer::create(lang.to_algorithm());
+                let tokens = tokenize(&combined, &stemmer);
+
+                (Some(tokens), Some(lang.canonical_name().to_owned()))
+            }
+            Err(e) => {
+                // Non-fatal: log and leave tokens empty so the entry is still indexed.
+                eprintln!(
+                    "warning: could not read {} for BM25 tokenization: {e}",
+                    full_path.display()
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     let entry = IndexEntry {
         rel_path: rel_path.to_owned(),
         modified,
@@ -641,6 +770,8 @@ pub(crate) fn scan_one_file(
         sections,
         tasks,
         links,
+        bm25_tokens,
+        bm25_language,
     };
 
     Ok((entry, file_links))
@@ -896,7 +1027,16 @@ See [[a]] for details.
     #[test]
     fn scanned_index_builds_entries() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         assert!(build.warnings.is_empty());
         assert_eq!(build.index.entries().len(), 2);
     }
@@ -904,7 +1044,16 @@ See [[a]] for details.
     #[test]
     fn scanned_index_get_by_path() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let idx = &build.index;
 
         let a = idx.get("a.md").unwrap();
@@ -920,7 +1069,16 @@ See [[a]] for details.
     #[test]
     fn scanned_index_sections_and_tasks() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let a = build.index.get("a.md").unwrap();
 
         // a.md has 2 sections: Introduction and Tasks
@@ -937,7 +1095,16 @@ See [[a]] for details.
     #[test]
     fn scanned_index_link_graph() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let graph = build.index.link_graph();
 
         // a.md links to b, b.md links to a
@@ -950,7 +1117,16 @@ See [[a]] for details.
     #[test]
     fn scanned_index_outbound_links() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let a = build.index.get("a.md").unwrap();
 
         // a.md has one outbound link: [[b]]
@@ -981,7 +1157,16 @@ Content.
             (tmp.path().join("good.md"), "good.md".to_owned()),
             (tmp.path().join("bad.md"), "bad.md".to_owned()),
         ];
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         assert_eq!(build.index.entries().len(), 1);
         assert_eq!(build.warnings.len(), 1);
         assert_eq!(build.warnings[0].rel_path, "bad.md");
@@ -990,7 +1175,16 @@ Content.
     #[test]
     fn scanned_index_modified_is_iso8601() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let a = build.index.get("a.md").unwrap();
         assert!(
             a.modified.contains('T') && a.modified.ends_with('Z'),
@@ -1002,13 +1196,22 @@ Content.
     #[test]
     fn snapshot_roundtrip() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let index = &build.index;
 
         let snap_dir = tempfile::tempdir().unwrap();
         let snap_path = snap_dir.path().join(".hyalo-index");
 
-        SnapshotIndex::save(index, &snap_path, "/tmp/vault", None).unwrap();
+        SnapshotIndex::save(index, &snap_path, "/tmp/vault", None, None).unwrap();
         let loaded = SnapshotIndex::load(&snap_path)
             .unwrap()
             .expect("snapshot should deserialize");
@@ -1030,7 +1233,16 @@ Content.
     #[test]
     fn scanned_index_skip_body() {
         let (_tmp, files) = setup_vault();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: false }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         assert!(build.warnings.is_empty());
         let idx = &build.index;
 

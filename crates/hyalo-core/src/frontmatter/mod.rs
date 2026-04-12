@@ -3,7 +3,7 @@
 mod parse;
 mod types;
 
-pub use parse::{hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
+pub use parse::{body_only, hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
 pub use types::{infer_type, parse_value};
 
 /// A typed error for frontmatter parse and structural failures.

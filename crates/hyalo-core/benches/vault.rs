@@ -77,7 +77,7 @@ fn bench_scan_all_files(c: &mut Criterion) {
         b.iter(|| {
             for file in &files {
                 let mut counter = TaskCounter::new();
-                let mut search = ContentSearchVisitor::new("obsidian");
+                let mut search = ContentSearchVisitor::regex("obsidian").unwrap();
                 let visitors: &mut [&mut dyn FileVisitor] = &mut [&mut counter, &mut search];
                 scan_file_multi(black_box(file), visitors)
                     .expect("scan_file_multi failed during benchmark");

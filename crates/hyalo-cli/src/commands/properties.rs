@@ -192,7 +192,15 @@ mod tests {
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&file_pairs, None, &ScanOptions { scan_body: false })?;
+        let build = ScannedIndex::build(
+            &file_pairs,
+            None,
+            &ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )?;
         let file_filter: Option<Vec<String>> = file.map(|f| vec![f.to_owned()]);
         properties_summary(&build.index, file_filter.as_deref(), format)
     }

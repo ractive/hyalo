@@ -403,8 +403,15 @@ mod tests {
                 (p, rel)
             })
             .collect();
-        let build =
-            ScannedIndex::build(&file_pairs, site_prefix, &ScanOptions { scan_body: true })?;
+        let build = ScannedIndex::build(
+            &file_pairs,
+            site_prefix,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )?;
         summary(dir, &build.index, globs, recent, depth, site_prefix, format)
     }
 
@@ -872,13 +879,23 @@ Body.
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&files, prefix, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            prefix,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let index_path = dir.join(".hyalo-index");
         SnapshotIndex::save(
             &build.index,
             &index_path,
             &dir.display().to_string(),
             prefix,
+            None,
         )
         .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
@@ -984,9 +1001,25 @@ Body.
                 (p, rel)
             })
             .collect();
-        let build = ScannedIndex::build(&files, None, &ScanOptions { scan_body: true }).unwrap();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+            },
+        )
+        .unwrap();
         let index_path = dir.join(".hyalo-index");
-        SnapshotIndex::save(&build.index, &index_path, &dir.display().to_string(), None).unwrap();
+        SnapshotIndex::save(
+            &build.index,
+            &index_path,
+            &dir.display().to_string(),
+            None,
+            None,
+        )
+        .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let index_val =
             unwrap_success(summary(dir, &loaded, &[], 10, None, None, Format::Json).unwrap());

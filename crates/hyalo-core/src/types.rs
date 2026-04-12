@@ -252,4 +252,6 @@ pub struct FileObject {
     pub backlinks: Option<Vec<BacklinkInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<ContentMatch>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
 }

@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
+use hyalo_core::bm25::Bm25InvertedIndex;
 use hyalo_core::discovery;
 use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ pub fn create_index(
     output: Option<&Path>,
     format: Format,
     allow_outside_vault: bool,
+    default_language: Option<&str>,
 ) -> Result<CommandOutcome> {
     // Determine output path
     let index_path = match output {
@@ -60,7 +62,15 @@ pub fn create_index(
         .collect();
 
     // Build the scanned index
-    let build = ScannedIndex::build(&files, site_prefix, &ScanOptions { scan_body: true })?;
+    let build = ScannedIndex::build(
+        &files,
+        site_prefix,
+        &ScanOptions {
+            scan_body: true,
+            bm25_tokenize: true,
+            default_language,
+        },
+    )?;
 
     // Warn about skipped files
     for w in &build.warnings {
@@ -73,8 +83,17 @@ pub fn create_index(
         .to_string_lossy()
         .into_owned();
 
-    // Save the snapshot
-    SnapshotIndex::save(&build.index, &index_path, &vault_dir_str, site_prefix)?;
+    // Build the BM25 inverted index from tokenized entries (if any have tokens).
+    let bm25_index = Bm25InvertedIndex::build_from_entries(build.index.entries());
+
+    // Save the snapshot (with the persisted BM25 index when available).
+    SnapshotIndex::save(
+        &build.index,
+        &index_path,
+        &vault_dir_str,
+        site_prefix,
+        bm25_index.as_ref(),
+    )?;
 
     // Check for stale indexes in the same directory
     if let Ok(stale) = find_stale_indexes(dir) {

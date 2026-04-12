@@ -48,6 +48,16 @@ pub(super) fn apply_sort(
                 filter::compare_property_values(a_val, b_val).then_with(|| a.file.cmp(&b.file))
             });
         }
+        SortField::Score => {
+            results.sort_by(|a, b| {
+                let a_score = a.score.unwrap_or(0.0);
+                let b_score = b.score.unwrap_or(0.0);
+                b_score
+                    .partial_cmp(&a_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.file.cmp(&b.file))
+            });
+        }
     }
 }
 
@@ -95,5 +105,7 @@ pub(super) fn presort_index_entries(
                     .then_with(|| a.rel_path.cmp(&b.rel_path))
             });
         }
+        // Score sorting is applied after BM25 scoring, not during pre-sort.
+        SortField::Score => {}
     }
 }
