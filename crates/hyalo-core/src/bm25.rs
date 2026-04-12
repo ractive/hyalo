@@ -708,6 +708,12 @@ pub fn is_low_discriminative(matches: &[Bm25Match], total_docs: usize) -> bool {
     if total_docs == 0 || matches.is_empty() {
         return false;
     }
+    debug_assert!(
+        matches.len() <= total_docs,
+        "matches ({}) exceeds total_docs ({})",
+        matches.len(),
+        total_docs
+    );
     #[allow(clippy::cast_precision_loss)]
     let match_ratio = matches.len() as f64 / total_docs as f64;
     let max_score = matches.iter().map(|m| m.score).fold(0.0_f64, f64::max);

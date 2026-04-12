@@ -770,10 +770,11 @@ pub(crate) enum ViewsAction {
         Overwrites if the view already exists.\n\n\
         SIDE EFFECTS: Modifies .hyalo.toml.")]
     Set {
-        /// View name
+        /// View name (first positional arg)
         #[arg(value_name = "NAME")]
         name: String,
-        /// Optional BM25 search pattern to save with the view
+        /// Optional BM25 search pattern to save with the view (second positional arg).
+        /// Example: `hyalo views set my-view "search terms" --tag foo`
         #[arg(value_name = "PATTERN")]
         pattern: Option<String>,
         #[command(flatten)]

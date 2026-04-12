@@ -276,17 +276,27 @@ pub fn find(
             // filter is active. Score all docs, then intersect with metadata-passing candidates.
             if !has_section_filter && let Some(bm25_idx) = index.bm25_index() {
                 let all_scored = bm25_idx.score(pat, &stemmer);
-                if is_low_discriminative(&all_scored, bm25_idx.doc_count()) {
-                    crate::warn::warn(
-                        "BM25 search: query matched most documents with low scores — \
-                         try more specific search terms",
-                    );
-                }
                 let map: HashMap<String, f64> = all_scored
                     .into_iter()
                     .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
                     .map(|m| (m.rel_path, m.score))
                     .collect();
+                // Check after filtering to candidates — use candidate count as
+                // denominator so the heuristic matches the slow path and doesn't
+                // false-positive when metadata filters narrow the result set.
+                let filtered: Vec<_> = map
+                    .iter()
+                    .map(|(p, &s)| hyalo_core::bm25::Bm25Match {
+                        rel_path: p.clone(),
+                        score: s,
+                    })
+                    .collect();
+                if is_low_discriminative(&filtered, candidate_paths.len()) {
+                    crate::warn::warn(
+                        "BM25 search: query matched most documents with low scores — \
+                         try more specific search terms",
+                    );
+                }
                 break 'bm25 Some(map);
             }
 
