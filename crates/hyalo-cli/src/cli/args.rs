@@ -222,6 +222,14 @@ pub(crate) struct FindFilters {
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
+    /// Only return orphan files: no inbound links and no outbound links (auto-includes backlinks field)
+    #[arg(long)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub orphan: bool,
+    /// Only return dead-end files: have inbound links but no outbound links (auto-includes links field)
+    #[arg(long)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub dead_end: bool,
     /// Filter by title: case-insensitive substring match against the displayed title
     /// (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
     /// (e.g. '/^The/' or '/^The/i').
@@ -268,6 +276,8 @@ impl FindFilters {
             self.limit = overlay.limit;
         }
         self.broken_links = self.broken_links || overlay.broken_links;
+        self.orphan = self.orphan || overlay.orphan;
+        self.dead_end = self.dead_end || overlay.dead_end;
         if overlay.title.is_some() {
             self.title.clone_from(&overlay.title);
         }
@@ -323,7 +333,7 @@ pub(crate) enum Commands {
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
             merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
             lists; scalar filters (--regexp, --sort, --limit, --title, --task, --language) override; bool \
-            flags (--broken-links, --reverse) OR. Example: hyalo find --view drafts --limit 5\n\
+            flags (--broken-links, --orphan, --dead-end, --reverse) OR. Example: hyalo find --view drafts --limit 5\n\
             COMMON MISTAKES:\n\
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
@@ -405,16 +415,19 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
-    /// Show a high-level vault summary: file counts, property/tag/status aggregation, tasks, recent files (read-only)
-    #[command(long_about = "Show a high-level vault summary.\n\n\
-            OUTPUT: A single 'VaultSummary' object with file counts (total + by directory), \
+    /// Show a compact vault summary: file counts, property/tag/status counts, tasks, links, orphans, dead-ends (read-only)
+    #[command(
+        long_about = "Show a compact vault summary (~20-30 lines regardless of vault size).\n\n\
+            OUTPUT: A 'VaultSummary' object with file counts (total + top-level directories), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
-            status grouping (files grouped by frontmatter 'status' value), \
-            task counts (total/done), link health (total/broken links with source locations), \
-            orphan files, and recently modified files.\n\
+            status grouping (value + count, no file lists), \
+            task counts (total/done), link health (total/broken count), \
+            orphan count, dead-end count, and recently modified files.\n\
+            Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need a quick overview of a vault's metadata landscape.")]
+            USE WHEN: You need a quick overview of a vault's metadata landscape."
+    )]
     Summary {
         /// Glob pattern(s) to filter which files to include, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]

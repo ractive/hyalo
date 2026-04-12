@@ -28,11 +28,17 @@ use crate::link_graph::{FileLinks, normalize_target};
 use crate::link_rewrite::{Replacement, RewritePlan, apply_replacements, execute_plans};
 use crate::links::{LinkKind, extract_link_spans_with_original};
 use crate::scanner::{FenceTracker, is_comment_fence, strip_inline_code, strip_inline_comments};
-use crate::types::BrokenLinkInfo;
-
 // ---------------------------------------------------------------------------
 // Report types
 // ---------------------------------------------------------------------------
+
+/// A single broken link with source file, line number, and raw target.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrokenLinkInfo {
+    pub source: String,
+    pub line: usize,
+    pub target: String,
+}
 
 /// Summary of broken link detection across the vault.
 #[derive(Debug, Clone, Serialize)]

@@ -10,9 +10,8 @@ use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::detect_broken_links_from_index;
 use hyalo_core::types::{
-    DeadEndSummary, DirectoryCount, FileCounts, LinkHealthSummary, OrphanSummary,
-    PropertySummaryEntry, RecentFile, StatusGroup, TagSummary, TagSummaryEntry, TaskCount,
-    VaultSummary,
+    DirectoryCount, FileCounts, LinkHealthSummary, PropertySummaryEntry, RecentFile, StatusGroup,
+    TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
 };
 
 // ---------------------------------------------------------------------------
@@ -209,26 +208,27 @@ pub fn summary(
         recent_entries.push((entry.modified.clone(), entry.rel_path.clone()));
     }
 
-    // Apply depth limit
-    if let Some(max_depth) = depth {
+    // Apply depth limit (default to 1 for compact output)
+    let effective_depth = depth.unwrap_or(1);
+    {
         let original: Vec<(String, usize)> = dir_counts.into_iter().collect();
         dir_counts = BTreeMap::new();
         for (dir_key, count) in original {
-            let target = truncate_to_depth(&dir_key, max_depth);
+            let target = truncate_to_depth(&dir_key, effective_depth);
             *dir_counts.entry(target).or_insert(0) += count;
         }
     }
 
-    // Build FileCounts
-    let mut by_directory: Vec<DirectoryCount> = dir_counts
+    // Build FileCounts — sort by count descending for compact output
+    let mut directories: Vec<DirectoryCount> = dir_counts
         .into_iter()
         .map(|(directory, count)| DirectoryCount { directory, count })
         .collect();
-    by_directory.sort_by(|a, b| a.directory.cmp(&b.directory));
+    directories.sort_by(|a, b| b.count.cmp(&a.count).then(a.directory.cmp(&b.directory)));
 
     let file_counts = FileCounts {
         total: total_files,
-        by_directory,
+        directories,
     };
 
     // Build properties summary
@@ -254,10 +254,13 @@ pub fn summary(
         total: tags_total,
     };
 
-    // Build status groups
+    // Build status groups (counts only)
     let status: Vec<StatusGroup> = status_groups
         .into_iter()
-        .map(|(value, files)| StatusGroup { value, files })
+        .map(|(value, files)| StatusGroup {
+            value,
+            count: files.len(),
+        })
         .collect();
 
     let tasks = TaskCount {
@@ -273,51 +276,29 @@ pub fn summary(
         .map(|(modified, path)| RecentFile { path, modified })
         .collect();
 
-    // Build orphan and dead-end lists using the pre-built link graph from the index.
+    // Count orphans and dead-ends using the pre-built link graph from the index.
     // The link graph is vault-wide so links from outside the scoped set still count.
     let (orphans, dead_ends) = {
         let graph = index.link_graph();
         let targets = graph.all_targets();
         let sources = graph.all_sources();
 
-        // Orphans: no inbound AND no outbound (fully isolated)
-        let mut orphan_files: Vec<String> = entries
-            .iter()
-            .filter(|entry| {
-                let rel_str: &str = &entry.rel_path;
-                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
-                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
-                let has_outbound = sources.contains(rel_str);
-                !has_inbound && !has_outbound
-            })
-            .map(|entry| entry.rel_path.clone())
-            .collect();
-        orphan_files.sort();
+        let mut orphan_count: usize = 0;
+        let mut dead_end_count: usize = 0;
 
-        // Dead-ends: has inbound links but no outbound links
-        let mut dead_end_files: Vec<String> = entries
-            .iter()
-            .filter(|entry| {
-                let rel_str: &str = &entry.rel_path;
-                let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
-                let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
-                let has_outbound = sources.contains(rel_str);
-                has_inbound && !has_outbound
-            })
-            .map(|entry| entry.rel_path.clone())
-            .collect();
-        dead_end_files.sort();
+        for entry in &entries {
+            let rel_str: &str = &entry.rel_path;
+            let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
+            let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+            let has_outbound = sources.contains(rel_str);
+            if !has_inbound && !has_outbound {
+                orphan_count += 1;
+            } else if has_inbound && !has_outbound {
+                dead_end_count += 1;
+            }
+        }
 
-        (
-            OrphanSummary {
-                total: orphan_files.len(),
-                files: orphan_files,
-            },
-            DeadEndSummary {
-                total: dead_end_files.len(),
-                files: dead_end_files,
-            },
-        )
+        (orphan_count, dead_end_count)
     };
 
     // Emit warnings for any property value that looks like a typo of a dominant value.
@@ -332,7 +313,6 @@ pub fn summary(
         LinkHealthSummary {
             total: report.total_links,
             broken: report.broken.len(),
-            broken_links: report.broken,
         }
     };
 
@@ -494,7 +474,7 @@ No tasks here.
         let tmp = setup_vault();
         let val =
             unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
-        let by_dir = val["files"]["by_directory"].as_array().unwrap();
+        let by_dir = val["files"]["directories"].as_array().unwrap();
         // Should have "." and "notes"
         assert!(
             by_dir
@@ -557,9 +537,9 @@ No tasks here.
             .find(|g| g["value"] == "draft")
             .unwrap();
         // a.md and notes/c.md have status=draft
-        assert_eq!(draft["files"].as_array().unwrap().len(), 2);
+        assert_eq!(draft["count"], 2);
         let done = status_groups.iter().find(|g| g["value"] == "done").unwrap();
-        assert_eq!(done["files"].as_array().unwrap().len(), 1);
+        assert_eq!(done["count"], 1);
     }
 
     #[test]
@@ -598,14 +578,14 @@ Body.
             .iter()
             .find(|g| g["value"] == "deprecated")
             .expect("expected 'deprecated' status group");
-        assert_eq!(deprecated["files"].as_array().unwrap().len(), 2);
+        assert_eq!(deprecated["count"], 2);
 
         // "non-standard" should appear as its own group with 1 file.
         let non_standard = status_groups
             .iter()
             .find(|g| g["value"] == "non-standard")
             .expect("expected 'non-standard' status group");
-        assert_eq!(non_standard["files"].as_array().unwrap().len(), 1);
+        assert_eq!(non_standard["count"], 1);
 
         // No stringified array group should exist.
         assert!(
@@ -692,7 +672,7 @@ Body.
         let tmp = setup_vault_nested();
         let val =
             unwrap_success(run_summary(tmp.path(), &[], 10, Some(0), None, Format::Json).unwrap());
-        let by_dir = val["files"]["by_directory"].as_array().unwrap();
+        let by_dir = val["files"]["directories"].as_array().unwrap();
         assert_eq!(by_dir.len(), 1);
         assert_eq!(by_dir[0]["directory"], ".");
         assert_eq!(by_dir[0]["count"], 3);
@@ -703,7 +683,7 @@ Body.
         let tmp = setup_vault_nested();
         let val =
             unwrap_success(run_summary(tmp.path(), &[], 10, Some(1), None, Format::Json).unwrap());
-        let by_dir = val["files"]["by_directory"].as_array().unwrap();
+        let by_dir = val["files"]["directories"].as_array().unwrap();
         // "." (1 file) and "notes" (2 files collapsed from notes/ and notes/sub/)
         assert_eq!(by_dir.len(), 2);
         let dot = by_dir.iter().find(|d| d["directory"] == ".").unwrap();
@@ -713,15 +693,16 @@ Body.
     }
 
     #[test]
-    fn summary_depth_none_shows_all() {
+    fn summary_depth_none_defaults_to_depth_one() {
         let tmp = setup_vault_nested();
         let val =
             unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
-        let by_dir = val["files"]["by_directory"].as_array().unwrap();
-        assert_eq!(by_dir.len(), 3);
+        let by_dir = val["files"]["directories"].as_array().unwrap();
+        // Default depth is 1, so "notes/sub" is collapsed into "notes"
+        assert_eq!(by_dir.len(), 2);
         assert!(by_dir.iter().any(|d| d["directory"] == "."));
-        assert!(by_dir.iter().any(|d| d["directory"] == "notes"));
-        assert!(by_dir.iter().any(|d| d["directory"] == "notes/sub"));
+        let notes = by_dir.iter().find(|d| d["directory"] == "notes").unwrap();
+        assert_eq!(notes["count"], 2);
     }
 
     #[test]
@@ -754,32 +735,8 @@ Body.
         // No glob: single-pass code path
         let val =
             unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
-        let orphan_files: Vec<&str> = val["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-
-        // orphan.md has no inbound and no outbound links
-        assert!(
-            orphan_files.iter().any(|f| f.contains("orphan")),
-            "orphan.md must appear in orphans: {orphan_files:?}"
-        );
-        // a.md links out, so it is not an orphan
-        assert!(
-            !orphan_files
-                .iter()
-                .any(|f| f.contains("/a") || *f == "a.md"),
-            "a.md must NOT appear in orphans: {orphan_files:?}"
-        );
-        // b.md has an inbound link from a.md, so it is not an orphan
-        assert!(
-            !orphan_files
-                .iter()
-                .any(|f| f.contains("/b") || *f == "b.md"),
-            "b.md must NOT appear in orphans: {orphan_files:?}"
-        );
+        // orphan.md has no inbound and no outbound links → 1 orphan
+        assert_eq!(val["orphans"], 1, "expected exactly 1 orphan");
     }
 
     /// Same assertion via the glob code path (separate vault-wide scan).
@@ -806,29 +763,8 @@ Body.
             )
             .unwrap(),
         );
-        let orphan_files: Vec<&str> = val["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-
-        assert!(
-            orphan_files.iter().any(|f| f.contains("orphan")),
-            "orphan.md must appear in orphans (glob path): {orphan_files:?}"
-        );
-        assert!(
-            !orphan_files
-                .iter()
-                .any(|f| f.contains("/a") || *f == "a.md"),
-            "a.md must NOT appear in orphans (glob path): {orphan_files:?}"
-        );
-        assert!(
-            !orphan_files
-                .iter()
-                .any(|f| f.contains("/b") || *f == "b.md"),
-            "b.md must NOT appear in orphans (glob path): {orphan_files:?}"
-        );
+        // orphan.md is the only orphan
+        assert_eq!(val["orphans"], 1, "expected exactly 1 orphan (glob path)");
     }
 
     /// Disk-scan and snapshot-index must produce identical orphan lists.
@@ -863,12 +799,7 @@ Body.
         // Disk-scan path
         let disk_val =
             unwrap_success(run_summary(dir, &[], 10, None, prefix, Format::Json).unwrap());
-        let disk_orphans: Vec<&str> = disk_val["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let disk_orphans = disk_val["orphans"].as_u64().unwrap();
 
         // Index path: build a SnapshotIndex and query via summary
         let all = hyalo_core::discovery::discover_files(dir).unwrap();
@@ -901,24 +832,14 @@ Body.
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let index_val =
             unwrap_success(summary(dir, &loaded, &[], 10, None, prefix, Format::Json).unwrap());
-        let index_orphans: Vec<&str> = index_val["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let index_orphans = index_val["orphans"].as_u64().unwrap();
 
         assert_eq!(
             disk_orphans, index_orphans,
-            "disk scan and index must produce identical orphan lists"
-        );
-        // c.md should NOT be an orphan (b.md links to it via absolute link with site_prefix)
-        assert!(
-            !disk_orphans.contains(&"c.md"),
-            "c.md should not be orphan with site_prefix: {disk_orphans:?}"
+            "disk scan and index must produce identical orphan counts"
         );
         // orphan.md should be the only orphan
-        assert_eq!(disk_orphans, vec!["orphan.md"]);
+        assert_eq!(disk_orphans, 1);
     }
 
     /// Dead-end detection:
@@ -942,28 +863,9 @@ Body.
             unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
 
         // c.md is the only dead-end
-        assert_eq!(val["dead_ends"]["total"], 1, "expected 1 dead-end");
-        let dead_end_files: Vec<&str> = val["dead_ends"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        assert_eq!(
-            dead_end_files,
-            vec!["c.md"],
-            "dead-ends: {dead_end_files:?}"
-        );
-
+        assert_eq!(val["dead_ends"], 1, "expected 1 dead-end");
         // d.md is the only orphan
-        assert_eq!(val["orphans"]["total"], 1, "expected 1 orphan");
-        let orphan_files: Vec<&str> = val["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        assert_eq!(orphan_files, vec!["d.md"], "orphans: {orphan_files:?}");
+        assert_eq!(val["orphans"], 1, "expected 1 orphan");
     }
 
     /// Dead-end parity: disk scan and index path must agree on dead-end lists.
@@ -985,12 +887,7 @@ Body.
 
         // Disk-scan path
         let disk_val = unwrap_success(run_summary(dir, &[], 10, None, None, Format::Json).unwrap());
-        let disk_dead_ends: Vec<&str> = disk_val["dead_ends"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let disk_dead_ends = disk_val["dead_ends"].as_u64().unwrap();
 
         // Index path
         let all = hyalo_core::discovery::discover_files(dir).unwrap();
@@ -1023,18 +920,13 @@ Body.
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let index_val =
             unwrap_success(summary(dir, &loaded, &[], 10, None, None, Format::Json).unwrap());
-        let index_dead_ends: Vec<&str> = index_val["dead_ends"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let index_dead_ends = index_val["dead_ends"].as_u64().unwrap();
 
         assert_eq!(
             disk_dead_ends, index_dead_ends,
-            "disk scan and index must produce identical dead-end lists"
+            "disk scan and index must produce identical dead-end counts"
         );
-        assert_eq!(disk_dead_ends, vec!["c.md"]);
+        assert_eq!(disk_dead_ends, 1);
     }
 
     #[test]

@@ -129,8 +129,8 @@ pub struct TaskReadResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultSummary {
     pub files: FileCounts,
-    pub orphans: OrphanSummary,
-    pub dead_ends: DeadEndSummary,
+    pub orphans: usize,
+    pub dead_ends: usize,
     pub links: LinkHealthSummary,
     pub properties: Vec<PropertySummaryEntry>,
     pub tags: TagSummary,
@@ -139,45 +139,18 @@ pub struct VaultSummary {
     pub recent_files: Vec<RecentFile>,
 }
 
-/// Vault-wide link health: total links, broken count, and broken link details.
+/// Vault-wide link health: total links and broken count.
 #[derive(Debug, Clone, Serialize)]
 pub struct LinkHealthSummary {
     pub total: usize,
     pub broken: usize,
-    pub broken_links: Vec<BrokenLinkInfo>,
-}
-
-/// A single broken link with source file, line number, and raw target.
-#[derive(Debug, Clone, Serialize)]
-pub struct BrokenLinkInfo {
-    pub source: String,
-    pub line: usize,
-    pub target: String,
-}
-
-/// Fully isolated files: no inbound links (nothing links to them) and no
-/// outbound links (they don't link to anything).
-#[derive(Debug, Clone, Serialize)]
-pub struct OrphanSummary {
-    pub total: usize,
-    pub files: Vec<String>,
-}
-
-/// Navigation dead-ends: files that have inbound links (something links to
-/// them) but no outbound links (they don't link to anything else).
-/// Orphans (no inbound AND no outbound) are excluded — they are reported
-/// separately.
-#[derive(Debug, Clone, Serialize)]
-pub struct DeadEndSummary {
-    pub total: usize,
-    pub files: Vec<String>,
 }
 
 /// File counts by directory.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileCounts {
     pub total: usize,
-    pub by_directory: Vec<DirectoryCount>,
+    pub directories: Vec<DirectoryCount>,
 }
 
 /// Count of files in a directory.
@@ -187,11 +160,11 @@ pub struct DirectoryCount {
     pub count: usize,
 }
 
-/// Files grouped by status property value.
+/// Files grouped by status property value (count only).
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusGroup {
     pub value: String,
-    pub files: Vec<String>,
+    pub count: usize,
 }
 
 /// A recently modified file.

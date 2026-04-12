@@ -24,6 +24,52 @@ fn run_find(
     title_filter: Option<&str>,
     format: Format,
 ) -> anyhow::Result<CommandOutcome> {
+    run_find_ext(
+        dir,
+        site_prefix,
+        pattern,
+        regexp,
+        property_filters,
+        tag_filters,
+        task_filter,
+        section_filters,
+        files_arg,
+        globs,
+        fields,
+        sort,
+        reverse,
+        limit,
+        broken_links,
+        false,
+        false,
+        title_filter,
+        format,
+    )
+}
+
+/// Extended `run_find` with orphan/dead_end flags.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn run_find_ext(
+    dir: &std::path::Path,
+    site_prefix: Option<&str>,
+    pattern: Option<&str>,
+    regexp: Option<&str>,
+    property_filters: &[PropertyFilter],
+    tag_filters: &[String],
+    task_filter: Option<&FindTaskFilter>,
+    section_filters: &[SectionFilter],
+    files_arg: &[String],
+    globs: &[String],
+    fields: &Fields,
+    sort: Option<&SortField>,
+    reverse: bool,
+    limit: Option<usize>,
+    broken_links: bool,
+    orphan: bool,
+    dead_end: bool,
+    title_filter: Option<&str>,
+    format: Format,
+) -> anyhow::Result<CommandOutcome> {
     let all = hyalo_core::discovery::discover_files(dir)?;
     let file_pairs: Vec<(std::path::PathBuf, String)> = all
         .into_iter()
@@ -58,6 +104,8 @@ fn run_find(
         reverse,
         limit,
         broken_links,
+        orphan,
+        dead_end,
         title_filter,
         format,
         None, // language
@@ -1522,6 +1570,8 @@ fn content_search_works_with_frontmatter_only_index() {
             false,
             None,
             false,
+            false,
+            false,
             None,
             Format::Json,
             None,
@@ -1540,4 +1590,143 @@ fn content_search_works_with_frontmatter_only_index() {
         "BM25 result should include a relevance score"
     );
     assert!(score.unwrap() > 0.0, "score should be positive");
+}
+
+// ---------------------------------------------------------------------------
+// --orphan and --dead-end filters
+// ---------------------------------------------------------------------------
+
+/// Setup: a.md→b (outbound), b.md has inbound but no outbound (dead-end),
+/// c.md has no links (orphan).
+fn setup_link_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\n[[b]]\n").unwrap();
+    fs::write(
+        tmp.path().join("b.md"),
+        "---\ntitle: B\n---\nNo outbound.\n",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("c.md"),
+        "---\ntitle: C\n---\nNo links at all.\n",
+    )
+    .unwrap();
+    tmp
+}
+
+#[test]
+fn find_orphan_returns_isolated_files() {
+    let tmp = setup_link_vault();
+    let out = unwrap_success(
+        run_find_ext(
+            tmp.path(),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &Fields::default(),
+            None,
+            false,
+            None,
+            false,
+            true,  // orphan
+            false, // dead_end
+            None,
+            Format::Json,
+        )
+        .unwrap(),
+    );
+    let arr = serde_json::from_str::<serde_json::Value>(&out)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    // c.md is the only orphan (no inbound, no outbound)
+    assert_eq!(files, vec!["c.md"], "orphan files: {files:?}");
+    // orphan results auto-include backlinks field
+    assert!(arr[0]["backlinks"].is_array());
+}
+
+#[test]
+fn find_dead_end_returns_files_with_inbound_only() {
+    let tmp = setup_link_vault();
+    let out = unwrap_success(
+        run_find_ext(
+            tmp.path(),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &Fields::default(),
+            None,
+            false,
+            None,
+            false,
+            false, // orphan
+            true,  // dead_end
+            None,
+            Format::Json,
+        )
+        .unwrap(),
+    );
+    let arr = serde_json::from_str::<serde_json::Value>(&out)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    // b.md has inbound from a but no outbound → dead-end
+    assert_eq!(files, vec!["b.md"], "dead-end files: {files:?}");
+    // dead-end results auto-include links field
+    assert!(arr[0]["links"].is_array());
+}
+
+#[test]
+fn find_orphan_composes_with_sort_and_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Two orphan files
+    fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\nNo links.\n").unwrap();
+    fs::write(tmp.path().join("b.md"), "---\ntitle: B\n---\nNo links.\n").unwrap();
+    fs::write(tmp.path().join("c.md"), "---\ntitle: C\n---\nNo links.\n").unwrap();
+    let out = unwrap_success(
+        run_find_ext(
+            tmp.path(),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &Fields::default(),
+            Some(&SortField::File),
+            false,
+            Some(2), // limit
+            false,
+            true,  // orphan
+            false, // dead_end
+            None,
+            Format::Json,
+        )
+        .unwrap(),
+    );
+    let arr = serde_json::from_str::<serde_json::Value>(&out)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(arr.len(), 2, "limit=2 should cap results");
 }
