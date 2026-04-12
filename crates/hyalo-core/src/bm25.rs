@@ -62,6 +62,30 @@ impl StemLanguage {
             Self::Turkish => Algorithm::Turkish,
         }
     }
+
+    /// Returns the lowercase canonical name for this language variant.
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Arabic => "arabic",
+            Self::Danish => "danish",
+            Self::Dutch => "dutch",
+            Self::English => "english",
+            Self::Finnish => "finnish",
+            Self::French => "french",
+            Self::German => "german",
+            Self::Greek => "greek",
+            Self::Hungarian => "hungarian",
+            Self::Italian => "italian",
+            Self::Norwegian => "norwegian",
+            Self::Portuguese => "portuguese",
+            Self::Romanian => "romanian",
+            Self::Russian => "russian",
+            Self::Spanish => "spanish",
+            Self::Swedish => "swedish",
+            Self::Tamil => "tamil",
+            Self::Turkish => "turkish",
+        }
+    }
 }
 
 /// Parses a language name string (case-insensitive) into a [`StemLanguage`].

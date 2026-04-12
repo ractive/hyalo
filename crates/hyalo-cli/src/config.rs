@@ -211,4 +211,35 @@ site_prefix = "docs"
         assert_eq!(resolved.dir, PathBuf::from("."));
         assert!(resolved.hints);
     }
+
+    #[test]
+    fn search_language_config() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[search]\nlanguage = \"french\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.search_language, Some("french".to_owned()));
+    }
+
+    #[test]
+    fn search_language_absent() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.search_language, None);
+    }
+
+    #[test]
+    fn search_language_empty_section() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "[search]\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.search_language, None);
+    }
 }

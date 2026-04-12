@@ -38,6 +38,7 @@ fn run_find(
         &ScanOptions {
             scan_body: true,
             bm25_tokenize: false,
+            default_language: None,
         },
     )?;
     find(
@@ -1497,6 +1498,7 @@ fn content_search_works_with_frontmatter_only_index() {
         &ScanOptions {
             scan_body: false,
             bm25_tokenize: false,
+            default_language: None,
         },
     )
     .unwrap();

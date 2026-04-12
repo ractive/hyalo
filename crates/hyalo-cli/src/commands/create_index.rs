@@ -17,6 +17,7 @@ pub fn create_index(
     output: Option<&Path>,
     format: Format,
     allow_outside_vault: bool,
+    default_language: Option<&str>,
 ) -> Result<CommandOutcome> {
     // Determine output path
     let index_path = match output {
@@ -66,6 +67,7 @@ pub fn create_index(
         &ScanOptions {
             scan_body: true,
             bm25_tokenize: true,
+            default_language,
         },
     )?;
 

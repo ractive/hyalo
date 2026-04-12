@@ -409,6 +409,7 @@ mod tests {
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )?;
         summary(dir, &build.index, globs, recent, depth, site_prefix, format)
@@ -884,6 +885,7 @@ Body.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1004,6 +1006,7 @@ Body.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();

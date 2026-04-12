@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::bm25::{StemLanguage, parse_language, tokenize};
+use crate::bm25::{resolve_language, tokenize};
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
@@ -84,7 +84,7 @@ pub trait VaultIndex {
 /// frontmatter data (e.g. `properties summary`, `tags summary`,
 /// `find --property status=planned` without body fields).
 #[derive(Debug, Clone, Copy)]
-pub struct ScanOptions {
+pub struct ScanOptions<'a> {
     /// When false, only frontmatter is read.
     pub scan_body: bool,
     /// When true, pre-tokenize file content for BM25 search and store tokens
@@ -92,6 +92,10 @@ pub struct ScanOptions {
     /// and is intended only for `create-index` (the write path), not for live
     /// scanning at query time.
     pub bm25_tokenize: bool,
+    /// Default stemming language from `[search] language` in `.hyalo.toml`.
+    /// Used as the fallback language when a document has no `language` frontmatter
+    /// property. `None` falls back to English.
+    pub default_language: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,12 +143,13 @@ impl ScannedIndex {
     pub fn build(
         files: &[(PathBuf, String)],
         site_prefix: Option<&str>,
-        options: &ScanOptions,
+        options: &ScanOptions<'_>,
     ) -> Result<ScannedIndexBuild> {
         let mut entries = Vec::with_capacity(files.len());
         let mut file_links_vec: Vec<FileLinks> = Vec::with_capacity(files.len());
         let mut warnings: Vec<IndexWarning> = Vec::new();
 
+        let default_language = options.default_language;
         let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> = files
             .par_iter()
             .map(|(full_path, rel_path)| {
@@ -153,6 +158,7 @@ impl ScannedIndex {
                     rel_path,
                     options.scan_body,
                     options.bm25_tokenize,
+                    default_language,
                 )
             })
             .collect();
@@ -309,7 +315,7 @@ impl SnapshotIndex {
             return Ok(None);
         };
         let full_path = dir.join(rel_path);
-        let (entry, file_links) = scan_one_file(&full_path, rel_path, true, false)?;
+        let (entry, file_links) = scan_one_file(&full_path, rel_path, true, false, None)?;
         self.entries[idx] = entry;
         Ok(file_links)
     }
@@ -349,7 +355,7 @@ impl SnapshotIndex {
 
         // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
-        let (entry, _file_links) = scan_one_file(&full_path, new_rel, true, false)?;
+        let (entry, _file_links) = scan_one_file(&full_path, new_rel, true, false, None)?;
 
         // Remove without triggering a path-index rebuild.
         self.entries.remove(old_idx);
@@ -621,6 +627,7 @@ pub(crate) fn scan_one_file(
     rel_path: &str,
     scan_body: bool,
     bm25_tokenize: bool,
+    default_language: Option<&str>,
 ) -> Result<(IndexEntry, Option<FileLinks>)> {
     let mut fm = FrontmatterCollector::new(scan_body);
 
@@ -680,18 +687,15 @@ pub(crate) fn scan_one_file(
                                 .unwrap_or("")
                         });
 
-                // Resolve stemming language: frontmatter > English default.
-                let lang_str = props
-                    .get("language")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("english");
-                let lang: StemLanguage = parse_language(lang_str).unwrap_or_default();
+                // Resolve stemming language: frontmatter > config default > English.
+                let fm_lang = props.get("language").and_then(|v| v.as_str());
+                let lang = resolve_language(fm_lang, None, default_language);
 
                 let combined = format!("{title} {body}");
                 let stemmer = rust_stemmers::Stemmer::create(lang.to_algorithm());
                 let tokens = tokenize(&combined, &stemmer);
 
-                (Some(tokens), Some(lang_str.to_lowercase()))
+                (Some(tokens), Some(lang.canonical_name().to_owned()))
             }
             Err(e) => {
                 // Non-fatal: log and leave tokens empty so the entry is still indexed.
@@ -977,6 +981,7 @@ See [[a]] for details.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -993,6 +998,7 @@ See [[a]] for details.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1017,6 +1023,7 @@ See [[a]] for details.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1042,6 +1049,7 @@ See [[a]] for details.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1063,6 +1071,7 @@ See [[a]] for details.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1102,6 +1111,7 @@ Content.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1119,6 +1129,7 @@ Content.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1139,6 +1150,7 @@ Content.
             &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();
@@ -1175,6 +1187,7 @@ Content.
             &ScanOptions {
                 scan_body: false,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )
         .unwrap();

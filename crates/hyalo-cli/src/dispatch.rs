@@ -14,6 +14,7 @@ use crate::commands::{
     summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use crate::output::{CommandOutcome, Format};
+use hyalo_core::bm25::parse_language;
 use hyalo_core::filter;
 use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
 
@@ -143,6 +144,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
             }
 
+            // Validate --language flag and config language against supported languages.
+            if let Some(ref lang) = language
+                && let Err(e) = parse_language(lang)
+            {
+                return Ok(CommandOutcome::UserError(format!(
+                    "invalid --language value {lang:?}: {e}"
+                )));
+            }
+            if let Some(cfg_lang) = ctx.config_language
+                && let Err(e) = parse_language(cfg_lang)
+            {
+                return Ok(CommandOutcome::UserError(format!(
+                    "invalid [search].language config value {cfg_lang:?}: {e}"
+                )));
+            }
+
             // Strip the dir prefix from --file args so that
             // filter_index_entries matches vault-relative paths.
             let file: Vec<String> = file
@@ -182,6 +199,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ScanOptions {
                     scan_body,
                     bm25_tokenize: false,
+                    default_language: None,
                 },
             )? {
                 IndexResolution::Resolved(resolved) => find_commands::find(
@@ -244,6 +262,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     ScanOptions {
                         scan_body: false,
                         bm25_tokenize: false,
+                        default_language: None,
                     },
                 )? {
                     IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
@@ -293,6 +312,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     ScanOptions {
                         scan_body: false,
                         bm25_tokenize: false,
+                        default_language: None,
                     },
                 )? {
                     IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
@@ -426,6 +446,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
+                default_language: None,
             },
         )? {
             IndexResolution::Resolved(resolved) => summary_commands::summary(
@@ -555,6 +576,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ScanOptions {
                     scan_body: true,
                     bm25_tokenize: false,
+                    default_language: None,
                 },
             )? {
                 IndexResolution::Resolved(resolved) => {
@@ -593,6 +615,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             output.as_deref(),
             effective_format,
             allow_outside_vault,
+            ctx.config_language,
         ),
         Commands::DropIndex {
             path,
@@ -621,6 +644,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ScanOptions {
                     scan_body: true,
                     bm25_tokenize: false,
+                    default_language: None,
                 },
             )? {
                 IndexResolution::Resolved(resolved) => links_commands::links_fix(

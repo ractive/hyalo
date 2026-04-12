@@ -55,6 +55,7 @@ pub(super) fn apply_sort(
                 b_score
                     .partial_cmp(&a_score)
                     .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.file.cmp(&b.file))
             });
         }
     }

@@ -12,7 +12,8 @@ use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::{
-    Bm25Corpus, DocumentInput, PreTokenizedInput, resolve_language, tokenize_document,
+    Bm25Corpus, DocumentInput, PreTokenizedInput, parse_language, resolve_language,
+    tokenize_document,
 };
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
@@ -154,7 +155,10 @@ pub fn find(
     // BM25 search bypasses pre-sort optimisation entirely (all candidates must
     // be scored before any can be ranked).
     let presorted = !reverse
-        && !matches!(effective_sort_ref, Some(SortField::BacklinksCount))
+        && !matches!(
+            effective_sort_ref,
+            Some(SortField::BacklinksCount | SortField::Score)
+        )
         && !has_bm25_search;
 
     let mut scoped_entries = scoped_entries;
@@ -262,22 +266,31 @@ pub fn find(
         // or when a section filter is active.
         let mut pre_tok_inputs: Vec<PreTokenizedInput> = Vec::new();
         let mut doc_inputs: Vec<DocumentInput> = Vec::new();
-        // Track which candidates we successfully processed.
-        let mut readable_candidates: Vec<usize> = Vec::with_capacity(candidates.len());
 
         for &idx in &candidates {
             let entry = &scoped_entries[idx];
 
             // Use pre-tokenized data only when:
             // 1. The index entry has stored tokens, AND
-            // 2. No section filter is active (section filters require line-level body slicing).
+            // 2. No section filter is active (section filters require line-level body slicing), AND
+            // 3. The cached language matches the effective language for this entry.
             if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
-                readable_candidates.push(idx);
-                pre_tok_inputs.push(PreTokenizedInput {
-                    rel_path: entry.rel_path.clone(),
-                    tokens: tokens.clone(),
-                });
-                continue;
+                let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+                let effective_lang = resolve_language(fm_lang, language, config_language);
+                let cached_lang_matches = entry
+                    .bm25_language
+                    .as_deref()
+                    .and_then(|s| parse_language(s).ok())
+                    == Some(effective_lang);
+
+                if cached_lang_matches {
+                    pre_tok_inputs.push(PreTokenizedInput {
+                        rel_path: entry.rel_path.clone(),
+                        tokens: tokens.clone(),
+                    });
+                    continue;
+                }
+                // Fall through to disk-read tokenization when language mismatches.
             }
 
             // Slow path: read the file from disk.
@@ -331,7 +344,6 @@ pub fn find(
             let title_str = title_val.as_str().unwrap_or("").to_owned();
             let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
             let lang = resolve_language(fm_lang, language, config_language);
-            readable_candidates.push(idx);
             doc_inputs.push(DocumentInput {
                 rel_path: entry.rel_path.clone(),
                 title: title_str,
