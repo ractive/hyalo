@@ -563,3 +563,302 @@ fn bm25_negation_excludes_docs() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 17. Implicit AND — all terms required
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_implicit_and_requires_both_terms() {
+    let tmp = setup_bm25_vault();
+    // "rust programming" → AND semantics: both terms must be present
+    let (status, json, stderr) = find_json(&tmp, &["rust programming"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+
+    // rust_deep.md has both "rust" (many times) and "programming language"
+    assert!(
+        files.contains(&"rust_deep.md"),
+        "rust_deep.md should match AND query (has both terms): {files:?}"
+    );
+    // rust_brief.md has both "Rust" and "programming languages"
+    assert!(
+        files.contains(&"rust_brief.md"),
+        "rust_brief.md should match AND query (has both terms): {files:?}"
+    );
+    // cooking.md has neither → must not appear
+    assert!(
+        !files.contains(&"cooking.md"),
+        "cooking.md should NOT match AND query: {files:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 18. AND with no overlap — returns empty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_and_no_overlap_returns_empty() {
+    let tmp = setup_bm25_vault();
+    // "rust cooking" — no document contains both terms
+    let (status, json, stderr) = find_json(&tmp, &["rust cooking"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.is_empty(),
+        "expected empty results: no doc has both 'rust' and 'cooking': {arr:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 19. Explicit OR — either term matches
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_explicit_or_returns_union() {
+    let tmp = setup_bm25_vault();
+    // "rust OR cooking" → any doc with either term
+    let (status, json, stderr) = find_json(&tmp, &["rust OR cooking"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+
+    assert!(
+        files.contains(&"rust_deep.md"),
+        "rust_deep.md should match OR query: {files:?}"
+    );
+    assert!(
+        files.contains(&"rust_brief.md"),
+        "rust_brief.md should match OR query: {files:?}"
+    );
+    assert!(
+        files.contains(&"cooking.md"),
+        "cooking.md should match OR query: {files:?}"
+    );
+    // running.md and french.md have neither → should not appear
+    assert!(
+        !files.contains(&"running.md"),
+        "running.md should NOT match 'rust OR cooking': {files:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 20. Phrase search — consecutive words required
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_phrase_search_consecutive_match() {
+    let tmp = setup_bm25_vault();
+    // "systems programming" appears consecutively in rust_deep.md
+    // ("Rust is a systems programming language")
+    // rust_brief.md has both words but NOT consecutively
+    let (status, json, stderr) = find_json(&tmp, &["\"systems programming\""]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+
+    assert!(
+        files.contains(&"rust_deep.md"),
+        "rust_deep.md should match phrase 'systems programming': {files:?}"
+    );
+    assert!(
+        !files.contains(&"rust_brief.md"),
+        "rust_brief.md should NOT match phrase 'systems programming' (words not adjacent): {files:?}"
+    );
+    assert!(
+        !files.contains(&"cooking.md"),
+        "cooking.md should NOT match phrase 'systems programming': {files:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 21. Mixed OR + negation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_mixed_or_negation() {
+    let tmp = setup_bm25_vault();
+    // "rust OR cooking -safety"
+    // rust_deep.md has "safety" → excluded
+    // rust_brief.md has "rust" but not "safety" → included
+    // cooking.md has "cooking" and not "safety" → included
+    let (status, json, stderr) = find_json(&tmp, &["rust OR cooking -safety"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+
+    assert!(
+        !files.contains(&"rust_deep.md"),
+        "rust_deep.md should be excluded (contains 'safety'): {files:?}"
+    );
+    assert!(
+        files.contains(&"rust_brief.md"),
+        "rust_brief.md should be included (has 'rust', no 'safety'): {files:?}"
+    );
+    assert!(
+        files.contains(&"cooking.md"),
+        "cooking.md should be included (has 'cooking', no 'safety'): {files:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 22. Whitespace-only query is rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_whitespace_only_query_rejected() {
+    let tmp = setup_bm25_vault();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "   "])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "whitespace-only query should return a non-zero exit code"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 23. Reverse — lowest BM25 score first
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_reverse_puts_lowest_score_first() {
+    let tmp = setup_bm25_vault();
+    let (status, json, stderr) = find_json(&tmp, &["rust", "--reverse"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.len() >= 2,
+        "expected at least 2 results for reverse test: {arr:?}"
+    );
+
+    // With --reverse the lowest-scoring result should be first
+    let scores: Vec<f64> = arr.iter().filter_map(|v| v["score"].as_f64()).collect();
+    assert!(!scores.is_empty(), "expected score fields in BM25 results");
+    for i in 1..scores.len() {
+        assert!(
+            scores[i - 1] <= scores[i],
+            "with --reverse, scores should be ascending (lowest first): {scores:?}"
+        );
+    }
+
+    // rust_deep.md has the highest BM25 score so it should be last in reverse order
+    let last_file = arr.last().unwrap()["file"].as_str().unwrap();
+    assert_eq!(
+        last_file, "rust_deep.md",
+        "rust_deep.md should be last (highest score) with --reverse: {arr:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 24. Phrase search via index
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_phrase_search_via_index() {
+    let tmp = setup_bm25_vault();
+
+    // Build the index first (it will store positions for phrase matching)
+    let index_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let index_path = tmp.path().join(".hyalo-index");
+    let index_path_str = index_path.to_str().unwrap();
+
+    // Phrase search via the built index
+    let (status, json, stderr) = find_json(
+        &tmp,
+        &["\"systems programming\"", "--index", index_path_str],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+
+    assert!(
+        files.contains(&"rust_deep.md"),
+        "rust_deep.md should match phrase via --index: {files:?}"
+    );
+    assert!(
+        !files.contains(&"rust_brief.md"),
+        "rust_brief.md should NOT match phrase via --index: {files:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 25. Section-scoped BM25 search
+// ---------------------------------------------------------------------------
+
+fn setup_multisection_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    write_md(
+        tmp.path(),
+        "multi_section.md",
+        md!(r"
+---
+title: Multi-section Doc
+tags:
+  - test
+---
+# Multi-section Doc
+
+## Rust Section
+Rust is a systems programming language with great performance.
+
+## Python Section
+Python is popular for data science and scripting.
+"),
+    );
+
+    tmp
+}
+
+#[test]
+fn bm25_section_scoped_search_includes_correct_section() {
+    let tmp = setup_multisection_vault();
+
+    // "rust" appears only in "Rust Section" — searching with --section "Rust Section" should find it
+    let (status, json, stderr) = find_json(&tmp, &["rust", "--section", "Rust Section"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.iter().any(|v| v["file"] == "multi_section.md"),
+        "multi_section.md should match 'rust' in --section 'Rust Section': {arr:?}"
+    );
+}
+
+#[test]
+fn bm25_section_scoped_search_excludes_other_section() {
+    let tmp = setup_multisection_vault();
+
+    // "rust" is NOT in "Python Section" — searching with --section "Python Section" should not find it
+    let (status, json, stderr) = find_json(&tmp, &["rust", "--section", "Python Section"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert!(
+        !arr.iter().any(|v| v["file"] == "multi_section.md"),
+        "multi_section.md should NOT match 'rust' in --section 'Python Section': {arr:?}"
+    );
+}
