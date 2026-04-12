@@ -139,6 +139,9 @@ pub(crate) struct Cli {
 
     /// Use a pre-built snapshot index instead of scanning files from disk.
     ///
+    /// When passed without a value, uses `.hyalo-index` in the vault
+    /// directory. Pass a path to use a different index file.
+    ///
     /// Read-only commands (find, summary, tags summary, properties summary,
     /// backlinks) use the index to skip disk scans entirely.
     ///
@@ -151,7 +154,7 @@ pub(crate) struct Cli {
     ///
     /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
     /// falls back to a full disk scan automatically.
-    #[arg(long, global = true, value_name = "PATH")]
+    #[arg(long, global = true, value_name = "PATH", num_args = 0..=1, default_missing_value = ".hyalo-index")]
     pub index: Option<PathBuf>,
 
     /// Suppress all warnings printed to stderr.

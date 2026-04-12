@@ -1550,3 +1550,42 @@ Target content
         "symlinked file inside vault should be included: {files:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bare --index flag (no path argument)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bare_index_flag_defaults_to_hyalo_index_in_vault_dir() {
+    let tmp = setup_vault();
+    create_default_index(&tmp);
+
+    // Use bare --index (no path) — should auto-resolve to {dir}/.hyalo-index
+    let index_json = run_find(&tmp, &["--index"]);
+    let disk_json = run_find(&tmp, &[]);
+
+    let mut index_files = sorted_files(&index_json);
+    let mut disk_files = sorted_files(&disk_json);
+    index_files.sort();
+    disk_files.sort();
+
+    assert_eq!(
+        disk_files, index_files,
+        "bare --index should use .hyalo-index and return the same file set as a disk scan"
+    );
+}
+
+#[test]
+fn bare_index_flag_without_index_file_falls_back_to_disk_scan() {
+    let tmp = setup_vault();
+    // Do NOT create an index — bare --index should fall back gracefully.
+
+    let result = run_find(&tmp, &["--index"]);
+    let files = sorted_files(&result);
+
+    // Should still return results via disk scan fallback.
+    assert!(
+        !files.is_empty(),
+        "bare --index without an index file should fall back to disk scan"
+    );
+}

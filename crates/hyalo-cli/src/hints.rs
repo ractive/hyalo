@@ -1142,16 +1142,25 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
 fn hints_for_create_index(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
+    // Use bare `--index` (defaults to .hyalo-index in vault dir) for the default path.
+    // Only include the explicit path when the index was created at a non-default location.
     let index_path = data
         .get("path")
         .and_then(|p| p.as_str())
-        .or(ctx.index_path.as_deref())
-        .unwrap_or(".hyalo-index");
+        .or(ctx.index_path.as_deref());
 
-    hints.push(Hint::new(
-        "Query using the index",
-        build_command_no_glob(ctx, &["find", "--index", index_path]),
-    ));
+    let is_default = index_path.is_none_or(|p| p == ".hyalo-index" || p.ends_with("/.hyalo-index"));
+
+    let hint_cmd = if is_default {
+        build_command_no_glob(ctx, &["find", "--index"])
+    } else {
+        build_command_no_glob(
+            ctx,
+            &["find", "--index", index_path.unwrap_or(".hyalo-index")],
+        )
+    };
+
+    hints.push(Hint::new("Query using the index", hint_cmd));
     hints.push(Hint::new(
         "Delete the index when done",
         build_command_no_glob(ctx, &["drop-index"]),
