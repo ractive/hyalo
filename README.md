@@ -207,6 +207,12 @@ hyalo find
 # Files with broken links (unresolved wikilinks or markdown links)
 hyalo find --broken-links
 
+# Orphan files (no inbound or outbound links)
+hyalo find --orphan
+
+# Dead-end files (have inbound links but no outbound links)
+hyalo find --dead-end
+
 # BM25 ranked full-text search (stemmed, relevance-ranked)
 hyalo find "retry backoff"               # AND: both words required
 hyalo find "retry OR backoff"            # OR: either word matches
