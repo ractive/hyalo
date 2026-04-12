@@ -33,7 +33,8 @@ hyalo find "error handling" --property status!=completed --tag iteration --secti
 ## BM25 Full-Text Search
 
 The positional argument to `find` triggers BM25 ranked full-text search with automatic
-stemming ("running" matches "run", "runner", etc.). Results are sorted by relevance score.
+stemming ("running" matches "run", "runner", etc.). Results are sorted by relevance score
+by default (unless `--sort` is specified).
 
 ```bash
 hyalo find "rust"                        # single term, stemmed

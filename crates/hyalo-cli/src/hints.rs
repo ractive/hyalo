@@ -561,7 +561,7 @@ fn suggest_save_as_view(ctx: &HintContext) -> Option<Hint> {
     }
 
     // Only count filters that can be round-tripped into a `views set` command.
-    // Body/regex search is excluded because HintContext only stores a bool,
+    // Body/regex search is excluded because `views set` does not support them,
     // not the actual pattern string.
     let filter_count =
         ctx.property_filters.len() + ctx.tag_filters.len() + usize::from(ctx.task_filter.is_some());
@@ -583,7 +583,10 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
 
     if results.is_empty() {
         // When a multi-word BM25 search returns nothing, suggest trying OR instead.
+        // Skip if the query already contains quotes (phrase search) — splitting on
+        // whitespace would produce malformed tokens like `"exact` and `phrase"`.
         if let Some(pat) = &ctx.body_pattern {
+            let has_quotes = pat.contains('"');
             let words: Vec<&str> = pat
                 .split_whitespace()
                 .filter(|w| {
@@ -592,7 +595,7 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
                         && !w.eq_ignore_ascii_case("and")
                 })
                 .collect();
-            if words.len() >= 2 {
+            if !has_quotes && words.len() >= 2 {
                 let or_query = words.join(" OR ");
                 return vec![Hint::new(
                     "Try OR instead of AND (match any word)",

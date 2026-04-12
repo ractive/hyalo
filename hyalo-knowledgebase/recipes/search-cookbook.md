@@ -136,6 +136,6 @@ hyalo find -e "^\s*-\s*\[[ x]\]" --section "Tasks"
 - **Implicit AND is the default.** `hyalo find "rust performance"` requires *both* words. This matches Google/GitHub behavior.
 - **OR must be explicit.** Write `rust OR golang`, not just `rust golang` (which means AND).
 - **Stemming applies everywhere.** `-running` also excludes "run", "runner". Phrase `"error handling"` matches "errors handled".
-- **Combine BM25 with filters freely.** The BM25 search runs first, then property/tag/section filters narrow the results.
+- **Combine BM25 with filters freely.** Metadata filters (property, tag, section) and BM25 scoring are logically combined — the result is documents matching all criteria, ranked by relevance.
 - **Use `--index` for large vaults.** On 500+ files, `create-index` makes BM25 queries 6x faster by persisting the inverted index.
 - **Score field.** BM25 results include a `score` field — higher is more relevant. Use `--jq '.results | sort_by(-.score) | .[0:3]'` for top 3.
