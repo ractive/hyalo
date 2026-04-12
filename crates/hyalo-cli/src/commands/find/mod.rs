@@ -12,8 +12,8 @@ use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::{
-    Bm25Corpus, DocumentInput, PreTokenizedInput, parse_language, resolve_language,
-    tokenize_document,
+    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, parse_language,
+    resolve_language, tokenize_document,
 };
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
@@ -179,212 +179,234 @@ pub fn find(
     // I/O pass to read bodies and build the corpus.
     let bm25_score_map: Option<HashMap<String, f64>> = if has_bm25_search {
         let pat = pattern.unwrap(); // has_bm25_search == pattern.is_some()
+        'bm25: {
+            // Collect entries that pass all metadata filters.
+            let mut candidates: Vec<usize> = Vec::new();
+            for (idx, entry) in scoped_entries.iter().enumerate() {
+                // Metadata filter (same logic as the main loop below)
+                let has_missing_fm_title = has_title_property_filter
+                    && !matches!(
+                        entry.properties.get("title"),
+                        Some(serde_json::Value::String(_))
+                    );
 
-        // Collect entries that pass all metadata filters.
-        let mut candidates: Vec<usize> = Vec::new();
-        for (idx, entry) in scoped_entries.iter().enumerate() {
-            // Metadata filter (same logic as the main loop below)
-            let has_missing_fm_title = has_title_property_filter
-                && !matches!(
-                    entry.properties.get("title"),
-                    Some(serde_json::Value::String(_))
-                );
-
-            if has_missing_fm_title {
-                let derived = extract_title(&entry.properties, Some(&entry.sections));
-                let title_ok = property_filters
-                    .iter()
-                    .filter(|f| f.key() == Some("title"))
-                    .all(|f| {
-                        if derived.is_null() {
-                            matches!(f, filter::PropertyFilter::Absent { .. })
-                        } else {
-                            f.matches_value(&derived)
-                        }
-                    });
-                if !title_ok {
-                    continue;
-                }
-                let non_title_ok = property_filters
-                    .iter()
-                    .filter(|f| f.key() != Some("title"))
-                    .all(|f| f.matches(&entry.properties));
-                if !non_title_ok {
-                    continue;
-                }
-                if !tag_filters.is_empty()
-                    && !tag_filters
+                if has_missing_fm_title {
+                    let derived = extract_title(&entry.properties, Some(&entry.sections));
+                    let title_ok = property_filters
                         .iter()
-                        .all(|q| entry.tags.iter().any(|t| filter::tag_matches(t, q)))
+                        .filter(|f| f.key() == Some("title"))
+                        .all(|f| {
+                            if derived.is_null() {
+                                matches!(f, filter::PropertyFilter::Absent { .. })
+                            } else {
+                                f.matches_value(&derived)
+                            }
+                        });
+                    if !title_ok {
+                        continue;
+                    }
+                    let non_title_ok = property_filters
+                        .iter()
+                        .filter(|f| f.key() != Some("title"))
+                        .all(|f| f.matches(&entry.properties));
+                    if !non_title_ok {
+                        continue;
+                    }
+                    if !tag_filters.is_empty()
+                        && !tag_filters
+                            .iter()
+                            .all(|q| entry.tags.iter().any(|t| filter::tag_matches(t, q)))
+                    {
+                        continue;
+                    }
+                } else if !filter::matches_filters_with_tags(
+                    &entry.properties,
+                    property_filters,
+                    &entry.tags,
+                    tag_filters,
+                ) {
+                    continue;
+                }
+
+                // Title filter
+                if let Some(ref matcher) = title_matcher {
+                    let title_val = extract_title(&entry.properties, Some(&entry.sections));
+                    if !matcher.matches(&title_val) {
+                        continue;
+                    }
+                }
+
+                // Section filter: check that at least one scope exists
+                if has_section_filter {
+                    let scope_ranges =
+                        build_section_scope(&entry.sections, section_filters, usize::MAX);
+                    if scope_ranges.is_empty() {
+                        continue;
+                    }
+                }
+
+                // Task filter
+                if let Some(filter) = task_filter
+                    && !matches_task_filter(&entry.tasks, filter)
                 {
                     continue;
                 }
-            } else if !filter::matches_filters_with_tags(
-                &entry.properties,
-                property_filters,
-                &entry.tags,
-                tag_filters,
-            ) {
-                continue;
+
+                candidates.push(idx);
             }
 
-            // Title filter
-            if let Some(ref matcher) = title_matcher {
+            // Resolve query-time stemmer (language from CLI/config, no per-document override for
+            // the query itself).
+            let query_lang = resolve_language(None, language, config_language);
+            let stemmer = create_stemmer(query_lang);
+
+            // Build the candidate set (rel_path strings) for filtering persisted-index results.
+            let candidate_paths: std::collections::HashSet<&str> = candidates
+                .iter()
+                .map(|&idx| scoped_entries[idx].rel_path.as_str())
+                .collect();
+
+            // Fastest path: use the persisted BM25 inverted index when available AND no section
+            // filter is active. Score all docs, then intersect with metadata-passing candidates.
+            if !has_section_filter && let Some(bm25_idx) = index.bm25_index() {
+                let all_scored = bm25_idx.score(pat, &stemmer);
+                let map: HashMap<String, f64> = all_scored
+                    .into_iter()
+                    .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
+                    .map(|m| (m.rel_path, m.score))
+                    .collect();
+                break 'bm25 Some(map);
+            }
+
+            // Build BM25 index from candidates.
+            //
+            // Fast path: when the index has pre-tokenized data and no section filter
+            // is active (section filters require scoping to specific line ranges, which
+            // is only possible with the raw body), use the stored tokens directly —
+            // no disk I/O needed.
+            //
+            // Slow path: read each file from disk for entries that lack stored tokens
+            // or when a section filter is active.
+            let mut pre_tok_inputs: Vec<PreTokenizedInput> = Vec::new();
+            let mut doc_inputs: Vec<DocumentInput> = Vec::new();
+
+            for &idx in &candidates {
+                let entry = &scoped_entries[idx];
+
+                // Use pre-tokenized data only when:
+                // 1. The index entry has stored tokens, AND
+                // 2. No section filter is active (section filters require line-level body slicing), AND
+                // 3. The cached language matches the effective language for this entry.
+                if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
+                    let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+                    let effective_lang = resolve_language(fm_lang, language, config_language);
+                    let cached_lang_matches = entry
+                        .bm25_language
+                        .as_deref()
+                        .and_then(|s| parse_language(s).ok())
+                        == Some(effective_lang);
+
+                    if cached_lang_matches {
+                        pre_tok_inputs.push(PreTokenizedInput {
+                            rel_path: entry.rel_path.clone(),
+                            tokens: tokens.clone(),
+                        });
+                        continue;
+                    }
+                    // Fall through to disk-read tokenization when language mismatches.
+                }
+
+                // Slow path: read the file from disk.
+                let full_path = dir.join(&entry.rel_path);
+                let file_content = match std::fs::read_to_string(&full_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                        continue;
+                    }
+                };
+                // Feed only the body (after frontmatter) to BM25 so that frontmatter
+                // YAML (including tag values) does not influence scoring.
+                let raw_body = hyalo_core::frontmatter::body_only(&file_content);
+
+                // When section filters are active, restrict the BM25 body to lines
+                // that fall within the matching section scope. This preserves the
+                // expectation that "pattern + --section X" only matches files where
+                // the pattern appears inside section X, not elsewhere in the document.
+                let body = if has_section_filter {
+                    let scope_ranges =
+                        build_section_scope(&entry.sections, section_filters, usize::MAX);
+                    if scope_ranges.is_empty() {
+                        // No matching section — this candidate should have been filtered
+                        // in Phase 1, but guard here just in case.
+                        continue;
+                    }
+                    // Index line numbers are 1-based relative to the full file (frontmatter + body).
+                    // Count lines in the frontmatter prefix to offset body line numbers correctly.
+                    let fm_prefix_len = file_content.len() - raw_body.len();
+                    let fm_lines = file_content[..fm_prefix_len].lines().count();
+                    raw_body
+                        .lines()
+                        .enumerate()
+                        .filter_map(|(i, line)| {
+                            // body line i corresponds to file line (fm_lines + i + 1) (1-based)
+                            let file_line = fm_lines + i + 1;
+                            if in_scope(&scope_ranges, file_line) {
+                                Some(line)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    raw_body.to_owned()
+                };
+
                 let title_val = extract_title(&entry.properties, Some(&entry.sections));
-                if !matcher.matches(&title_val) {
-                    continue;
-                }
-            }
-
-            // Section filter: check that at least one scope exists
-            if has_section_filter {
-                let scope_ranges =
-                    build_section_scope(&entry.sections, section_filters, usize::MAX);
-                if scope_ranges.is_empty() {
-                    continue;
-                }
-            }
-
-            // Task filter
-            if let Some(filter) = task_filter
-                && !matches_task_filter(&entry.tasks, filter)
-            {
-                continue;
-            }
-
-            candidates.push(idx);
-        }
-
-        // Build BM25 corpus from candidates.
-        //
-        // Fast path: when the index has pre-tokenized data and no section filter
-        // is active (section filters require scoping to specific line ranges, which
-        // is only possible with the raw body), use the stored tokens directly —
-        // no disk I/O needed.
-        //
-        // Slow path: read each file from disk for entries that lack stored tokens
-        // or when a section filter is active.
-        let mut pre_tok_inputs: Vec<PreTokenizedInput> = Vec::new();
-        let mut doc_inputs: Vec<DocumentInput> = Vec::new();
-
-        for &idx in &candidates {
-            let entry = &scoped_entries[idx];
-
-            // Use pre-tokenized data only when:
-            // 1. The index entry has stored tokens, AND
-            // 2. No section filter is active (section filters require line-level body slicing), AND
-            // 3. The cached language matches the effective language for this entry.
-            if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
+                let title_str = title_val.as_str().unwrap_or("").to_owned();
                 let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
-                let effective_lang = resolve_language(fm_lang, language, config_language);
-                let cached_lang_matches = entry
-                    .bm25_language
-                    .as_deref()
-                    .and_then(|s| parse_language(s).ok())
-                    == Some(effective_lang);
-
-                if cached_lang_matches {
-                    pre_tok_inputs.push(PreTokenizedInput {
-                        rel_path: entry.rel_path.clone(),
-                        tokens: tokens.clone(),
-                    });
-                    continue;
-                }
-                // Fall through to disk-read tokenization when language mismatches.
+                let lang = resolve_language(fm_lang, language, config_language);
+                doc_inputs.push(DocumentInput {
+                    rel_path: entry.rel_path.clone(),
+                    title: title_str,
+                    body,
+                    language: lang,
+                });
             }
 
-            // Slow path: read the file from disk.
-            let full_path = dir.join(&entry.rel_path);
-            let file_content = match std::fs::read_to_string(&full_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
-                    continue;
-                }
-            };
-            // Feed only the body (after frontmatter) to BM25 so that frontmatter
-            // YAML (including tag values) does not influence scoring.
-            let raw_body = hyalo_core::frontmatter::body_only(&file_content);
-
-            // When section filters are active, restrict the BM25 body to lines
-            // that fall within the matching section scope. This preserves the
-            // expectation that "pattern + --section X" only matches files where
-            // the pattern appears inside section X, not elsewhere in the document.
-            let body = if has_section_filter {
-                let scope_ranges =
-                    build_section_scope(&entry.sections, section_filters, usize::MAX);
-                if scope_ranges.is_empty() {
-                    // No matching section — this candidate should have been filtered
-                    // in Phase 1, but guard here just in case.
-                    continue;
-                }
-                // Index line numbers are 1-based relative to the full file (frontmatter + body).
-                // Count lines in the frontmatter prefix to offset body line numbers correctly.
-                let fm_prefix_len = file_content.len() - raw_body.len();
-                let fm_lines = file_content[..fm_prefix_len].lines().count();
-                raw_body
-                    .lines()
-                    .enumerate()
-                    .filter_map(|(i, line)| {
-                        // body line i corresponds to file line (fm_lines + i + 1) (1-based)
-                        let file_line = fm_lines + i + 1;
-                        if in_scope(&scope_ranges, file_line) {
-                            Some(line)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
+            // Score all documents. When the corpus is a mix of pre-tokenized and
+            // freshly-read documents, we build two separate corpora and merge scores.
+            // This is safe because BM25 scores are relative within a corpus — mixing
+            // them directly would be incorrect. However, the common case is that ALL
+            // candidates come from the same source (all pre-tokenized or all from disk),
+            // so the mixed case only arises during a rolling index upgrade where some
+            // entries were indexed before BM25 support was added.
+            let scored = if doc_inputs.is_empty() {
+                // All candidates were pre-tokenized — fast path.
+                let corpus = Bm25InvertedIndex::build_from_tokens(pre_tok_inputs);
+                corpus.score(pat, &stemmer)
+            } else if pre_tok_inputs.is_empty() {
+                // All candidates need file reads — original slow path.
+                let corpus = Bm25InvertedIndex::build(doc_inputs);
+                corpus.score(pat, &stemmer)
             } else {
-                raw_body.to_owned()
+                // Mixed: some candidates have pre-tokenized data from the index, others were
+                // read from disk. Tokenize the disk-read entries and combine into a single
+                // pre-tokenized corpus so all BM25 scores are computed on the same basis.
+                let mut all_pre_tok = pre_tok_inputs;
+                for doc in doc_inputs {
+                    all_pre_tok.push(tokenize_document(doc));
+                }
+                let corpus = Bm25InvertedIndex::build_from_tokens(all_pre_tok);
+                corpus.score(pat, &stemmer)
             };
 
-            let title_val = extract_title(&entry.properties, Some(&entry.sections));
-            let title_str = title_val.as_str().unwrap_or("").to_owned();
-            let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
-            let lang = resolve_language(fm_lang, language, config_language);
-            doc_inputs.push(DocumentInput {
-                rel_path: entry.rel_path.clone(),
-                title: title_str,
-                body,
-                language: lang,
-            });
-        }
-
-        // Resolve the query language (no per-document frontmatter for the query itself).
-        let query_lang = resolve_language(None, language, config_language);
-
-        // Score all documents. When the corpus is a mix of pre-tokenized and
-        // freshly-read documents, we build two separate corpora and merge scores.
-        // This is safe because BM25 scores are relative within a corpus — mixing
-        // them directly would be incorrect. However, the common case is that ALL
-        // candidates come from the same source (all pre-tokenized or all from disk),
-        // so the mixed case only arises during a rolling index upgrade where some
-        // entries were indexed before BM25 support was added.
-        let scored = if doc_inputs.is_empty() {
-            // All candidates were pre-tokenized — fast path.
-            let corpus = Bm25Corpus::build_from_tokens(pre_tok_inputs, query_lang);
-            corpus.score(pat)
-        } else if pre_tok_inputs.is_empty() {
-            // All candidates need file reads — original slow path.
-            let corpus = Bm25Corpus::build(doc_inputs, query_lang);
-            corpus.score(pat)
-        } else {
-            // Mixed: some candidates have pre-tokenized data from the index, others were
-            // read from disk. Tokenize the disk-read entries and combine into a single
-            // pre-tokenized corpus so all BM25 scores are computed on the same basis.
-            let mut all_pre_tok = pre_tok_inputs;
-            for doc in doc_inputs {
-                all_pre_tok.push(tokenize_document(doc));
-            }
-            let corpus = Bm25Corpus::build_from_tokens(all_pre_tok, query_lang);
-            corpus.score(pat)
-        };
-
-        // Build a map from rel_path → score (only entries with score > 0).
-        let map: HashMap<String, f64> = scored.into_iter().map(|m| (m.rel_path, m.score)).collect();
-        Some(map)
+            // Build a map from rel_path → score (only entries with score > 0).
+            let map: HashMap<String, f64> =
+                scored.into_iter().map(|m| (m.rel_path, m.score)).collect();
+            Some(map)
+        } // end 'bm25 block
     } else {
         None
     };

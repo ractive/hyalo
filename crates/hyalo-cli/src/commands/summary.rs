@@ -895,6 +895,7 @@ Body.
             &index_path,
             &dir.display().to_string(),
             prefix,
+            None,
         )
         .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
@@ -1011,7 +1012,14 @@ Body.
         )
         .unwrap();
         let index_path = dir.join(".hyalo-index");
-        SnapshotIndex::save(&build.index, &index_path, &dir.display().to_string(), None).unwrap();
+        SnapshotIndex::save(
+            &build.index,
+            &index_path,
+            &dir.display().to_string(),
+            None,
+            None,
+        )
+        .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let index_val =
             unwrap_success(summary(dir, &loaded, &[], 10, None, None, Format::Json).unwrap());

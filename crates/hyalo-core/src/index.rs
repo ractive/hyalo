@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::bm25::{resolve_language, tokenize};
+use crate::bm25::{Bm25InvertedIndex, resolve_language, tokenize};
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
@@ -70,6 +70,15 @@ pub trait VaultIndex {
 
     /// The pre-built link graph for backlink lookups.
     fn link_graph(&self) -> &LinkGraph;
+
+    /// Return the persisted BM25 inverted index, if available.
+    ///
+    /// Returns `Some` only for [`SnapshotIndex`] instances that were saved with
+    /// `bm25_tokenize = true`. Returns `None` for live [`ScannedIndex`] instances
+    /// and for snapshots built without BM25 tokenization.
+    fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -241,12 +250,14 @@ struct SnapshotHeader {
     pid: u32,
 }
 
-/// Internal serialization envelope — header + entries + graph.
+/// Internal serialization envelope — header + entries + graph + optional BM25 index.
 #[derive(Serialize, Deserialize)]
 struct SnapshotData {
     header: SnapshotHeader,
     entries: Vec<IndexEntry>,
     graph: LinkGraph,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bm25_index: Option<Bm25InvertedIndex>,
 }
 
 /// Borrowed variant used only for serialization — avoids cloning all entries.
@@ -255,6 +266,8 @@ struct SnapshotDataRef<'a> {
     header: SnapshotHeader,
     entries: &'a [IndexEntry],
     graph: &'a LinkGraph,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bm25_index: Option<&'a Bm25InvertedIndex>,
 }
 
 /// A vault index loaded from a MessagePack snapshot file.
@@ -267,6 +280,8 @@ pub struct SnapshotIndex {
     path_index: HashMap<String, usize>,
     graph: LinkGraph,
     header: SnapshotHeader,
+    /// Persisted BM25 inverted index (if the snapshot was built with `bm25_tokenize = true`).
+    bm25_index: Option<Bm25InvertedIndex>,
 }
 
 impl SnapshotIndex {
@@ -391,6 +406,7 @@ impl SnapshotIndex {
             path,
             &self.header.vault_dir,
             self.header.site_prefix.as_deref(),
+            self.bm25_index.as_ref(),
         )
     }
 
@@ -421,6 +437,7 @@ impl SnapshotIndex {
                     path_index,
                     graph: data.graph,
                     header: data.header,
+                    bm25_index: data.bm25_index,
                 })
             }
             Err(e) => {
@@ -469,13 +486,22 @@ impl SnapshotIndex {
     ///
     /// `vault_dir` and `site_prefix` are stored in the header for informational
     /// purposes (shown by `create-index` on load; not validated on subsequent loads).
+    ///
+    /// `bm25_index` is an optional pre-built BM25 inverted index to persist alongside
+    /// the entries. When `Some`, subsequent loads will expose it via [`VaultIndex::bm25_index`].
     pub fn save(
         index: &dyn VaultIndex,
         path: &Path,
         vault_dir: &str,
         site_prefix: Option<&str>,
+        bm25_index: Option<&Bm25InvertedIndex>,
     ) -> Result<()> {
-        write_snapshot(index, path, vault_dir, site_prefix)
+        write_snapshot(index, path, vault_dir, site_prefix, bm25_index)
+    }
+
+    /// Return the persisted BM25 inverted index, if present.
+    pub fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
+        self.bm25_index.as_ref()
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -497,6 +523,7 @@ fn write_snapshot(
     path: &Path,
     vault_dir: &str,
     site_prefix: Option<&str>,
+    bm25_index: Option<&Bm25InvertedIndex>,
 ) -> Result<()> {
     let header = SnapshotHeader {
         vault_dir: vault_dir.to_owned(),
@@ -507,10 +534,31 @@ fn write_snapshot(
             .unwrap_or(0),
         pid: std::process::id(),
     };
+    // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
+    // avoid duplicating the same data (the inverted index already encodes it).
+    // This roughly halves the snapshot size on large vaults.
+    let stripped_entries: Vec<IndexEntry>;
+    let entries: &[IndexEntry] = if bm25_index.is_some() {
+        stripped_entries = index
+            .entries()
+            .iter()
+            .map(|e| {
+                let mut e = e.clone();
+                e.bm25_tokens = None;
+                e.bm25_language = None;
+                e
+            })
+            .collect();
+        &stripped_entries
+    } else {
+        index.entries()
+    };
+
     let data = SnapshotDataRef {
         header,
-        entries: index.entries(),
+        entries,
         graph: index.link_graph(),
+        bm25_index,
     };
     let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
     // Use a kernel-assigned temp-file name in the same directory as the
@@ -543,6 +591,10 @@ impl VaultIndex for SnapshotIndex {
 
     fn link_graph(&self) -> &LinkGraph {
         &self.graph
+    }
+
+    fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
+        self.bm25_index.as_ref()
     }
 }
 
@@ -1159,7 +1211,7 @@ Content.
         let snap_dir = tempfile::tempdir().unwrap();
         let snap_path = snap_dir.path().join(".hyalo-index");
 
-        SnapshotIndex::save(index, &snap_path, "/tmp/vault", None).unwrap();
+        SnapshotIndex::save(index, &snap_path, "/tmp/vault", None, None).unwrap();
         let loaded = SnapshotIndex::load(&snap_path)
             .unwrap()
             .expect("snapshot should deserialize");

@@ -4,12 +4,12 @@
 //! - [`StemLanguage`]: enum of supported stemming languages with [`parse_language`]
 //! - [`resolve_language`]: language precedence logic (frontmatter > CLI > config > English)
 //! - [`tokenize`]: Unicode-aware tokenization + stemming pipeline
-//! - [`Bm25Corpus`]: in-memory BM25 index built from [`DocumentInput`] values
+//! - [`Bm25InvertedIndex`]: serializable in-memory BM25 index built from [`DocumentInput`] values
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use bm25::{EmbedderBuilder, Scorer, Tokenizer};
 use rust_stemmers::{Algorithm, Stemmer};
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Language
@@ -144,6 +144,14 @@ pub fn resolve_language(
 // Tokenizer
 // ---------------------------------------------------------------------------
 
+/// Create a [`Stemmer`] for the given language.
+///
+/// This is the public API for creating stemmers — `StemLanguage::to_algorithm` is
+/// `pub(crate)` and not available outside `hyalo-core`.
+pub fn create_stemmer(lang: StemLanguage) -> Stemmer {
+    Stemmer::create(lang.to_algorithm())
+}
+
 /// Tokenizes `text` with Unicode-aware lowercasing, splits on non-alphanumeric chars, and stems
 /// each token using `stemmer`.
 pub fn tokenize(text: &str, stemmer: &Stemmer) -> Vec<String> {
@@ -152,23 +160,6 @@ pub fn tokenize(text: &str, stemmer: &Stemmer) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(|word| stemmer.stem(word).into_owned())
         .collect()
-}
-
-// ---------------------------------------------------------------------------
-// WhitespaceTokenizer (pre-tokenized text pass-through)
-// ---------------------------------------------------------------------------
-
-/// A simple tokenizer that splits on ASCII whitespace.
-///
-/// Used internally so the bm25 crate re-splits our pre-tokenized, space-joined token strings
-/// without applying its own stemming or stop-word logic.
-#[derive(Default)]
-struct WhitespaceTokenizer;
-
-impl Tokenizer for WhitespaceTokenizer {
-    fn tokenize(&self, input: &str) -> Vec<String> {
-        input.split_whitespace().map(String::from).collect()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +174,7 @@ pub struct PreTokenizedInput {
     pub tokens: Vec<String>,
 }
 
-/// Input data for a single document added to a [`Bm25Corpus`].
+/// Input data for a single document added to a [`Bm25InvertedIndex`].
 pub struct DocumentInput {
     /// Relative path that uniquely identifies the document.
     pub rel_path: String,
@@ -197,7 +188,7 @@ pub struct DocumentInput {
 
 /// Tokenize a [`DocumentInput`] into a [`PreTokenizedInput`].
 ///
-/// Applies the same tokenization pipeline as [`Bm25Corpus::build`]: Unicode-aware
+/// Applies the same tokenization pipeline as [`Bm25InvertedIndex::build`]: Unicode-aware
 /// lowercasing, split on non-alphanumeric chars, then stemming with the document's
 /// declared language. Useful when mixing indexed (pre-tokenized) and unindexed
 /// (raw body) documents in a single corpus build.
@@ -211,7 +202,8 @@ pub fn tokenize_document(doc: DocumentInput) -> PreTokenizedInput {
     }
 }
 
-/// A ranked search result returned by [`Bm25Corpus::search`] and [`Bm25Corpus::score`].
+/// A ranked search result returned by [`Bm25InvertedIndex::search`] and
+/// [`Bm25InvertedIndex::score`].
 pub struct Bm25Match {
     /// Relative path of the matched document.
     pub rel_path: String,
@@ -221,16 +213,68 @@ pub struct Bm25Match {
 
 /// Parsed query with positive search terms and negative exclusion terms.
 struct ParsedQuery {
-    /// Positive terms to search for (stemmed, joined with spaces for the embedder).
-    positive: String,
+    /// Positive stemmed terms to search for.
+    positive: Vec<String>,
     /// Negative terms to exclude (stemmed). A document containing any of these is filtered out.
     negative: HashSet<String>,
 }
 
-/// In-memory BM25 index built from a collection of [`DocumentInput`] values.
+// ---------------------------------------------------------------------------
+// Query parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a query string into positive and negative terms.
 ///
-/// Build once with [`Bm25Corpus::build`], then call [`Bm25Corpus::search`] or
-/// [`Bm25Corpus::score`] as many times as needed.
+/// Terms prefixed with `-` are negation terms (docs containing them are excluded).
+/// All other terms contribute to BM25 relevance scoring.
+fn parse_query(query: &str, stemmer: &Stemmer) -> ParsedQuery {
+    let mut positive = Vec::new();
+    let mut negative = HashSet::new();
+
+    for word in query.split_whitespace() {
+        if let Some(neg) = word.strip_prefix('-') {
+            if !neg.is_empty() {
+                let tokens = tokenize(neg, stemmer);
+                for t in tokens {
+                    negative.insert(t);
+                }
+            }
+        } else {
+            let tokens = tokenize(word, stemmer);
+            positive.extend(tokens);
+        }
+    }
+
+    ParsedQuery { positive, negative }
+}
+
+// ---------------------------------------------------------------------------
+// BM25 inverted index
+// ---------------------------------------------------------------------------
+
+/// A (doc_id, term_frequency) pair stored in the posting list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Posting {
+    doc_id: u32,
+    term_freq: u32,
+}
+
+/// Serializable BM25 inverted index built from a collection of documents.
+///
+/// Build once with [`Bm25InvertedIndex::build`] or [`Bm25InvertedIndex::build_from_tokens`],
+/// then call [`Bm25InvertedIndex::search`] or [`Bm25InvertedIndex::score`] as many times as
+/// needed. Because this type is `Serialize + Deserialize`, it can be persisted in the snapshot
+/// index and reused across invocations — avoiding the O(N·doc) corpus rebuild on every query.
+///
+/// ## BM25 scoring formula
+///
+/// ```text
+/// score(q, d) = Σ IDF(t) × (tf(t,d) × (k1 + 1)) / (tf(t,d) + k1 × (1 - b + b × |d|/avgdl))
+///
+/// where:
+///   IDF(t) = ln(1 + (N - n(t) + 0.5) / (n(t) + 0.5))
+///   k1 = 1.2, b = 0.75
+/// ```
 ///
 /// ## Query syntax
 ///
@@ -239,193 +283,205 @@ struct ParsedQuery {
 /// - `-term` — exclude documents containing this term (negation)
 ///
 /// Examples: `"rust programming"`, `"rust -javascript"`, `"search -draft"`
-pub struct Bm25Corpus {
-    /// Relative paths ordered by their integer document ID (index into this vec).
-    doc_ids: Vec<String>,
-    /// Per-document token sets (stemmed) for negation filtering.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bm25InvertedIndex {
+    /// Term → list of (doc_id, term_frequency) postings, sorted by doc_id.
+    postings: HashMap<String, Vec<Posting>>,
+    /// Number of tokens in each document (indexed by doc_id).
+    doc_lengths: Vec<u32>,
+    /// doc_id → relative path mapping.
+    doc_paths: Vec<String>,
+    /// Per-document token sets for negation query support.
     doc_token_sets: Vec<HashSet<String>>,
-    scorer: Scorer<usize, u32>,
-    embedder: bm25::Embedder<u32, WhitespaceTokenizer>,
-    /// Stemmer used to tokenize queries.
-    query_stemmer: Stemmer,
+    /// Average document length (pre-computed).
+    avgdl: f32,
 }
 
-impl Bm25Corpus {
+impl Bm25InvertedIndex {
+    // BM25 tuning constants
+    const K1: f64 = 1.2;
+    const B: f64 = 0.75;
+
     /// Builds a BM25 index from `docs`.
     ///
-    /// Each document is tokenized with its own [`StemLanguage`]. The `query_language` stemmer is
-    /// stored for use during [`Bm25Corpus::search`] and [`Bm25Corpus::score`].
-    pub fn build(docs: Vec<DocumentInput>, query_language: StemLanguage) -> Self {
-        // Pre-tokenize every document using its declared language.
-        let token_lists: Vec<Vec<String>> = docs
-            .iter()
+    /// Each document is tokenized with its own [`StemLanguage`]. No stemmer is
+    /// stored in the index — pass a [`Stemmer`] to [`search`](Self::search) or
+    /// [`score`](Self::score) at query time.
+    pub fn build(docs: Vec<DocumentInput>) -> Self {
+        let pre_tokenized: Vec<PreTokenizedInput> = docs
+            .into_iter()
             .map(|doc| {
                 let stemmer = Stemmer::create(doc.language.to_algorithm());
                 let combined = format!("{} {}", doc.title, doc.body);
-                tokenize(&combined, &stemmer)
+                let tokens = tokenize(&combined, &stemmer);
+                PreTokenizedInput {
+                    rel_path: doc.rel_path,
+                    tokens,
+                }
             })
             .collect();
-        let pre_tokenized: Vec<String> = token_lists.iter().map(|t| t.join(" ")).collect();
-
-        // Build per-document token sets for negation filtering.
-        let doc_token_sets: Vec<HashSet<String>> = token_lists
-            .into_iter()
-            .map(|tokens| tokens.into_iter().collect())
-            .collect();
-
-        // Compute average document length (in stemmed tokens) across the corpus.
-        let total_tokens: usize = pre_tokenized
-            .iter()
-            .map(|s| s.split_whitespace().count())
-            .sum();
-        // avgdl is an approximation; precision loss from usize→f32 is acceptable here.
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        let avgdl: f32 = if docs.is_empty() {
-            256.0
-        } else {
-            (total_tokens as f64 / docs.len() as f64) as f32
-        };
-
-        let embedder = EmbedderBuilder::<u32, WhitespaceTokenizer>::with_avgdl(avgdl).build();
-        let mut scorer = Scorer::<usize, u32>::new();
-
-        let doc_ids: Vec<String> = docs.into_iter().map(|d| d.rel_path).collect();
-
-        for (idx, pre_tok) in pre_tokenized.iter().enumerate() {
-            let embedding = embedder.embed(pre_tok);
-            scorer.upsert(&idx, embedding);
-        }
-
-        let query_stemmer = Stemmer::create(query_language.to_algorithm());
-
-        Self {
-            doc_ids,
-            doc_token_sets,
-            scorer,
-            embedder,
-            query_stemmer,
-        }
+        Self::build_from_tokens(pre_tokenized)
     }
 
     /// Builds a BM25 index from pre-tokenized documents (e.g. stored in the snapshot index).
     ///
     /// Each document's tokens are already stemmed — no further tokenization is applied.
-    /// The `query_language` stemmer is stored for use during [`Bm25Corpus::search`] and
-    /// [`Bm25Corpus::score`].
-    pub fn build_from_tokens(docs: Vec<PreTokenizedInput>, query_language: StemLanguage) -> Self {
-        // Join each document's token list back into a space-separated string so that
-        // the internal `WhitespaceTokenizer` can re-split it. This avoids changing the
-        // embedder interface while still bypassing the main tokenization pipeline.
-        let pre_tokenized: Vec<String> = docs.iter().map(|d| d.tokens.join(" ")).collect();
+    pub fn build_from_tokens(docs: Vec<PreTokenizedInput>) -> Self {
+        let n = docs.len();
+        let mut postings: HashMap<String, Vec<Posting>> = HashMap::new();
+        let mut doc_lengths: Vec<u32> = Vec::with_capacity(n);
+        let mut doc_paths: Vec<String> = Vec::with_capacity(n);
+        let mut doc_token_sets: Vec<HashSet<String>> = Vec::with_capacity(n);
 
-        let doc_token_sets: Vec<HashSet<String>> = docs
-            .iter()
-            .map(|d| d.tokens.iter().cloned().collect())
-            .collect();
+        for (doc_id, doc) in docs.into_iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let doc_id = doc_id as u32;
+            let token_count = doc.tokens.len();
 
-        let total_tokens: usize = pre_tokenized
-            .iter()
-            .map(|s| s.split_whitespace().count())
-            .sum();
+            // Build per-document term-frequency map.
+            let mut tf: HashMap<&str, u32> = HashMap::new();
+            for token in &doc.tokens {
+                *tf.entry(token.as_str()).or_insert(0) += 1;
+            }
+
+            // Insert into postings lists.
+            for (term, freq) in tf {
+                postings.entry(term.to_owned()).or_default().push(Posting {
+                    doc_id,
+                    term_freq: freq,
+                });
+            }
+
+            let token_set: HashSet<String> = doc.tokens.into_iter().collect();
+            #[allow(clippy::cast_possible_truncation)]
+            doc_lengths.push(token_count as u32);
+            doc_paths.push(doc.rel_path);
+            doc_token_sets.push(token_set);
+        }
+
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        let avgdl: f32 = if docs.is_empty() {
+        let avgdl: f32 = if n == 0 {
             256.0
         } else {
-            (total_tokens as f64 / docs.len() as f64) as f32
+            let total: u64 = doc_lengths.iter().map(|&l| u64::from(l)).sum();
+            // avgdl precision loss is acceptable — this is a BM25 normalisation factor.
+            (total as f64 / n as f64) as f32
         };
 
-        let embedder = EmbedderBuilder::<u32, WhitespaceTokenizer>::with_avgdl(avgdl).build();
-        let mut scorer = Scorer::<usize, u32>::new();
-
-        let doc_ids: Vec<String> = docs.into_iter().map(|d| d.rel_path).collect();
-
-        for (idx, pre_tok) in pre_tokenized.iter().enumerate() {
-            let embedding = embedder.embed(pre_tok);
-            scorer.upsert(&idx, embedding);
-        }
-
-        let query_stemmer = Stemmer::create(query_language.to_algorithm());
-
         Self {
-            doc_ids,
+            postings,
+            doc_lengths,
+            doc_paths,
             doc_token_sets,
-            scorer,
-            embedder,
-            query_stemmer,
+            avgdl,
         }
+    }
+
+    /// Build a `Bm25InvertedIndex` from `IndexEntry` values stored in a snapshot.
+    ///
+    /// Returns `None` if no entries have `bm25_tokens` set (i.e. the index was built
+    /// without `bm25_tokenize = true`).
+    pub fn build_from_entries(entries: &[crate::index::IndexEntry]) -> Option<Self> {
+        let docs: Vec<PreTokenizedInput> = entries
+            .iter()
+            .filter_map(|e| {
+                e.bm25_tokens.as_ref().map(|tokens| PreTokenizedInput {
+                    rel_path: e.rel_path.clone(),
+                    tokens: tokens.clone(),
+                })
+            })
+            .collect();
+
+        if docs.is_empty() {
+            return None;
+        }
+        Some(Self::build_from_tokens(docs))
     }
 
     /// Returns the top `limit` matches for `query`, ranked by BM25 score (highest first).
     ///
     /// Returns an empty vec when `query` produces no tokens or has no matches.
-    pub fn search(&self, query: &str, limit: usize) -> Vec<Bm25Match> {
-        self.ranked_matches(query).into_iter().take(limit).collect()
+    pub fn search(&self, query: &str, stemmer: &Stemmer, limit: usize) -> Vec<Bm25Match> {
+        self.ranked_matches(query, stemmer)
+            .into_iter()
+            .take(limit)
+            .collect()
     }
 
     /// Returns **all** matches for `query`, ranked by BM25 score (highest first).
     ///
     /// Returns an empty vec when `query` produces no tokens or has no matches.
-    pub fn score(&self, query: &str) -> Vec<Bm25Match> {
-        self.ranked_matches(query)
+    pub fn score(&self, query: &str, stemmer: &Stemmer) -> Vec<Bm25Match> {
+        self.ranked_matches(query, stemmer)
     }
 
     // ------------------------------------------------------------------
     // Private helpers
     // ------------------------------------------------------------------
 
-    /// Parse a query string into positive and negative terms.
-    ///
-    /// Terms prefixed with `-` are negation terms (docs containing them are excluded).
-    /// All other terms contribute to BM25 relevance scoring.
-    fn parse_query(&self, query: &str) -> ParsedQuery {
-        let mut positive = Vec::new();
-        let mut negative = HashSet::new();
-
-        for word in query.split_whitespace() {
-            if let Some(neg) = word.strip_prefix('-') {
-                if !neg.is_empty() {
-                    let stemmed = tokenize(neg, &self.query_stemmer);
-                    for t in stemmed {
-                        negative.insert(t);
-                    }
-                }
-            } else {
-                let stemmed = tokenize(word, &self.query_stemmer);
-                positive.extend(stemmed);
-            }
-        }
-
-        ParsedQuery {
-            positive: positive.join(" "),
-            negative,
-        }
-    }
-
-    fn ranked_matches(&self, query: &str) -> Vec<Bm25Match> {
-        let parsed = self.parse_query(query);
+    /// Compute BM25 scores for all documents matching any positive term.
+    fn ranked_matches(&self, query: &str, stemmer: &Stemmer) -> Vec<Bm25Match> {
+        let parsed = parse_query(query, stemmer);
         if parsed.positive.is_empty() {
             return Vec::new();
         }
-        let query_embedding = self.embedder.embed(&parsed.positive);
 
-        self.scorer
-            .matches(&query_embedding)
+        #[allow(clippy::cast_precision_loss)]
+        let n = self.doc_paths.len() as f64;
+        let avgdl = f64::from(self.avgdl);
+        let mut scores: Vec<f64> = vec![0.0; self.doc_paths.len()];
+
+        for term in &parsed.positive {
+            let Some(posting_list) = self.postings.get(term) else {
+                continue;
+            };
+
+            // IDF = ln(1 + (N - n(t) + 0.5) / (n(t) + 0.5))
+            #[allow(clippy::cast_precision_loss)]
+            let nt = posting_list.len() as f64;
+            let idf = (1.0 + (n - nt + 0.5) / (nt + 0.5)).ln();
+
+            for p in posting_list {
+                let doc_id = p.doc_id as usize;
+                let tf = f64::from(p.term_freq);
+                let dl = f64::from(self.doc_lengths[doc_id]);
+                // BM25 term weight
+                let tf_norm = (tf * (Self::K1 + 1.0))
+                    / (tf + Self::K1 * (1.0 - Self::B + Self::B * dl / avgdl));
+                scores[doc_id] += idf * tf_norm;
+            }
+        }
+
+        // Collect non-zero scores, apply negation filter, sort descending.
+        let mut matches: Vec<Bm25Match> = scores
             .into_iter()
-            .filter_map(|scored| {
-                let rel_path = self.doc_ids.get(scored.id)?;
-                // Apply negation filter: skip docs containing any excluded term.
+            .enumerate()
+            .filter_map(|(doc_id, score)| {
+                if score <= 0.0 {
+                    return None;
+                }
+                // Negation filter: skip docs that contain any excluded term.
                 if !parsed.negative.is_empty()
-                    && let Some(token_set) = self.doc_token_sets.get(scored.id)
-                    && parsed.negative.iter().any(|neg| token_set.contains(neg))
+                    && parsed
+                        .negative
+                        .iter()
+                        .any(|neg| self.doc_token_sets[doc_id].contains(neg))
                 {
                     return None;
                 }
                 Some(Bm25Match {
-                    rel_path: rel_path.clone(),
-                    score: f64::from(scored.score),
+                    rel_path: self.doc_paths[doc_id].clone(),
+                    score,
                 })
             })
-            .collect()
+            .collect();
+
+        matches.sort_unstable_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        matches
     }
 }
 
@@ -544,7 +600,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Bm25Corpus
+    // Bm25InvertedIndex
     // ------------------------------------------------------------------
 
     fn doc(rel_path: &str, title: &str, body: &str) -> DocumentInput {
@@ -575,8 +631,9 @@ mod tests {
                 "How to bake a delicious cake.",
             ),
         ];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.search("rust programming", 10);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.search("rust programming", &stemmer, 10);
         assert!(!results.is_empty(), "expected at least one result");
         // The Rust document should rank first.
         assert_eq!(results[0].rel_path, "rust.md");
@@ -597,8 +654,9 @@ mod tests {
                 "I enjoy cooking every evening.",
             ),
         ];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.search("run", 10);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.search("run", &stemmer, 10);
         assert!(!results.is_empty(), "expected matches via stemming");
         assert_eq!(results[0].rel_path, "running.md");
     }
@@ -618,8 +676,9 @@ mod tests {
                 "Rust is one option among many languages.",
             ),
         ];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.search("rust", 10);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.search("rust", &stemmer, 10);
         assert!(results.len() >= 2);
         assert_eq!(results[0].rel_path, "many.md");
     }
@@ -627,16 +686,18 @@ mod tests {
     #[test]
     fn test_bm25_corpus_empty_query() {
         let docs = vec![doc("a.md", "Title", "Some body text.")];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.search("", 10);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.search("", &stemmer, 10);
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_bm25_corpus_no_matches() {
         let docs = vec![doc("a.md", "Title", "Some body text.")];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.search("xyzzy42quux", 10);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.search("xyzzy42quux", &stemmer, 10);
         assert!(results.is_empty());
     }
 
@@ -647,8 +708,9 @@ mod tests {
             "Only document",
             "This is the only document.",
         )];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.search("document", 10);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.search("document", &stemmer, 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].rel_path, "single.md");
     }
@@ -660,9 +722,10 @@ mod tests {
             doc("b.md", "Beta", "The lazy dog slept."),
             doc("c.md", "Gamma", "No matching content here."),
         ];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
         // "quick" matches only doc a, so score() should return exactly 1 result.
-        let all = corpus.score("quick");
+        let all = index.score("quick", &stemmer);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].rel_path, "a.md");
     }
@@ -682,9 +745,10 @@ mod tests {
             ),
             doc("go.md", "Go", "Go is a compiled programming language."),
         ];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
         // "programming -python" should return rust.md and go.md but NOT python.md
-        let results = corpus.score("programming -python");
+        let results = index.score("programming -python", &stemmer);
         let paths: Vec<&str> = results.iter().map(|r| r.rel_path.as_str()).collect();
         assert!(
             !paths.contains(&"python.md"),
@@ -700,9 +764,10 @@ mod tests {
     #[test]
     fn test_bm25_negation_only_returns_empty() {
         let docs = vec![doc("a.md", "Title", "Some body text.")];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
         // Only negation terms → no positive terms → empty results
-        let results = corpus.score("-text");
+        let results = index.score("-text", &stemmer);
         assert!(
             results.is_empty(),
             "negation-only query should return empty"
@@ -716,8 +781,9 @@ mod tests {
             doc("a.md", "Running", "I love running every day."),
             doc("b.md", "Swimming", "I love swimming every day."),
         ];
-        let corpus = Bm25Corpus::build(docs, StemLanguage::English);
-        let results = corpus.score("love -running");
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.score("love -running", &stemmer);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].rel_path, "b.md");
     }
@@ -734,9 +800,93 @@ mod tests {
                 tokens: vec!["python".to_owned(), "program".to_owned()],
             },
         ];
-        let corpus = Bm25Corpus::build_from_tokens(docs, StemLanguage::English);
-        let results = corpus.score("rust");
+        let index = Bm25InvertedIndex::build_from_tokens(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.score("rust", &stemmer);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].rel_path, "a.md");
+    }
+
+    #[test]
+    fn test_bm25_serde_round_trip() {
+        let docs = vec![
+            doc("rust.md", "Rust", "Rust is a systems programming language."),
+            doc("python.md", "Python", "Python is a scripting language."),
+        ];
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+
+        // Serialize to MessagePack and back.
+        let bytes = rmp_serde::to_vec_named(&index).expect("serialize");
+        let restored: Bm25InvertedIndex = rmp_serde::from_slice(&bytes).expect("deserialize");
+
+        // Verify search results are identical after round-trip.
+        let before = index.score("rust", &stemmer);
+        let after = restored.score("rust", &stemmer);
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before[0].rel_path, after[0].rel_path);
+        assert!((before[0].score - after[0].score).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_bm25_build_from_entries() {
+        use crate::index::IndexEntry;
+        use indexmap::IndexMap;
+
+        let entries = vec![
+            IndexEntry {
+                rel_path: "a.md".to_owned(),
+                modified: String::new(),
+                properties: IndexMap::new(),
+                tags: Vec::new(),
+                sections: Vec::new(),
+                tasks: Vec::new(),
+                links: Vec::new(),
+                bm25_tokens: Some(vec!["rust".to_owned(), "program".to_owned()]),
+                bm25_language: Some("english".to_owned()),
+            },
+            IndexEntry {
+                rel_path: "b.md".to_owned(),
+                modified: String::new(),
+                properties: IndexMap::new(),
+                tags: Vec::new(),
+                sections: Vec::new(),
+                tasks: Vec::new(),
+                links: Vec::new(),
+                bm25_tokens: None, // No tokens — should be skipped
+                bm25_language: None,
+            },
+        ];
+
+        let index = Bm25InvertedIndex::build_from_entries(&entries);
+        assert!(index.is_some(), "should build from entries with tokens");
+        let index = index.unwrap();
+        let stemmer = make_stemmer(StemLanguage::English);
+        let results = index.score("rust", &stemmer);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].rel_path, "a.md");
+    }
+
+    #[test]
+    fn test_bm25_build_from_entries_none_when_no_tokens() {
+        use crate::index::IndexEntry;
+        use indexmap::IndexMap;
+
+        let entries = vec![IndexEntry {
+            rel_path: "a.md".to_owned(),
+            modified: String::new(),
+            properties: IndexMap::new(),
+            tags: Vec::new(),
+            sections: Vec::new(),
+            tasks: Vec::new(),
+            links: Vec::new(),
+            bm25_tokens: None,
+            bm25_language: None,
+        }];
+
+        assert!(
+            Bm25InvertedIndex::build_from_entries(&entries).is_none(),
+            "no tokens → should return None"
+        );
     }
 }
