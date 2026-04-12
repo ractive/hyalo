@@ -405,7 +405,7 @@ fn find_pattern_matches_content() {
 }
 
 #[test]
-fn find_pattern_includes_matches_field() {
+fn find_pattern_includes_score_field() {
     let tmp = setup_vault();
     let fields = Fields::default();
     let out = unwrap_success(
