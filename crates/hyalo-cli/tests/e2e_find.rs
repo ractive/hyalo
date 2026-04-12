@@ -3514,3 +3514,136 @@ fn find_title_slash_regex_with_anchors() {
     );
     assert_eq!(results[0]["file"], "alpha.md");
 }
+
+// ---------------------------------------------------------------------------
+// find --orphan and find --dead-end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_orphan_returns_isolated_files() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // a.md links to b.md
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n[[b]]\n");
+    // b.md has inbound but no outbound
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nContent.\n");
+    // c.md is fully isolated (orphan)
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\nNo links.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--orphan",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["c.md"], "orphan files: {files:?}");
+    // backlinks field auto-included
+    assert!(results[0]["backlinks"].is_array());
+}
+
+#[test]
+fn find_dead_end_returns_files_with_inbound_only() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n[[b]]\n");
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nContent.\n");
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\nNo links.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--dead-end",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["b.md"], "dead-end files: {files:?}");
+    // links field auto-included
+    assert!(results[0]["links"].is_array());
+}
+
+#[test]
+fn find_orphan_composes_with_sort_and_limit() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nNo links.\n");
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nNo links.\n");
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\nNo links.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--orphan",
+            "--sort",
+            "file",
+            "--limit",
+            "2",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "limit=2 should cap results");
+}
+
+#[test]
+fn find_orphan_composes_with_glob() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nNo links.\n");
+    write_md(tmp.path(), "notes/b.md", "---\ntitle: B\n---\nNo links.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--orphan",
+            "--glob",
+            "notes/*.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    // Only notes/b.md matches the glob, a.md excluded
+    assert_eq!(files, vec!["notes/b.md"]);
+}

@@ -396,22 +396,42 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         ));
     }
 
+    // Suggest find --orphan if there are orphan files.
+    let orphan_count = data
+        .get("orphans")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if orphan_count > 0 && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            format!("{orphan_count} orphan files"),
+            build_command_with_glob(ctx, &["find", "--orphan"]),
+        ));
+    }
+
+    // Suggest find --dead-end if there are dead-end files.
+    let dead_end_count = data
+        .get("dead_ends")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if dead_end_count > 0 && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            format!("{dead_end_count} dead-end files"),
+            build_command_with_glob(ctx, &["find", "--dead-end"]),
+        ));
+    }
+
     // Suggest find --broken-links if there are broken links.
     let broken_links = data
         .get("links")
         .and_then(|l| l.get("broken"))
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    if broken_links > 0 {
-        let remaining = MAX_HINTS.saturating_sub(hints.len());
-        if remaining > 0 {
-            hints.push(Hint::new(
-                "List files with broken links",
-                build_command_with_glob(ctx, &["find", "--broken-links"]),
-            ));
-        }
-        let remaining = MAX_HINTS.saturating_sub(hints.len());
-        if remaining > 0 {
+    if broken_links > 0 && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            format!("{broken_links} files with broken links"),
+            build_command_with_glob(ctx, &["find", "--broken-links"]),
+        ));
+        if hints.len() < MAX_HINTS {
             hints.push(Hint::new(
                 "Auto-fix broken links (dry run)",
                 build_command_with_glob(ctx, &["links", "fix"]),

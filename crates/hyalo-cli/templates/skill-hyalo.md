@@ -76,7 +76,8 @@ scanning all files to build the link graph. Each backlink entry contains `source
 
 ```bash
 hyalo find --fields backlinks --file my-note.md       # see who links to this note (--file required: positional is PATTERN)
-hyalo find --fields backlinks --jq '.results | map(select(.backlinks | length == 0))' # find orphan notes
+hyalo find --orphan                                        # find orphan files (no inbound or outbound links)
+hyalo find --dead-end                                      # find dead-end files (inbound but no outbound links)
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
 
@@ -179,7 +180,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 - **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
 - **read** — extract body content, a section, or line range
-- **summary** — directory overview: file counts, tags, tasks, recent files (use `--depth N` to limit directory listing)
+- **summary** — compact directory overview (~20-30 lines): file counts, tags, tasks, orphans, dead-ends, links (use `--depth N` to override directory depth)
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts

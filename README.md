@@ -362,16 +362,15 @@ hyalo tags rename --from old-tag --to new-tag --glob "notes/*.md"
 
 ### summary
 
-High-level vault overview: file counts, property and tag aggregates, status groups, tasks, link health (total and broken links with source locations), orphan files (fully isolated — no links in or out), and recently modified files.
+Compact vault overview (~20-30 lines regardless of vault size): file counts, property and tag aggregates, status counts, tasks, link health, orphan/dead-end counts, and recently modified files. Drill down with `find --orphan`, `find --dead-end`, `find --broken-links`.
 
 ```sh
 hyalo summary
 hyalo summary --glob "notes/*.md"
 hyalo summary --recent 5          # control how many recent files to show (default: 10)
-hyalo summary --depth 1           # collapse subdirectories beyond depth 1
+hyalo summary --depth 2           # override default depth-1 directory listing
 hyalo summary --format text
 hyalo summary --jq '.results.tasks.total'
-hyalo summary --jq '.results.orphans.files'  # list fully isolated files (no links in or out)
 hyalo summary --format text --hints
 ```
 

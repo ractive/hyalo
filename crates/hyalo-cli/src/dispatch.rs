@@ -89,6 +89,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 reverse,
                 limit,
                 broken_links,
+                orphan,
+                dead_end,
                 title,
                 language,
             } = filters_raw;
@@ -182,9 +184,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     || sort_needs_links
                     || sort_needs_title
                     || broken_links
+                    || orphan
+                    || dead_end
                     || has_title_filter
                     || has_bm25_search;
-            let needs_full_vault = parsed_fields.backlinks || sort_needs_backlinks;
+            let needs_full_vault =
+                parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
             // The link graph is only built when scan_body is true, so
             // backlinks / backlink-sort always require body scanning.
             let scan_body = needs_body || needs_full_vault;
@@ -219,6 +224,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     reverse,
                     limit,
                     broken_links,
+                    orphan,
+                    dead_end,
                     title.as_deref(),
                     effective_format,
                     language.as_deref(),

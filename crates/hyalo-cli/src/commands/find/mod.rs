@@ -37,7 +37,7 @@ use sort::{apply_sort, presort_index_entries};
 /// - Link path resolution (`discovery::resolve_target`)
 ///
 /// Backlinks are resolved via `index.link_graph()` without a fresh vault scan.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub fn find(
     index: &dyn VaultIndex,
     dir: &Path,
@@ -55,6 +55,8 @@ pub fn find(
     reverse: bool,
     limit: Option<usize>,
     broken_links: bool,
+    orphan: bool,
+    dead_end: bool,
     title_filter: Option<&str>,
     format: Format,
     language: Option<&str>,
@@ -112,24 +114,28 @@ pub fn find(
     crate::warn::warn_glob_dir_overlap(dir, globs, scoped_entries.len());
 
     // Use the index's pre-built link graph for backlinks
-    let link_graph_ref = if fields.backlinks || sort_needs_backlinks {
+    let link_graph_ref = if fields.backlinks || sort_needs_backlinks || orphan || dead_end {
         Some(index.link_graph())
     } else {
         None
     };
 
-    // When sorting by a frontmatter property or title, or when --broken-links
-    // is active, force the relevant fields on even if not requested via --fields.
+    // When sorting by a frontmatter property or title, or when --broken-links /
+    // --orphan / --dead-end is active, force the relevant fields on even if not
+    // requested via --fields.
     let original_fields = fields;
     let effective_fields;
-    let fields = if (sort_needs_properties && !fields.properties)
+    let needs_field_override = (sort_needs_properties && !fields.properties)
         || (sort_needs_title && !fields.title)
         || (broken_links && !fields.links)
-    {
+        || (orphan && (!fields.links || !fields.backlinks))
+        || (dead_end && (!fields.links || !fields.backlinks));
+    let fields = if needs_field_override {
         effective_fields = Fields {
             properties: fields.properties || sort_needs_properties,
             title: fields.title || sort_needs_title,
-            links: fields.links || broken_links,
+            links: fields.links || broken_links || orphan || dead_end,
+            backlinks: fields.backlinks || orphan || dead_end,
             ..fields.clone()
         };
         &effective_fields
@@ -555,7 +561,12 @@ pub fn find(
 
         // When pre-sorted with a limit, skip expensive construction once full.
         // (broken_links needs the resolved links, so fall through.)
-        if presorted && limit.is_some_and(|n| results.len() >= n) && !broken_links {
+        if presorted
+            && limit.is_some_and(|n| results.len() >= n)
+            && !broken_links
+            && !orphan
+            && !dead_end
+        {
             total_matching += 1;
             continue;
         }
@@ -686,6 +697,24 @@ pub fn find(
                 .iter()
                 .any(|l| l.path.is_none());
             if !has_broken {
+                continue;
+            }
+        }
+
+        // --- Apply orphan filter (no inbound AND no outbound links) ---
+        if orphan {
+            let has_outbound = !obj.links.as_deref().unwrap_or(&[]).is_empty();
+            let has_inbound = !obj.backlinks.as_deref().unwrap_or(&[]).is_empty();
+            if has_outbound || has_inbound {
+                continue;
+            }
+        }
+
+        // --- Apply dead-end filter (has inbound, no outbound links) ---
+        if dead_end {
+            let has_outbound = !obj.links.as_deref().unwrap_or(&[]).is_empty();
+            let has_inbound = !obj.backlinks.as_deref().unwrap_or(&[]).is_empty();
+            if has_outbound || !has_inbound {
                 continue;
             }
         }

@@ -8,7 +8,7 @@ tags:
   - ux
   - llm
   - cli
-status: planned
+status: in-progress
 branch: iter-105/summary-redesign
 ---
 
@@ -131,64 +131,64 @@ Since hyalo is pre-1.0 and JSON consumers are primarily AI agents (which adapt),
 ## Tasks
 
 ### Summary output refactoring
-- [ ] Change `OrphanSummary` to just a count (usize) in `VaultSummary`
-- [ ] Change `DeadEndSummary` to just a count (usize) in `VaultSummary`
-- [ ] Remove `broken_links` vec from `LinkHealthSummary`
-- [ ] Change `StatusGroup` to carry `count: usize` instead of `files: Vec<String>`
-- [ ] Collapse `files.by_directory` to depth-1 by default in summary builder
-- [ ] Rename `by_directory` to `directories` in `FileCounts`
-- [ ] Update text formatter: single-line properties/tags with top-N and counts
-- [ ] Update text formatter: single-line status with counts
-- [ ] Update text formatter: remove orphan/dead-end/broken-link file listings
-- [ ] Update text formatter: single-line directories (top-level only, sorted by count)
-- [ ] Update JSON serialization to match new schema
+- [x] Change `OrphanSummary` to just a count (usize) in `VaultSummary`
+- [x] Change `DeadEndSummary` to just a count (usize) in `VaultSummary`
+- [x] Remove `broken_links` vec from `LinkHealthSummary`
+- [x] Change `StatusGroup` to carry `count: usize` instead of `files: Vec<String>`
+- [x] Collapse `files.by_directory` to depth-1 by default in summary builder
+- [x] Rename `by_directory` to `directories` in `FileCounts`
+- [x] Update text formatter: single-line properties/tags with top-N and counts
+- [x] Update text formatter: single-line status with counts
+- [x] Update text formatter: remove orphan/dead-end/broken-link file listings
+- [x] Update text formatter: single-line directories (top-level only, sorted by count)
+- [x] Update JSON serialization to match new schema
 
 ### Find filter flags
-- [ ] Add `--orphan` flag to `FindArgs`
-- [ ] Implement orphan filtering in find command (backlinks count == 0)
-- [ ] Add `--dead-end` flag to `FindArgs`
-- [ ] Implement dead-end filtering in find command (outbound links == 0, inbound > 0)
-- [ ] Auto-include relevant fields when `--orphan` or `--dead-end` is used
-- [ ] Handle view merging for new boolean flags (OR semantics, like `--broken-links`)
+- [x] Add `--orphan` flag to `FindArgs`
+- [x] Implement orphan filtering in find command (backlinks count == 0)
+- [x] Add `--dead-end` flag to `FindArgs`
+- [x] Implement dead-end filtering in find command (outbound links == 0, inbound > 0)
+- [x] Auto-include relevant fields when `--orphan` or `--dead-end` is used
+- [x] Handle view merging for new boolean flags (OR semantics, like `--broken-links`)
 
 ### Hints
-- [ ] Update summary hints to reference `find --orphan`, `find --dead-end`
-- [ ] Add count-aware hint text (e.g., "74 orphan files")
-- [ ] Suppress orphan/dead-end hints when counts are zero
+- [x] Update summary hints to reference `find --orphan`, `find --dead-end`
+- [x] Add count-aware hint text (e.g., "74 orphan files")
+- [x] Suppress orphan/dead-end hints when counts are zero
 
 ### Tests
-- [ ] Unit tests for compact summary output (text + JSON)
-- [ ] Unit tests for `find --orphan` filtering
-- [ ] Unit tests for `find --dead-end` filtering
-- [ ] E2E test: summary output is compact (no file lists in either format)
-- [ ] E2E test: `find --orphan` returns correct files
-- [ ] E2E test: `find --dead-end` returns correct files
-- [ ] E2E test: `find --orphan --sort modified --limit 5` composes correctly
-- [ ] E2E test: `find --orphan --glob 'research/*'` composes correctly
+- [x] Unit tests for compact summary output (text + JSON)
+- [x] Unit tests for `find --orphan` filtering
+- [x] Unit tests for `find --dead-end` filtering
+- [x] E2E test: summary output is compact (no file lists in either format)
+- [x] E2E test: `find --orphan` returns correct files
+- [x] E2E test: `find --dead-end` returns correct files
+- [x] E2E test: `find --orphan --sort modified --limit 5` composes correctly
+- [x] E2E test: `find --orphan --glob 'research/*'` composes correctly
 
 ### Documentation & help texts
-- [ ] Update `summary` command help text and long_about in args.rs
-- [ ] Update `find` command help text to document `--orphan` and `--dead-end`
-- [ ] Update help.rs overview text and example commands
-- [ ] Update `--jq` examples if they reference removed summary fields
-- [ ] Update README.md summary examples and any jq examples
-- [ ] Update skill template (`templates/skill-hyalo.md`) with new summary output and new find flags
-- [ ] Update hyalo claude rule (`templates/rule-knowledgebase.md`) if summary usage is mentioned
-- [ ] Update `.claude/CLAUDE.md` if it references summary output format
-- [ ] Update search cookbook (`recipes/search-cookbook.md`) with orphan/dead-end examples
+- [x] Update `summary` command help text and long_about in args.rs
+- [x] Update `find` command help text to document `--orphan` and `--dead-end`
+- [x] Update help.rs overview text and example commands
+- [x] Update `--jq` examples if they reference removed summary fields
+- [x] Update README.md summary examples and any jq examples
+- [x] Update skill template (`templates/skill-hyalo.md`) with new summary output and new find flags
+- [x] Update hyalo claude rule (`templates/rule-knowledgebase.md`) if summary usage is mentioned
+- [x] Update `.claude/CLAUDE.md` if it references summary output format
+- [x] Update search cookbook (`recipes/search-cookbook.md`) with orphan/dead-end examples
 
 ### Quality gates
-- [ ] cargo fmt
-- [ ] cargo clippy --workspace --all-targets -- -D warnings
-- [ ] cargo test --workspace
-- [ ] Dogfood against hyalo-knowledgebase, mdn, docs, vscode-docs
+- [x] cargo fmt
+- [x] cargo clippy --workspace --all-targets -- -D warnings
+- [x] cargo test --workspace
+- [x] Dogfood against hyalo-knowledgebase, mdn, docs, vscode-docs
 
 ## Acceptance Criteria
-- [ ] `hyalo summary --format text` produces ≤30 lines on any vault size
-- [ ] `hyalo summary --format json` contains no file-path arrays (orphans, dead-ends, broken links, status groups)
-- [ ] `hyalo find --orphan` returns files with zero inbound links
-- [ ] `hyalo find --dead-end` returns files with inbound links but zero outbound links
-- [ ] Both new flags compose with `--property`, `--tag`, `--glob`, `--sort`, `--limit`, `--fields`
-- [ ] Summary hints reference `find --orphan` and `find --dead-end` with counts
-- [ ] MDN vault (14k files) summary is ≤30 lines in text mode
-- [ ] All quality gates pass
+- [x] `hyalo summary --format text` produces ≤30 lines on any vault size
+- [x] `hyalo summary --format json` contains no file-path arrays (orphans, dead-ends, broken links, status groups)
+- [x] `hyalo find --orphan` returns files with zero inbound links
+- [x] `hyalo find --dead-end` returns files with inbound links but zero outbound links
+- [x] Both new flags compose with `--property`, `--tag`, `--glob`, `--sort`, `--limit`, `--fields`
+- [x] Summary hints reference `find --orphan` and `find --dead-end` with counts
+- [x] MDN vault (14k files) summary is ≤30 lines in text mode
+- [x] All quality gates pass

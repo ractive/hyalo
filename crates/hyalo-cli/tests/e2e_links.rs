@@ -114,33 +114,15 @@ fn summary_includes_link_health() {
         .expect("links.broken should be a number");
     assert!(broken >= 1, "expected at least 1 broken link, got {broken}");
 
-    // links.broken_links is an array of broken link entries
-    let broken_links = json["results"]["links"]["broken_links"]
-        .as_array()
-        .expect("links.broken_links should be an array");
+    // broken_links array was removed; summary only reports counts now.
     assert!(
-        !broken_links.is_empty(),
-        "broken_links array should not be empty"
-    );
-
-    // Each entry must have source, line, and target fields
-    let first = &broken_links[0];
-    assert!(
-        first["source"].is_string(),
-        "broken link entry must have 'source' string field"
-    );
-    assert!(
-        first["line"].is_number(),
-        "broken link entry must have 'line' number field"
-    );
-    assert!(
-        first["target"].is_string(),
-        "broken link entry must have 'target' string field"
+        json["results"]["links"]["broken_links"].is_null(),
+        "broken_links array should no longer be present in summary"
     );
 }
 
 #[test]
-fn summary_broken_links_includes_nonexistent_target() {
+fn summary_broken_links_count_includes_nonexistent() {
     let tmp = setup_vault();
     let output = hyalo_no_hints()
         .args([
@@ -159,19 +141,11 @@ fn summary_broken_links_includes_nonexistent_target() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let broken_links = json["results"]["links"]["broken_links"]
-        .as_array()
-        .expect("links.broken_links should be an array");
-
-    // b.md has [[nonexistent]] — that broken link must appear
-    let has_nonexistent = broken_links.iter().any(|entry| {
-        entry["source"].as_str().unwrap_or("") == "b.md"
-            && entry["target"].as_str().unwrap_or("") == "nonexistent"
-    });
-    assert!(
-        has_nonexistent,
-        "expected broken link {{source: 'b.md', target: 'nonexistent'}} in: {broken_links:?}"
-    );
+    // b.md has [[nonexistent]] — the broken count must reflect it
+    let broken = json["results"]["links"]["broken"]
+        .as_u64()
+        .expect("links.broken should be a number");
+    assert!(broken >= 1, "expected at least 1 broken link, got {broken}");
 }
 
 #[test]

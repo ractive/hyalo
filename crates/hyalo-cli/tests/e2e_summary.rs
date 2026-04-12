@@ -135,7 +135,7 @@ fn summary_json_has_all_fields() {
 
     // files
     assert!(json["results"]["files"]["total"].as_u64().unwrap() >= 4);
-    assert!(json["results"]["files"]["by_directory"].is_array());
+    assert!(json["results"]["files"]["directories"].is_array());
 
     // properties
     assert!(json["results"]["properties"].is_array());
@@ -173,7 +173,7 @@ fn summary_file_counts_by_directory() {
     let total = json["results"]["files"]["total"].as_u64().unwrap();
     assert_eq!(total, 4);
 
-    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["directories"].as_array().unwrap();
     // Should have entries for ".", "notes", "docs"
     let dir_names: Vec<&str> = by_dir
         .iter()
@@ -232,19 +232,13 @@ fn summary_status_groups() {
         .iter()
         .find(|g| g["value"] == "draft")
         .expect("'draft' status group should be present");
-    let draft_files = draft_group["files"]
-        .as_array()
-        .expect("field 'files' should be an array");
-    assert_eq!(draft_files.len(), 2);
+    assert_eq!(draft_group["count"].as_u64().unwrap(), 2);
 
     let published_group = status
         .iter()
         .find(|g| g["value"] == "published")
         .expect("'published' status group should be present");
-    let published_files = published_group["files"]
-        .as_array()
-        .expect("field 'files' should be an array");
-    assert_eq!(published_files.len(), 1);
+    assert_eq!(published_group["count"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -352,7 +346,7 @@ fn summary_text_format() {
     assert!(output.status.success());
 
     let text = String::from_utf8(output.stdout).unwrap();
-    assert!(text.contains("Files: 4 total"));
+    assert!(text.contains("Files: 4"));
     assert!(text.contains("Properties:"));
     assert!(text.contains("Tags:"));
     assert!(text.contains("Status:"));
@@ -447,7 +441,7 @@ fn summary_depth_zero_collapses_all_dirs() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["directories"].as_array().unwrap();
     assert_eq!(by_dir.len(), 1);
     assert_eq!(by_dir[0]["directory"], ".");
     assert_eq!(by_dir[0]["count"], 3);
@@ -473,7 +467,7 @@ fn summary_depth_one_collapses_sub_into_parent() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["directories"].as_array().unwrap();
     // "." and "notes" (notes/sub collapsed into notes)
     assert_eq!(by_dir.len(), 2);
 
@@ -488,7 +482,7 @@ fn summary_depth_one_collapses_sub_into_parent() {
 }
 
 #[test]
-fn summary_depth_no_flag_shows_all_directories() {
+fn summary_depth_no_flag_defaults_to_depth_one() {
     let tmp = setup_vault_nested();
     let output = hyalo_no_hints()
         .args([
@@ -503,14 +497,15 @@ fn summary_depth_no_flag_shows_all_directories() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let by_dir = json["results"]["files"]["by_directory"].as_array().unwrap();
+    let by_dir = json["results"]["files"]["directories"].as_array().unwrap();
+    // Default depth is 1: "notes/sub" collapsed into "notes"
+    assert_eq!(by_dir.len(), 2);
     let dirs: Vec<&str> = by_dir
         .iter()
         .map(|d| d["directory"].as_str().unwrap())
         .collect();
     assert!(dirs.contains(&"."));
     assert!(dirs.contains(&"notes"));
-    assert!(dirs.contains(&"notes/sub"));
 }
 
 #[test]
@@ -557,8 +552,8 @@ fn summary_json_has_orphans_field() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(json["results"]["orphans"]["total"].is_number());
-    assert!(json["results"]["orphans"]["files"].is_array());
+    assert!(json["results"]["orphans"].is_number());
+    assert!(json["results"]["dead_ends"].is_number());
 }
 
 #[test]
@@ -611,22 +606,8 @@ No links to me
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let orphans = json["results"]["orphans"]["files"].as_array().unwrap();
-    let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
-
     // c.md is the only orphan: no inbound AND no outbound links
-    assert!(orphan_paths.contains(&"c.md"), "c.md should be orphan");
-    // a.md has outbound links (to b), so NOT an orphan
-    assert!(
-        !orphan_paths.contains(&"a.md"),
-        "a.md should NOT be orphan (has outbound)"
-    );
-    // b.md has inbound links (from a), so NOT an orphan
-    assert!(
-        !orphan_paths.contains(&"b.md"),
-        "b.md should NOT be orphan (has inbound)"
-    );
-    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 1);
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -667,13 +648,7 @@ See [[a]]
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 0);
-    assert!(
-        json["results"]["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 0);
 }
 
 #[test]
@@ -714,14 +689,7 @@ No links
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
     // Both files are orphans
-    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 2);
-    assert_eq!(
-        json["results"]["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 2);
 }
 
 #[test]
@@ -756,10 +724,6 @@ No links
         text.contains("Orphans: 1"),
         "expected 'Orphans: 1' in: {text}"
     );
-    assert!(
-        text.contains("\"a.md\""),
-        "expected orphan file listed in: {text}"
-    );
 }
 
 #[test]
@@ -778,13 +742,7 @@ fn summary_orphans_empty_vault() {
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 0);
-    assert!(
-        json["results"]["orphans"]["files"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -846,19 +804,9 @@ No links
     // Summary only counts glob-matched files
     assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 2);
 
-    let orphans = json["results"]["orphans"]["files"].as_array().unwrap();
-    let orphan_paths: Vec<&str> = orphans.iter().map(|v| v.as_str().unwrap()).collect();
-
-    // notes/a.md is linked from root.md (outside glob) — NOT an orphan
-    assert!(
-        !orphan_paths.contains(&"notes/a.md"),
-        "notes/a.md should NOT be orphan (linked from outside glob)"
-    );
-    // notes/b.md has no links in or out — orphan
-    assert!(
-        orphan_paths.contains(&"notes/b.md"),
-        "notes/b.md should be orphan"
-    );
+    // notes/a.md is linked from root.md (outside glob) — NOT an orphan.
+    // notes/b.md has no links in or out — orphan. So 1 orphan.
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -967,12 +915,7 @@ No links.
         String::from_utf8_lossy(&disk_out.stderr)
     );
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
-    let disk_orphans: Vec<&str> = disk_json["results"]["orphans"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let disk_orphans = disk_json["results"]["orphans"].as_u64().unwrap();
 
     // Create index with same site_prefix
     let idx_create = hyalo_no_hints()
@@ -1006,23 +949,14 @@ No links.
         String::from_utf8_lossy(&idx_out.stderr)
     );
     let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
-    let idx_orphans: Vec<&str> = idx_json["results"]["orphans"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let idx_orphans = idx_json["results"]["orphans"].as_u64().unwrap();
 
     assert_eq!(
         disk_orphans, idx_orphans,
-        "disk scan and index orphan lists must match"
+        "disk scan and index orphan counts must match"
     );
-    // With site_prefix=docs, /docs/c.md resolves to c.md, so c.md is not orphan
-    assert!(
-        !disk_orphans.contains(&"c.md"),
-        "c.md should not be orphan: {disk_orphans:?}"
-    );
-    assert_eq!(disk_orphans, vec!["orphan.md"]);
+    // orphan.md is the only orphan (c.md is not orphan with site_prefix=docs)
+    assert_eq!(disk_orphans, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1099,37 +1033,13 @@ fn summary_dead_ends_json() {
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert!(
-        json["results"]["dead_ends"]["total"].is_number(),
-        "dead_ends.total should be a number"
-    );
-    assert!(
-        json["results"]["dead_ends"]["files"].is_array(),
-        "dead_ends.files should be an array"
-    );
-
     assert_eq!(
-        json["results"]["dead_ends"]["total"].as_u64().unwrap(),
+        json["results"]["dead_ends"].as_u64().unwrap(),
         1,
         "expected 1 dead-end"
     );
-    let dead_end_files: Vec<&str> = json["results"]["dead_ends"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert_eq!(dead_end_files, vec!["c.md"]);
-
     // d.md is the orphan, not a dead-end
-    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 1);
-    let orphan_files: Vec<&str> = json["results"]["orphans"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert_eq!(orphan_files, vec!["d.md"]);
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -1151,10 +1061,6 @@ fn summary_dead_ends_text_format() {
     assert!(
         text.contains("Dead-ends: 1"),
         "expected 'Dead-ends: 1' in: {text}"
-    );
-    assert!(
-        text.contains("\"c.md\""),
-        "expected dead-end file listed in: {text}"
     );
 }
 
@@ -1197,14 +1103,8 @@ No links.
     assert!(output.status.success());
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["results"]["dead_ends"]["total"].as_u64().unwrap(), 0);
-    assert!(
-        json["results"]["dead_ends"]["files"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(json["results"]["orphans"]["total"].as_u64().unwrap(), 2);
+    assert_eq!(json["results"]["dead_ends"].as_u64().unwrap(), 0);
+    assert_eq!(json["results"]["orphans"].as_u64().unwrap(), 2);
 }
 
 /// Dead-end results must be identical between disk-scan and index-based summary.
@@ -1224,12 +1124,7 @@ fn summary_dead_end_parity_disk_vs_index() {
         String::from_utf8_lossy(&disk_out.stderr)
     );
     let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
-    let disk_dead_ends: Vec<&str> = disk_json["results"]["dead_ends"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let disk_dead_ends = disk_json["results"]["dead_ends"].as_u64().unwrap();
 
     // Create index
     let idx_create = hyalo_no_hints()
@@ -1253,16 +1148,11 @@ fn summary_dead_end_parity_disk_vs_index() {
         String::from_utf8_lossy(&idx_out.stderr)
     );
     let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
-    let idx_dead_ends: Vec<&str> = idx_json["results"]["dead_ends"]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
+    let idx_dead_ends = idx_json["results"]["dead_ends"].as_u64().unwrap();
 
     assert_eq!(
         disk_dead_ends, idx_dead_ends,
-        "disk scan and index dead-end lists must match"
+        "disk scan and index dead-end counts must match"
     );
-    assert_eq!(disk_dead_ends, vec!["c.md"]);
+    assert_eq!(disk_dead_ends, 1);
 }

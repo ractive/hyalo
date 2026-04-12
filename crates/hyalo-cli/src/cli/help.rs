@@ -42,7 +42,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
 pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
-               [-s/--section HEADING ...] [--title PAT] [--broken-links]
+               [-s/--section HEADING ...] [--title PAT] [--broken-links] [--orphan] [--dead-end]
                [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [--reverse] [-n/--limit N]
 
   Read (display file body content, read-only):
@@ -164,6 +164,12 @@ COOKBOOK:
   # Find open tasks within a specific section
   hyalo find --section '## Sprint' --task todo
 
+  # Find orphan files (no inbound or outbound links)
+  hyalo find --orphan
+
+  # Find dead-end files (have inbound links but no outbound)
+  hyalo find --dead-end
+
   # Find broken [[wikilinks]] (fields=links, then filter in jq)
   hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'
 
@@ -284,10 +290,11 @@ OUTPUT SHAPES (JSON, default):
   # task read / toggle / set
   {\"results\": {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}, \"hints\": [...]}
 
-  # summary
-  {\"results\": {\"files\": {\"total\": 31, \"by_directory\": [...]}, \"properties\": [...], \"tags\": {...},
-  \"status\": [{\"value\": \"draft\", \"files\": [...]}], \"tasks\": {\"total\": 50, \"done\": 30},
-  \"orphans\": {\"total\": N, \"files\": [...]}, \"recent_files\": [...]}, \"hints\": [...]}
+  # summary (compact: counts only, no file lists)
+  {\"results\": {\"files\": {\"total\": 31, \"directories\": [...]}, \"properties\": [...], \"tags\": {...},
+  \"status\": [{\"value\": \"draft\", \"count\": 5}], \"tasks\": {\"total\": 50, \"done\": 30},
+  \"orphans\": 7, \"dead_ends\": 3, \"links\": {\"total\": 166, \"broken\": 5},
+  \"recent_files\": [...]}, \"hints\": [...]}
 
   # backlinks
   {\"results\": {\"file\": \"target.md\", \"backlinks\": [{\"source\": \"a.md\", \"line\": 5, \"target\": \"target\"}]},
