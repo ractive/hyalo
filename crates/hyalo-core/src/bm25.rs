@@ -544,6 +544,10 @@ impl Bm25InvertedIndex {
             .count();
         let mut must_hits: HashMap<u32, usize> = HashMap::new();
 
+        // Docs that received phrase-term scores but don't satisfy phrase adjacency.
+        // These must have those scores removed in the final filter.
+        let mut phrase_rejected: HashSet<u32> = HashSet::new();
+
         for clause in &query.clauses {
             let (terms, is_must) = match clause {
                 Clause::Must(t) => (t, true),
@@ -575,33 +579,47 @@ impl Bm25InvertedIndex {
                 }
             }
 
-            // Record Must clause satisfaction for AND filtering.
-            if is_must {
-                if is_phrase {
-                    for doc_id in self.docs_with_all_terms(terms) {
-                        if self.has_phrase_at_positions(terms, doc_id) {
-                            *must_hits.entry(doc_id).or_insert(0) += 1;
-                        }
+            // Validate phrase adjacency and record Must clause satisfaction.
+            if is_phrase {
+                let phrase_docs: HashSet<u32> = self
+                    .docs_with_all_terms(terms)
+                    .into_iter()
+                    .filter(|&doc_id| self.has_phrase_at_positions(terms, doc_id))
+                    .collect();
+
+                if is_must {
+                    for &doc_id in &phrase_docs {
+                        *must_hits.entry(doc_id).or_insert(0) += 1;
                     }
-                } else {
-                    // Single-term Must: presence in posting list is sufficient.
-                    if let Some(posting_list) = self.postings.get(&terms[0]) {
-                        for p in posting_list {
-                            *must_hits.entry(p.doc_id).or_insert(0) += 1;
-                        }
+                }
+
+                // Track docs that got individual term scores but don't match the phrase.
+                // These scores must be excluded so phrases aren't matched as bag-of-words.
+                let all_term_docs: HashSet<u32> = self.docs_with_all_terms(terms);
+                for doc_id in all_term_docs {
+                    if !phrase_docs.contains(&doc_id) {
+                        phrase_rejected.insert(doc_id);
+                    }
+                }
+            } else if is_must {
+                // Single-term Must: presence in posting list is sufficient.
+                if let Some(posting_list) = self.postings.get(&terms[0]) {
+                    for p in posting_list {
+                        *must_hits.entry(p.doc_id).or_insert(0) += 1;
                     }
                 }
             }
         }
 
-        // Collect results: exclude negated docs, enforce AND intersection.
+        // Collect results: exclude negated docs, enforce AND intersection,
+        // and reject docs that only matched phrase terms non-adjacently.
         let mut matches: Vec<Bm25Match> = scores
             .into_iter()
             .filter(|(doc_id, score)| {
                 if *score <= 0.0 {
                     return false;
                 }
-                if excluded.contains(doc_id) {
+                if phrase_rejected.contains(doc_id) {
                     return false;
                 }
                 if must_clause_count > 0 {
@@ -644,13 +662,18 @@ impl Bm25InvertedIndex {
         }
 
         // Collect position slices for each term in this document.
+        // Postings are sorted by doc_id, so use binary search for O(log n) lookup.
         let positions: Vec<&[u32]> = terms
             .iter()
             .map(|t| {
                 self.postings
                     .get(t)
-                    .and_then(|ps| ps.iter().find(|p| p.doc_id == doc_id))
-                    .map_or(&[] as &[u32], |p| p.positions.as_slice())
+                    .and_then(|ps| {
+                        ps.binary_search_by_key(&doc_id, |p| p.doc_id)
+                            .ok()
+                            .map(|idx| ps[idx].positions.as_slice())
+                    })
+                    .unwrap_or(&[] as &[u32])
             })
             .collect();
 
@@ -1162,6 +1185,41 @@ mod tests {
         assert!(
             !paths.contains(&"non_consecutive.md"),
             "non_consecutive.md should not match phrase: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn test_bm25_phrase_in_or_context() {
+        let docs = vec![
+            doc(
+                "consecutive.md",
+                "Fast Rust",
+                "Rust is a fast systems language.",
+            ),
+            doc(
+                "non_consecutive.md",
+                "Systems Language",
+                "A fast language but not Rust specific.",
+            ),
+            doc("cooking.md", "Cooking", "Recipes for healthy meals."),
+        ];
+        let index = Bm25InvertedIndex::build(docs);
+        let stemmer = make_stemmer(StemLanguage::English);
+        // Phrase "fast rust" in OR context: only docs with the phrase adjacently
+        // should match the phrase part; cooking.md matches "cooking" via OR.
+        let results = index.score("\"fast rust\" OR cooking", &stemmer);
+        let paths: Vec<&str> = results.iter().map(|r| r.rel_path.as_str()).collect();
+        assert!(
+            paths.contains(&"consecutive.md"),
+            "consecutive.md should match phrase in OR: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"cooking.md"),
+            "cooking.md should match 'cooking' via OR: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"non_consecutive.md"),
+            "non_consecutive.md should NOT match phrase in OR (words not adjacent): {paths:?}"
         );
     }
 
