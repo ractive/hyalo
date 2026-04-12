@@ -411,6 +411,7 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.sort.clone_from(sort);
                 ctx.has_limit = limit.is_some();
                 ctx.has_body_search = pattern.is_some();
+                ctx.body_pattern.clone_from(pattern);
                 ctx.has_regex_search = regexp.is_some();
                 ctx.property_filters.clone_from(properties);
                 ctx.tag_filters.clone_from(tag);

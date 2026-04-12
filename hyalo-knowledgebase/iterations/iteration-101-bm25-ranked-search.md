@@ -2,7 +2,7 @@
 title: Iteration 101 — BM25 Ranked Search
 type: iteration
 date: 2026-04-09
-status: in-progress
+status: completed
 branch: iter-101/bm25-ranked-search
 tags:
   - iteration

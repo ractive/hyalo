@@ -207,12 +207,15 @@ hyalo find
 # Files with broken links (unresolved wikilinks or markdown links)
 hyalo find --broken-links
 
-# Content search (case-insensitive substring)
-hyalo find "retry backoff"
-hyalo find "retry" --tag research
+# BM25 ranked full-text search (stemmed, relevance-ranked)
+hyalo find "retry backoff"               # AND: both words required
+hyalo find "retry OR backoff"            # OR: either word matches
+hyalo find "retry -deprecated"           # NOT: exclude "deprecated"
+hyalo find '"retry backoff"'             # Phrase: exact consecutive match
+hyalo find "retry" --tag research        # combine with filters
 
-# Regex content search (case-insensitive by default)
-hyalo find --regexp "retry.*backoff"
+# Regex content search (case-insensitive by default, unranked)
+hyalo find -e "retry.*backoff"
 hyalo find -e "TODO|FIXME|HACK"
 hyalo find -e "fn\s+\w+_test" --tag rust
 

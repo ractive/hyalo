@@ -62,6 +62,8 @@ pub struct HintContext {
     pub sort: Option<String>,
     pub has_limit: bool,
     pub has_body_search: bool,
+    /// The actual body-search pattern string, when a body search was issued.
+    pub body_pattern: Option<String>,
     pub has_regex_search: bool,
     pub property_filters: Vec<String>,
     pub tag_filters: Vec<String>,
@@ -106,6 +108,7 @@ impl HintContext {
             sort: None,
             has_limit: false,
             has_body_search: false,
+            body_pattern: None,
             has_regex_search: false,
             property_filters: vec![],
             tag_filters: vec![],
@@ -245,6 +248,36 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
     }
     for arg in extra_args {
         parts.push(shell_quote(arg));
+    }
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    parts.join(" ")
+}
+
+/// Build a `find` command that replaces the body search pattern with `new_pattern`
+/// while preserving all other existing filters (property, tag, task, file targets,
+/// glob). The pattern is inserted as a positional argument immediately after `find`.
+fn build_find_command_with_pattern(ctx: &HintContext, new_pattern: &str) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
+    parts.push(shell_quote(new_pattern));
+    for pf in &ctx.property_filters {
+        parts.push("--property".to_owned());
+        parts.push(shell_quote(pf));
+    }
+    for tf in &ctx.tag_filters {
+        parts.push("--tag".to_owned());
+        parts.push(shell_quote(tf));
+    }
+    if let Some(task) = &ctx.task_filter {
+        parts.push("--task".to_owned());
+        parts.push(shell_quote(task));
+    }
+    for ft in &ctx.file_targets {
+        parts.push("--file".to_owned());
+        parts.push(shell_quote(ft));
     }
     push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
@@ -528,7 +561,7 @@ fn suggest_save_as_view(ctx: &HintContext) -> Option<Hint> {
     }
 
     // Only count filters that can be round-tripped into a `views set` command.
-    // Body/regex search is excluded because HintContext only stores a bool,
+    // Body/regex search is excluded because `views set` does not support them,
     // not the actual pattern string.
     let filter_count =
         ctx.property_filters.len() + ctx.tag_filters.len() + usize::from(ctx.task_filter.is_some());
@@ -549,6 +582,27 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     };
 
     if results.is_empty() {
+        // When a multi-word BM25 search returns nothing, suggest trying OR instead.
+        // Skip if the query already contains quotes (phrase search) — splitting on
+        // whitespace would produce malformed tokens like `"exact` and `phrase"`.
+        if let Some(pat) = &ctx.body_pattern {
+            let has_quotes = pat.contains('"');
+            let words: Vec<&str> = pat
+                .split_whitespace()
+                .filter(|w| {
+                    !w.starts_with('-')
+                        && !w.eq_ignore_ascii_case("or")
+                        && !w.eq_ignore_ascii_case("and")
+                })
+                .collect();
+            if !has_quotes && words.len() >= 2 {
+                let or_query = words.join(" OR ");
+                return vec![Hint::new(
+                    "Try OR instead of AND (match any word)",
+                    build_find_command_with_pattern(ctx, &or_query),
+                )];
+            }
+        }
         return vec![];
     }
 
@@ -744,6 +798,29 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     // Body search → regex suggestion is intentionally omitted.
     // We cannot produce a concrete regex without knowing the user's intent,
     // and a placeholder like `'pattern'` would violate our no-templates contract.
+
+    // Suggest phrase search when body search has multiple words and many results.
+    if let Some(pat) = &ctx.body_pattern {
+        let has_quotes = pat.contains('"');
+        let words: Vec<&str> = pat
+            .split_whitespace()
+            .filter(|w| {
+                !w.starts_with('-')
+                    && !w.eq_ignore_ascii_case("or")
+                    && !w.eq_ignore_ascii_case("and")
+            })
+            .collect();
+        if !has_quotes && words.len() >= 2 && result_count > 10 {
+            let remaining = MAX_HINTS.saturating_sub(hints.len());
+            if remaining > 0 {
+                let phrase = format!("\"{}\"", words.join(" "));
+                hints.push(Hint::new(
+                    "Try as exact phrase for more precise results",
+                    build_find_command_with_pattern(ctx, &phrase),
+                ));
+            }
+        }
+    }
 
     // Suggest `links fix` when results contain broken links (e.g. from --broken-links).
     // Broken links are serialised with `"path": null` (never omitted) by find's output.
