@@ -8,7 +8,7 @@ tags:
   - ux
   - llm
   - cli
-status: in-progress
+status: completed
 branch: iter-105/summary-redesign
 ---
 

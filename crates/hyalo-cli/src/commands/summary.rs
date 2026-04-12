@@ -118,7 +118,7 @@ pub fn summary(
     // Only tracks text-typed string properties (not date/datetime/number/checkbox/list).
     let mut string_prop_values: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut tag_counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    let mut status_groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut status_groups: BTreeMap<String, usize> = BTreeMap::new();
     let mut total_tasks: usize = 0;
     let mut done_tasks: usize = 0;
     let mut recent_entries: Vec<(String, String)> = Vec::new();
@@ -173,10 +173,7 @@ pub fn summary(
             let mut seen = std::collections::HashSet::new();
             let mut push_status = |s: String| {
                 if seen.insert(s.clone()) {
-                    status_groups
-                        .entry(s)
-                        .or_default()
-                        .push(entry.rel_path.clone());
+                    *status_groups.entry(s).or_insert(0) += 1;
                 }
             };
             match status_val {
@@ -257,10 +254,7 @@ pub fn summary(
     // Build status groups (counts only)
     let status: Vec<StatusGroup> = status_groups
         .into_iter()
-        .map(|(value, files)| StatusGroup {
-            value,
-            count: files.len(),
-        })
+        .map(|(value, count)| StatusGroup { value, count })
         .collect();
 
     let tasks = TaskCount {

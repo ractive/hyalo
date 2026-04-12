@@ -1729,4 +1729,6 @@ fn find_orphan_composes_with_sort_and_limit() {
         .unwrap()
         .clone();
     assert_eq!(arr.len(), 2, "limit=2 should cap results");
+    let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
+    assert_eq!(files, vec!["a.md", "b.md"], "sorted by file, limited to 2");
 }

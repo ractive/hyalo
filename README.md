@@ -362,7 +362,7 @@ hyalo tags rename --from old-tag --to new-tag --glob "notes/*.md"
 
 ### summary
 
-Compact vault overview (~20-30 lines regardless of vault size): file counts, property and tag aggregates, status counts, tasks, link health, orphan/dead-end counts, and recently modified files. Drill down with `find --orphan`, `find --dead-end`, `find --broken-links`.
+Compact, fixed-size vault overview: file counts, property and tag aggregates, status counts, tasks, link health, orphan/dead-end counts, and recently modified files. Drill down with `find --orphan`, `find --dead-end`, `find --broken-links`.
 
 ```sh
 hyalo summary

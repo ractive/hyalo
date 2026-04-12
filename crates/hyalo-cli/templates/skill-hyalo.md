@@ -180,7 +180,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 - **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
 - **read** — extract body content, a section, or line range
-- **summary** — compact directory overview (~20-30 lines): file counts, tags, tasks, orphans, dead-ends, links (use `--depth N` to override directory depth)
+- **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links (use `--depth N` to override directory depth)
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts

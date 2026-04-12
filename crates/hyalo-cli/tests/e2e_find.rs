@@ -3552,7 +3552,8 @@ fn find_orphan_returns_isolated_files() {
         .map(|r| r["file"].as_str().unwrap())
         .collect();
     assert_eq!(files, vec!["c.md"], "orphan files: {files:?}");
-    // backlinks field auto-included
+    // orphan auto-includes both links and backlinks fields
+    assert!(results[0]["links"].is_array());
     assert!(results[0]["backlinks"].is_array());
 }
 
@@ -3616,6 +3617,11 @@ fn find_orphan_composes_with_sort_and_limit() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let results = json["results"].as_array().unwrap();
     assert_eq!(results.len(), 2, "limit=2 should cap results");
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["a.md", "b.md"], "sorted by file, limited to 2");
 }
 
 #[test]
@@ -3646,4 +3652,79 @@ fn find_orphan_composes_with_glob() {
         .collect();
     // Only notes/b.md matches the glob, a.md excluded
     assert_eq!(files, vec!["notes/b.md"]);
+}
+
+#[test]
+fn find_dead_end_composes_with_sort_and_limit() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // a.md links to b, c, and d — making them all dead-ends
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n[[b]] [[c]] [[d]]\n",
+    );
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nContent.\n");
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\nContent.\n");
+    write_md(tmp.path(), "d.md", "---\ntitle: D\n---\nContent.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--dead-end",
+            "--sort",
+            "file",
+            "--limit",
+            "2",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "limit=2 should cap results");
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(files, vec!["b.md", "c.md"], "sorted by file, limited to 2");
+}
+
+#[test]
+fn find_dead_end_composes_with_glob() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // a.md links to b and notes/c — making them dead-ends
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n[[b]] [[notes/c]]\n",
+    );
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nContent.\n");
+    write_md(tmp.path(), "notes/c.md", "---\ntitle: C\n---\nContent.\n");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--dead-end",
+            "--glob",
+            "notes/*.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    // Only notes/c.md matches the glob
+    assert_eq!(files, vec!["notes/c.md"]);
 }

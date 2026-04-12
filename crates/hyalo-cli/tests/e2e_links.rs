@@ -112,12 +112,18 @@ fn summary_includes_link_health() {
     let broken = json["results"]["links"]["broken"]
         .as_u64()
         .expect("links.broken should be a number");
-    assert!(broken >= 1, "expected at least 1 broken link, got {broken}");
+    assert_eq!(
+        broken, 2,
+        "expected 2 broken links: [[nonexistent]] from b.md and [[Authnticaton]] from d.md"
+    );
 
     // broken_links array was removed; summary only reports counts now.
+    let links_obj = json["results"]["links"]
+        .as_object()
+        .expect("results.links should be an object");
     assert!(
-        json["results"]["links"]["broken_links"].is_null(),
-        "broken_links array should no longer be present in summary"
+        !links_obj.contains_key("broken_links"),
+        "broken_links should be removed from summary output"
     );
 }
 
@@ -145,7 +151,10 @@ fn summary_broken_links_count_includes_nonexistent() {
     let broken = json["results"]["links"]["broken"]
         .as_u64()
         .expect("links.broken should be a number");
-    assert!(broken >= 1, "expected at least 1 broken link, got {broken}");
+    assert_eq!(
+        broken, 2,
+        "expected 2 broken links: [[nonexistent]] from b.md and [[Authnticaton]] from d.md"
+    );
 }
 
 #[test]

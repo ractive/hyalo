@@ -428,7 +428,7 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         .unwrap_or(0);
     if broken_links > 0 && hints.len() < MAX_HINTS {
         hints.push(Hint::new(
-            format!("{broken_links} files with broken links"),
+            format!("{broken_links} broken links"),
             build_command_with_glob(ctx, &["find", "--broken-links"]),
         ));
         if hints.len() < MAX_HINTS {
