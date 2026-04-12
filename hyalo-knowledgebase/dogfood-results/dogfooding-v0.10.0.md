@@ -73,7 +73,7 @@ Combining `--orphan` and `--dead-end` returns nothing because they're mutually e
 ### UX-3 (LOW): Views can't store BM25 patterns
 
 `views set` accepts all filter flags but not the positional search pattern. A `--pattern` or positional arg would complete the feature:
-```
+```bash
 hyalo views set perf-iterations "performance" --tag iteration
 ```
 
@@ -91,6 +91,7 @@ The Status line in `summary` shows `active (3), completed (184), ...` — alphab
 | `properties` | 15ms | **59x faster** (was 880ms) |
 
 With index:
+
 | Command | Time |
 |---|---|
 | `find "dogfood" --index --limit 1` | 11ms |

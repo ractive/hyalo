@@ -2,7 +2,7 @@
 title: "Iteration 106 — Dogfood Fixes: Status Sort, Views Pattern, Orphan Warning"
 date: 2026-04-12
 type: iteration
-status: in-progress
+status: completed
 branch: iter-106/dogfood-fixes
 tags:
   - iteration

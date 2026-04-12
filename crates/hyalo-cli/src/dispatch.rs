@@ -688,6 +688,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     pattern,
                     mut filters,
                 } => {
+                    if pattern.is_some() && filters.regexp.is_some() {
+                        return Ok(CommandOutcome::UserError(
+                            "Error: PATTERN and --regexp are mutually exclusive".to_owned(),
+                        ));
+                    }
                     filters.pattern = pattern;
                     crate::commands::views::set_view(&name, &filters)
                 }
