@@ -1456,3 +1456,31 @@ fn bare_index_flag_without_index_file_falls_back_to_disk_scan() {
         "bare --index without an index file should fall back to disk scan"
     );
 }
+
+#[test]
+fn bare_index_works_from_different_cwd() {
+    let tmp = setup_vault();
+    create_default_index(&tmp);
+
+    // Run from a different CWD (root dir) — bare --index should still resolve
+    // to {dir}/.hyalo-index, not {cwd}/.hyalo-index.
+    let other_dir = TempDir::new().unwrap();
+    let output = hyalo_no_hints()
+        .current_dir(other_dir.path())
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--index"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "bare --index from different CWD should work: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files = sorted_files(&json);
+    assert!(
+        !files.is_empty(),
+        "bare --index from different CWD should find files via <dir>/.hyalo-index"
+    );
+}
