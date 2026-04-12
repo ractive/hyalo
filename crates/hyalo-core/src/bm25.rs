@@ -1442,4 +1442,54 @@ mod tests {
             "no tokens → should return None"
         );
     }
+
+    // ------------------------------------------------------------------
+    // is_low_discriminative
+    // ------------------------------------------------------------------
+
+    fn make_match(rel_path: &str, score: f64) -> Bm25Match {
+        Bm25Match {
+            rel_path: rel_path.to_owned(),
+            score,
+        }
+    }
+
+    #[test]
+    fn test_low_discriminative_empty_matches_returns_false() {
+        assert!(!is_low_discriminative(&[], 10));
+    }
+
+    #[test]
+    fn test_low_discriminative_zero_total_docs_returns_false() {
+        let matches = vec![make_match("a.md", 0.5)];
+        assert!(!is_low_discriminative(&matches, 0));
+    }
+
+    #[test]
+    fn test_low_discriminative_high_ratio_low_scores_returns_true() {
+        // 9 matches out of 10 docs = 90% ratio; all scores below 1.0
+        let matches: Vec<Bm25Match> = (0..9)
+            .map(|i| make_match(&format!("{i}.md"), 0.5))
+            .collect();
+        assert!(is_low_discriminative(&matches, 10));
+    }
+
+    #[test]
+    fn test_low_discriminative_low_ratio_returns_false() {
+        // 3 matches out of 10 docs = 30% ratio → not low discriminative
+        let matches: Vec<Bm25Match> = (0..3)
+            .map(|i| make_match(&format!("{i}.md"), 0.5))
+            .collect();
+        assert!(!is_low_discriminative(&matches, 10));
+    }
+
+    #[test]
+    fn test_low_discriminative_high_ratio_high_scores_returns_false() {
+        // 9 matches out of 10 docs = 90% ratio, but top score >= 1.0 → not low discriminative
+        let mut matches: Vec<Bm25Match> = (0..8)
+            .map(|i| make_match(&format!("{i}.md"), 0.5))
+            .collect();
+        matches.push(make_match("high.md", 2.5));
+        assert!(!is_low_discriminative(&matches, 10));
+    }
 }
