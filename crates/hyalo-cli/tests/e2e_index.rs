@@ -255,10 +255,10 @@ fn drop_index_nonexistent_returns_error() {
 #[test]
 fn find_with_index_returns_same_files_as_disk_scan() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_json = run_find(&tmp, &[]);
-    let index_json = run_find(&tmp, &["--index", index_path.to_str().unwrap()]);
+    let index_json = run_find(&tmp, &["--index"]);
 
     let mut disk_files = sorted_files(&disk_json);
     let mut index_files = sorted_files(&index_json);
@@ -274,10 +274,10 @@ fn find_with_index_returns_same_files_as_disk_scan() {
 #[test]
 fn find_with_index_preserves_properties() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_json = run_find(&tmp, &[]);
-    let index_json = run_find(&tmp, &["--index", index_path.to_str().unwrap()]);
+    let index_json = run_find(&tmp, &["--index"]);
 
     // For each file returned by disk scan, check that index scan has matching properties.
     for disk_entry in unwrap_results(&disk_json) {
@@ -301,17 +301,9 @@ fn find_with_index_preserves_properties() {
 #[test]
 fn find_with_index_property_filter() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
-    let json = run_find(
-        &tmp,
-        &[
-            "--property",
-            "status=draft",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--property", "status=draft", "--index"]);
 
     let files = sorted_files(&json);
     assert_eq!(files, vec!["alpha.md", "gamma.md"]);
@@ -330,12 +322,9 @@ fn find_with_index_property_filter() {
 #[test]
 fn find_with_index_tag_filter() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
-    let json = run_find(
-        &tmp,
-        &["--tag", "rust", "--index", index_path.to_str().unwrap()],
-    );
+    let json = run_find(&tmp, &["--tag", "rust", "--index"]);
 
     let mut files = sorted_files(&json);
     files.sort();
@@ -345,13 +334,10 @@ fn find_with_index_tag_filter() {
 #[test]
 fn find_with_index_content_search_falls_back_to_disk() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     // "fascinating" only appears in beta.md body.
-    let json = run_find(
-        &tmp,
-        &["fascinating", "--index", index_path.to_str().unwrap()],
-    );
+    let json = run_find(&tmp, &["fascinating", "--index"]);
 
     let files = sorted_files(&json);
     assert_eq!(files, vec!["beta.md"]);
@@ -360,16 +346,9 @@ fn find_with_index_content_search_falls_back_to_disk() {
 #[test]
 fn find_with_index_content_search_no_match() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
-    let json = run_find(
-        &tmp,
-        &[
-            "this-string-does-not-exist-anywhere",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["this-string-does-not-exist-anywhere", "--index"]);
 
     assert!(unwrap_results(&json).is_empty());
 }
@@ -381,7 +360,7 @@ fn find_with_index_content_search_no_match() {
 #[test]
 fn summary_with_index_matches_disk_scan() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -393,13 +372,7 @@ fn summary_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--index",
-            index_path.to_str().unwrap(),
-            "summary",
-            "--format",
-            "json",
-        ])
+        .args(["--index", "summary", "--format", "json"])
         .output()
         .unwrap();
     assert!(
@@ -426,17 +399,11 @@ fn summary_with_index_matches_disk_scan() {
 #[test]
 fn summary_with_index_file_count() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--index",
-            index_path.to_str().unwrap(),
-            "summary",
-            "--format",
-            "json",
-        ])
+        .args(["--index", "summary", "--format", "json"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -452,7 +419,7 @@ fn summary_with_index_file_count() {
 #[test]
 fn tags_summary_with_index_matches_disk_scan() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -464,7 +431,7 @@ fn tags_summary_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", index_path.to_str().unwrap(), "tags", "summary"])
+        .args(["--index", "tags", "summary"])
         .output()
         .unwrap();
     assert!(
@@ -507,7 +474,7 @@ fn tags_summary_with_index_matches_disk_scan() {
 #[test]
 fn properties_summary_with_index_matches_disk_scan() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -519,12 +486,7 @@ fn properties_summary_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--index",
-            index_path.to_str().unwrap(),
-            "properties",
-            "summary",
-        ])
+        .args(["--index", "properties", "summary"])
         .output()
         .unwrap();
     assert!(
@@ -562,18 +524,12 @@ fn properties_summary_with_index_matches_disk_scan() {
 #[test]
 fn backlinks_with_index_finds_wikilinks() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     // gamma.md links to alpha.md via [[alpha]]
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--index",
-            index_path.to_str().unwrap(),
-            "backlinks",
-            "--file",
-            "alpha.md",
-        ])
+        .args(["--index", "backlinks", "--file", "alpha.md"])
         .output()
         .unwrap();
     assert!(
@@ -600,7 +556,7 @@ fn backlinks_with_index_finds_wikilinks() {
 #[test]
 fn backlinks_with_index_matches_disk_scan() {
     let tmp = setup_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -612,13 +568,7 @@ fn backlinks_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--index",
-            index_path.to_str().unwrap(),
-            "backlinks",
-            "--file",
-            "beta.md",
-        ])
+        .args(["--index", "backlinks", "--file", "beta.md"])
         .output()
         .unwrap();
     assert!(index_output.status.success());
@@ -645,7 +595,8 @@ fn incompatible_index_falls_back_to_disk_scan() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", garbage_path.to_str().unwrap(), "find"])
+        .arg(format!("--index={}", garbage_path.display()))
+        .arg("find")
         .output()
         .unwrap();
 
@@ -681,13 +632,8 @@ fn incompatible_index_falls_back_for_summary() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args([
-            "--index",
-            garbage_path.to_str().unwrap(),
-            "summary",
-            "--format",
-            "json",
-        ])
+        .arg(format!("--index={}", garbage_path.display()))
+        .args(["summary", "--format", "json"])
         .output()
         .unwrap();
 
@@ -709,7 +655,7 @@ fn incompatible_index_falls_back_for_summary() {
 fn run_with_index(tmp: &TempDir, index_path: &std::path::Path, args: &[&str]) -> serde_json::Value {
     let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
-    cmd.args(["--index", index_path.to_str().unwrap()]);
+    cmd.arg(format!("--index={}", index_path.display()));
     cmd.args(args);
     let output = cmd.output().unwrap();
     assert!(
@@ -737,15 +683,7 @@ fn set_with_index_updates_index_for_subsequent_find() {
     );
 
     // Query the index — should see the updated property without re-scanning
-    let json = run_find(
-        &tmp,
-        &[
-            "--property",
-            "reviewed=true",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--property", "reviewed=true", "--index"]);
 
     let files = sorted_files(&json);
     assert_eq!(files, vec!["alpha.md"]);
@@ -773,7 +711,6 @@ fn remove_with_index_updates_index_for_subsequent_find() {
             "--file",
             "alpha.md",
             "--index",
-            index_path.to_str().unwrap(),
         ],
     );
     assert_eq!(unwrap_results(&before).len(), 1);
@@ -786,15 +723,7 @@ fn remove_with_index_updates_index_for_subsequent_find() {
     );
 
     // Query the index — alpha should no longer match status=draft
-    let after = run_find(
-        &tmp,
-        &[
-            "--property",
-            "status=draft",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let after = run_find(&tmp, &["--property", "status=draft", "--index"]);
 
     let files = sorted_files(&after);
     assert!(
@@ -822,15 +751,7 @@ fn append_with_index_updates_index_for_subsequent_find() {
     );
 
     // Find by the new property via index
-    let json = run_find(
-        &tmp,
-        &[
-            "--property",
-            "aliases",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--property", "aliases", "--index"]);
 
     let files = sorted_files(&json);
     assert_eq!(files, vec!["alpha.md"]);
@@ -846,14 +767,7 @@ fn task_toggle_with_index_updates_index() {
     let before = run_find(
         &tmp,
         &[
-            "--task",
-            "todo",
-            "--file",
-            "alpha.md",
-            "--fields",
-            "tasks",
-            "--index",
-            index_path.to_str().unwrap(),
+            "--task", "todo", "--file", "alpha.md", "--fields", "tasks", "--index",
         ],
     );
     let todo_tasks: Vec<&serde_json::Value> = unwrap_results(&before)[0]["tasks"]
@@ -885,14 +799,7 @@ fn task_toggle_with_index_updates_index() {
     // Query the index — the task should now be done
     let after = run_find(
         &tmp,
-        &[
-            "--file",
-            "alpha.md",
-            "--fields",
-            "tasks",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
+        &["--file", "alpha.md", "--fields", "tasks", "--index"],
     );
     let tasks = unwrap_results(&after)[0]["tasks"].as_array().unwrap();
     let toggled = tasks
@@ -918,7 +825,7 @@ fn mv_with_index_updates_index_path() {
     );
 
     // The index should now have archive/gamma.md and not gamma.md
-    let json = run_find(&tmp, &["--index", index_path.to_str().unwrap()]);
+    let json = run_find(&tmp, &["--index"]);
     let files = sorted_files(&json);
     assert!(
         files.contains(&"archive/gamma.md".to_owned()),
@@ -930,15 +837,7 @@ fn mv_with_index_updates_index_path() {
     );
 
     // Properties/tags on the moved file are still queryable
-    let json = run_find(
-        &tmp,
-        &[
-            "--property",
-            "status=draft",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--property", "status=draft", "--index"]);
     let files = sorted_files(&json);
     assert!(
         files.contains(&"archive/gamma.md".to_owned()),
@@ -976,23 +875,12 @@ fn tags_rename_with_index_updates_index() {
     );
 
     // Query via index — alpha.md should have 'command-line' tag, not 'cli'
-    let json = run_find(
-        &tmp,
-        &[
-            "--tag",
-            "command-line",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--tag", "command-line", "--index"]);
     let files = sorted_files(&json);
     assert_eq!(files, vec!["alpha.md"]);
 
     // Old tag should find nothing
-    let old = run_find(
-        &tmp,
-        &["--tag", "cli", "--index", index_path.to_str().unwrap()],
-    );
+    let old = run_find(&tmp, &["--tag", "cli", "--index"]);
     assert!(
         unwrap_results(&old).is_empty(),
         "old tag 'cli' should match nothing after rename"
@@ -1019,27 +907,11 @@ fn properties_rename_with_index_updates_index() {
     );
 
     // Query via index — alpha.md should have 'importance', not 'priority'
-    let json = run_find(
-        &tmp,
-        &[
-            "--property",
-            "importance",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--property", "importance", "--index"]);
     let files = sorted_files(&json);
     assert_eq!(files, vec!["alpha.md"]);
 
-    let old = run_find(
-        &tmp,
-        &[
-            "--property",
-            "priority",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let old = run_find(&tmp, &["--property", "priority", "--index"]);
     assert!(
         unwrap_results(&old).is_empty(),
         "old property 'priority' should match nothing after rename"
@@ -1069,15 +941,7 @@ fn chained_mutations_with_index_keep_index_consistent() {
     );
 
     // Query via index — should reflect all three mutations
-    let json = run_find(
-        &tmp,
-        &[
-            "--file",
-            "alpha.md",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
-    );
+    let json = run_find(&tmp, &["--file", "alpha.md", "--index"]);
     let entry = &unwrap_results(&json)[0];
     assert_eq!(entry["properties"]["status"], "archived");
     let tags: Vec<&str> = entry["tags"]
@@ -1206,16 +1070,11 @@ fn find_property_regex_yaml_array_disk_and_index_agree() {
     let disk_total = run_find_jq(&tmp, ".total", &["--property", "status~=deprecated"]);
 
     // Build index, then query via it.
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
     let index_total = run_find_jq(
         &tmp,
         ".total",
-        &[
-            "--property",
-            "status~=deprecated",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
+        &["--property", "status~=deprecated", "--index"],
     );
 
     assert_eq!(
@@ -1236,18 +1095,13 @@ fn find_property_regex_yaml_array_disk_and_index_agree() {
 #[test]
 fn find_property_exact_yaml_array_index_returns_correct_count() {
     let tmp = setup_array_status_vault();
-    let index_path = create_default_index(&tmp);
+    create_default_index(&tmp);
 
     let disk_total = run_find_jq(&tmp, ".total", &["--property", "status=deprecated"]);
     let index_total = run_find_jq(
         &tmp,
         ".total",
-        &[
-            "--property",
-            "status=deprecated",
-            "--index",
-            index_path.to_str().unwrap(),
-        ],
+        &["--property", "status=deprecated", "--index"],
     );
 
     assert_eq!(
@@ -1564,14 +1418,27 @@ fn bare_index_flag_defaults_to_hyalo_index_in_vault_dir() {
     let index_json = run_find(&tmp, &["--index"]);
     let disk_json = run_find(&tmp, &[]);
 
-    let mut index_files = sorted_files(&index_json);
-    let mut disk_files = sorted_files(&disk_json);
-    index_files.sort();
-    disk_files.sort();
+    assert_eq!(
+        sorted_files(&disk_json),
+        sorted_files(&index_json),
+        "bare --index should use .hyalo-index and return the same file set as a disk scan"
+    );
+}
+
+#[test]
+fn explicit_index_path_with_equals_syntax() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Use --index=path (explicit, require_equals form)
+    let arg = format!("--index={}", index_path.display());
+    let index_json = run_find(&tmp, &[&arg]);
+    let disk_json = run_find(&tmp, &[]);
 
     assert_eq!(
-        disk_files, index_files,
-        "bare --index should use .hyalo-index and return the same file set as a disk scan"
+        sorted_files(&disk_json),
+        sorted_files(&index_json),
+        "--index=path should work with explicit equals syntax"
     );
 }
 

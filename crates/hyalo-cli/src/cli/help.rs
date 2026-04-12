@@ -111,7 +111,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     --hints                 Force hints on (already the default; suppressed by --jq)
     --no-hints              Disable drill-down hints (enabled by default, override via .hyalo.toml)
     --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
-    --index <PATH>          Use pre-built snapshot index (see create-index)
+    --index[=PATH]          Use pre-built snapshot index (default: .hyalo-index in vault dir)
     -q/--quiet              Suppress all warnings to stderr
 
 COOKBOOK:

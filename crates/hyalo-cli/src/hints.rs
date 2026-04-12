@@ -1149,7 +1149,11 @@ fn hints_for_create_index(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hi
         .and_then(|p| p.as_str())
         .or(ctx.index_path.as_deref());
 
-    let is_default = index_path.is_none_or(|p| p == ".hyalo-index" || p.ends_with("/.hyalo-index"));
+    let is_default = index_path.is_none_or(|p| {
+        std::path::Path::new(p)
+            .file_name()
+            .is_some_and(|f| f == ".hyalo-index")
+    });
 
     let hint_cmd = if is_default {
         build_command_no_glob(ctx, &["find", "--index"])

@@ -509,10 +509,7 @@ fn bm25_via_index() {
         String::from_utf8_lossy(&index_output.stderr)
     );
 
-    let index_path = tmp.path().join(".hyalo-index");
-    let index_path_str = index_path.to_str().unwrap();
-
-    let (status, json, stderr) = find_json(&tmp, &["rust", "--index", index_path_str]);
+    let (status, json, stderr) = find_json(&tmp, &["rust", "--index"]);
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = unwrap_results(&json);
@@ -781,14 +778,8 @@ fn bm25_phrase_search_via_index() {
         String::from_utf8_lossy(&index_output.stderr)
     );
 
-    let index_path = tmp.path().join(".hyalo-index");
-    let index_path_str = index_path.to_str().unwrap();
-
     // Phrase search via the built index
-    let (status, json, stderr) = find_json(
-        &tmp,
-        &["\"systems programming\"", "--index", index_path_str],
-    );
+    let (status, json, stderr) = find_json(&tmp, &["\"systems programming\"", "--index"]);
     assert!(status.success(), "stderr: {stderr}");
 
     let arr = unwrap_results(&json);
