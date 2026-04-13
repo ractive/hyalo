@@ -745,7 +745,8 @@ Repeatable (AND).\n\
             INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
             Without any file arguments, the entire vault is linted.\n\n\
             OUTPUT: Text by default (per-file violations + summary line). Use --format json for a\n\
-            JSON envelope: {{\"results\": [{{\"file\": \"...\", \"violations\": [...]}}], \"total\": N}}.\n\n\
+            JSON payload (wrapped by the standard CLI envelope under `results`):\n\
+            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N}.\n\n\
             EXIT CODES: 0 = clean, 1 = errors found, 2 = internal error.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo lint\n\

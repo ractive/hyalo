@@ -267,15 +267,15 @@ fn lint_json_output() {
         .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
 
     // The pipeline wraps the lint output in the standard envelope:
-    // {"results": {"results": [...], "total": N}, "hints": [...]}
+    // {"results": {"files": [...], "total": N}, "hints": [...]}
     let inner = &val["results"];
     assert!(inner.is_object(), "expected results object in envelope");
-    assert!(inner["results"].is_array(), "expected inner results array");
+    assert!(inner["files"].is_array(), "expected files array");
     assert!(inner["total"].is_number(), "expected total field");
 
-    let results = inner["results"].as_array().unwrap();
-    assert!(!results.is_empty());
-    let first = &results[0];
+    let files = inner["files"].as_array().unwrap();
+    assert!(!files.is_empty());
+    let first = &files[0];
     assert!(first["file"].is_string(), "expected file field");
     assert!(first["violations"].is_array(), "expected violations array");
 

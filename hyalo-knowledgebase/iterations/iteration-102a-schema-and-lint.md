@@ -94,7 +94,7 @@ research/karpathy-llm-wiki.md:
 3 files checked, 2 with issues (2 errors, 2 warnings)
 ```
 
-JSON output follows the standard envelope: `{"results": [{"file": "...", "violations": [...]}], "total": N}`.
+JSON output is wrapped by the standard CLI envelope. The lint payload uses `files` (not `results`) to avoid a confusing `results.results` nesting: `{"results": {"files": [{"file": "...", "violations": [...]}], "total": N}, "hints": [...]}`.
 
 ### Severity Levels
 

@@ -10,6 +10,7 @@
 ///     not declared in schema)
 ///
 /// Exit code: 0 = clean, 1 = errors found, 2 = internal error.
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -59,9 +60,12 @@ pub struct FileLintResult {
 }
 
 /// Aggregated lint output.
+///
+/// The `files` field is renamed from the internal `results` to avoid a
+/// confusing `results.results` nesting once the CLI envelope wraps the payload.
 #[derive(Debug, Serialize)]
 pub struct LintOutput {
-    pub results: Vec<FileLintResult>,
+    pub files: Vec<FileLintResult>,
     pub total: usize,
 }
 
@@ -105,7 +109,10 @@ pub fn lint_files(
     }
 
     let total = files.len();
-    let output = LintOutput { results, total };
+    let output = LintOutput {
+        files: results,
+        total,
+    };
 
     let outcome = match format {
         Format::Json => {
@@ -207,13 +214,26 @@ fn validate_properties(
     let mut violations: Vec<Violation> = Vec::new();
 
     // Determine the document type.
-    let doc_type: Option<String> = properties.get("type").and_then(|v| match v {
+    let type_value = properties.get("type");
+    let doc_type: Option<String> = type_value.and_then(|v| match v {
         Value::String(s) => Some(s.clone()),
         _ => None,
     });
 
+    // If `type` is present but not a string, report an error. A non-string `type`
+    // still satisfies a bare `required = ["type"]` check, so without this error
+    // invalid type values would slip through silently.
+    if let Some(v) = type_value
+        && doc_type.is_none()
+    {
+        violations.push(Violation {
+            severity: Severity::Error,
+            message: format!("property \"type\" expected string, got {v}"),
+        });
+    }
+
     // Warn when no `type` property is present.
-    if doc_type.is_none() && !schema.is_empty() {
+    if type_value.is_none() && !schema.is_empty() {
         violations.push(Violation {
             severity: Severity::Warn,
             message: "no 'type' property — validating against default schema only".to_owned(),
@@ -248,24 +268,36 @@ fn validate_properties(
         });
     }
 
+    // Build a per-call regex cache so the same pattern isn't recompiled across
+    // properties (this matters in `hyalo summary`, which runs lint over the full
+    // index).
+    let mut regex_cache: HashMap<String, Result<Regex, String>> = HashMap::new();
+
     // Type-specific property constraint validation.
     for (name, value) in properties {
+        // `tags` is validated against its declared constraint if present, but we
+        // never emit an "undeclared property" warning for it (it has its own
+        // "no tags defined" warning above).
         if name == "tags" {
-            continue; // tags handled separately
+            if let Some(constraint) = effective_schema.properties.get(name.as_str())
+                && let Some(v) = validate_constraint(name, value, constraint, &mut regex_cache)
+            {
+                violations.push(v);
+            }
+            continue;
         }
         // Never warn about "type" (type discriminator) or properties listed in `required`
         // — they're implicitly accepted even if not in the `properties` map.
-        let implicitly_accepted =
-            name == "type" || effective_schema.required.contains(&name.clone());
+        let implicitly_accepted = name == "type" || effective_schema.required.contains(name);
 
         if let Some(constraint) = effective_schema.properties.get(name.as_str()) {
-            if let Some(v) = validate_constraint(name, value, constraint) {
+            if let Some(v) = validate_constraint(name, value, constraint, &mut regex_cache) {
                 violations.push(v);
             }
         } else if !effective_schema.properties.is_empty() && !implicitly_accepted {
-            // Property not declared in schema — warn if the schema has any constraints.
-            // We only warn when the schema is non-trivial (has some declared properties)
-            // to avoid noisy warnings on minimal schemas that only specify `required`.
+            // Property not declared in schema — warn only when the schema declares
+            // some properties. Schemas that only specify `required` remain
+            // intentionally permissive about extra fields.
             violations.push(Violation {
                 severity: Severity::Warn,
                 message: format!("property \"{name}\" is not declared in schema"),
@@ -284,12 +316,22 @@ fn validate_constraint(
     name: &str,
     value: &Value,
     constraint: &PropertyConstraint,
+    regex_cache: &mut HashMap<String, Result<Regex, String>>,
 ) -> Option<Violation> {
     match constraint {
         PropertyConstraint::String { pattern } => {
-            let s = value_as_str(value)?;
+            let Some(s) = value_as_str(value) else {
+                return Some(Violation {
+                    severity: Severity::Error,
+                    message: format!("property \"{name}\" expected string, got {value}"),
+                });
+            };
             if let Some(pat) = pattern {
-                match Regex::new(pat) {
+                // Compile (or look up) the regex once per pattern per call.
+                let entry = regex_cache
+                    .entry(pat.clone())
+                    .or_insert_with(|| Regex::new(pat).map_err(|e| e.to_string()));
+                match entry {
                     Ok(re) => {
                         if !re.is_match(s) {
                             return Some(Violation {
@@ -412,7 +454,7 @@ fn format_text_output(output: &LintOutput, counts: &LintCounts) -> String {
     use std::fmt::Write as _;
 
     let mut s = String::new();
-    for file in &output.results {
+    for file in &output.files {
         if file.violations.is_empty() {
             continue;
         }
@@ -429,12 +471,13 @@ fn format_text_output(output: &LintOutput, counts: &LintCounts) -> String {
 
     // Summary line.
     let files_checked = output.total;
+    let files_label = if files_checked == 1 { "file" } else { "files" };
     if counts.errors == 0 && counts.warnings == 0 {
-        let _ = write!(s, "{files_checked} files checked, no issues");
+        let _ = write!(s, "{files_checked} {files_label} checked, no issues");
     } else {
         let _ = write!(
             s,
-            "{files_checked} files checked, {} with issues ({} errors, {} warnings)",
+            "{files_checked} {files_label} checked, {} with issues ({} errors, {} warnings)",
             counts.files_with_issues, counts.errors, counts.warnings,
         );
     }
@@ -490,11 +533,17 @@ mod tests {
         assert!(!is_iso8601_date("2026/04/13"));
     }
 
+    // Test helper: wraps `validate_constraint` with a throwaway regex cache.
+    fn vc(name: &str, value: &Value, c: &PropertyConstraint) -> Option<Violation> {
+        let mut cache = HashMap::new();
+        validate_constraint(name, value, c, &mut cache)
+    }
+
     // --- validate_constraint ---
 
     #[test]
     fn date_constraint_valid() {
-        let v = validate_constraint(
+        let v = vc(
             "date",
             &Value::String("2026-04-13".into()),
             &PropertyConstraint::Date,
@@ -504,7 +553,7 @@ mod tests {
 
     #[test]
     fn date_constraint_invalid() {
-        let v = validate_constraint(
+        let v = vc(
             "date",
             &Value::String("April 13".into()),
             &PropertyConstraint::Date,
@@ -520,7 +569,7 @@ mod tests {
 
     #[test]
     fn enum_constraint_valid() {
-        let v = validate_constraint(
+        let v = vc(
             "status",
             &Value::String("planned".into()),
             &PropertyConstraint::Enum {
@@ -532,7 +581,7 @@ mod tests {
 
     #[test]
     fn enum_constraint_invalid_with_suggestion() {
-        let v = validate_constraint(
+        let v = vc(
             "status",
             &Value::String("planed".into()),
             &PropertyConstraint::Enum {
@@ -546,7 +595,7 @@ mod tests {
 
     #[test]
     fn number_constraint_valid() {
-        let v = validate_constraint(
+        let v = vc(
             "priority",
             &Value::Number(5.into()),
             &PropertyConstraint::Number,
@@ -556,7 +605,7 @@ mod tests {
 
     #[test]
     fn number_constraint_invalid() {
-        let v = validate_constraint(
+        let v = vc(
             "priority",
             &Value::String("five".into()),
             &PropertyConstraint::Number,
@@ -572,13 +621,13 @@ mod tests {
 
     #[test]
     fn boolean_constraint_valid() {
-        let v = validate_constraint("draft", &Value::Bool(true), &PropertyConstraint::Boolean);
+        let v = vc("draft", &Value::Bool(true), &PropertyConstraint::Boolean);
         assert!(v.is_none());
     }
 
     #[test]
     fn boolean_constraint_invalid() {
-        let v = validate_constraint(
+        let v = vc(
             "draft",
             &Value::String("yes".into()),
             &PropertyConstraint::Boolean,
@@ -594,13 +643,13 @@ mod tests {
 
     #[test]
     fn list_constraint_valid() {
-        let v = validate_constraint("tags", &Value::Array(vec![]), &PropertyConstraint::List);
+        let v = vc("tags", &Value::Array(vec![]), &PropertyConstraint::List);
         assert!(v.is_none());
     }
 
     #[test]
     fn list_constraint_invalid() {
-        let v = validate_constraint(
+        let v = vc(
             "tags",
             &Value::String("rust".into()),
             &PropertyConstraint::List,
@@ -616,7 +665,7 @@ mod tests {
 
     #[test]
     fn string_pattern_constraint_valid() {
-        let v = validate_constraint(
+        let v = vc(
             "branch",
             &Value::String("iter-42/my-feature".into()),
             &PropertyConstraint::String {
@@ -628,7 +677,7 @@ mod tests {
 
     #[test]
     fn string_pattern_constraint_invalid() {
-        let v = validate_constraint(
+        let v = vc(
             "branch",
             &Value::String("feature/my-branch".into()),
             &PropertyConstraint::String {
@@ -712,7 +761,7 @@ mod tests {
     #[test]
     fn format_text_output_clean() {
         let output = LintOutput {
-            results: vec![],
+            files: vec![],
             total: 3,
         };
         let counts = LintCounts::default();
@@ -724,7 +773,7 @@ mod tests {
     #[test]
     fn format_text_output_with_violations() {
         let output = LintOutput {
-            results: vec![FileLintResult {
+            files: vec![FileLintResult {
                 file: "note.md".to_owned(),
                 violations: vec![
                     Violation {
@@ -748,6 +797,6 @@ mod tests {
         assert!(text.contains("note.md:"));
         assert!(text.contains("error"));
         assert!(text.contains("warn"));
-        assert!(text.contains("1 files checked, 1 with issues"));
+        assert!(text.contains("1 file checked, 1 with issues"));
     }
 }
