@@ -633,6 +633,49 @@ When no `[schema]` block is configured, `hyalo lint` exits 0 with zero violation
 
 `hyalo summary` shows a one-line lint count (`schema.errors/warnings`) when a schema is configured.
 
+### types
+
+Manage document-type schemas in `.hyalo.toml` without hand-editing TOML. All mutations preserve existing comments and formatting.
+
+```sh
+# List all defined types and their required fields
+hyalo types
+hyalo types list
+
+# Show the full merged schema for a type
+hyalo types show iteration
+
+# Add a new type entry to .hyalo.toml
+hyalo types create iteration
+
+# Print the TOML snippet instead of writing it
+hyalo types create iteration --print
+
+# Remove a type entry
+hyalo types remove iteration
+
+# Add required fields to a type
+hyalo types set iteration --required title,date,status
+
+# Set a default value (auto-applies to existing vault files of that type)
+hyalo types set iteration --default 'status=planned' --default 'date=$today'
+
+# Preview changes without writing (dry-run)
+hyalo types set iteration --default "status=planned" --dry-run
+
+# Add a property type constraint
+hyalo types set iteration --property-type "status=string"
+hyalo types set iteration --property-type "date=date"
+
+# Define an enum constraint
+hyalo types set iteration --property-values "status=planned,in-progress,completed"
+
+# Set a filename template
+hyalo types set iteration --filename-template "iterations/iteration-{n}-{slug}.md"
+```
+
+When `--default` is used, hyalo walks all vault files of that type and writes the default value to any file that does not already have the property. Use `--dry-run` to preview which files would be updated.
+
 ### Hints
 
 Add `--hints` to any read-only command to get suggested drill-down commands:

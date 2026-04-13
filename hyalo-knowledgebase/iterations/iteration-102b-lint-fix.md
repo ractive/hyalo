@@ -2,15 +2,24 @@
 title: Iteration 102b — `hyalo lint --fix` auto-remediation
 type: iteration
 date: 2026-04-13
-status: planned
+status: superseded
 branch: iter-102b/lint-fix
-tags: [iteration, schema, lint, auto-fix]
+tags:
+  - iteration
+  - schema
+  - lint
+  - auto-fix
 depends-on: iterations/iteration-102a-schema-and-lint.md
 ---
 
 # Iteration 102b — `hyalo lint --fix`
 
 ## Goal
+
+> **Superseded by [[iteration-102c-types-command]]** — the `lint --fix` work in
+> this plan (auto-fix, filename-template parsing, type inference, date
+> normalization, enum-typo correction, `--dry-run`) was implemented as part of
+> iter-102c rather than on a separate branch.
 
 Add auto-remediation to `hyalo lint`. Depends on **[[iteration-102a-schema-and-lint]]** — schema model, validation, and read-only `lint` must land first.
 

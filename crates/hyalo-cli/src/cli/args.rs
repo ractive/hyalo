@@ -732,7 +732,7 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: LinksAction,
     },
-    /// Validate frontmatter properties against the `.hyalo.toml` schema (read-only)
+    /// Validate frontmatter properties against the `.hyalo.toml` schema (optional auto-fix)
     #[command(
         long_about = "Validate frontmatter properties against the schema defined in `.hyalo.toml`.\n\n\
             Reads the `[schema.default]` and `[schema.types.*]` sections from `.hyalo.toml` to\n\
@@ -746,14 +746,26 @@ Repeatable (AND).\n\
             Without any file arguments, the entire vault is linted.\n\n\
             OUTPUT: Text by default (per-file violations + summary line). Use --format json for a\n\
             JSON payload (wrapped by the standard CLI envelope under `results`):\n\
-            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N}.\n\n\
-            EXIT CODES: 0 = clean, 1 = errors found, 2 = internal error.\n\n\
+            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N, \"fixes\": [...]}.\n\n\
+            AUTO-FIX: With --fix, `hyalo lint` attempts to repair fixable violations in place:\n\
+            \u{00a0} - Insert missing properties that have defaults in the schema ($today expands\n\
+            \u{00a0}   to the current date).\n\
+            \u{00a0} - Correct close enum typos (Levenshtein distance <= 2) to the nearest value.\n\
+            \u{00a0} - Normalize date formats (e.g. 2026-4-9 -> 2026-04-09).\n\
+            \u{00a0} - Infer a missing `type` property when the file path matches a\n\
+            \u{00a0}   [schema.types.*].filename-template.\n\
+            Missing required properties without defaults are reported, never fabricated.\n\
+            Use --dry-run to preview fixes without writing any files.\n\n\
+            EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo lint\n\
             \u{00a0} hyalo lint iterations/iteration-101-bm25.md\n\
             \u{00a0} hyalo lint --glob \"iterations/*.md\"\n\
-            \u{00a0} hyalo lint --format json\n\n\
-            SIDE EFFECTS: None (read-only).\n\n\
+            \u{00a0} hyalo lint --format json\n\
+            \u{00a0} hyalo lint --fix\n\
+            \u{00a0} hyalo lint --fix --dry-run\n\n\
+            SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
+            are rewritten atomically, preserving body bytes and frontmatter key order.\n\n\
             TIP: Run `hyalo summary` to see a one-line lint count across the whole vault."
     )]
     Lint {
@@ -766,6 +778,20 @@ Repeatable (AND).\n\
         /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
+        /// Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
+        #[arg(long)]
+        fix: bool,
+        /// With --fix, preview changes without writing files
+        #[arg(long, requires = "fix")]
+        dry_run: bool,
+    },
+    /// Manage document-type schemas in `.hyalo.toml`
+    #[command(
+        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - create: Add a new type entry (fails if the type already exists).\n            - remove: Delete a type entry.\n            - set:    Update required fields, defaults, property constraints, or the filename template.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: create/remove/set modify .hyalo.toml. list and show are read-only."
+    )]
+    Types {
+        #[command(subcommand)]
+        action: Option<TypesAction>,
     },
     /// Generate shell completions for the given shell
     #[command(
@@ -822,6 +848,72 @@ pub(crate) enum ViewsAction {
         /// View name to delete
         #[arg(value_name = "NAME")]
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TypesAction {
+    /// List all defined types and their required fields (default)
+    #[command(
+        long_about = "List all type schemas defined in `.hyalo.toml`.\n\n            OUTPUT: JSON envelope with results array and total count.\n            SIDE EFFECTS: None (read-only)."
+    )]
+    List,
+    /// Show the full schema for a single type
+    #[command(
+        long_about = "Display the full merged schema for a named type.\n\n            OUTPUT: JSON object with type name, required fields, defaults,\n            filename template, and property constraints.\n            SIDE EFFECTS: None (read-only)."
+    )]
+    Show {
+        /// Type name to display
+        #[arg(value_name = "TYPE")]
+        type_name: String,
+    },
+    /// Add a new type entry to `.hyalo.toml`
+    #[command(
+        long_about = "Create a new `[schema.types.<name>]` section in `.hyalo.toml`.\n\n            Fails if the type already exists. Creates an empty section with `required = []`.\n            Use --print to write the TOML snippet to stdout instead of modifying the file.\n\n            OUTPUT: JSON result or, with --print, raw TOML snippet to stdout.\n            SIDE EFFECTS: Modifies .hyalo.toml (unless --print is used)."
+    )]
+    Create {
+        /// Type name to create
+        #[arg(value_name = "TYPE")]
+        type_name: String,
+        /// Print the TOML snippet to stdout instead of writing to .hyalo.toml
+        #[arg(long)]
+        print: bool,
+    },
+    /// Remove a type entry from `.hyalo.toml`
+    #[command(
+        long_about = "Remove a `[schema.types.<name>]` section from `.hyalo.toml`.\n\n            Fails with a user error if the type does not exist.\n\n            OUTPUT: JSON result with action and type name.\n            SIDE EFFECTS: Modifies .hyalo.toml."
+    )]
+    Remove {
+        /// Type name to remove
+        #[arg(value_name = "TYPE")]
+        type_name: String,
+    },
+    /// Update a type schema's required fields, defaults, or property constraints
+    #[command(
+        long_about = "Update a type schema in `.hyalo.toml`.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/number/boolean/list/enum).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+    )]
+    Set {
+        /// Type name to update
+        #[arg(value_name = "TYPE")]
+        type_name: String,
+        /// Comma-separated list of required property names to add (repeatable)
+        #[arg(long, value_name = "FIELDS")]
+        required: Vec<String>,
+        /// Set a default value: key=value (repeatable)
+        #[arg(long, value_name = "KEY=VALUE")]
+        default: Vec<String>,
+        /// Set the property type constraint: key=type (repeatable)
+        #[arg(long, value_name = "KEY=TYPE")]
+        property_type: Vec<String>,
+        /// Set enum values for a property: key=val1,val2,... (repeatable)
+        #[arg(long, value_name = "KEY=VALUES")]
+        property_values: Vec<String>,
+        /// Set the filename template for new files of this type
+        #[arg(long, value_name = "TEMPLATE")]
+        filename_template: Option<String>,
+        /// Preview changes without writing any files
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

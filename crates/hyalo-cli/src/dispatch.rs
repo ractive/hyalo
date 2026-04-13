@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::cli::args::{
-    Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction, ViewsAction,
-    resolve_single_file,
+    Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction, TypesAction,
+    ViewsAction, resolve_single_file,
 };
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
@@ -685,6 +685,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             file,
             glob,
+            fix,
+            dry_run,
         } => {
             // Build the file list. Positional arg is treated as a single --file.
             let mut files_arg: Vec<String> = file;
@@ -698,10 +700,24 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
                 };
 
-            let (outcome, counts) =
-                lint_commands::lint_files(&file_pairs, ctx.schema, ctx.user_format)?;
+            let fix_mode = if fix {
+                if dry_run {
+                    lint_commands::FixMode::DryRun
+                } else {
+                    lint_commands::FixMode::Apply
+                }
+            } else {
+                lint_commands::FixMode::Off
+            };
 
-            // Signal exit code 1 when errors were found (set before returning).
+            let (outcome, counts) = lint_commands::lint_files_with_options(
+                &file_pairs,
+                ctx.schema,
+                ctx.user_format,
+                fix_mode,
+            )?;
+
+            // Signal exit code 1 when errors remain after fixes (set before returning).
             if counts.errors > 0 {
                 ctx.exit_code_override = Some(1);
             }
@@ -732,6 +748,39 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     crate::commands::views::set_view(&name, &filters)
                 }
                 ViewsAction::Remove { name } => crate::commands::views::remove_view(&name),
+            }
+        }
+        Commands::Types { action } => {
+            let action = action.unwrap_or(TypesAction::List);
+            match action {
+                TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
+                TypesAction::Show { type_name } => {
+                    Ok(crate::commands::types::show_type(&type_name, ctx.schema))
+                }
+                TypesAction::Create { type_name, print } => {
+                    crate::commands::types::create_type(&type_name, print)
+                }
+                TypesAction::Remove { type_name } => {
+                    crate::commands::types::remove_type(&type_name)
+                }
+                TypesAction::Set {
+                    type_name,
+                    required,
+                    default,
+                    property_type,
+                    property_values,
+                    filename_template,
+                    dry_run,
+                } => crate::commands::types::set_type(
+                    dir,
+                    &type_name,
+                    &required,
+                    &default,
+                    &property_type,
+                    &property_values,
+                    filename_template.as_deref(),
+                    dry_run,
+                ),
             }
         }
     }
