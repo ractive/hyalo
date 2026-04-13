@@ -593,6 +593,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Deinit
             | Commands::Completion { .. }
             | Commands::Views { .. }
+            | Commands::Types { .. }
             | Commands::Lint { .. } => None,
         }
     } else {

@@ -17,6 +17,7 @@ pub mod set;
 pub mod summary;
 pub mod tags;
 pub mod tasks;
+pub mod types;
 pub mod views;
 
 use crate::output::{CommandOutcome, Format};

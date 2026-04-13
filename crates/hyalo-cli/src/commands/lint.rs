@@ -19,8 +19,9 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
 
-use hyalo_core::frontmatter::read_frontmatter;
-use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+use hyalo_core::filename_template::FilenameTemplate;
+use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter};
+use hyalo_core::schema::{self, PropertyConstraint, SchemaConfig, TypeSchema};
 
 use crate::output::{CommandOutcome, Format, format_success};
 
@@ -59,6 +60,20 @@ pub struct FileLintResult {
     pub violations: Vec<Violation>,
 }
 
+/// A single auto-fix that was (or would be) applied.
+#[derive(Debug, Clone, Serialize)]
+pub struct FixAction {
+    /// Kind of fix: "insert-default", "fix-enum-typo", "normalize-date", "infer-type".
+    pub kind: String,
+    /// Frontmatter property affected.
+    pub property: String,
+    /// Old value (if any) — omitted for inserted properties.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    /// New value applied (or previewed with --dry-run).
+    pub new: String,
+}
+
 /// Aggregated lint output.
 ///
 /// The `files` field is renamed from the internal `results` to avoid a
@@ -67,6 +82,20 @@ pub struct FileLintResult {
 pub struct LintOutput {
     pub files: Vec<FileLintResult>,
     pub total: usize,
+    /// Fixes that were applied (or previewed) per file. Omitted when no
+    /// `--fix` run produced any changes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<FileFixResult>,
+    /// `true` when `--dry-run` was passed and fixes were not written.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+}
+
+/// Fixes applied to a single file.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileFixResult {
+    pub file: String,
+    pub actions: Vec<FixAction>,
 }
 
 /// Summary counts returned to callers (e.g. `hyalo summary`).
@@ -91,11 +120,38 @@ pub fn lint_files(
     schema: &SchemaConfig,
     format: Format,
 ) -> Result<(CommandOutcome, LintCounts)> {
+    lint_files_with_options(files, schema, format, FixMode::Off)
+}
+
+/// Whether — and how — `lint_files_with_options` should apply auto-fixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixMode {
+    /// Read-only: do not attempt to fix anything.
+    Off,
+    /// Apply fixes in memory and write them back to disk.
+    Apply,
+    /// Compute the fixes that would be applied but don't write any files.
+    DryRun,
+}
+
+/// Run lint with the given fix mode.
+///
+/// When `fix` is `Apply`, repairable violations are written back to each file
+/// before the final counts are computed, so the returned counts reflect only
+/// the violations that *remain* after fixing. With `DryRun`, counts reflect
+/// the post-fix state but files are untouched.
+pub fn lint_files_with_options(
+    files: &[(std::path::PathBuf, String)],
+    schema: &SchemaConfig,
+    format: Format,
+    fix: FixMode,
+) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
     let mut counts = LintCounts::default();
+    let mut fix_results: Vec<FileFixResult> = Vec::new();
 
     for (full_path, rel_path) in files {
-        let file_result = lint_file(full_path, rel_path, schema)?;
+        let (file_result, file_fixes) = lint_file_with_fix(full_path, rel_path, schema, fix)?;
         for v in &file_result.violations {
             match v.severity {
                 Severity::Error => counts.errors += 1,
@@ -105,6 +161,9 @@ pub fn lint_files(
         if !file_result.violations.is_empty() {
             counts.files_with_issues += 1;
         }
+        if !file_fixes.actions.is_empty() {
+            fix_results.push(file_fixes);
+        }
         results.push(file_result);
     }
 
@@ -112,6 +171,8 @@ pub fn lint_files(
     let output = LintOutput {
         files: results,
         total,
+        fixes: fix_results,
+        dry_run: matches!(fix, FixMode::DryRun),
     };
 
     let outcome = match format {
@@ -178,27 +239,250 @@ pub fn lint_counts_from_properties<'a>(
 // ---------------------------------------------------------------------------
 
 fn lint_file(full_path: &Path, rel_path: &str, schema: &SchemaConfig) -> Result<FileLintResult> {
+    let (result, _) = lint_file_with_fix(full_path, rel_path, schema, FixMode::Off)?;
+    Ok(result)
+}
+
+/// Lint a single file, optionally applying auto-fixes.
+fn lint_file_with_fix(
+    full_path: &Path,
+    rel_path: &str,
+    schema: &SchemaConfig,
+    fix: FixMode,
+) -> Result<(FileLintResult, FileFixResult)> {
     let properties = match read_frontmatter(full_path) {
         Ok(props) => props,
         Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
             // Malformed frontmatter — report as a single error violation.
-            return Ok(FileLintResult {
-                file: rel_path.to_owned(),
-                violations: vec![Violation {
-                    severity: Severity::Error,
-                    message: format!("could not parse frontmatter: {e}"),
-                }],
-            });
+            return Ok((
+                FileLintResult {
+                    file: rel_path.to_owned(),
+                    violations: vec![Violation {
+                        severity: Severity::Error,
+                        message: format!("could not parse frontmatter: {e}"),
+                    }],
+                },
+                FileFixResult {
+                    file: rel_path.to_owned(),
+                    actions: Vec::new(),
+                },
+            ));
         }
         Err(e) => return Err(e).context(format!("reading {rel_path}")),
     };
 
-    let has_tags = properties.contains_key("tags");
-    let violations = validate_properties(rel_path, &properties, has_tags, schema);
-    Ok(FileLintResult {
-        file: rel_path.to_owned(),
-        violations,
-    })
+    // Apply fixes in memory (or dry-run) before final validation.
+    let (final_props, actions) = if matches!(fix, FixMode::Apply | FixMode::DryRun) {
+        let mut mutable = properties.clone();
+        let actions = apply_fixes(rel_path, &mut mutable, schema);
+        if matches!(fix, FixMode::Apply) && !actions.is_empty() {
+            write_frontmatter(full_path, &mutable)
+                .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
+        }
+        (mutable, actions)
+    } else {
+        (properties, Vec::new())
+    };
+
+    let has_tags = final_props.contains_key("tags");
+    let violations = validate_properties(rel_path, &final_props, has_tags, schema);
+    Ok((
+        FileLintResult {
+            file: rel_path.to_owned(),
+            violations,
+        },
+        FileFixResult {
+            file: rel_path.to_owned(),
+            actions,
+        },
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Auto-fix
+// ---------------------------------------------------------------------------
+
+/// Maximum Levenshtein distance accepted for an enum-typo fix.
+/// Chosen so that single-letter slips (e.g. "planed" → "planned") are corrected
+/// while unrelated values (e.g. "wip" vs. "in-progress") are left alone.
+const ENUM_TYPO_MAX_DISTANCE: usize = 2;
+
+/// Compute and apply in-memory auto-fixes to `props`. Returns the list of
+/// actions that were taken. Caller is responsible for persisting `props` to
+/// disk when appropriate.
+fn apply_fixes(
+    rel_path: &str,
+    props: &mut IndexMap<String, Value>,
+    schema: &SchemaConfig,
+) -> Vec<FixAction> {
+    let mut actions: Vec<FixAction> = Vec::new();
+
+    // Step 1: infer `type` from filename-template if missing.
+    if !props.contains_key("type")
+        && let Some(inferred) = infer_type_from_path(rel_path, schema)
+    {
+        // Insert `type` at the front of the map so downstream logic picks it up.
+        props.shift_insert(0, "type".to_owned(), Value::String(inferred.clone()));
+        actions.push(FixAction {
+            kind: "infer-type".to_owned(),
+            property: "type".to_owned(),
+            old: None,
+            new: inferred,
+        });
+    }
+
+    // Determine the effective schema after any type inference.
+    let doc_type: Option<String> = props.get("type").and_then(|v| match v {
+        Value::String(s) => Some(s.clone()),
+        _ => None,
+    });
+    let effective_schema: TypeSchema = match &doc_type {
+        Some(t) => schema.merged_schema_for_type(t),
+        None => schema.default_schema().clone(),
+    };
+
+    // Step 2: insert defaults for missing properties.
+    // Iterate in the schema's `required` order first, then any remaining defaults,
+    // so the resulting frontmatter is ordered deterministically.
+    let mut inserted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for req in &effective_schema.required {
+        if !props.contains_key(req.as_str())
+            && let Some(raw) = effective_schema.defaults.get(req.as_str())
+        {
+            let value = schema::expand_default(raw);
+            props.insert(req.clone(), Value::String(value.clone()));
+            inserted.insert(req.clone());
+            actions.push(FixAction {
+                kind: "insert-default".to_owned(),
+                property: req.clone(),
+                old: None,
+                new: value,
+            });
+        }
+    }
+    // Also honour defaults for properties not listed in `required`.
+    for (name, raw) in &effective_schema.defaults {
+        if inserted.contains(name) || props.contains_key(name.as_str()) {
+            continue;
+        }
+        let value = schema::expand_default(raw);
+        props.insert(name.clone(), Value::String(value.clone()));
+        actions.push(FixAction {
+            kind: "insert-default".to_owned(),
+            property: name.clone(),
+            old: None,
+            new: value,
+        });
+    }
+
+    // Step 3: per-property fixes (enum typos, date normalization).
+    let prop_names: Vec<String> = props.keys().cloned().collect();
+    for name in prop_names {
+        let Some(constraint) = effective_schema.properties.get(name.as_str()) else {
+            continue;
+        };
+        // Snapshot the current value to avoid double-borrowing `props`.
+        let Some(current) = props.get(name.as_str()).cloned() else {
+            continue;
+        };
+        match constraint {
+            PropertyConstraint::Enum { values } => {
+                let Value::String(s) = &current else { continue };
+                if values.iter().any(|v| v == s) {
+                    continue;
+                }
+                if let Some((suggestion, dist)) = values
+                    .iter()
+                    .map(|v| (v, strsim::levenshtein(s, v.as_str())))
+                    .min_by_key(|(_, d)| *d)
+                    && dist <= ENUM_TYPO_MAX_DISTANCE
+                {
+                    let old = s.clone();
+                    let new_value = suggestion.clone();
+                    props.insert(name.clone(), Value::String(new_value.clone()));
+                    actions.push(FixAction {
+                        kind: "fix-enum-typo".to_owned(),
+                        property: name.clone(),
+                        old: Some(old),
+                        new: new_value,
+                    });
+                }
+            }
+            PropertyConstraint::Date => {
+                let Value::String(s) = &current else { continue };
+                if is_iso8601_date(s) {
+                    continue;
+                }
+                if let Some(normalized) = normalize_date(s) {
+                    let old = s.clone();
+                    props.insert(name.clone(), Value::String(normalized.clone()));
+                    actions.push(FixAction {
+                        kind: "normalize-date".to_owned(),
+                        property: name.clone(),
+                        old: Some(old),
+                        new: normalized,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    actions
+}
+
+/// Try to infer a `type` value for a file at `rel_path` by matching it against
+/// every `[schema.types.*].filename-template`. Returns `None` if zero or more
+/// than one type matches (ambiguous).
+fn infer_type_from_path(rel_path: &str, schema: &SchemaConfig) -> Option<String> {
+    let mut matches: Vec<String> = Vec::new();
+    for (type_name, ts) in &schema.types {
+        let Some(template_str) = &ts.filename_template else {
+            continue;
+        };
+        let Ok(template) = FilenameTemplate::parse(template_str) else {
+            continue;
+        };
+        if template.matches(rel_path) {
+            matches.push(type_name.clone());
+        }
+    }
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
+}
+
+/// Normalize a loose date string to `YYYY-MM-DD`.
+///
+/// Accepts inputs of the form `Y-M-D` where `Y`, `M`, `D` are decimal digit
+/// runs and month/day are in the valid calendar ranges. Returns `None` for
+/// inputs that are ambiguous (e.g. natural-language dates, non-ISO separators,
+/// or out-of-range values); those are reported as violations instead.
+fn normalize_date(s: &str) -> Option<String> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y = parts[0];
+    let m = parts[1];
+    let d = parts[2];
+    if y.len() != 4 || !y.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if m.is_empty() || m.len() > 2 || !m.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if d.is_empty() || d.len() > 2 || !d.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mi: u32 = m.parse().ok()?;
+    let di: u32 = d.parse().ok()?;
+    if !(1..=12).contains(&mi) || !(1..=31).contains(&di) {
+        return None;
+    }
+    Some(format!("{y}-{mi:02}-{di:02}"))
 }
 
 /// Core property validation logic.
@@ -454,6 +738,38 @@ fn format_text_output(output: &LintOutput, counts: &LintCounts) -> String {
     use std::fmt::Write as _;
 
     let mut s = String::new();
+
+    // Fixes section — shown first so the user sees what changed.
+    let fix_count: usize = output.fixes.iter().map(|f| f.actions.len()).sum();
+    if fix_count > 0 {
+        let verb = if output.dry_run { "Would fix" } else { "Fixed" };
+        for file in &output.fixes {
+            if file.actions.is_empty() {
+                continue;
+            }
+            let _ = writeln!(s, "{verb} {}:", file.file);
+            for a in &file.actions {
+                match (&a.kind[..], &a.old) {
+                    ("insert-default", _) => {
+                        let _ = writeln!(s, "  insert  {} = {:?}", a.property, a.new);
+                    }
+                    ("infer-type", _) => {
+                        let _ = writeln!(s, "  infer   type = {:?}", a.new);
+                    }
+                    ("fix-enum-typo", Some(old)) => {
+                        let _ = writeln!(s, "  enum    {}: {:?} -> {:?}", a.property, old, a.new);
+                    }
+                    ("normalize-date", Some(old)) => {
+                        let _ = writeln!(s, "  date    {}: {:?} -> {:?}", a.property, old, a.new);
+                    }
+                    _ => {
+                        let _ = writeln!(s, "  {}  {} = {:?}", a.kind, a.property, a.new);
+                    }
+                }
+            }
+        }
+    }
+
     for file in &output.files {
         if file.violations.is_empty() {
             continue;
@@ -480,6 +796,10 @@ fn format_text_output(output: &LintOutput, counts: &LintCounts) -> String {
             "{files_checked} {files_label} checked, {} with issues ({} errors, {} warnings)",
             counts.files_with_issues, counts.errors, counts.warnings,
         );
+    }
+    if fix_count > 0 {
+        let fixed_label = if output.dry_run { "would fix" } else { "fixed" };
+        let _ = write!(s, " — {fixed_label} {fix_count}");
     }
 
     s
@@ -763,6 +1083,8 @@ mod tests {
         let output = LintOutput {
             files: vec![],
             total: 3,
+            fixes: Vec::new(),
+            dry_run: false,
         };
         let counts = LintCounts::default();
         let text = format_text_output(&output, &counts);
@@ -787,6 +1109,8 @@ mod tests {
                 ],
             }],
             total: 1,
+            fixes: Vec::new(),
+            dry_run: false,
         };
         let counts = LintCounts {
             errors: 1,

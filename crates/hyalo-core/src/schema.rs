@@ -23,6 +23,7 @@
 /// pattern = "^iter-\\d+/"
 /// ```
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
@@ -111,6 +112,54 @@ pub struct TypeSchema {
     /// Per-property type constraints keyed by property name.
     #[serde(default)]
     pub properties: HashMap<String, PropertyConstraint>,
+}
+
+/// Expand a schema-default template into a concrete value.
+///
+/// Currently the only supported token is `$today`, which expands to the
+/// current UTC date in YYYY-MM-DD format.
+pub fn expand_default(raw: &str) -> String {
+    if raw == "$today" {
+        return today_iso8601();
+    }
+    raw.to_owned()
+}
+
+/// Current UTC date in YYYY-MM-DD format.
+pub fn today_iso8601() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Safety: secs / 86_400 fits well within i64 for any date in the next few million years.
+    #[allow(clippy::cast_possible_wrap)]
+    let (y, m, d) = days_to_ymd((secs / 86_400) as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Convert days since the Unix epoch to a `(year, month, day)` tuple in the
+/// proleptic Gregorian calendar, via Howard Hinnant's civil_from_days.
+///
+/// All casts here are safe for any date representable in the Gregorian calendar
+/// on a 64-bit system (the algorithm is bounded to reasonable calendar ranges).
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
+)]
+fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
+    // Shift so that day 0 == 0000-03-01 (era-based algorithm).
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m, d)
 }
 
 /// Constraint on a single frontmatter property.
@@ -362,6 +411,38 @@ pattern = "^iter-\\d+/"
             }
             other => panic!("expected string with pattern, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn today_is_iso8601() {
+        let d = today_iso8601();
+        assert_eq!(d.len(), 10);
+        let b = d.as_bytes();
+        assert_eq!(b[4], b'-');
+        assert_eq!(b[7], b'-');
+        assert!(b[..4].iter().all(u8::is_ascii_digit));
+        assert!(b[5..7].iter().all(u8::is_ascii_digit));
+        assert!(b[8..10].iter().all(u8::is_ascii_digit));
+    }
+
+    #[test]
+    fn days_to_ymd_known_dates() {
+        // 1970-01-01 is day 0.
+        assert_eq!(days_to_ymd(0), (1970, 1, 1));
+        // 2000-01-01 is day 10_957.
+        assert_eq!(days_to_ymd(10_957), (2000, 1, 1));
+        // 2026-04-13 is day 20_556.
+        assert_eq!(days_to_ymd(20_556), (2026, 4, 13));
+    }
+
+    #[test]
+    fn expand_default_today() {
+        let expanded = expand_default("$today");
+        assert_eq!(expanded.len(), 10);
+        assert_eq!(expanded.as_bytes()[4], b'-');
+
+        let literal = expand_default("planned");
+        assert_eq!(literal, "planned");
     }
 
     #[test]
