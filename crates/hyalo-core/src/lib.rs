@@ -1,6 +1,7 @@
 pub mod bm25;
 pub mod content_search;
 pub mod discovery;
+pub mod filename_template;
 pub mod filter;
 pub mod frontmatter;
 pub mod fs_util;

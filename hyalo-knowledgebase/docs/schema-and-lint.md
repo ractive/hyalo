@@ -80,9 +80,48 @@ hyalo lint --glob "iterations/*.md"
 
 # JSON output
 hyalo lint --format json
+
+# Auto-remediate fixable violations in place
+hyalo lint --fix
+
+# Preview fixes without writing any files
+hyalo lint --fix --dry-run
 ```
 
-**Exit codes:** `0` = clean, `1` = errors found, `2` = internal error.
+**Exit codes:** `0` = clean (after fixes, if any), `1` = errors remain, `2` = internal error.
+
+### Auto-Fix (`--fix`)
+
+`hyalo lint --fix` attempts to repair the violations it can repair safely:
+
+| Fixable | How |
+|---------|-----|
+| Missing property with a schema `default` | Insert the default (`$today` expands to the current ISO 8601 date) |
+| Close enum typo (Levenshtein ≤ 2) | Replace with the nearest valid value (e.g. `planed` → `planned`) |
+| Loose date format | Normalize to `YYYY-MM-DD` (e.g. `2026-4-9` → `2026-04-09`) |
+| Missing `type` when the path matches a `filename-template` | Infer the type from the matching `[schema.types.*]` entry |
+
+**Never fabricated.** Missing required properties without defaults are reported but never invented; a human or tool must supply the value. Fixes preserve the existing frontmatter key order and the document body byte-for-byte.
+
+Pass `--dry-run` together with `--fix` to print the fixes that *would* be applied without modifying any files. The JSON output gains a top-level `fixes` array listing the actions per file:
+
+```json
+{
+  "results": {
+    "files": [...],
+    "total": 3,
+    "fixes": [
+      {
+        "file": "iterations/iteration-101-bm25.md",
+        "actions": [
+          { "kind": "fix-enum-typo", "property": "status", "old": "planed", "new": "planned" }
+        ]
+      }
+    ],
+    "dry_run": true
+  }
+}
+```
 
 ### Output (text)
 

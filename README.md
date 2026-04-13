@@ -573,7 +573,7 @@ Default is `--dry-run` (preview only). Pass `--apply` to write fixes to disk. Us
 
 ### lint
 
-Validate frontmatter properties against the schema defined in `.hyalo.toml` (read-only).
+Validate frontmatter properties against the schema defined in `.hyalo.toml` (read-only by default, auto-fix with `--fix`).
 
 ```sh
 # Lint the whole vault
@@ -587,9 +587,23 @@ hyalo lint --glob "iterations/*.md"
 
 # JSON output
 hyalo lint --format json
+
+# Auto-remediate fixable violations in place
+hyalo lint --fix
+
+# Preview fixes without writing any files
+hyalo lint --fix --dry-run
 ```
 
-**Exit codes:** 0 = clean, 1 = errors found, 2 = internal error.
+**Exit codes:** 0 = clean (after fixes, if any), 1 = errors remain, 2 = internal error.
+
+**`--fix` categories:**
+- Missing property with a schema default → insert the default (`$today` expands to the current ISO 8601 date).
+- Close enum typo (Levenshtein distance ≤ 2) → replace with the nearest valid value (e.g. `planed` → `planned`).
+- Loose date format → normalize to `YYYY-MM-DD` (e.g. `2026-4-9` → `2026-04-09`).
+- Missing `type` property when the file path matches a `[schema.types.*].filename-template` → infer the type.
+
+Missing required properties **without** a default are reported but never fabricated — a human or tool must decide the value. Fixes preserve existing frontmatter key order and the document body byte-for-byte.
 
 Define a schema in `.hyalo.toml`:
 

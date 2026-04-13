@@ -685,6 +685,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             file,
             glob,
+            fix,
+            dry_run,
         } => {
             // Build the file list. Positional arg is treated as a single --file.
             let mut files_arg: Vec<String> = file;
@@ -698,10 +700,24 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
                 };
 
-            let (outcome, counts) =
-                lint_commands::lint_files(&file_pairs, ctx.schema, ctx.user_format)?;
+            let fix_mode = if fix {
+                if dry_run {
+                    lint_commands::FixMode::DryRun
+                } else {
+                    lint_commands::FixMode::Apply
+                }
+            } else {
+                lint_commands::FixMode::Off
+            };
 
-            // Signal exit code 1 when errors were found (set before returning).
+            let (outcome, counts) = lint_commands::lint_files_with_options(
+                &file_pairs,
+                ctx.schema,
+                ctx.user_format,
+                fix_mode,
+            )?;
+
+            // Signal exit code 1 when errors remain after fixes (set before returning).
             if counts.errors > 0 {
                 ctx.exit_code_override = Some(1);
             }

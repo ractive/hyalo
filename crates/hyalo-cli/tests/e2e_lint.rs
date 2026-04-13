@@ -466,3 +466,288 @@ fn summary_no_schema_field_without_config() {
         "schema field should be absent when no schema is configured"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --fix tests
+// ---------------------------------------------------------------------------
+
+/// Schema with defaults, enum, date, and a filename-template on `iteration`.
+fn write_schema_with_fixables(dir: &std::path::Path) {
+    write_schema_toml(
+        dir,
+        r#"dir = "."
+
+[schema.default]
+required = ["title"]
+
+[schema.types.iteration]
+required = ["title", "status", "date"]
+filename-template = "iterations/iteration-{n}-{slug}.md"
+
+[schema.types.iteration.defaults]
+status = "planned"
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed"]
+
+[schema.types.iteration.properties.date]
+type = "date"
+"#,
+    );
+}
+
+#[test]
+fn fix_inserts_default_for_missing_property() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    // Missing status; has date; has type.
+    write_md(
+        tmp.path(),
+        "iterations/iteration-1-a.md",
+        "---\ntitle: Iter\ntype: iteration\ndate: 2026-04-13\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-1-a.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code().unwrap(), 0, "fix should clean file");
+    let updated = std::fs::read_to_string(tmp.path().join("iterations/iteration-1-a.md")).unwrap();
+    assert!(
+        updated.contains("status: planned"),
+        "expected inserted default: {updated}"
+    );
+}
+
+#[test]
+fn fix_corrects_enum_typo() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    write_md(
+        tmp.path(),
+        "iterations/iteration-2-b.md",
+        "---\ntitle: Iter\ntype: iteration\nstatus: planed\ndate: 2026-04-13\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-2-b.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code().unwrap(), 0);
+    let updated = std::fs::read_to_string(tmp.path().join("iterations/iteration-2-b.md")).unwrap();
+    assert!(
+        updated.contains("status: planned"),
+        "expected typo fixed: {updated}"
+    );
+    assert!(!updated.contains("planed\n"));
+}
+
+#[test]
+fn fix_normalizes_date_format() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    write_md(
+        tmp.path(),
+        "iterations/iteration-3-c.md",
+        "---\ntitle: Iter\ntype: iteration\nstatus: planned\ndate: 2026-4-9\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-3-c.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code().unwrap(), 0);
+    let updated = std::fs::read_to_string(tmp.path().join("iterations/iteration-3-c.md")).unwrap();
+    assert!(
+        updated.contains("date: 2026-04-09"),
+        "expected normalized date: {updated}"
+    );
+}
+
+#[test]
+fn fix_infers_type_from_filename_template() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    // Missing type; filename matches iteration template.
+    write_md(
+        tmp.path(),
+        "iterations/iteration-4-d.md",
+        "---\ntitle: Iter\nstatus: planned\ndate: 2026-04-13\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-4-d.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code().unwrap(), 0);
+    let updated = std::fs::read_to_string(tmp.path().join("iterations/iteration-4-d.md")).unwrap();
+    assert!(
+        updated.contains("type: iteration"),
+        "expected inferred type: {updated}"
+    );
+}
+
+#[test]
+fn fix_dry_run_does_not_modify_files() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    let body = "---\ntitle: Iter\ntype: iteration\nstatus: planed\ndate: 2026-04-13\n---\nBody\n";
+    write_md(tmp.path(), "iterations/iteration-5-e.md", body);
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--dry-run", "iterations/iteration-5-e.md"])
+        .output()
+        .unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("iterations/iteration-5-e.md")).unwrap();
+    assert_eq!(content, body, "dry-run must not modify the file");
+}
+
+#[test]
+fn fix_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    write_md(
+        tmp.path(),
+        "iterations/iteration-6-f.md",
+        "---\ntitle: Iter\ntype: iteration\nstatus: planed\ndate: 2026-4-3\n---\nBody\n",
+    );
+
+    // First run
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-6-f.md"])
+        .output()
+        .unwrap();
+    let first = std::fs::read_to_string(tmp.path().join("iterations/iteration-6-f.md")).unwrap();
+
+    // Second run must be a no-op on disk.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-6-f.md"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0);
+    let second = std::fs::read_to_string(tmp.path().join("iterations/iteration-6-f.md")).unwrap();
+    assert_eq!(first, second, "second --fix run must be idempotent");
+}
+
+#[test]
+fn fix_preserves_frontmatter_key_order() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    // Ordering: title, type, date — then status will be inserted.
+    let original =
+        "---\ntitle: Iter\ntype: iteration\ndate: 2026-04-13\n---\nBody bytes preserved.\n";
+    write_md(tmp.path(), "iterations/iteration-7-g.md", original);
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-7-g.md"])
+        .output()
+        .unwrap();
+
+    let updated = std::fs::read_to_string(tmp.path().join("iterations/iteration-7-g.md")).unwrap();
+    // Original keys appear in their original relative order.
+    let title_idx = updated.find("title:").unwrap();
+    let type_idx = updated.find("type:").unwrap();
+    let date_idx = updated.find("date:").unwrap();
+    assert!(title_idx < type_idx);
+    assert!(type_idx < date_idx);
+    // Body is preserved verbatim.
+    assert!(updated.ends_with("Body bytes preserved.\n"));
+}
+
+#[test]
+fn fix_dry_run_requires_fix() {
+    // --dry-run without --fix must be rejected by clap
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "--dry-run alone must fail");
+}
+
+#[test]
+fn fix_reports_missing_required_without_default() {
+    // With no default, a missing required field is reported, never fabricated.
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    // Missing `title` — no default available.
+    write_md(
+        tmp.path(),
+        "iterations/iteration-8-h.md",
+        "---\ntype: iteration\nstatus: planned\ndate: 2026-04-13\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "iterations/iteration-8-h.md"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "unfixable violation must keep exit 1"
+    );
+    let updated = std::fs::read_to_string(tmp.path().join("iterations/iteration-8-h.md")).unwrap();
+    assert!(
+        !updated.contains("title:"),
+        "title must not be fabricated: {updated}"
+    );
+}
+
+#[test]
+fn fix_json_output_includes_fixes_array() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_with_fixables(tmp.path());
+    write_md(
+        tmp.path(),
+        "iterations/iteration-9-i.md",
+        "---\ntitle: Iter\ntype: iteration\nstatus: planed\ndate: 2026-04-13\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "--format",
+            "json",
+            "lint",
+            "--fix",
+            "iterations/iteration-9-i.md",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
+    let fixes = &val["results"]["fixes"];
+    assert!(fixes.is_array(), "expected fixes array: {stdout}");
+    let arr = fixes.as_array().unwrap();
+    assert!(!arr.is_empty(), "expected at least one fix entry");
+    let actions = &arr[0]["actions"];
+    assert!(actions.is_array());
+    assert!(
+        actions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "fix-enum-typo"),
+        "expected fix-enum-typo action"
+    );
+}

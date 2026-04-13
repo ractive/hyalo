@@ -732,7 +732,7 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: LinksAction,
     },
-    /// Validate frontmatter properties against the `.hyalo.toml` schema (read-only)
+    /// Validate frontmatter properties against the `.hyalo.toml` schema (optional auto-fix)
     #[command(
         long_about = "Validate frontmatter properties against the schema defined in `.hyalo.toml`.\n\n\
             Reads the `[schema.default]` and `[schema.types.*]` sections from `.hyalo.toml` to\n\
@@ -746,14 +746,26 @@ Repeatable (AND).\n\
             Without any file arguments, the entire vault is linted.\n\n\
             OUTPUT: Text by default (per-file violations + summary line). Use --format json for a\n\
             JSON payload (wrapped by the standard CLI envelope under `results`):\n\
-            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N}.\n\n\
-            EXIT CODES: 0 = clean, 1 = errors found, 2 = internal error.\n\n\
+            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N, \"fixes\": [...]}.\n\n\
+            AUTO-FIX: With --fix, `hyalo lint` attempts to repair fixable violations in place:\n\
+            \u{00a0} - Insert missing properties that have defaults in the schema ($today expands\n\
+            \u{00a0}   to the current date).\n\
+            \u{00a0} - Correct close enum typos (Levenshtein distance <= 2) to the nearest value.\n\
+            \u{00a0} - Normalize date formats (e.g. 2026-4-9 -> 2026-04-09).\n\
+            \u{00a0} - Infer a missing `type` property when the file path matches a\n\
+            \u{00a0}   [schema.types.*].filename-template.\n\
+            Missing required properties without defaults are reported, never fabricated.\n\
+            Use --dry-run to preview fixes without writing any files.\n\n\
+            EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo lint\n\
             \u{00a0} hyalo lint iterations/iteration-101-bm25.md\n\
             \u{00a0} hyalo lint --glob \"iterations/*.md\"\n\
-            \u{00a0} hyalo lint --format json\n\n\
-            SIDE EFFECTS: None (read-only).\n\n\
+            \u{00a0} hyalo lint --format json\n\
+            \u{00a0} hyalo lint --fix\n\
+            \u{00a0} hyalo lint --fix --dry-run\n\n\
+            SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
+            are rewritten atomically, preserving body bytes and frontmatter key order.\n\n\
             TIP: Run `hyalo summary` to see a one-line lint count across the whole vault."
     )]
     Lint {
@@ -766,6 +778,12 @@ Repeatable (AND).\n\
         /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
+        /// Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
+        #[arg(long)]
+        fix: bool,
+        /// With --fix, preview changes without writing files
+        #[arg(long, requires = "fix")]
+        dry_run: bool,
     },
     /// Generate shell completions for the given shell
     #[command(

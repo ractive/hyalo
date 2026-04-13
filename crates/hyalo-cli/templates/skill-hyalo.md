@@ -214,9 +214,17 @@ hyalo lint --glob "iterations/*.md"
 
 # JSON output
 hyalo lint --format json
+
+# Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
+hyalo lint --fix
+
+# Preview fixes without writing any files
+hyalo lint --fix --dry-run
 ```
 
-Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
+Exit codes: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.
+
+**Auto-fix categories:** missing property with a schema default → inserted (`$today` → today's ISO date); close enum typo (Levenshtein ≤ 2) → corrected; loose date (e.g. `2026-4-9`) → normalized to `2026-04-09`; missing `type` when the file path matches a `filename-template` → inferred. Missing required properties without defaults are reported but never fabricated.
 
 **Schema format:**
 
