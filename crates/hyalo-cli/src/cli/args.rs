@@ -732,6 +732,41 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: LinksAction,
     },
+    /// Validate frontmatter properties against the `.hyalo.toml` schema (read-only)
+    #[command(
+        long_about = "Validate frontmatter properties against the schema defined in `.hyalo.toml`.\n\n\
+            Reads the `[schema.default]` and `[schema.types.*]` sections from `.hyalo.toml` to\n\
+            determine which properties are required, what types they should be, and which enum\n\
+            values are allowed. Reports violations at two severity levels:\n\n\
+            - error: schema violation (missing required property, wrong type, invalid enum value,\n\
+                     pattern mismatch)\n\
+            - warn:  soft issue (no 'type' property, no 'tags', property not declared in schema)\n\n\
+            When no `[schema]` section exists in `.hyalo.toml`, lint exits 0 with zero violations.\n\n\
+            INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
+            Without any file arguments, the entire vault is linted.\n\n\
+            OUTPUT: Text by default (per-file violations + summary line). Use --format json for a\n\
+            JSON payload (wrapped by the standard CLI envelope under `results`):\n\
+            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N}.\n\n\
+            EXIT CODES: 0 = clean, 1 = errors found, 2 = internal error.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo lint\n\
+            \u{00a0} hyalo lint iterations/iteration-101-bm25.md\n\
+            \u{00a0} hyalo lint --glob \"iterations/*.md\"\n\
+            \u{00a0} hyalo lint --format json\n\n\
+            SIDE EFFECTS: None (read-only).\n\n\
+            TIP: Run `hyalo summary` to see a one-line lint count across the whole vault."
+    )]
+    Lint {
+        /// Target file (relative to --dir) — positional form
+        #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob"])]
+        file_positional: Option<String>,
+        /// Target file(s) (repeatable). Mutually exclusive with --glob
+        #[arg(short, long, conflicts_with = "glob")]
+        file: Vec<String>,
+        /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
+        #[arg(short, long, conflicts_with = "file")]
+        glob: Vec<String>,
+    },
     /// Generate shell completions for the given shell
     #[command(
         display_order = 900,

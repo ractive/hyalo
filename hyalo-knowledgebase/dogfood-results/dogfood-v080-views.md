@@ -2,7 +2,11 @@
 title: "Dogfood v0.8.0: Views Feature"
 date: 2026-04-03
 origin: dogfood session 2026-04-03
-tags: [dogfooding, views]
+tags:
+  - dogfooding
+  - views
+type: research
+status: archived
 ---
 
 # Dogfood v0.8.0 — Views Feature

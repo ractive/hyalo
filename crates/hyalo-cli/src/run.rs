@@ -592,7 +592,8 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
-            | Commands::Views { .. } => None,
+            | Commands::Views { .. }
+            | Commands::Lint { .. } => None,
         }
     } else {
         None
@@ -617,6 +618,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::DropIndex { .. }
             | Commands::Read { .. }
             | Commands::Views { .. }
+            | Commands::Lint { .. }
     );
     let mut snapshot_index: Option<SnapshotIndex> = if uses_index {
         if let Some(ref index_path) = cli.index {
@@ -653,6 +655,7 @@ fn run_inner() -> Result<(), AppError> {
     };
 
     let config_language_owned = config.search_language.clone();
+    let schema = config.schema;
     let mut ctx = CommandContext {
         dir: &dir,
         site_prefix,
@@ -661,8 +664,11 @@ fn run_inner() -> Result<(), AppError> {
         snapshot_index: &mut snapshot_index,
         index_path: cli.index.as_deref(),
         config_language: config_language_owned.as_deref(),
+        schema: &schema,
+        exit_code_override: None,
     };
     let result = dispatch(cli.command, &mut ctx);
+    let exit_code_override = ctx.exit_code_override;
 
     let pipeline = OutputPipeline {
         user_format: format,
@@ -671,9 +677,11 @@ fn run_inner() -> Result<(), AppError> {
         count: cli.count,
     };
     let code = pipeline.finalize(result);
-    if code == 0 {
+    // Commands like `lint` may override the exit code even on success output.
+    let final_code = exit_code_override.unwrap_or(code);
+    if final_code == 0 {
         Ok(())
     } else {
-        Err(AppError::Exit(code))
+        Err(AppError::Exit(final_code))
     }
 }

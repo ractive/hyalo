@@ -6,6 +6,7 @@ pub mod drop_index;
 pub mod find;
 pub mod init;
 pub mod links;
+pub mod lint;
 pub(crate) mod mutation;
 pub mod mv;
 pub mod properties;

@@ -1,3 +1,11 @@
+---
+title: Hyalo Dogfood Run 5 — MDN Maintenance Tasks
+type: research
+date: 2026-03-31
+status: archived
+tags:
+  - dogfooding
+---
 # Hyalo Dogfood Run 5 — MDN Maintenance Tasks
 Date: 2026-03-31
 Vault: 14,245 files (MDN en-us docs)

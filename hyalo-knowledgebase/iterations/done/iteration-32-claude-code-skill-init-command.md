@@ -1,5 +1,5 @@
 ---
-branch: worktree-sunny-gliding-glade
+branch: iter-32/claude-code-skill-init-command
 date: 2026-03-23
 status: completed
 tags:

@@ -8,6 +8,7 @@ tags:
   - dogfooding
 status: planned
 date: 2026-03-30
+priority: medium
 ---
 
 ## Problem

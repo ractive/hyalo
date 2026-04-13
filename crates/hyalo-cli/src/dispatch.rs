@@ -9,14 +9,15 @@ use crate::cli::args::{
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
-    find as find_commands, links as links_commands, mv as mv_commands, properties,
-    read as read_commands, remove as remove_commands, resolve_index, set as set_commands,
-    summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    find as find_commands, links as links_commands, lint as lint_commands, mv as mv_commands,
+    properties, read as read_commands, remove as remove_commands, resolve_index,
+    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
 };
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::parse_language;
 use hyalo_core::filter;
 use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
+use hyalo_core::schema::SchemaConfig;
 
 /// Shared context for command dispatch.
 pub(crate) struct CommandContext<'a> {
@@ -31,6 +32,12 @@ pub(crate) struct CommandContext<'a> {
     pub index_path: Option<&'a Path>,
     /// Default stemming language from `[search] language` in `.hyalo.toml`.
     pub config_language: Option<&'a str>,
+    /// Parsed schema configuration from `[schema.*]` sections in `.hyalo.toml`.
+    pub schema: &'a SchemaConfig,
+    /// Optional exit code override set by commands that need a non-0/2 exit code
+    /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
+    /// to override its own exit code calculation.
+    pub exit_code_override: Option<i32>,
 }
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
@@ -470,6 +477,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 depth,
                 site_prefix,
                 effective_format,
+                ctx.schema,
             ),
             IndexResolution::Outcome(outcome) => Ok(outcome),
         },
@@ -673,6 +681,33 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             },
         },
+        Commands::Lint {
+            file_positional,
+            file,
+            glob,
+        } => {
+            // Build the file list. Positional arg is treated as a single --file.
+            let mut files_arg: Vec<String> = file;
+            if let Some(pos) = file_positional {
+                files_arg.insert(0, pos);
+            }
+
+            let file_pairs =
+                match crate::commands::collect_files(dir, &files_arg, &glob, ctx.user_format)? {
+                    crate::commands::FilesOrOutcome::Files(f) => f,
+                    crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
+                };
+
+            let (outcome, counts) =
+                lint_commands::lint_files(&file_pairs, ctx.schema, ctx.user_format)?;
+
+            // Signal exit code 1 when errors were found (set before returning).
+            if counts.errors > 0 {
+                ctx.exit_code_override = Some(1);
+            }
+
+            Ok(outcome)
+        }
         // `Init`, `Deinit`, and `Completion` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
         Commands::Deinit => unreachable!("Deinit is dispatched before this match reached"),

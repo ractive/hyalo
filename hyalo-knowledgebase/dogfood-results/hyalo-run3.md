@@ -1,3 +1,11 @@
+---
+title: Hyalo Dogfood Run 3 — MDN Maintenance Use Cases
+type: research
+date: 2026-03-30
+status: archived
+tags:
+  - dogfooding
+---
 # Hyalo Dogfood Run 3 — MDN Maintenance Use Cases
 
 **Date:** 2026-03-30
