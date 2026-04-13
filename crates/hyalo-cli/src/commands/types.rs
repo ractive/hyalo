@@ -22,7 +22,7 @@ const TOML_PATH: &str = ".hyalo.toml";
 // ---------------------------------------------------------------------------
 
 /// `hyalo types list` — list all defined types and their required fields.
-pub(crate) fn list_types(schema: &SchemaConfig) -> Result<CommandOutcome> {
+pub(crate) fn list_types(schema: &SchemaConfig) -> CommandOutcome {
     let mut sorted_types: Vec<&str> = schema.types.keys().map(String::as_str).collect();
     sorted_types.sort_unstable();
 
@@ -41,10 +41,7 @@ pub(crate) fn list_types(schema: &SchemaConfig) -> Result<CommandOutcome> {
 
     let total = results.len() as u64;
     let val = serde_json::json!(results);
-    Ok(CommandOutcome::success_with_total(
-        format_success(Format::Json, &val),
-        total,
-    ))
+    CommandOutcome::success_with_total(format_success(Format::Json, &val), total)
 }
 
 // ---------------------------------------------------------------------------
@@ -52,11 +49,11 @@ pub(crate) fn list_types(schema: &SchemaConfig) -> Result<CommandOutcome> {
 // ---------------------------------------------------------------------------
 
 /// `hyalo types show <type>` — full merged schema for a type.
-pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig) -> Result<CommandOutcome> {
+pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig) -> CommandOutcome {
     if !schema.types.contains_key(type_name) {
-        return Ok(CommandOutcome::UserError(format!(
+        return CommandOutcome::UserError(format!(
             "Error: type '{type_name}' not found\n\n  tip: run 'hyalo types list' to see available types"
-        )));
+        ));
     }
 
     let merged = schema.merged_schema_for_type(type_name);
@@ -79,7 +76,7 @@ pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig) -> Result<Comman
         "properties": props,
     });
 
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+    CommandOutcome::success(format_success(Format::Json, &val))
 }
 
 fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
@@ -364,9 +361,8 @@ pub(crate) fn set_type(
         let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
 
         for full_path in &all_vault_files {
-            let props = match read_frontmatter(full_path) {
-                Ok(p) => p,
-                Err(_) => continue,
+            let Ok(props) = read_frontmatter(full_path) else {
+                continue;
             };
             let file_type = props
                 .get("type")
@@ -721,7 +717,7 @@ mod tests {
     #[test]
     fn list_types_empty_schema() {
         let schema = SchemaConfig::default();
-        let outcome = list_types(&schema).unwrap();
+        let outcome = list_types(&schema);
         match outcome {
             CommandOutcome::Success { output, total } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -735,7 +731,7 @@ mod tests {
     #[test]
     fn list_types_with_entries() {
         let schema = make_schema_with_type("iteration", &["title", "date"]);
-        let outcome = list_types(&schema).unwrap();
+        let outcome = list_types(&schema);
         match outcome {
             CommandOutcome::Success { output, total } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -753,14 +749,14 @@ mod tests {
     #[test]
     fn show_type_not_found() {
         let schema = SchemaConfig::default();
-        let outcome = show_type("nonexistent", &schema).unwrap();
+        let outcome = show_type("nonexistent", &schema);
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
     #[test]
     fn show_type_found() {
         let schema = make_schema_with_type("note", &["title"]);
-        let outcome = show_type("note", &schema).unwrap();
+        let outcome = show_type("note", &schema);
         match outcome {
             CommandOutcome::Success { output, .. } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -783,7 +779,7 @@ mod tests {
                 values: vec!["draft".to_owned(), "published".to_owned()],
             },
         );
-        let outcome = show_type("note", &schema).unwrap();
+        let outcome = show_type("note", &schema);
         match outcome {
             CommandOutcome::Success { output, .. } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();

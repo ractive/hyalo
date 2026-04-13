@@ -753,9 +753,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Types { action } => {
             let action = action.unwrap_or(TypesAction::List);
             match action {
-                TypesAction::List => crate::commands::types::list_types(ctx.schema),
+                TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
                 TypesAction::Show { type_name } => {
-                    crate::commands::types::show_type(&type_name, ctx.schema)
+                    Ok(crate::commands::types::show_type(&type_name, ctx.schema))
                 }
                 TypesAction::Create { type_name, print } => {
                     crate::commands::types::create_type(&type_name, print)
