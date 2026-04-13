@@ -1,10 +1,19 @@
 ---
-title: "Iteration 102 — Frontmatter Types, Schema & Lint"
+title: Iteration 102 — Frontmatter Types, Schema & Lint
 type: iteration
 date: 2026-04-09
-status: planned
+status: superseded
 branch: iter-102/frontmatter-types-schema
-tags: [iteration, schema, types, validation, lint, toml]
+tags:
+  - iteration
+  - schema
+  - types
+  - validation
+  - lint
+  - toml
+superseded-by: >-
+  iterations/iteration-102a-schema-and-lint.md,
+  iterations/iteration-102b-lint-fix.md, iterations/iteration-102c-types-command.md
 ---
 
 # Iteration 102 — Frontmatter Types, Schema & Lint
@@ -246,3 +255,13 @@ Use `--dry-run` to preview what would change without writing anything.
 - Skill-driven migration when a type schema changes (bulk fix when schema evolves)
 - Cross-file validation (e.g. unique titles, no duplicate branches)
 - Lint checks beyond schema: orphan pages, broken links (currently in `summary` and `links fix`)
+- Bulk renumber / shift of sequenced files (e.g. iterations) — `hyalo renumber iterations/iteration-4-*.md --shift +1` or similar:
+  - Use case: iterations 4, 5, 6 are planned; a new ad-hoc iteration needs slot 4, so shift existing 4/5/6 → 5/6/7
+  - Leverages this iteration's filename templates (`iteration-{n}-{slug}.md`) + property types (`n: integer`) to know which field drives the number and how the filename is derived
+  - Updates frontmatter (e.g. a numeric property) AND renames the file, rewriting backlinks via the existing `hyalo mv` machinery
+  - Could generalize beyond iterations to any type with an ordinal field + filename template (episodes, ADRs, RFCs)
+- Markdown body linting (MD001–MD054-style rules) via an existing Rust crate:
+  - [`rumdl`](https://crates.io/crates/rumdl) — actively maintained pure-Rust `markdownlint` drop-in with library API; best candidate for integration
+  - [`mado`](https://crates.io/crates/mado) — alternative markdownlint-compatible Rust linter
+  - [`comrak`](https://crates.io/crates/comrak) / [`pulldown-cmark`](https://crates.io/crates/pulldown-cmark) — parsers to build custom rules (e.g. wikilink validation, frontmatter-aware checks) if generic rule sets don't fit
+  - Would extend `hyalo lint` beyond frontmatter/schema into prose-level checks (heading levels, list style, trailing whitespace, etc.)
