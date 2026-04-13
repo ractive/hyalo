@@ -2,9 +2,13 @@
 title: Iteration 102c — `hyalo types` schema management CLI
 type: iteration
 date: 2026-04-13
-status: planned
+status: completed
 branch: iter-102c/types-command
-tags: [iteration, schema, types, cli]
+tags:
+  - iteration
+  - schema
+  - types
+  - cli
 depends-on: iterations/iteration-102a-schema-and-lint.md
 ---
 
@@ -55,55 +59,55 @@ Rule: **defaults can be applied silently** (user just told us the value). **Cons
 
 ## Design Decisions
 
-- [ ] Should `types create` write directly to .hyalo.toml or output TOML to stdout for review? (default: write; offer `--print` for stdout)
+- [x] Should `types create` write directly to .hyalo.toml or output TOML to stdout for review? (default: write; offer `--print` for stdout)
 
 ## Tasks
 
 ### Commands
-- [ ] `hyalo types` / `hyalo types list` — list all defined types with required fields
-- [ ] `hyalo types show <type>` — show full schema for a type
-- [ ] `hyalo types create <type>` — create a new type entry in .hyalo.toml
-- [ ] `hyalo types remove <type>` — remove a type definition
-- [ ] `hyalo types set <type> --required <fields>`
-- [ ] `hyalo types set <type> --default <key=value>`
-- [ ] `hyalo types set <type> --filename-template <template>`
-- [ ] `hyalo types set <type> --property-type <key=type>`
-- [ ] `hyalo types set <type> --property-values <key=val1,val2,...>`
+- [x] `hyalo types` / `hyalo types list` — list all defined types with required fields
+- [x] `hyalo types show <type>` — show full schema for a type
+- [x] `hyalo types create <type>` — create a new type entry in .hyalo.toml
+- [x] `hyalo types remove <type>` — remove a type definition
+- [x] `hyalo types set <type> --required <fields>`
+- [x] `hyalo types set <type> --default <key=value>`
+- [x] `hyalo types set <type> --filename-template <template>`
+- [x] `hyalo types set <type> --property-type <key=type>`
+- [x] `hyalo types set <type> --property-values <key=val1,val2,...>`
 
 ### Side-effect logic
-- [ ] `types set --default` auto-applies new defaults to files missing the property
-- [ ] `types set` constraint changes report violations without auto-fixing
-- [ ] `--dry-run` flag for `types set` to preview file changes
-- [ ] `.hyalo.toml` edits preserve formatting and comments
+- [x] `types set --default` auto-applies new defaults to files missing the property
+- [x] `types set` constraint changes report violations without auto-fixing
+- [x] `--dry-run` flag for `types set` to preview file changes
+- [x] `.hyalo.toml` edits preserve formatting and comments
 
 ### Tests
-- [ ] E2E tests for `hyalo types list/show/create/set/remove`
-- [ ] E2E test: `types set --default` applies to files missing the property
-- [ ] E2E test: `types set` constraint change reports violations without fixing
-- [ ] E2E test: `types set --dry-run` previews without writing
-- [ ] E2E test: `.hyalo.toml` edits preserve formatting
+- [x] E2E tests for `hyalo types list/show/create/set/remove`
+- [x] E2E test: `types set --default` applies to files missing the property
+- [x] E2E test: `types set` constraint change reports violations without fixing
+- [x] E2E test: `types set --dry-run` previews without writing
+- [x] E2E test: `.hyalo.toml` edits preserve formatting
 
 ### Docs & Surfaces (keep all four in sync)
-- [ ] CLI help text for `hyalo types` and all subcommands
-- [ ] Update README.md: add `hyalo types` section with examples
-- [ ] Update knowledgebase: user docs for type management
-- [ ] Update skills: mention `hyalo types` as preferred over hand-editing TOML
+- [x] CLI help text for `hyalo types` and all subcommands
+- [x] Update README.md: add `hyalo types` section with examples
+- [x] Update knowledgebase: user docs for type management
+- [x] Update skills: mention `hyalo types` as preferred over hand-editing TOML
 
 ### Quality Gates
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
-- [ ] Dogfood: rebuild this repo's schemas via `hyalo types` instead of hand-edited TOML
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`
+- [x] Dogfood: rebuild this repo's schemas via `hyalo types` instead of hand-edited TOML
 
 ## Acceptance Criteria
 
-- [ ] `hyalo types list` shows all defined types
-- [ ] `hyalo types create/set/remove` manage type schemas
-- [ ] `types set --default` applies defaults to files missing the property
-- [ ] `types set` constraint changes report violations without auto-fixing
-- [ ] `--dry-run` previews without writing
-- [ ] `.hyalo.toml` edits preserve formatting and comments
-- [ ] README, help texts, knowledgebase docs, and skills updated
+- [x] `hyalo types list` shows all defined types
+- [x] `hyalo types create/set/remove` manage type schemas
+- [x] `types set --default` applies defaults to files missing the property
+- [x] `types set` constraint changes report violations without auto-fixing
+- [x] `--dry-run` previews without writing
+- [x] `.hyalo.toml` edits preserve formatting and comments
+- [x] README, help texts, knowledgebase docs, and skills updated
 
 ## Future (Not This Iteration)
 
