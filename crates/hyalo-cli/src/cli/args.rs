@@ -793,7 +793,7 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: Option<TypesAction>,
     },
-        /// Generate shell completions for the given shell
+    /// Generate shell completions for the given shell
     #[command(
         display_order = 900,
         long_about = "Generate shell completion scripts.\n\n\

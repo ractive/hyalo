@@ -182,6 +182,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **read** — extract body content, a section, or line range
 - **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
 - **lint** — validate frontmatter against the `[schema]` in `.hyalo.toml` (read-only); exit 1 when errors found
+- **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, create, remove, set)
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts
@@ -244,6 +245,25 @@ Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `numbe
 When no `[schema]` block exists, lint exits 0 with zero violations (backwards compatible).
 
 `hyalo summary` includes a `schema` field with error/warning counts when a schema is configured.
+
+## Types — manage type schemas
+
+`hyalo types` manages `[schema.types.*]` entries in `.hyalo.toml` without hand-editing TOML. All mutations preserve existing comments and formatting.
+
+```bash
+hyalo types list                                     # list all defined types
+hyalo types show iteration                           # full merged schema for a type
+hyalo types create iteration                         # add a new type entry
+hyalo types remove iteration                         # remove a type entry
+hyalo types set iteration --required title,date      # add required fields
+hyalo types set iteration --default "status=planned" # set default (auto-applies to vault files)
+hyalo types set iteration --property-type "date=date"
+hyalo types set iteration --property-values "status=planned,in-progress,completed"
+hyalo types set iteration --filename-template "iterations/iteration-{n}-{slug}.md"
+hyalo types set iteration --required branch --dry-run  # preview without writing
+```
+
+When `--default` is used, hyalo applies the default to all vault files of that type missing that property.
 
 ## Views — saved find queries
 

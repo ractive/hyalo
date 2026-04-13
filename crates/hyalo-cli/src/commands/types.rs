@@ -202,7 +202,9 @@ fn parse_kv<'a>(s: &'a str, flag: &str) -> Result<(&'a str, &'a str), String> {
         Some(pos) => {
             let key = s[..pos].trim();
             if key.is_empty() {
-                return Err(format!("invalid {flag} argument '{s}': key cannot be empty"));
+                return Err(format!(
+                    "invalid {flag} argument '{s}': key cannot be empty"
+                ));
             }
             Ok((key, &s[pos + 1..]))
         }
@@ -410,9 +412,8 @@ pub(crate) fn set_type(
     }
 
     // --- Side effects: constraint violation reporting ---
-    let needs_violation_check = !required_fields.is_empty()
-        || !prop_type_map.is_empty()
-        || !prop_values_map.is_empty();
+    let needs_violation_check =
+        !required_fields.is_empty() || !prop_type_map.is_empty() || !prop_values_map.is_empty();
 
     let mut constraint_violations: Vec<Value> = Vec::new();
 
@@ -761,10 +762,12 @@ mod tests {
             CommandOutcome::Success { output, .. } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();
                 assert_eq!(v["type"], "note");
-                assert!(v["required"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&serde_json::json!("title")));
+                assert!(
+                    v["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!("title"))
+                );
             }
             other => panic!("expected Success, got {other:?}"),
         }
