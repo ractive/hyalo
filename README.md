@@ -658,7 +658,7 @@ hyalo types remove iteration
 hyalo types set iteration --required title,date,status
 
 # Set a default value (auto-applies to existing vault files of that type)
-hyalo types set iteration --default "status=planned" --default "date=$today"
+hyalo types set iteration --default 'status=planned' --default 'date=$today'
 
 # Preview changes without writing (dry-run)
 hyalo types set iteration --default "status=planned" --dry-run

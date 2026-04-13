@@ -477,9 +477,22 @@ fn normalize_date(s: &str) -> Option<String> {
     if d.is_empty() || d.len() > 2 || !d.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
+    let yi: i32 = y.parse().ok()?;
     let mi: u32 = m.parse().ok()?;
     let di: u32 = d.parse().ok()?;
-    if !(1..=12).contains(&mi) || !(1..=31).contains(&di) {
+    if !(1..=12).contains(&mi) {
+        return None;
+    }
+    let max_day = match mi {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = (yi % 4 == 0 && yi % 100 != 0) || (yi % 400 == 0);
+            if leap { 29 } else { 28 }
+        }
+        _ => return None,
+    };
+    if !(1..=max_day).contains(&di) {
         return None;
     }
     Some(format!("{y}-{mi:02}-{di:02}"))
@@ -844,6 +857,19 @@ mod tests {
     #[test]
     fn valid_date() {
         assert!(is_iso8601_date("2026-04-13"));
+    }
+
+    #[test]
+    fn normalize_date_padding_and_calendar() {
+        // Short month/day get zero-padded.
+        assert_eq!(normalize_date("2026-4-9"), Some("2026-04-09".to_owned()));
+        // Feb 29 is valid in leap years only.
+        assert_eq!(normalize_date("2024-2-29"), Some("2024-02-29".to_owned()));
+        assert_eq!(normalize_date("2023-2-29"), None);
+        // Out-of-range days/months are rejected, not silently normalized.
+        assert_eq!(normalize_date("2026-02-31"), None);
+        assert_eq!(normalize_date("2026-04-31"), None);
+        assert_eq!(normalize_date("2026-13-01"), None);
     }
 
     #[test]

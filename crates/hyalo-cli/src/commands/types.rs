@@ -125,7 +125,9 @@ pub(crate) fn create_type(type_name: &str, print: bool) -> Result<CommandOutcome
     }
 
     // Create [schema.types.<name>] with required = []
-    ensure_schema_types_table(&mut doc);
+    if let Err(msg) = ensure_schema_types_table(&mut doc) {
+        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+    }
 
     {
         let schema = doc["schema"].as_table_mut().expect("schema is a table");
@@ -278,7 +280,15 @@ pub(crate) fn set_type(
     for arg in property_values_args {
         match parse_kv(arg, "--property-values") {
             Ok((k, v)) => {
+                // Trim each value; reject empty entries (e.g. `status=` or
+                // `status=a,`) so we don't silently persist an enum with a
+                // `""` value, which would make lint/fix output confusing.
                 let vals: Vec<String> = v.split(',').map(|s| s.trim().to_owned()).collect();
+                if vals.iter().any(String::is_empty) {
+                    return Ok(CommandOutcome::UserError(format!(
+                        "Error: invalid --property-values argument '{arg}': enum values cannot be empty"
+                    )));
+                }
                 prop_values_map.insert(k.to_owned(), vals);
             }
             Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
@@ -320,6 +330,15 @@ pub(crate) fn set_type(
             set_string_field(&mut doc, type_name, "filename-template", tmpl);
         }
     }
+
+    // Pre-expand each default once per invocation so time-sensitive tokens
+    // (e.g. `$today`) produce the same value for TOML storage, for vault
+    // writes, and for the reported `defaults_applied` — even if the run
+    // crosses midnight.
+    let expanded_defaults: HashMap<String, String> = defaults_map
+        .iter()
+        .map(|(k, v)| (k.clone(), expand_default(v)))
+        .collect();
 
     // Apply --default key=value.
     for (k, v) in &defaults_map {
@@ -377,10 +396,10 @@ pub(crate) fn set_type(
 
             // Find which defaults this file is missing.
             let mut file_needs: HashMap<String, String> = HashMap::new();
-            for (key, raw_val) in &defaults_map {
+            for key in defaults_map.keys() {
                 if !props.contains_key(key.as_str()) {
-                    let expanded = expand_default(raw_val);
-                    file_needs.insert(key.clone(), expanded.clone());
+                    let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
+                    file_needs.insert(key.clone(), expanded);
                     per_default_files
                         .entry(key.clone())
                         .or_default()
@@ -391,15 +410,24 @@ pub(crate) fn set_type(
             if !dry_run && !file_needs.is_empty() {
                 let mut new_props = props.clone();
                 for (key, expanded) in &file_needs {
-                    new_props.insert(key.clone(), Value::String(expanded.clone()));
+                    // If the user declared a non-string property-type in this
+                    // same invocation, coerce the default to the matching
+                    // JSON type so we don't write `archived: "true"` when the
+                    // user intended `archived: true`.
+                    let typed = coerce_default_for_prop(
+                        expanded,
+                        prop_type_map.get(key.as_str()).copied(),
+                        prop_values_map.contains_key(key.as_str()),
+                    );
+                    new_props.insert(key.clone(), typed);
                 }
                 write_frontmatter(full_path, &new_props)
                     .with_context(|| format!("writing defaults to {rel}"))?;
             }
         }
 
-        for (key, raw_val) in &defaults_map {
-            let expanded = expand_default(raw_val);
+        for key in defaults_map.keys() {
+            let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
             let applied_files = per_default_files.get(key).cloned().unwrap_or_default();
             let count = applied_files.len();
             defaults_applied.push(serde_json::json!({
@@ -495,14 +523,26 @@ fn toml_type_exists(doc: &toml_edit::DocumentMut, type_name: &str) -> bool {
 }
 
 /// Ensure `[schema]` and `[schema.types]` tables exist in the doc.
-fn ensure_schema_types_table(doc: &mut toml_edit::DocumentMut) {
+///
+/// Returns a user-facing error if `schema` or `schema.types` exist but are not
+/// TOML tables (e.g. the user hand-edited `.hyalo.toml` into something like
+/// `schema = "foo"`). We prefer a clear error over a panic on user input.
+fn ensure_schema_types_table(doc: &mut toml_edit::DocumentMut) -> Result<(), String> {
     if !doc.contains_key("schema") {
         doc["schema"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
+    let schema = doc["schema"].as_table_mut().ok_or_else(|| {
+        "malformed .hyalo.toml: `schema` is not a table — expected `[schema]` section".to_owned()
+    })?;
     if !schema.contains_key("types") {
         schema.insert("types", toml_edit::Item::Table(toml_edit::Table::new()));
     }
+    if !schema["types"].is_table() {
+        return Err(
+            "malformed .hyalo.toml: `schema.types` is not a table — expected `[schema.types]` section".to_owned(),
+        );
+    }
+    Ok(())
 }
 
 /// Ensure `[schema.types.<name>.defaults]` table exists.
@@ -641,17 +681,63 @@ fn set_property_enum(
     prop_table["values"] = toml_edit::Item::Value(toml_edit::Value::Array(arr));
 }
 
-/// Validate a type name: alphanumeric, hyphens, underscores, dots.
+/// Coerce a raw default string to the JSON type implied by the property's
+/// constraint in this invocation. Returns `Value::String(raw)` when no typed
+/// coercion is possible (the caller declared no matching `--property-type`,
+/// or the string could not be parsed as the declared type).
+///
+/// `pt` is the property type declared with `--property-type` in this
+/// invocation (e.g. `"boolean"`); `is_enum` is `true` when
+/// `--property-values` was supplied for this key.
+fn coerce_default_for_prop(raw: &str, pt: Option<&'static str>, is_enum: bool) -> Value {
+    // Enums and explicit "string" declarations always keep string defaults.
+    if is_enum {
+        return Value::String(raw.to_owned());
+    }
+    match pt {
+        Some("boolean") => match raw {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => Value::String(raw.to_owned()),
+        },
+        Some("number") => {
+            if let Ok(n) = raw.parse::<i64>() {
+                Value::Number(n.into())
+            } else if let Ok(f) = raw.parse::<f64>()
+                && let Some(num) = serde_json::Number::from_f64(f)
+            {
+                Value::Number(num)
+            } else {
+                Value::String(raw.to_owned())
+            }
+        }
+        Some("list") => {
+            // Comma-separated list.
+            let items: Vec<Value> = raw
+                .split(',')
+                .map(|s| Value::String(s.trim().to_owned()))
+                .collect();
+            Value::Array(items)
+        }
+        _ => Value::String(raw.to_owned()),
+    }
+}
+
+/// Validate a type name: alphanumeric, hyphens, underscores.
+///
+/// Dots are disallowed because TOML interprets `[schema.types.a.b]` as nested
+/// tables, so a type named `a.b` would not round-trip back to itself under
+/// `list`/`show`/`set`/`remove`.
 fn validate_type_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("type name cannot be empty".to_owned());
     }
     if !name
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err(format!(
-            "invalid type name '{name}': must contain only alphanumeric characters, hyphens, underscores, or dots"
+            "invalid type name '{name}': must contain only alphanumeric characters, hyphens, or underscores"
         ));
     }
     Ok(())
@@ -801,7 +887,6 @@ mod tests {
         assert!(validate_type_name("iteration").is_ok());
         assert!(validate_type_name("my-type").is_ok());
         assert!(validate_type_name("my_type").is_ok());
-        assert!(validate_type_name("type.v2").is_ok());
     }
 
     #[test]
@@ -809,6 +894,9 @@ mod tests {
         assert!(validate_type_name("").is_err());
         assert!(validate_type_name("type with spaces").is_err());
         assert!(validate_type_name("type/slash").is_err());
+        // Dots are rejected: would create nested TOML tables that don't
+        // round-trip to the original type name.
+        assert!(validate_type_name("type.v2").is_err());
     }
 
     // --- parse_property_type_str ---
