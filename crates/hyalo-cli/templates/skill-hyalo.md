@@ -180,7 +180,8 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 - **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
 - **read** — extract body content, a section, or line range
-- **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links (use `--depth N` to override directory depth)
+- **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
+- **lint** — validate frontmatter against the `[schema]` in `.hyalo.toml` (read-only); exit 1 when errors found
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts
@@ -196,6 +197,53 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **views list** — show all saved views and their filters
 - **views set** — save a find query as a named view (`hyalo views set todo --task todo`)
 - **views remove** — delete a saved view
+
+## Schema & Lint
+
+Hyalo supports optional frontmatter schema validation. Define schemas in `.hyalo.toml` under `[schema.*]` sections, then run `hyalo lint` to validate files.
+
+```bash
+# Lint the whole vault
+hyalo lint
+
+# Lint a single file
+hyalo lint iterations/iteration-42-feature.md
+
+# Lint with a glob
+hyalo lint --glob "iterations/*.md"
+
+# JSON output
+hyalo lint --format json
+```
+
+Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
+
+**Schema format:**
+
+```toml
+[schema.default]
+required = ["title"]
+
+[schema.types.iteration]
+required = ["title", "date", "status", "branch", "tags"]
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed", "superseded"]
+
+[schema.types.iteration.properties.date]
+type = "date"
+
+[schema.types.iteration.properties.branch]
+type = "string"
+pattern = "^iter-\\d+/"
+```
+
+Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `number`, `boolean`, `list`, `enum` (with `values`).
+
+When no `[schema]` block exists, lint exits 0 with zero violations (backwards compatible).
+
+`hyalo summary` includes a `schema` field with error/warning counts when a schema is configured.
 
 ## Views — saved find queries
 

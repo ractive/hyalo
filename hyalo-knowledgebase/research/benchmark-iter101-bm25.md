@@ -9,6 +9,7 @@ tags:
   - benchmarking
 related:
   - "[[iterations/iteration-101-bm25-ranked-search]]"
+status: archived
 ---
 
 # Benchmark: Iteration 101 — BM25 Ranked Search

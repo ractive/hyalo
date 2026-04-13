@@ -571,6 +571,68 @@ hyalo links fix --format text
 
 Default is `--dry-run` (preview only). Pass `--apply` to write fixes to disk. Use `--ignore-target` (repeatable) to skip links containing specific substrings — useful for template syntax, external paths, or anchors that aren't real files.
 
+### lint
+
+Validate frontmatter properties against the schema defined in `.hyalo.toml` (read-only).
+
+```sh
+# Lint the whole vault
+hyalo lint
+
+# Lint a single file
+hyalo lint iterations/iteration-101-bm25.md
+
+# Lint with a glob
+hyalo lint --glob "iterations/*.md"
+
+# JSON output
+hyalo lint --format json
+```
+
+**Exit codes:** 0 = clean, 1 = errors found, 2 = internal error.
+
+Define a schema in `.hyalo.toml`:
+
+```toml
+[schema.default]
+required = ["title"]
+
+[schema.types.iteration]
+required = ["title", "date", "status", "branch", "tags"]
+filename-template = "iterations/iteration-{n}-{slug}.md"
+
+[schema.types.iteration.defaults]
+status = "planned"
+date = "$today"
+type = "iteration"
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed", "superseded", "shelved", "deferred"]
+
+[schema.types.iteration.properties.branch]
+type = "string"
+pattern = "^iter-\\d+/"
+
+[schema.types.iteration.properties.date]
+type = "date"
+
+[schema.types.iteration.properties.tags]
+type = "list"
+```
+
+**Property types:** `string` (with optional `pattern` regex), `date` (YYYY-MM-DD), `number`, `boolean`, `list`, `enum` (with `values`).
+
+**Severity levels:**
+- `error` — schema violation (missing required, wrong type, invalid enum value, pattern mismatch)
+- `warn` — soft issue (no `type` property, no `tags`, property not in schema)
+
+**Schema merging:** `schema.default` is the baseline. Type-specific `required` extends (not replaces) default required. Type-specific `properties` override defaults for the same property name.
+
+When no `[schema]` block is configured, `hyalo lint` exits 0 with zero violations (backwards compatible).
+
+`hyalo summary` shows a one-line lint count (`schema.errors/warnings`) when a schema is configured.
+
 ### Hints
 
 Add `--hints` to any read-only command to get suggested drill-down commands:

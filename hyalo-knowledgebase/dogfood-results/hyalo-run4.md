@@ -1,3 +1,11 @@
+---
+title: Hyalo Dogfood Run 4 — MDN Maintenance Tasks
+type: research
+date: 2026-03-30
+status: archived
+tags:
+  - dogfooding
+---
 # Hyalo Dogfood Run 4 — MDN Maintenance Tasks
 
 Date: 2026-03-30

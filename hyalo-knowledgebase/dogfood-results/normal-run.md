@@ -1,3 +1,11 @@
+---
+title: Normal Run (built-in tools only)
+type: research
+date: 2026-03-30
+status: archived
+tags:
+  - dogfooding
+---
 # Normal Run (built-in tools only)
 Date: 2026-03-30
 

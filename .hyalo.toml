@@ -1,5 +1,98 @@
 dir = "hyalo-knowledgebase"
 
+[schema.default]
+required = ["title", "type"]
+
+[schema.types.iteration]
+required = ["title", "type", "date", "status", "branch", "tags"]
+filename-template = "iterations/iteration-{n}-{slug}.md"
+
+[schema.types.iteration.defaults]
+status = "planned"
+date = "$today"
+type = "iteration"
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed", "superseded", "shelved", "deferred"]
+
+[schema.types.iteration.properties.branch]
+type = "string"
+pattern = "^iter-\\d+[a-z]*/"
+
+[schema.types.iteration.properties.date]
+type = "date"
+
+[schema.types.iteration.properties.tags]
+type = "list"
+
+[schema.types.iteration.properties.priority]
+type = "number"
+
+[schema.types.iteration.properties.related]
+type = "list"
+
+[schema.types.iteration.properties.supersedes]
+type = "string"
+
+[schema.types.iteration.properties.superseded-by]
+type = "string"
+
+[schema.types.iteration.properties.depends-on]
+type = "string"
+
+[schema.types.research]
+required = ["title", "type", "date", "status"]
+
+[schema.types.research.properties.date]
+type = "date"
+
+[schema.types.research.properties.status]
+type = "enum"
+values = ["active", "archived", "reference", "completed", "superseded"]
+
+[schema.types.research.properties.related]
+type = "list"
+
+[schema.types.research.properties.supersedes]
+type = "string"
+
+[schema.types.research.properties.source]
+type = "string"
+
+[schema.types.research.properties.origin]
+type = "string"
+
+[schema.types.backlog]
+required = ["title", "type", "date", "status", "priority"]
+
+[schema.types.backlog.properties.date]
+type = "date"
+
+[schema.types.backlog.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed", "superseded", "wont-do", "deferred", "shelved", "not-a-bug"]
+
+[schema.types.backlog.properties.priority]
+type = "enum"
+values = ["low", "medium", "high", "critical"]
+
+[schema.types.backlog.properties.origin]
+type = "string"
+
+[schema.types.backlog.properties.blocked-by]
+type = "string"
+
+[schema.types.docs]
+required = ["title", "type", "date", "status"]
+
+[schema.types.docs.properties.date]
+type = "date"
+
+[schema.types.docs.properties.status]
+type = "enum"
+values = ["active", "archived", "draft"]
+
 [views.completed-with-todos]
 fields = ["tasks"]
 properties = ["status=completed"]

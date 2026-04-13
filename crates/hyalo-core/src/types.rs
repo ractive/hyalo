@@ -125,6 +125,14 @@ pub struct TaskReadResult {
 // Summary types
 // ---------------------------------------------------------------------------
 
+/// Lint violation counts for the vault summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct LintSummary {
+    pub errors: usize,
+    pub warnings: usize,
+    pub files_with_issues: usize,
+}
+
 /// High-level vault summary.
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultSummary {
@@ -137,6 +145,9 @@ pub struct VaultSummary {
     pub status: Vec<StatusGroup>,
     pub tasks: TaskCount,
     pub recent_files: Vec<RecentFile>,
+    /// Schema lint counts — `None` when no `[schema]` block is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<LintSummary>,
 }
 
 /// Vault-wide link health: total links and broken count.

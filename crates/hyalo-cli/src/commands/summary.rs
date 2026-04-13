@@ -5,13 +5,15 @@ use std::path::Path;
 
 use hyalo_core::util::levenshtein;
 
+use crate::commands::lint::lint_counts_from_properties;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::detect_broken_links_from_index;
+use hyalo_core::schema::SchemaConfig;
 use hyalo_core::types::{
-    DirectoryCount, FileCounts, LinkHealthSummary, PropertySummaryEntry, RecentFile, StatusGroup,
-    TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
+    DirectoryCount, FileCounts, LinkHealthSummary, LintSummary, PropertySummaryEntry, RecentFile,
+    StatusGroup, TagSummary, TagSummaryEntry, TaskCount, VaultSummary,
 };
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,7 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
 ///
 /// `globs` optionally narrows which entries are included (same semantics as the
 /// `--glob` flag on the `summary` command).
+#[allow(clippy::too_many_arguments)]
 pub fn summary(
     dir: &Path,
     index: &dyn VaultIndex,
@@ -103,6 +106,7 @@ pub fn summary(
     depth: Option<usize>,
     site_prefix: Option<&str>,
     format: Format,
+    schema: &SchemaConfig,
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
     let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
@@ -311,6 +315,22 @@ pub fn summary(
         }
     };
 
+    // Compute schema lint counts from index data (no disk re-read needed).
+    let lint_summary: Option<LintSummary> = if schema.is_empty() {
+        None
+    } else {
+        let lint_entries = entries.iter().map(|e| {
+            let has_tags = e.properties.contains_key("tags") || !e.tags.is_empty();
+            (e.rel_path.as_str(), &e.properties, has_tags)
+        });
+        let counts = lint_counts_from_properties(lint_entries, schema);
+        Some(LintSummary {
+            errors: counts.errors,
+            warnings: counts.warnings,
+            files_with_issues: counts.files_with_issues,
+        })
+    };
+
     let vault_summary = VaultSummary {
         files: file_counts,
         orphans,
@@ -321,6 +341,7 @@ pub fn summary(
         status,
         tasks,
         recent_files,
+        schema: lint_summary,
     };
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
@@ -387,7 +408,17 @@ mod tests {
                 default_language: None,
             },
         )?;
-        summary(dir, &build.index, globs, recent, depth, site_prefix, format)
+        let schema = hyalo_core::schema::SchemaConfig::default();
+        summary(
+            dir,
+            &build.index,
+            globs,
+            recent,
+            depth,
+            site_prefix,
+            format,
+            &schema,
+        )
     }
 
     macro_rules! md {
@@ -825,8 +856,10 @@ Body.
         )
         .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
-        let index_val =
-            unwrap_success(summary(dir, &loaded, &[], 10, None, prefix, Format::Json).unwrap());
+        let schema = hyalo_core::schema::SchemaConfig::default();
+        let index_val = unwrap_success(
+            summary(dir, &loaded, &[], 10, None, prefix, Format::Json, &schema).unwrap(),
+        );
         let index_orphans = index_val["orphans"].as_u64().unwrap();
 
         assert_eq!(
@@ -913,8 +946,10 @@ Body.
         )
         .unwrap();
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
-        let index_val =
-            unwrap_success(summary(dir, &loaded, &[], 10, None, None, Format::Json).unwrap());
+        let schema = hyalo_core::schema::SchemaConfig::default();
+        let index_val = unwrap_success(
+            summary(dir, &loaded, &[], 10, None, None, Format::Json, &schema).unwrap(),
+        );
         let index_dead_ends = index_val["dead_ends"].as_u64().unwrap();
 
         assert_eq!(

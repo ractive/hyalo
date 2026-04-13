@@ -7,6 +7,7 @@ tags:
   - index
   - daemon
 status: wont-do
+priority: medium
 ---
 
 # RAII Index Server with File Watcher

@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use hyalo_core::schema::{RawSchemaConfig, SchemaConfig};
+
 /// Search-specific configuration from `[search]` in `.hyalo.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,10 +34,15 @@ struct ConfigFile {
     views: Option<HashMap<String, toml::Value>>,
     /// Search configuration (BM25 stemming language, etc.)
     search: Option<SearchConfig>,
+    /// Schema configuration for document type validation.
+    /// Stored as raw TOML value to avoid `deny_unknown_fields` issues with
+    /// the deeply nested schema structure.
+    #[serde(default)]
+    schema: Option<toml::Value>,
 }
 
 /// Resolved configuration with all defaults applied.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct ResolvedDefaults {
     pub(crate) dir: PathBuf,
     pub(crate) format: String,
@@ -44,6 +51,20 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) site_prefix: Option<String>,
     /// Default stemming language for BM25 search from `[search] language` in `.hyalo.toml`.
     pub(crate) search_language: Option<String>,
+    /// Parsed schema configuration from `[schema.*]` sections.
+    pub(crate) schema: SchemaConfig,
+}
+
+impl PartialEq for ResolvedDefaults {
+    fn eq(&self, other: &Self) -> bool {
+        // SchemaConfig doesn't implement PartialEq, so compare the other fields only.
+        // Tests that care about schema equality check it separately.
+        self.dir == other.dir
+            && self.format == other.format
+            && self.hints == other.hints
+            && self.site_prefix == other.site_prefix
+            && self.search_language == other.search_language
+    }
 }
 
 impl ResolvedDefaults {
@@ -54,6 +75,7 @@ impl ResolvedDefaults {
             hints: true,
             site_prefix: None,
             search_language: None,
+            schema: SchemaConfig::default(),
         }
     }
 }
@@ -103,12 +125,32 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     };
 
     let defaults = ResolvedDefaults::hardcoded();
+    let schema = parse_schema_from_toml(cfg.schema.as_ref());
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
         format: cfg.format.unwrap_or(defaults.format),
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
         search_language: cfg.search.and_then(|s| s.language),
+        schema,
+    }
+}
+
+/// Parse a `SchemaConfig` from the raw `[schema]` TOML value.
+///
+/// On malformed schema TOML, emits a warning and returns an empty schema
+/// (no validation), consistent with how malformed `.hyalo.toml` is handled
+/// throughout the rest of the config loading pipeline.
+fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
+    let Some(val) = raw else {
+        return SchemaConfig::default();
+    };
+    match val.clone().try_into::<RawSchemaConfig>() {
+        Ok(raw_cfg) => SchemaConfig::from(raw_cfg),
+        Err(e) => {
+            crate::warn::warn(format!("malformed [schema] in .hyalo.toml: {e}"));
+            SchemaConfig::default()
+        }
     }
 }
 
