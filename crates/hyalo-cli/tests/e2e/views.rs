@@ -555,3 +555,64 @@ fn views_set_with_bm25_pattern_and_find() {
         "expected relevant.md in results: {results:?}"
     );
 }
+
+/// Regression test: when `.hyalo.toml` in the project root has `dir = "subdir"`,
+/// views must be read from the root config — not from `subdir/.hyalo.toml`.
+#[test]
+fn views_work_when_dir_is_a_subdir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let subdir = tmp.path().join("notes");
+    fs::create_dir_all(&subdir).unwrap();
+    write_md(&subdir, "a.md", "---\nstatus: draft\n---\nhello");
+
+    // Write root .hyalo.toml with dir pointing to subdir
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+    // Set a view (should write to root .hyalo.toml)
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "views set failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Root config should have the view; subdir should NOT have a .hyalo.toml
+    let root_toml = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        root_toml.contains("[views.drafts]"),
+        "view should be in root .hyalo.toml: {root_toml}"
+    );
+    assert!(
+        !subdir.join(".hyalo.toml").exists(),
+        "subdir should not have its own .hyalo.toml"
+    );
+
+    // List views — should find the view
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "expected 1 view: {json}");
+
+    // find --view should work
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "drafts"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "find --view failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "expected 1 result: {results:?}");
+}

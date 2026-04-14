@@ -47,6 +47,10 @@ struct ConfigFile {
 #[derive(Debug)]
 pub(crate) struct ResolvedDefaults {
     pub(crate) dir: PathBuf,
+    /// The directory where `.hyalo.toml` was found.  Views and types are stored
+    /// in this file, so mutations must target `config_dir/.hyalo.toml` — not the
+    /// vault directory (which may be a subdirectory specified via `dir = "…"`).
+    pub(crate) config_dir: PathBuf,
     pub(crate) format: String,
     pub(crate) hints: bool,
     /// Explicit site-prefix override from `.hyalo.toml`, if any.
@@ -67,6 +71,7 @@ impl PartialEq for ResolvedDefaults {
         // SchemaConfig doesn't implement PartialEq, so compare the other fields only.
         // Tests that care about schema equality check it separately.
         self.dir == other.dir
+            && self.config_dir == other.config_dir
             && self.format == other.format
             && self.hints == other.hints
             && self.site_prefix == other.site_prefix
@@ -79,12 +84,21 @@ impl ResolvedDefaults {
     fn hardcoded() -> Self {
         Self {
             dir: PathBuf::from("."),
+            config_dir: PathBuf::from("."),
             format: "json".to_owned(),
             hints: true,
             site_prefix: None,
             search_language: None,
             schema: SchemaConfig::default(),
             default_limit: None,
+        }
+    }
+
+    /// Hardcoded defaults with `config_dir` set to the given directory.
+    fn defaults_for(dir: &Path) -> Self {
+        Self {
+            config_dir: dir.to_path_buf(),
+            ..Self::hardcoded()
         }
     }
 }
@@ -117,11 +131,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let contents = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return ResolvedDefaults::hardcoded();
+            return ResolvedDefaults::defaults_for(dir);
         }
         Err(e) => {
             crate::warn::warn(format!("could not read .hyalo.toml: {e}"));
-            return ResolvedDefaults::hardcoded();
+            return ResolvedDefaults::defaults_for(dir);
         }
     };
 
@@ -129,7 +143,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         Ok(c) => c,
         Err(e) => {
             crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
-            return ResolvedDefaults::hardcoded();
+            return ResolvedDefaults::defaults_for(dir);
         }
     };
 
@@ -137,6 +151,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
+        config_dir: dir.to_path_buf(),
         format: cfg.format.unwrap_or(defaults.format),
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
@@ -180,7 +195,7 @@ mod tests {
     fn missing_config_returns_defaults() {
         let dir = make_temp();
         let resolved = load_config_from(dir.path());
-        assert_eq!(resolved, ResolvedDefaults::hardcoded());
+        assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
     }
 
     #[test]
@@ -240,7 +255,7 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "this is not { valid toml").unwrap();
 
         let resolved = load_config_from(dir.path());
-        assert_eq!(resolved, ResolvedDefaults::hardcoded());
+        assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
     }
 
     #[test]
@@ -249,7 +264,7 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "unknown_key = \"value\"\n").unwrap();
 
         let resolved = load_config_from(dir.path());
-        assert_eq!(resolved, ResolvedDefaults::hardcoded());
+        assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
     }
 
     #[test]
@@ -293,5 +308,20 @@ site_prefix = "docs"
 
         let resolved = load_config_from(dir.path());
         assert_eq!(resolved.search_language, None);
+    }
+
+    #[test]
+    fn config_dir_points_to_toml_location_not_vault_dir() {
+        let dir = make_temp();
+        fs::create_dir_all(dir.path().join("subdir")).unwrap();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"subdir\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.dir, PathBuf::from("subdir"));
+        assert_eq!(
+            resolved.config_dir,
+            dir.path().to_path_buf(),
+            "config_dir should be where .hyalo.toml lives, not the vault subdir"
+        );
     }
 }

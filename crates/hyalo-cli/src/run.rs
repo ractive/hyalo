@@ -235,9 +235,11 @@ fn run_inner() -> Result<(), AppError> {
         let target_config = crate::config::load_config_from(&cli_dir);
         (cli_dir, target_config)
     } else {
-        let config_dir = config.dir.clone();
-        (config_dir, config)
+        let vault_dir = config.dir.clone();
+        (vault_dir, config)
     };
+    // The directory where .hyalo.toml lives. Views/types are stored there.
+    let config_dir = config.config_dir.clone();
 
     // Validate that the resolved dir exists and is a directory (for the
     // non-CLI case where dir comes from .hyalo.toml).
@@ -315,7 +317,7 @@ fn run_inner() -> Result<(), AppError> {
         ..
     } = cli.command
     {
-        let views = crate::commands::views::load_views(&dir);
+        let views = crate::commands::views::load_views(&config_dir);
         match views.get(view_name) {
             Some(base) => {
                 let overlay = std::mem::take(filters);
@@ -723,6 +725,7 @@ fn run_inner() -> Result<(), AppError> {
     let schema = config.schema;
     let mut ctx = CommandContext {
         dir: &dir,
+        config_dir: &config_dir,
         site_prefix,
         effective_format,
         user_format: format,
