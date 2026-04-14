@@ -93,6 +93,14 @@ impl ResolvedDefaults {
             default_limit: None,
         }
     }
+
+    /// Hardcoded defaults with `config_dir` set to the given directory.
+    fn defaults_for(dir: &Path) -> Self {
+        Self {
+            config_dir: dir.to_path_buf(),
+            ..Self::hardcoded()
+        }
+    }
 }
 
 /// Load configuration from `.hyalo.toml` in the current working directory.
@@ -123,15 +131,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let contents = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut defaults = ResolvedDefaults::hardcoded();
-            defaults.config_dir = dir.to_path_buf();
-            return defaults;
+            return ResolvedDefaults::defaults_for(dir);
         }
         Err(e) => {
             crate::warn::warn(format!("could not read .hyalo.toml: {e}"));
-            let mut defaults = ResolvedDefaults::hardcoded();
-            defaults.config_dir = dir.to_path_buf();
-            return defaults;
+            return ResolvedDefaults::defaults_for(dir);
         }
     };
 
@@ -139,9 +143,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         Ok(c) => c,
         Err(e) => {
             crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
-            let mut defaults = ResolvedDefaults::hardcoded();
-            defaults.config_dir = dir.to_path_buf();
-            return defaults;
+            return ResolvedDefaults::defaults_for(dir);
         }
     };
 
@@ -193,9 +195,7 @@ mod tests {
     fn missing_config_returns_defaults() {
         let dir = make_temp();
         let resolved = load_config_from(dir.path());
-        let mut expected = ResolvedDefaults::hardcoded();
-        expected.config_dir = dir.path().to_path_buf();
-        assert_eq!(resolved, expected);
+        assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
     }
 
     #[test]
@@ -255,9 +255,7 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "this is not { valid toml").unwrap();
 
         let resolved = load_config_from(dir.path());
-        let mut expected = ResolvedDefaults::hardcoded();
-        expected.config_dir = dir.path().to_path_buf();
-        assert_eq!(resolved, expected);
+        assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
     }
 
     #[test]
@@ -266,9 +264,7 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "unknown_key = \"value\"\n").unwrap();
 
         let resolved = load_config_from(dir.path());
-        let mut expected = ResolvedDefaults::hardcoded();
-        expected.config_dir = dir.path().to_path_buf();
-        assert_eq!(resolved, expected);
+        assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
     }
 
     #[test]
