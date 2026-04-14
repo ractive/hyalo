@@ -334,27 +334,27 @@ pub(crate) fn set_type(
     }
 
     // Auto-create string property entries for required fields without constraints.
-    if !dry_run {
-        for f in &required_fields {
-            // Skip if this field already has a property-type or property-values in this invocation.
-            if prop_type_map.contains_key(f.as_str()) || prop_values_map.contains_key(f.as_str()) {
-                continue;
-            }
-            // Skip if the property already exists in TOML.
-            let already_has = doc
-                .get("schema")
-                .and_then(|s| s.as_table())
-                .and_then(|t| t.get("types"))
-                .and_then(|t| t.as_table())
-                .and_then(|t| t.get(type_name))
-                .and_then(|t| t.as_table())
-                .and_then(|t| t.get("properties"))
-                .and_then(|t| t.as_table())
-                .and_then(|t| t.get(f.as_str()))
-                .is_some();
-            if !already_has {
+    for f in &required_fields {
+        // Skip if this field already has a property-type or property-values in this invocation.
+        if prop_type_map.contains_key(f.as_str()) || prop_values_map.contains_key(f.as_str()) {
+            continue;
+        }
+        // Skip if the property already exists in TOML.
+        let already_has = doc
+            .get("schema")
+            .and_then(|s| s.as_table())
+            .and_then(|t| t.get("types"))
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get(type_name))
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get("properties"))
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get(f.as_str()))
+            .is_some();
+        if !already_has {
+            toml_changes.push(format!("auto-add property {f}: type=string"));
+            if !dry_run {
                 set_property_type_field(&mut doc, type_name, f, "string");
-                toml_changes.push(format!("auto-add property {f}: type=string"));
             }
         }
     }
