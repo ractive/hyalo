@@ -87,8 +87,13 @@ pub struct LintOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<FileFixResult>,
     /// `true` when `--dry-run` was passed and fixes were not written.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(skip_serializing_if = "is_false")]
     pub dry_run: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires `fn(&bool) -> bool`
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// Fixes applied to a single file.

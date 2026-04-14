@@ -44,7 +44,7 @@ hyalo lint --fix --dry-run     # preview without writing
 - [x] Implement `--fix`: infer `type` from filename-template match
 - [x] Implement `--fix`: normalize date formats to ISO 8601
 - [x] Add `--dry-run` to preview fixes without writing
-- [x] Ensure fixes preserve frontmatter key ordering and comments
+- [x] Ensure fixes preserve frontmatter key ordering
 
 ### Filename-template parsing
 - [x] Parse `{slug}`, `{n}`, `{date}` placeholders
@@ -76,5 +76,5 @@ hyalo lint --fix --dry-run     # preview without writing
 - [x] `hyalo lint --fix` auto-fixes: defaults, enum typos, date normalization, type inference
 - [x] `--dry-run` previews without writing
 - [x] Missing required properties without defaults are reported, not fabricated
-- [x] Fixes preserve frontmatter key ordering and formatting
+- [x] Fixes preserve frontmatter key ordering
 - [x] README, help texts, knowledgebase docs, and skills updated
