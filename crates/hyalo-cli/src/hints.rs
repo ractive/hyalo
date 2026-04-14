@@ -140,25 +140,33 @@ impl HintContext {
 
 /// Generate concrete drill-down hints from a command's JSON output.
 ///
+/// `total` is the real count of items (may exceed the number of items in `data`
+/// when output was truncated by a limit). `None` means the command doesn't
+/// produce a list with a total.
+///
 /// Returns at most [`MAX_HINTS`] [`Hint`]s, each with a human-readable description
 /// and an executable `hyalo` command (`cmd`).
 #[must_use]
-pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+pub fn generate_hints(
+    ctx: &HintContext,
+    data: &serde_json::Value,
+    total: Option<u64>,
+) -> Vec<Hint> {
     let hints = match &ctx.source {
         HintSource::Summary => hints_for_summary(ctx, data),
-        HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data),
-        HintSource::TagsSummary => hints_for_tags_summary(ctx, data),
-        HintSource::Find => hints_for_find(ctx, data),
+        HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data, total),
+        HintSource::TagsSummary => hints_for_tags_summary(ctx, data, total),
+        HintSource::Find => hints_for_find(ctx, data, total),
         HintSource::Set | HintSource::Remove | HintSource::Append => hints_for_mutation(ctx, data),
         HintSource::Read => hints_for_read(ctx, data),
-        HintSource::Backlinks => hints_for_backlinks(ctx, data),
+        HintSource::Backlinks => hints_for_backlinks(ctx, data, total),
         HintSource::Mv => hints_for_mv(ctx, data),
         HintSource::TaskRead => hints_for_task_read(ctx, data),
         HintSource::TaskToggle | HintSource::TaskSetStatus => hints_for_task_mutation(ctx, data),
         HintSource::LinksFix => hints_for_links_fix(ctx, data),
         HintSource::CreateIndex => hints_for_create_index(ctx, data),
         HintSource::DropIndex => hints_for_drop_index(ctx, data),
-        HintSource::Lint => hints_for_lint(ctx, data),
+        HintSource::Lint => hints_for_lint(ctx, data, total),
         HintSource::Types { .. } => hints_for_types(ctx, data),
     };
     hints.into_iter().take(MAX_HINTS).collect()
@@ -530,10 +538,30 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     hints
 }
 
-fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+fn hints_for_properties_summary(
+    ctx: &HintContext,
+    data: &serde_json::Value,
+    total: Option<u64>,
+) -> Vec<Hint> {
     let Some(arr) = data.as_array() else {
         return vec![];
     };
+
+    let mut hints = Vec::new();
+
+    // When output was truncated by the default limit (not an explicit --limit), suggest
+    // showing all results.
+    if !ctx.has_limit {
+        let shown = arr.len() as u64;
+        if let Some(t) = total
+            && shown < t
+        {
+            hints.push(Hint::new(
+                format!("Show all {t} properties (no limit)"),
+                build_command_with_glob(ctx, &["properties", "--limit", "0"]),
+            ));
+        }
+    }
 
     // Sort by count descending, take top 3.
     let mut entries: Vec<(&str, u64)> = arr
@@ -549,16 +577,17 @@ fn hints_for_properties_summary(ctx: &HintContext, data: &serde_json::Value) -> 
         .collect();
     entries.sort_by(|a, b| b.1.cmp(&a.1));
 
-    entries
-        .into_iter()
-        .take(3)
-        .map(|(name, count)| {
-            Hint::new(
-                format!("Find {count} files with property: {name}"),
-                build_command_with_glob(ctx, &["find", "--property", name]),
-            )
-        })
-        .collect()
+    for (name, count) in entries.into_iter().take(3) {
+        if hints.len() >= MAX_HINTS {
+            break;
+        }
+        hints.push(Hint::new(
+            format!("Find {count} files with property: {name}"),
+            build_command_with_glob(ctx, &["find", "--property", name]),
+        ));
+    }
+
+    hints
 }
 
 /// Slugify a string to the charset valid for view names: `[a-z0-9_-]`.
@@ -662,7 +691,7 @@ fn suggest_save_as_view(ctx: &HintContext) -> Option<Hint> {
     Some(Hint::new("Save this query as a view", cmd))
 }
 
-fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+fn hints_for_find(ctx: &HintContext, data: &serde_json::Value, total: Option<u64>) -> Vec<Hint> {
     // find returns a bare array as the raw command output (the envelope is built later).
     let Some(results) = data.as_array() else {
         return vec![];
@@ -770,6 +799,20 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         ));
     }
 
+    // --- Show-all hint when default limit truncated output ---
+    if !ctx.has_limit
+        && let Some(t) = total
+        && (result_count as u64) < t
+    {
+        let remaining = MAX_HINTS.saturating_sub(hints.len());
+        if remaining > 0 {
+            hints.push(Hint::new(
+                format!("Show all {t} results (no limit)"),
+                build_find_command_preserving_filters(ctx, &["--limit", "0"]),
+            ));
+        }
+    }
+
     // --- Narrowing for many results (>5) ---
     if result_count > 5 {
         // Tag narrowing (skip tags already filtered on).
@@ -862,8 +905,8 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             }
         }
 
-        // Limit suggestion (only if not already limited).
-        if !ctx.has_limit {
+        // Limit suggestion: suggest --limit 10 when not truncated and no explicit limit.
+        if !ctx.has_limit && total.is_none_or(|t| (result_count as u64) >= t) {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
                 hints.push(Hint::new(
@@ -933,11 +976,31 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     hints
 }
 
-fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+fn hints_for_tags_summary(
+    ctx: &HintContext,
+    data: &serde_json::Value,
+    total: Option<u64>,
+) -> Vec<Hint> {
     // tags summary returns a bare array [{name, count}, ...].
     let Some(tags_arr) = data.as_array() else {
         return vec![];
     };
+
+    let mut hints = Vec::new();
+
+    // When output was truncated by the default limit (not an explicit --limit), suggest
+    // showing all results.
+    if !ctx.has_limit {
+        let shown = tags_arr.len() as u64;
+        if let Some(t) = total
+            && shown < t
+        {
+            hints.push(Hint::new(
+                format!("Show all {t} tags (no limit)"),
+                build_command_with_glob(ctx, &["tags", "--limit", "0"]),
+            ));
+        }
+    }
 
     // Sort by count descending, take top 3.
     let mut entries: Vec<(&str, u64)> = tags_arr
@@ -953,16 +1016,17 @@ fn hints_for_tags_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hi
         .collect();
     entries.sort_by(|a, b| b.1.cmp(&a.1));
 
-    entries
-        .into_iter()
-        .take(3)
-        .map(|(name, count)| {
-            Hint::new(
-                format!("Find {count} files tagged: {name}"),
-                build_command_with_glob(ctx, &["find", "--tag", name]),
-            )
-        })
-        .collect()
+    for (name, count) in entries.into_iter().take(3) {
+        if hints.len() >= MAX_HINTS {
+            break;
+        }
+        hints.push(Hint::new(
+            format!("Find {count} files tagged: {name}"),
+            build_command_with_glob(ctx, &["find", "--tag", name]),
+        ));
+    }
+
+    hints
 }
 
 fn hints_for_mutation(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
@@ -1009,8 +1073,30 @@ fn hints_for_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     hints
 }
 
-fn hints_for_backlinks(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+fn hints_for_backlinks(
+    ctx: &HintContext,
+    data: &serde_json::Value,
+    total: Option<u64>,
+) -> Vec<Hint> {
     let mut hints = Vec::new();
+
+    // When output was truncated by the default limit (not an explicit --limit), suggest
+    // showing all results.
+    if !ctx.has_limit {
+        let shown = data
+            .get("backlinks")
+            .and_then(|b| b.as_array())
+            .map_or(0, |a| a.len() as u64);
+        if let Some(t) = total
+            && shown < t
+        {
+            let file = data.get("file").and_then(|f| f.as_str()).unwrap_or("");
+            hints.push(Hint::new(
+                format!("Show all {t} backlinks (no limit)"),
+                build_command_with_file(ctx, &["backlinks", "--limit", "0"], file, &[]),
+            ));
+        }
+    }
 
     let file = data.get("file").and_then(|f| f.as_str());
 
@@ -1031,6 +1117,7 @@ fn hints_for_backlinks(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
             .first()
             .and_then(|b| b.get("source"))
             .and_then(|s| s.as_str())
+        && hints.len() < MAX_HINTS
     {
         hints.push(Hint::new(
             format!("Read linking file: {first_source}"),
@@ -1265,8 +1352,24 @@ fn hints_for_drop_index(ctx: &HintContext, _data: &serde_json::Value) -> Vec<Hin
     )]
 }
 
-fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u64>) -> Vec<Hint> {
     let mut hints = Vec::new();
+
+    // When output was truncated by the default limit, suggest showing all.
+    let is_limited = data
+        .get("limited")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !ctx.has_limit && is_limited {
+        let total_violations = data
+            .get("files_with_issues")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        hints.push(Hint::new(
+            format!("Show all {total_violations} files with issues (no limit)"),
+            build_command_with_glob_and_files(ctx, &["lint", "--limit", "0"]),
+        ));
+    }
 
     // When in dry-run mode and there are pending fixes, suggest applying them.
     let is_dry_run = data
@@ -1501,7 +1604,7 @@ mod tests {
             "tasks": {"total": 0, "done": 0},
             "recent_files": []
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(hints.iter().any(|h| {
             h.cmd == "hyalo properties"
                 || (h.cmd.starts_with("hyalo properties ") && h.cmd.contains("--dir "))
@@ -1525,7 +1628,7 @@ mod tests {
             "tasks": {"total": 10, "done": 3},
             "recent_files": []
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("find")
                 && h.cmd.contains("--task")
@@ -1544,7 +1647,7 @@ mod tests {
             "tasks": {"total": 10, "done": 10},
             "recent_files": []
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(!hints.iter().any(|h| h.cmd.contains("--todo")));
     }
 
@@ -1563,7 +1666,7 @@ mod tests {
             "tasks": {"total": 0, "done": 0},
             "recent_files": []
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         // in-progress should appear before completed
         let in_progress_pos = hints.iter().position(|h| h.cmd.contains("in-progress"));
         let completed_pos = hints.iter().position(|h| h.cmd.contains("completed"));
@@ -1590,7 +1693,7 @@ mod tests {
             "tasks": {"total": 5, "done": 1},
             "recent_files": []
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(hints.len() <= MAX_HINTS);
     }
 
@@ -1605,7 +1708,7 @@ mod tests {
             {"name": "tags", "type": "list", "count": 30},
             {"name": "author", "type": "text", "count": 5}
         ]);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert_eq!(hints.len(), 3);
         assert!(hints[0].cmd.contains("title"));
         assert!(hints[1].cmd.contains("status"));
@@ -1617,7 +1720,7 @@ mod tests {
     #[test]
     fn properties_summary_empty_data() {
         let c = ctx(HintSource::PropertiesSummary);
-        let hints = generate_hints(&c, &json!([]));
+        let hints = generate_hints(&c, &json!([]), None);
         assert!(hints.is_empty());
     }
 
@@ -1625,7 +1728,7 @@ mod tests {
     fn properties_summary_propagates_glob() {
         let c = ctx_with_glob(HintSource::PropertiesSummary, "notes/*.md");
         let data = json!([{"name": "status", "type": "text", "count": 5}]);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(hints[0].cmd.contains("--glob"));
         assert!(hints[0].cmd.contains("notes/*.md"));
     }
@@ -1651,7 +1754,7 @@ mod tests {
     #[test]
     fn find_empty_results_no_hints() {
         let c = ctx(HintSource::Find);
-        let hints = generate_hints(&c, &json!([]));
+        let hints = generate_hints(&c, &json!([]), None);
         assert!(hints.is_empty());
     }
 
@@ -1660,7 +1763,7 @@ mod tests {
         let c = ctx(HintSource::Find);
         let items = vec![make_find_item("notes/alpha.md", None, &[])];
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1688,7 +1791,7 @@ mod tests {
             make_find_item("f.md", Some("completed"), &[]),
         ];
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1710,7 +1813,7 @@ mod tests {
             make_find_item("f.md", Some("completed"), &[]),
         ];
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1732,7 +1835,7 @@ mod tests {
             make_find_item("f.md", Some("planned"), &[]),
         ];
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1754,7 +1857,7 @@ mod tests {
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
             .collect();
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(hints.len() <= MAX_HINTS);
     }
 
@@ -1768,7 +1871,7 @@ mod tests {
             .map(|i| make_find_item(&format!("{i}.md"), Some("draft"), &["research"]))
             .collect();
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         let sort_hint = hints.iter().find(|h| h.cmd.contains("--sort"));
         assert!(sort_hint.is_some(), "should include a sort hint: {hints:?}");
         let cmd = &sort_hint.unwrap().cmd;
@@ -1790,7 +1893,7 @@ mod tests {
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["iteration"]))
             .collect();
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         let limit_hint = hints.iter().find(|h| h.cmd.contains("--limit"));
         assert!(
             limit_hint.is_some(),
@@ -1810,7 +1913,7 @@ mod tests {
         let c = ctx_with_dir(HintSource::TagsSummary, "/vault");
         // tags summary returns a bare array [{name, count}, ...]
         let data = json!([{"name": "rust", "count": 5}]);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(hints[0].cmd.contains("--dir"));
         assert!(hints[0].cmd.contains("/vault"));
     }
@@ -1827,7 +1930,7 @@ mod tests {
             "skipped": [],
             "total": 1
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1846,7 +1949,7 @@ mod tests {
     fn read_hints_suggest_metadata_and_backlinks() {
         let c = ctx(HintSource::Read);
         let data = json!({"file": "notes/alpha.md", "content": "Some content"});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1869,7 +1972,7 @@ mod tests {
             "backlinks": [{"source": "a.md", "line": 5, "target": "target"}],
             "total": 1
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1888,7 +1991,7 @@ mod tests {
     fn create_index_hints_suggest_find_and_drop() {
         let c = ctx(HintSource::CreateIndex);
         let data = json!({"path": ".hyalo-index", "files_indexed": 42, "warnings": 0});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1905,7 +2008,7 @@ mod tests {
     fn drop_index_hints_suggest_create() {
         let c = ctx(HintSource::DropIndex);
         let data = json!({"deleted": ".hyalo-index"});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("create-index")),
             "should suggest create-index: {hints:?}"
@@ -1923,7 +2026,7 @@ mod tests {
             "total_files_updated": 0,
             "total_links_updated": 0
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("mv")
                 && h.cmd.contains("new.md")
@@ -1943,7 +2046,7 @@ mod tests {
             "total_files_updated": 0,
             "total_links_updated": 0
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -1963,7 +2066,7 @@ mod tests {
         let c = ctx(HintSource::TaskRead);
         let data =
             json!({"file": "todo.md", "line": 5, "status": " ", "text": "Fix bug", "done": false});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("task toggle")),
             "should suggest toggling undone task: {hints:?}"
@@ -1975,7 +2078,7 @@ mod tests {
         let c = ctx(HintSource::TaskRead);
         let data =
             json!({"file": "todo.md", "line": 5, "status": "x", "text": "Fix bug", "done": true});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             !hints.iter().any(|h| h.cmd.contains("task toggle")),
             "should not suggest toggling already-done task: {hints:?}"
@@ -1991,7 +2094,7 @@ mod tests {
         let c = ctx(HintSource::TaskToggle);
         let data =
             json!({"file": "todo.md", "line": 5, "status": "x", "text": "Fix bug", "done": true});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("find")
                 && h.cmd.contains("--task")
@@ -2010,7 +2113,7 @@ mod tests {
             "applied": false,
             "fixes": []
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("links fix --apply")),
             "should suggest applying fixes: {hints:?}"
@@ -2029,7 +2132,7 @@ mod tests {
             .map(|i| make_find_item(&format!("{i}.md"), Some("completed"), &[]))
             .collect();
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("summary")),
             "broad query should suggest summary: {hints:?}"
@@ -2044,7 +2147,7 @@ mod tests {
             .map(|i| make_find_item(&format!("{i}.md"), Some("completed"), &["rust"]))
             .collect();
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             !hints.iter().any(|h| h.cmd.contains("summary")),
             "filtered query should not suggest summary: {hints:?}"
@@ -2059,7 +2162,7 @@ mod tests {
             .map(|i| make_find_item(&format!("{i}.md"), Some("planned"), &["rust", "cli"]))
             .collect();
         let data = json!(items);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         // Should NOT suggest narrowing by --tag rust (already filtered).
         // Sort/limit hints may legitimately include --tag rust as a preserved filter,
         // so only check narrowing hints (those whose description starts with "Narrow").
@@ -2087,7 +2190,7 @@ mod tests {
             "tasks": {"total": 0, "done": 0},
             "orphans": 0
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("links fix")),
             "summary with broken links should suggest links fix: {hints:?}"
@@ -2110,7 +2213,7 @@ mod tests {
             "tasks": {"total": 0, "done": 0},
             "orphans": 0
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             !hints.iter().any(|h| h.cmd.contains("links fix")),
             "summary without broken links should not suggest links fix: {hints:?}"
@@ -2133,7 +2236,7 @@ mod tests {
             "modified": "2026-01-01T00:00:00Z"
         });
         let data = json!([item]);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("links fix")),
             "find results with broken links should suggest links fix: {hints:?}"
@@ -2155,7 +2258,7 @@ mod tests {
             "modified": "2026-01-01T00:00:00Z"
         });
         let data = json!([item]);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             !hints.iter().any(|h| h.cmd.contains("links fix")),
             "find results without broken links should not suggest links fix: {hints:?}"
@@ -2171,7 +2274,7 @@ mod tests {
             "files": [{"file": "test.md", "violations": [{"severity": "error", "message": "missing required property"}]}],
             "total": 1,
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(!hints.is_empty());
         assert!(
             hints.iter().any(|h| h.cmd.contains("lint --fix")),
@@ -2189,7 +2292,7 @@ mod tests {
             "fixes": [{"file": "test.md", "actions": [{"kind": "insert-default", "property": "status", "new": "draft"}]}],
             "dry_run": true,
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints
                 .iter()
@@ -2202,7 +2305,7 @@ mod tests {
     fn lint_hints_always_suggest_types_list() {
         let c = ctx(HintSource::Lint);
         let data = json!({"files": [], "total": 0});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("types list")),
             "should always suggest types list: {hints:?}"
@@ -2216,7 +2319,7 @@ mod tests {
             "files": [{"file": "test.md", "violations": [{"severity": "error", "message": "x", "type": "iteration"}]}],
             "total": 5,
         });
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(hints.len() <= MAX_HINTS);
     }
 
@@ -2231,7 +2334,7 @@ mod tests {
             {"type": "iteration", "required": ["title"], "has_filename_template": true, "property_count": 3},
             {"type": "note", "required": [], "has_filename_template": false, "property_count": 1},
         ]);
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("types show")),
             "should suggest types show: {hints:?}"
@@ -2248,7 +2351,7 @@ mod tests {
             subcommand: Some("show".to_owned()),
         });
         let data = json!({"type": "iteration", "required": ["title"], "properties": {}});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("lint")),
             "should suggest lint: {hints:?}"
@@ -2265,7 +2368,7 @@ mod tests {
             subcommand: Some("set".to_owned()),
         });
         let data = json!({"type": "iteration", "action": "updated"});
-        let hints = generate_hints(&c, &data);
+        let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("types show iteration")),
             "should suggest types show for updated type: {hints:?}"

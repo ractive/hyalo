@@ -39,6 +39,8 @@ struct ConfigFile {
     /// the deeply nested schema structure.
     #[serde(default)]
     schema: Option<toml::Value>,
+    /// Default output limit for list commands (0 = unlimited).
+    default_limit: Option<usize>,
 }
 
 /// Resolved configuration with all defaults applied.
@@ -53,6 +55,11 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) search_language: Option<String>,
     /// Parsed schema configuration from `[schema.*]` sections.
     pub(crate) schema: SchemaConfig,
+    /// Default output limit for list commands.
+    /// `None` = use hardcoded default (50).
+    /// `Some(0)` = unlimited.
+    /// `Some(n)` = limit to n.
+    pub(crate) default_limit: Option<usize>,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -64,6 +71,7 @@ impl PartialEq for ResolvedDefaults {
             && self.hints == other.hints
             && self.site_prefix == other.site_prefix
             && self.search_language == other.search_language
+            && self.default_limit == other.default_limit
     }
 }
 
@@ -76,6 +84,7 @@ impl ResolvedDefaults {
             site_prefix: None,
             search_language: None,
             schema: SchemaConfig::default(),
+            default_limit: None,
         }
     }
 }
@@ -133,6 +142,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         site_prefix: cfg.site_prefix,
         search_language: cfg.search.and_then(|s| s.language),
         schema,
+        default_limit: cfg.default_limit,
     }
 }
 

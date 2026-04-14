@@ -14,10 +14,12 @@ use serde::Serialize;
 ///
 /// `file_filter` is an optional list of vault-relative paths to include.
 /// When `None` (or an empty slice), all index entries are used.
+/// `limit` caps how many entries are returned (`None` = no cap).
 pub fn properties_summary(
     index: &dyn VaultIndex,
     file_filter: Option<&[String]>,
     format: Format,
+    limit: Option<usize>,
 ) -> Result<CommandOutcome> {
     let mut agg: std::collections::BTreeMap<(String, String), usize> =
         std::collections::BTreeMap::new();
@@ -51,6 +53,9 @@ pub fn properties_summary(
     result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
 
     let total = result.len() as u64;
+    if let Some(n) = limit {
+        result.truncate(n);
+    }
     let _ = format;
     Ok(CommandOutcome::success_with_total(
         serde_json::to_string_pretty(&result).context("failed to serialize")?,
@@ -202,7 +207,7 @@ mod tests {
             },
         )?;
         let file_filter: Option<Vec<String>> = file.map(|f| vec![f.to_owned()]);
-        properties_summary(&build.index, file_filter.as_deref(), format)
+        properties_summary(&build.index, file_filter.as_deref(), format, None)
     }
 
     fn setup_dir() -> tempfile::TempDir {

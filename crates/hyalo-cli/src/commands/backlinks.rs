@@ -21,11 +21,13 @@ struct BacklinkItem {
 ///
 /// `dir` is still needed to resolve the `file_arg` to a vault-relative path via
 /// `discovery::resolve_file`. Link lookup is done against `index.link_graph()`.
+/// `limit` caps how many backlink entries are returned (`None` = no cap).
 pub fn backlinks(
     index: &dyn VaultIndex,
     file_arg: &str,
     dir: &Path,
     format: Format,
+    limit: Option<usize>,
 ) -> Result<CommandOutcome> {
     // Resolve the file argument to a relative path (same as in `backlinks`)
     let (_full_path, rel) = match discovery::resolve_file(dir, file_arg) {
@@ -43,7 +45,8 @@ pub fn backlinks(
         .filter(|e| !is_self_link(e, &rel))
         .collect();
 
-    let items: Vec<BacklinkItem> = entries
+    let total = entries.len() as u64;
+    let mut items: Vec<BacklinkItem> = entries
         .iter()
         .map(|e| BacklinkItem {
             source: e.source.to_string_lossy().replace('\\', "/"),
@@ -53,7 +56,9 @@ pub fn backlinks(
         })
         .collect();
 
-    let total = items.len() as u64;
+    if let Some(n) = limit {
+        items.truncate(n);
+    }
     let result = serde_json::json!({ "file": rel, "backlinks": items });
     Ok(CommandOutcome::success_with_total(
         serde_json::to_string_pretty(&result).context("failed to serialize")?,

@@ -3,6 +3,7 @@ mod common;
 use std::fs;
 
 use common::{hyalo, hyalo_no_hints, write_md};
+use serde_json::Value;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -256,5 +257,212 @@ fn cli_hints_false_overrides_config() {
     assert!(
         hints.is_empty(),
         "hints should be empty when --no-hints overrides config; got: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// default_limit config key
+// ---------------------------------------------------------------------------
+
+/// Write N minimal markdown files named "file-N.md" with a single tag.
+fn write_many_notes(dir: &std::path::Path, count: usize) {
+    for i in 0..count {
+        write_md(
+            dir,
+            &format!("file-{i:03}.md"),
+            &format!("---\ntitle: Note {i}\ntags:\n  - testtag\n---\n"),
+        );
+    }
+}
+
+#[test]
+fn default_limit_applies_to_find() {
+    let tmp = TempDir::new().unwrap();
+    // Write 60 files — more than the hardcoded default of 50.
+    write_many_notes(tmp.path(), 60);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    // Default limit is 50; only 50 results should be shown.
+    assert_eq!(
+        results.len(),
+        50,
+        "expected default limit of 50 results, got {}",
+        results.len()
+    );
+    // Total should report all 60.
+    assert_eq!(json["total"], 60);
+}
+
+#[test]
+fn default_limit_bypassed_with_limit_zero() {
+    let tmp = TempDir::new().unwrap();
+    write_many_notes(tmp.path(), 60);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--limit", "0"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        60,
+        "--limit 0 should return all results, got {}",
+        results.len()
+    );
+}
+
+#[test]
+fn config_default_limit_overrides_hardcoded_default() {
+    let tmp = TempDir::new().unwrap();
+    // Set default_limit = 5 in config.
+    fs::write(tmp.path().join(".hyalo.toml"), "default_limit = 5\n").unwrap();
+    write_many_notes(tmp.path(), 20);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        5,
+        "config default_limit=5 should cap results to 5, got {}",
+        results.len()
+    );
+    assert_eq!(json["total"], 20);
+}
+
+#[test]
+fn config_default_limit_zero_means_unlimited() {
+    let tmp = TempDir::new().unwrap();
+    // default_limit = 0 means unlimited.
+    fs::write(tmp.path().join(".hyalo.toml"), "default_limit = 0\n").unwrap();
+    write_many_notes(tmp.path(), 60);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        60,
+        "default_limit=0 in config should return all results, got {}",
+        results.len()
+    );
+}
+
+#[test]
+fn cli_limit_overrides_config_default_limit() {
+    let tmp = TempDir::new().unwrap();
+    // Config sets limit to 5 but CLI passes --limit 3.
+    fs::write(tmp.path().join(".hyalo.toml"), "default_limit = 5\n").unwrap();
+    write_many_notes(tmp.path(), 20);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--limit", "3"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        3,
+        "explicit --limit 3 should override config default_limit=5, got {}",
+        results.len()
+    );
+}
+
+#[test]
+fn default_limit_applies_to_tags_summary() {
+    let tmp = TempDir::new().unwrap();
+    // Write files with many unique tags (more than 50).
+    for i in 0..60usize {
+        write_md(
+            tmp.path(),
+            &format!("file-{i:03}.md"),
+            &format!("---\ntitle: Note {i}\ntags:\n  - tag-{i:03}\n---\n"),
+        );
+    }
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["tags"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        50,
+        "tags summary should default-limit to 50, got {}",
+        results.len()
+    );
+    assert_eq!(json["total"], 60);
+}
+
+#[test]
+fn default_limit_applies_to_properties_summary() {
+    let tmp = TempDir::new().unwrap();
+    // Write files with many unique property keys (more than 50).
+    for i in 0..60usize {
+        write_md(
+            tmp.path(),
+            &format!("file-{i:03}.md"),
+            &format!("---\ntitle: Note {i}\nprop_{i:03}: value\n---\n"),
+        );
+    }
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["properties"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        50,
+        "properties summary should default-limit to 50, got {}",
+        results.len()
+    );
+    // 60 unique props + 60 "title" entries = 61 unique property names total
+    assert!(
+        json["total"].as_u64().unwrap() > 50,
+        "total should exceed 50"
     );
 }

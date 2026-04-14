@@ -53,10 +53,12 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
 ///
 /// `file_filter` is an optional list of vault-relative paths to include.
 /// When `None` (or an empty slice), all index entries are used.
+/// `limit` caps how many entries are returned (`None` = no cap).
 pub fn tags_summary(
     index: &dyn VaultIndex,
     file_filter: Option<&[String]>,
     format: Format,
+    limit: Option<usize>,
 ) -> Result<CommandOutcome> {
     // Aggregate case-insensitively: use lowercase key, preserve first-seen casing for display
     let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
@@ -78,12 +80,15 @@ pub fn tags_summary(
         }
     }
 
-    let tags: Vec<TagSummaryEntry> = counts
+    let mut tags: Vec<TagSummaryEntry> = counts
         .into_iter()
         .map(|(_, (name, count))| TagSummaryEntry { name, count })
         .collect();
 
     let total = tags.len() as u64;
+    if let Some(n) = limit {
+        tags.truncate(n);
+    }
     let _ = format; // format is applied by the output pipeline
     Ok(CommandOutcome::success_with_total(
         serde_json::to_string_pretty(&tags).context("failed to serialize")?,
@@ -268,7 +273,7 @@ mod tests {
             },
         )?;
         let file_filter: Option<Vec<String>> = file.map(|f| vec![f.to_owned()]);
-        tags_summary(&build.index, file_filter.as_deref(), format)
+        tags_summary(&build.index, file_filter.as_deref(), format, None)
     }
 
     macro_rules! md {

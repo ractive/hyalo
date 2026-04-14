@@ -58,11 +58,11 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
 
   Properties (subcommand group):
-    hyalo properties summary [-g/--glob G]                        Unique property names, types, and file counts (read-only)
+    hyalo properties summary [-g/--glob G] [-n/--limit N]         Unique property names, types, and file counts (read-only)
     hyalo properties rename --from OLD --to NEW [-g/--glob G]     Rename a property key across files (mutates files)
 
   Tags (subcommand group):
-    hyalo tags summary [-g/--glob G]                              Unique tags with file counts (read-only)
+    hyalo tags summary [-g/--glob G] [-n/--limit N]               Unique tags with file counts (read-only)
     hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)
 
   Summary (vault overview, read-only):
@@ -74,7 +74,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     hyalo task set        -f/--file F -l/--line N -s/--status C
 
   Backlinks (reverse link lookup, read-only):
-    hyalo backlinks -f/--file F
+    hyalo backlinks -f/--file F [-n/--limit N]
 
   Links (link operations):
     hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
@@ -113,6 +113,11 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
     --index[=PATH]          Use pre-built snapshot index (default: .hyalo-index in vault dir)
     -q/--quiet              Suppress all warnings to stderr
+
+  Default output limits:
+    List commands (find, lint, tags summary, properties summary, backlinks) return
+    at most 50 results by default. Use --limit 0 for unlimited output.
+    Override the default in .hyalo.toml:  default_limit = 100
 
 COOKBOOK:
   # Discover what metadata exists in a vault

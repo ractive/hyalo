@@ -1,10 +1,15 @@
 ---
-title: "Default output limits for all list commands"
+title: Default output limits for all list commands
 type: iteration
 date: 2026-04-14
-status: planned
+status: in-progress
 branch: iter-110/default-output-limits
-tags: [cli, ux, llm, performance, dogfooding]
+tags:
+  - cli
+  - ux
+  - llm
+  - performance
+  - dogfooding
 ---
 
 # iter-110: Default output limits for all list commands
@@ -31,12 +36,12 @@ Large knowledgebases can produce output that busts an LLM's context window. Comm
 
 ## Tasks
 
-- [ ] Change `parse_limit` to accept 0 as "unlimited"
-- [ ] Add default limit to `find` (e.g. 50)
-- [ ] Add `--limit` to `lint` with default (e.g. 50)
-- [ ] Add `--limit` to `tags summary` with default
-- [ ] Add `--limit` to `properties summary` with default
-- [ ] Add `--limit` to `backlinks` with default
-- [ ] Support `default_limit` in `.hyalo.toml`
-- [ ] Ensure "showing N of M" message works consistently across all commands
-- [ ] Update e2e tests
+- [x] Change `parse_limit` to accept 0 as "unlimited"
+- [x] Add default limit to `find` (e.g. 50)
+- [x] Add `--limit` to `lint` with default (e.g. 50)
+- [x] Add `--limit` to `tags summary` with default
+- [x] Add `--limit` to `properties summary` with default
+- [x] Add `--limit` to `backlinks` with default
+- [x] Support `default_limit` in `.hyalo.toml`
+- [x] Ensure "showing N of M" message works consistently across all commands
+- [x] Update e2e tests

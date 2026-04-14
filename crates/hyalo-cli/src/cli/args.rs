@@ -10,13 +10,8 @@ pub(crate) fn is_false(v: &bool) -> bool {
 }
 
 pub(crate) fn parse_limit(s: &str) -> Result<usize, String> {
-    let n: usize = s
-        .parse()
-        .map_err(|_| format!("'{s}' is not a valid number"))?;
-    if n == 0 {
-        return Err("limit must be at least 1".to_owned());
-    }
-    Ok(n)
+    s.parse()
+        .map_err(|_| format!("'{s}' is not a valid number"))
 }
 
 /// Value parser for `--threshold`: accepts a `f64` in `[0.0, 1.0]`.
@@ -218,7 +213,7 @@ pub(crate) struct FindFilters {
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
-    /// Maximum number of results to return (must be at least 1)
+    /// Maximum number of results to return (0 = unlimited)
     #[arg(short = 'n', long, value_parser = parse_limit)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -462,6 +457,9 @@ pub(crate) enum Commands {
         /// Target file to find backlinks for (relative to --dir) — flag form
         #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
         file: Option<String>,
+        /// Maximum number of backlinks to return (0 = unlimited, default: 50)
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
     },
     /// Move/rename a file and update all inbound and outbound links
     #[command(
@@ -1053,6 +1051,9 @@ pub(crate) enum PropertiesAction {
         /// Glob pattern(s) to select files (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited, default: 50)
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
     },
     /// Rename a property key across all matched files
     #[command(
@@ -1085,6 +1086,9 @@ pub(crate) enum TagsAction {
         /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited, default: 50)
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
     },
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
