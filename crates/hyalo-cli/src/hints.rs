@@ -229,6 +229,25 @@ fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     parts.join(" ")
 }
 
+/// Like `build_command_with_glob` but also preserves `--file` / positional file
+/// targets so that lint hints don't widen scope from a single file to the whole
+/// vault.
+fn build_command_with_glob_and_files(ctx: &HintContext, args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    for arg in args {
+        parts.push(shell_quote(arg));
+    }
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    for ft in &ctx.file_targets {
+        parts.push(shell_quote(ft));
+    }
+    parts.join(" ")
+}
+
 /// Build a `find` command that preserves the caller's existing filters (property,
 /// tag, task, file targets) plus `--glob`, then appends `extra_args`.  Use this for
 /// hints like sort and limit that refine the current query without changing its scope.
@@ -1247,24 +1266,30 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     if is_dry_run && has_fixes && hints.len() < MAX_HINTS {
         hints.push(Hint::new(
             "Apply fixes (remove --dry-run)",
-            build_command_with_glob(ctx, &["lint", "--fix"]),
+            build_command_with_glob_and_files(ctx, &["lint", "--fix"]),
         ));
     }
 
     // When there are violations and we're not already in fix mode, suggest fixing.
-    let total = data
-        .get("total")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    if total > 0 && !is_dry_run && hints.len() < MAX_HINTS {
+    let has_violations = data
+        .get("files")
+        .and_then(|f| f.as_array())
+        .is_some_and(|files| {
+            files.iter().any(|file| {
+                file.get("violations")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|v| !v.is_empty())
+            })
+        });
+    if has_violations && !is_dry_run && hints.len() < MAX_HINTS {
         hints.push(Hint::new(
             "Preview auto-fixes",
-            build_command_with_glob(ctx, &["lint", "--fix", "--dry-run"]),
+            build_command_with_glob_and_files(ctx, &["lint", "--fix", "--dry-run"]),
         ));
         if hints.len() < MAX_HINTS {
             hints.push(Hint::new(
                 "Apply auto-fixes",
-                build_command_with_glob(ctx, &["lint", "--fix"]),
+                build_command_with_glob_and_files(ctx, &["lint", "--fix"]),
             ));
         }
     }
@@ -1275,32 +1300,6 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             "See defined type schemas",
             build_command_no_glob(ctx, &["types", "list"]),
         ));
-    }
-
-    // Suggest filtering by the first type mentioned in violations.
-    if hints.len() < MAX_HINTS {
-        let first_type = data
-            .get("files")
-            .and_then(|f| f.as_array())
-            .and_then(|files| {
-                files.iter().find_map(|file_entry| {
-                    file_entry
-                        .get("violations")
-                        .and_then(|v| v.as_array())
-                        .and_then(|viols| {
-                            viols
-                                .iter()
-                                .find_map(|v| v.get("type").and_then(serde_json::Value::as_str))
-                        })
-                })
-            });
-        if let Some(type_name) = first_type {
-            let filter = format!("type={type_name}");
-            hints.push(Hint::new(
-                format!("Find files of type: {type_name}"),
-                build_command_with_glob(ctx, &["find", "--property", &filter]),
-            ));
-        }
     }
 
     hints

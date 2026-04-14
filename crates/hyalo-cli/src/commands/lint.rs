@@ -119,9 +119,8 @@ pub struct LintCounts {
 pub fn lint_files(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
-    format: Format,
 ) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_with_options(files, schema, format, FixMode::Off)
+    lint_files_with_options(files, schema, FixMode::Off)
 }
 
 /// Whether — and how — `lint_files_with_options` should apply auto-fixes.
@@ -144,7 +143,6 @@ pub enum FixMode {
 pub fn lint_files_with_options(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
-    _format: Format,
     fix: FixMode,
 ) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
@@ -1008,7 +1006,7 @@ mod tests {
 
         let schema = SchemaConfig::default();
         let files = vec![(path, "note.md".to_owned())];
-        let (_, counts) = lint_files(&files, &schema, Format::Text).unwrap();
+        let (_, counts) = lint_files(&files, &schema).unwrap();
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
     }
