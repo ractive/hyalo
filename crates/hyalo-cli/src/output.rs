@@ -697,6 +697,18 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
 fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -> String {
     match value {
         serde_json::Value::Array(arr) => {
+            // TypeList: array of type list entries — use custom formatter with blank-line separation.
+            let is_type_list = arr.first().and_then(|v| v.as_object()).is_some_and(|m| {
+                key_signature(m) == "has_filename_template,property_count,required,type"
+            });
+            if is_type_list {
+                return arr
+                    .iter()
+                    .filter_map(|v| v.as_object())
+                    .map(format_type_list_entry_text)
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+            }
             // Use blank-line separator between FileObjects for readability.
             let is_file_objects = arr
                 .first()
@@ -714,6 +726,10 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 && let Some(output) = apply_jq_filter(filter, value, cache)
             {
                 return output;
+            }
+            // TypeShow: detected by presence of "properties" object + "required" array + "type" string.
+            if sig == "defaults,filename_template,properties,required,type" {
+                return format_type_show_text(map);
             }
             // LintOutput: detected by "files" array of {file, violations} + "total".
             if map.contains_key("total")
@@ -846,17 +862,17 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
     }
 
     // Summary line.
-    let total: u64 = map
-        .get("total")
+    let files_checked: u64 = map
+        .get("files_checked")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let files_label = if total == 1 { "file" } else { "files" };
+    let files_label = if files_checked == 1 { "file" } else { "files" };
     if error_count == 0 && warn_count == 0 {
-        let _ = write!(s, "{total} {files_label} checked, no issues");
+        let _ = write!(s, "{files_checked} {files_label} checked, no issues");
     } else {
         let _ = write!(
             s,
-            "{total} {files_label} checked, {files_with_issues} with issues ({error_count} errors, {warn_count} warnings)",
+            "{files_checked} {files_label} checked, {files_with_issues} with issues ({error_count} errors, {warn_count} warnings)",
         );
     }
 
@@ -871,6 +887,176 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
     if fix_count > 0 {
         let fixed_label = if dry_run { "would fix" } else { "fixed" };
         let _ = write!(s, " — {fixed_label} {fix_count}");
+    }
+
+    s
+}
+
+/// Format a `types show` result as human-readable text.
+///
+/// Expected JSON shape: `{type, required, filename_template, defaults, properties}`.
+/// Output example:
+/// ```text
+/// Type: iteration
+///
+/// Required: title, type, date
+///
+/// Properties:
+///   branch:
+///     type: string
+///     pattern: ^iter-\d+/
+///
+///   date:
+///     type: date
+///
+/// Filename template: iteration-{N}-{slug}.md
+/// ```
+fn format_type_show_text(map: &serde_json::Map<String, serde_json::Value>) -> String {
+    use std::fmt::Write as _;
+
+    let mut s = String::new();
+
+    let type_name = map
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("?");
+    let _ = write!(s, "Type: {type_name}");
+
+    // Required fields.
+    if let Some(serde_json::Value::Array(req)) = map.get("required")
+        && !req.is_empty()
+    {
+        let list: Vec<&str> = req.iter().filter_map(serde_json::Value::as_str).collect();
+        let _ = write!(s, "\n\nRequired: {}", list.join(", "));
+    }
+
+    // Defaults block.
+    if let Some(serde_json::Value::Object(defaults)) = map.get("defaults")
+        && !defaults.is_empty()
+    {
+        let _ = write!(s, "\n\nDefaults:");
+        let mut keys: Vec<&str> = defaults.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        for key in keys {
+            if let Some(value) = defaults.get(key) {
+                let display = match value {
+                    serde_json::Value::String(sv) => sv.clone(),
+                    other => other.to_string(),
+                };
+                let _ = write!(s, "\n  {key}: {display}");
+            }
+        }
+    }
+
+    // Properties block.
+    if let Some(serde_json::Value::Object(props)) = map.get("properties")
+        && !props.is_empty()
+    {
+        let _ = write!(s, "\n\nProperties:");
+        let mut prop_names: Vec<&str> = props.keys().map(String::as_str).collect();
+        prop_names.sort_unstable();
+        for name in prop_names {
+            let Some(prop_val) = props.get(name) else {
+                continue;
+            };
+            let _ = write!(s, "\n  {name}:");
+            if let Some(obj) = prop_val.as_object() {
+                // Print each constraint key on its own indented line.
+                // Always show "type" first, then remaining keys sorted.
+                let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+                keys.sort_unstable_by(|a, b| {
+                    if *a == "type" {
+                        std::cmp::Ordering::Less
+                    } else if *b == "type" {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        a.cmp(b)
+                    }
+                });
+                for key in keys {
+                    if let Some(v) = obj.get(key) {
+                        let display = match v {
+                            serde_json::Value::Array(arr) => arr
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            serde_json::Value::String(sv) => sv.clone(),
+                            other => other.to_string(),
+                        };
+                        let _ = write!(s, "\n    {key}: {display}");
+                    }
+                }
+            }
+            s.push('\n'); // blank line between property blocks
+        }
+    }
+
+    // Optional filename template.
+    if let Some(serde_json::Value::String(tmpl)) = map.get("filename_template") {
+        let _ = write!(s, "\nFilename template: {tmpl}");
+    }
+
+    s
+}
+
+/// Format a single `types list` entry as human-readable text.
+///
+/// Expected JSON shape: `{type, required, property_count, has_filename_template}`.
+/// Output example:
+/// ```text
+/// iteration (4 required, 6 properties)
+///   required: title, type, date, tags
+/// ```
+///
+/// Note: `has_filename_template` is a boolean; the actual template is only in `types show`.
+/// When present, a hint to run `types show` is appended.
+fn format_type_list_entry_text(map: &serde_json::Map<String, serde_json::Value>) -> String {
+    use std::fmt::Write as _;
+
+    let mut s = String::new();
+
+    let type_name = map
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("?");
+
+    let req_arr: &[serde_json::Value] = map
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[], Vec::as_slice);
+    let req_count = req_arr.len();
+
+    let prop_count = map
+        .get("property_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    let has_filename = map
+        .get("has_filename_template")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let prop_label = if prop_count == 1 {
+        "property"
+    } else {
+        "properties"
+    };
+    let _ = write!(
+        s,
+        "{type_name} ({req_count} required, {prop_count} {prop_label})"
+    );
+
+    if !req_arr.is_empty() {
+        let list: Vec<&str> = req_arr
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let _ = write!(s, "\n  required: {}", list.join(", "));
+    }
+
+    if has_filename {
+        let _ = write!(s, "\n  filename: (see type details)");
     }
 
     s

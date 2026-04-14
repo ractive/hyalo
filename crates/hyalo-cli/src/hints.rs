@@ -401,6 +401,25 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         build_command_with_glob(ctx, &["tags"]),
     ));
 
+    // Suggest lint early when there are schema violations — high priority so it
+    // is not pushed out by orphans/dead-ends/broken-links hints.
+    if let Some(schema_obj) = data.get("schema") {
+        let errors = schema_obj
+            .get("errors")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let warnings = schema_obj
+            .get("warnings")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if (errors > 0 || warnings > 0) && hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                format!("Lint: {errors} errors, {warnings} warnings"),
+                build_command_with_glob(ctx, &["lint"]),
+            ));
+        }
+    }
+
     // Suggest find --task todo if there are open tasks.
     let tasks_total = data
         .get("tasks")
@@ -462,7 +481,8 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         }
     }
 
-    // Suggest lint when a schema is defined (schema field present in summary data).
+    // When schema is defined but no violations, or when there's still room,
+    // add the general lint / types hints.
     if let Some(schema_obj) = data.get("schema") {
         let errors = schema_obj
             .get("errors")
@@ -472,12 +492,7 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             .get("warnings")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        if (errors > 0 || warnings > 0) && hints.len() < MAX_HINTS {
-            hints.push(Hint::new(
-                format!("Lint: {errors} errors, {warnings} warnings"),
-                build_command_with_glob(ctx, &["lint"]),
-            ));
-        } else if hints.len() < MAX_HINTS {
+        if errors == 0 && warnings == 0 && hints.len() < MAX_HINTS {
             hints.push(Hint::new(
                 "Validate frontmatter against schema",
                 build_command_with_glob(ctx, &["lint"]),

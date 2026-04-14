@@ -498,6 +498,137 @@ fn types_set_unknown_type_exits_nonzero() {
 }
 
 // ---------------------------------------------------------------------------
+// --format text rendering
+// ---------------------------------------------------------------------------
+
+/// Create a vault with a rich type definition for text-format tests.
+fn setup_with_rich_type() -> TempDir {
+    let tmp = setup_empty();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.types.iteration]
+required = ["title", "date", "status"]
+filename-template = "iteration-{N}-{slug}.md"
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed"]
+
+[schema.types.iteration.properties.date]
+type = "date"
+
+[schema.types.iteration.defaults]
+status = "planned"
+"#,
+    )
+    .unwrap();
+    tmp
+}
+
+#[test]
+fn types_show_format_text_has_indentation() {
+    let tmp = setup_with_rich_type();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "iteration", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Type header
+    assert!(
+        text.contains("Type: iteration"),
+        "expected 'Type: iteration' header, got:\n{text}"
+    );
+    // Required list
+    assert!(
+        text.contains("Required:"),
+        "expected 'Required:' line, got:\n{text}"
+    );
+    // Properties block with indentation
+    assert!(
+        text.contains("Properties:"),
+        "expected 'Properties:' section, got:\n{text}"
+    );
+    // Property names indented with two spaces
+    assert!(
+        text.lines().any(|l| l.starts_with("  status:")),
+        "expected '  status:' line with 2-space indent, got:\n{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.starts_with("  date:")),
+        "expected '  date:' line with 2-space indent, got:\n{text}"
+    );
+    // Constraint lines indented with four spaces
+    assert!(
+        text.lines().any(|l| l.starts_with("    type:")),
+        "expected '    type:' line with 4-space indent, got:\n{text}"
+    );
+    // Defaults block
+    assert!(
+        text.contains("Defaults:"),
+        "expected 'Defaults:' section, got:\n{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.starts_with("  status: planned")),
+        "expected '  status: planned' in Defaults block, got:\n{text}"
+    );
+    // Filename template shown
+    assert!(
+        text.contains("Filename template: iteration-{N}-{slug}.md"),
+        "expected filename template line, got:\n{text}"
+    );
+}
+
+#[test]
+fn types_list_format_text_has_type_headers_and_separation() {
+    let tmp = setup_with_rich_type();
+    // Add a second type so we can verify blank-line separation.
+    hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "create", "note"])
+        .output()
+        .unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "list", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Type names appear as headers with counts
+    assert!(
+        text.lines().any(|l| l.starts_with("iteration (")),
+        "expected 'iteration (...)' header line, got:\n{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.starts_with("note (")),
+        "expected 'note (...)' header line, got:\n{text}"
+    );
+    // Required fields listed with indentation
+    assert!(
+        text.lines().any(|l| l.starts_with("  required:")),
+        "expected '  required:' line with 2-space indent, got:\n{text}"
+    );
+    // Blank line between entries
+    assert!(
+        text.contains("\n\n"),
+        "expected blank line between type entries, got:\n{text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // TOML comment preservation
 // ---------------------------------------------------------------------------
 

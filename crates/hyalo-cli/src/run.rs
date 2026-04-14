@@ -211,9 +211,36 @@ fn run_inner() -> Result<(), AppError> {
     let dir_from_cli = cli.dir.is_some();
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
-    let dir = cli.dir.unwrap_or(config.dir);
+    // Determine the effective vault directory and the config to use:
+    //
+    // - When --dir is explicitly provided on the CLI, validate first, then
+    //   reload .hyalo.toml from the target directory so its schema, format,
+    //   hints, site_prefix, and search config apply — not the caller's CWD
+    //   config.
+    // - Otherwise, keep the CWD config (already loaded) and use its dir.
+    let (dir, config) = if let Some(cli_dir) = cli.dir {
+        // Validate before loading config to avoid misleading file-read warnings.
+        if !cli_dir.exists() {
+            return Err(AppError::User(format!(
+                "Error: --dir path '{}' does not exist.",
+                cli_dir.display()
+            )));
+        }
+        if cli_dir.is_file() {
+            return Err(AppError::User(format!(
+                "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
+                cli_dir.display()
+            )));
+        }
+        let target_config = crate::config::load_config_from(&cli_dir);
+        (cli_dir, target_config)
+    } else {
+        let config_dir = config.dir.clone();
+        (config_dir, config)
+    };
 
-    // Validate that --dir exists and is a directory (symlinks to directories are fine).
+    // Validate that the resolved dir exists and is a directory (for the
+    // non-CLI case where dir comes from .hyalo.toml).
     if !dir.exists() {
         return Err(AppError::User(format!(
             "Error: --dir path '{}' does not exist.",
