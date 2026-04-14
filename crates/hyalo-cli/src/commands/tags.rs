@@ -86,7 +86,7 @@ pub fn tags_summary(
         .collect();
 
     let total = tags.len() as u64;
-    if let Some(n) = limit {
+    if let Some(n) = limit.filter(|n| *n > 0) {
         tags.truncate(n);
     }
     let _ = format; // format is applied by the output pipeline

@@ -46,8 +46,10 @@ pub fn backlinks(
         .collect();
 
     let total = entries.len() as u64;
-    let mut items: Vec<BacklinkItem> = entries
+    let take_n = limit.filter(|n| *n > 0).unwrap_or(usize::MAX);
+    let items: Vec<BacklinkItem> = entries
         .iter()
+        .take(take_n)
         .map(|e| BacklinkItem {
             source: e.source.to_string_lossy().replace('\\', "/"),
             line: e.line,
@@ -55,10 +57,6 @@ pub fn backlinks(
             label: e.link.label.clone(),
         })
         .collect();
-
-    if let Some(n) = limit {
-        items.truncate(n);
-    }
     let result = serde_json::json!({ "file": rel, "backlinks": items });
     Ok(CommandOutcome::success_with_total(
         serde_json::to_string_pretty(&result).context("failed to serialize")?,

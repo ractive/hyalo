@@ -53,7 +53,7 @@ pub fn properties_summary(
     result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
 
     let total = result.len() as u64;
-    if let Some(n) = limit {
+    if let Some(n) = limit.filter(|n| *n > 0) {
         result.truncate(n);
     }
     let _ = format;
