@@ -19,6 +19,10 @@ use hyalo_core::filter;
 use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;
 
+/// Default output limit for list commands when no `--limit` is passed and no
+/// `default_limit` is set in `.hyalo.toml`.
+pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 50;
+
 /// Shared context for command dispatch.
 pub(crate) struct CommandContext<'a> {
     pub dir: &'a Path,
@@ -38,6 +42,31 @@ pub(crate) struct CommandContext<'a> {
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
     /// to override its own exit code calculation.
     pub exit_code_override: Option<i32>,
+    /// Default output limit from `.hyalo.toml` (`default_limit`).
+    /// `None` = use `DEFAULT_OUTPUT_LIMIT`.
+    /// `Some(0)` = unlimited.
+    /// `Some(n)` = limit to n.
+    pub config_default_limit: Option<usize>,
+}
+
+/// Resolve the effective limit for a list command.
+///
+/// Precedence (highest first):
+/// 1. `cli_limit = Some(n)` — user passed `--limit n` (0 = unlimited → returns `None`)
+/// 2. `config_default` = `Some(n)` from `.hyalo.toml` (0 = unlimited → returns `None`)
+/// 3. `DEFAULT_OUTPUT_LIMIT` — hard-coded fallback
+///
+/// Returns `None` for unlimited, `Some(n)` for an effective cap.
+fn resolve_limit(cli_limit: Option<usize>, config_default: Option<usize>) -> Option<usize> {
+    match cli_limit {
+        Some(0) => None, // explicit --limit 0 = unlimited
+        Some(n) => Some(n),
+        None => match config_default {
+            Some(0) => None, // config default_limit = 0 = unlimited
+            Some(n) => Some(n),
+            None => Some(DEFAULT_OUTPUT_LIMIT),
+        },
+    }
 }
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
@@ -235,7 +264,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &parsed_fields,
                     sort_field.as_ref(),
                     reverse,
-                    limit,
+                    resolve_limit(limit, ctx.config_default_limit),
                     broken_links,
                     orphan,
                     dead_end,
@@ -269,9 +298,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )
         }
         Commands::Properties { action } => {
-            let action = action.unwrap_or(PropertiesAction::Summary { glob: vec![] });
+            let action = action.unwrap_or(PropertiesAction::Summary {
+                glob: vec![],
+                limit: None,
+            });
             match action {
-                PropertiesAction::Summary { ref glob } => match resolve_index(
+                PropertiesAction::Summary {
+                    ref glob,
+                    limit: cli_limit,
+                } => match resolve_index(
                     snapshot_index.as_ref(),
                     dir,
                     &[],
@@ -298,12 +333,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 } else {
                                     Some(paths.as_slice())
                                 };
-                                properties::properties_summary(idx, file_filter, effective_format)
+                                properties::properties_summary(
+                                    idx,
+                                    file_filter,
+                                    effective_format,
+                                    resolve_limit(cli_limit, ctx.config_default_limit),
+                                )
                             }
                         }
                     }
                     IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                        properties::properties_summary(&build.index, None, effective_format)
+                        properties::properties_summary(
+                            &build.index,
+                            None,
+                            effective_format,
+                            resolve_limit(cli_limit, ctx.config_default_limit),
+                        )
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),
                 },
@@ -319,9 +364,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             }
         }
         Commands::Tags { action } => {
-            let action = action.unwrap_or(TagsAction::Summary { glob: vec![] });
+            let action = action.unwrap_or(TagsAction::Summary {
+                glob: vec![],
+                limit: None,
+            });
             match action {
-                TagsAction::Summary { ref glob } => match resolve_index(
+                TagsAction::Summary {
+                    ref glob,
+                    limit: cli_limit,
+                } => match resolve_index(
                     snapshot_index.as_ref(),
                     dir,
                     &[],
@@ -348,12 +399,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 } else {
                                     Some(paths.as_slice())
                                 };
-                                tag_commands::tags_summary(idx, file_filter, effective_format)
+                                tag_commands::tags_summary(
+                                    idx,
+                                    file_filter,
+                                    effective_format,
+                                    resolve_limit(cli_limit, ctx.config_default_limit),
+                                )
                             }
                         }
                     }
                     IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                        tag_commands::tags_summary(&build.index, None, effective_format)
+                        tag_commands::tags_summary(
+                            &build.index,
+                            None,
+                            effective_format,
+                            resolve_limit(cli_limit, ctx.config_default_limit),
+                        )
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),
                 },
@@ -581,6 +642,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Backlinks {
             file_positional,
             file,
+            limit: cli_limit,
         } => {
             let file = match resolve_single_file(file_positional, file) {
                 Ok(f) => f,
@@ -600,9 +662,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     default_language: None,
                 },
             )? {
-                IndexResolution::Resolved(resolved) => {
-                    backlinks_commands::backlinks(resolved.as_index(), &file, dir, effective_format)
-                }
+                IndexResolution::Resolved(resolved) => backlinks_commands::backlinks(
+                    resolved.as_index(),
+                    &file,
+                    dir,
+                    effective_format,
+                    resolve_limit(cli_limit, ctx.config_default_limit),
+                ),
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }
         }
@@ -687,7 +753,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             glob,
             fix,
             dry_run,
-            limit,
+            limit: cli_limit,
         } => {
             // Build the file list. Positional arg is treated as a single --file.
             let mut files_arg: Vec<String> = file;
@@ -711,8 +777,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 lint_commands::FixMode::Off
             };
 
-            let (outcome, counts) =
-                lint_commands::lint_files_with_options(&file_pairs, ctx.schema, fix_mode, limit)?;
+            let (outcome, counts) = lint_commands::lint_files_with_options(
+                &file_pairs,
+                ctx.schema,
+                fix_mode,
+                resolve_limit(cli_limit, ctx.config_default_limit),
+            )?;
 
             // Signal exit code 1 when errors remain after fixes (set before returning).
             if counts.errors > 0 {

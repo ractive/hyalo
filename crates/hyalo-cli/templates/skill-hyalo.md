@@ -318,8 +318,24 @@ hyalo backlinks iterations/iteration-37-bulk-mutations.md
 hyalo backlinks iterations/iteration-37-bulk-mutations.md --format json
 ```
 
-Supports `--format text` (default, compact) and `--format json`. Useful for impact analysis
-(what depends on this file?), finding orphan pages, and navigating link structure.
+Supports `--format text` (default, compact), `--format json`, and `--limit N` (default: 50,
+use `--limit 0` for all). Useful for impact analysis (what depends on this file?), finding
+orphan pages, and navigating link structure.
+
+## Default output limits
+
+List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at
+most **50 results** by default to avoid flooding the context window. When results are truncated,
+output shows "showing N of M matches" and a hint to get all results.
+
+- `--limit N` — override the default (e.g. `--limit 20` for fewer, `--limit 200` for more)
+- `--limit 0` — unlimited output (returns everything)
+- `--count` — just get the total count without any results
+
+The default can be changed in `.hyalo.toml`:
+```toml
+default_limit = 100   # 0 = unlimited
+```
 
 ## Snapshot index — ALWAYS create for vaults with 500+ files
 

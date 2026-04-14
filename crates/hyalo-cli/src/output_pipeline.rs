@@ -55,7 +55,7 @@ impl OutputPipeline<'_> {
 
                 // Generate hints when a context is available.
                 let hints = if let Some(ctx) = self.hint_ctx {
-                    generate_hints(ctx, &value)
+                    generate_hints(ctx, &value, total)
                 } else {
                     Vec::new()
                 };

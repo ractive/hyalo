@@ -2590,21 +2590,20 @@ fn find_single_glob_backward_compat() {
 }
 
 // ---------------------------------------------------------------------------
-// --limit 0 = rejected by clap
+// --limit 0 = unlimited (no cap)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn find_limit_zero_is_rejected() {
+fn find_limit_zero_is_unlimited() {
     let tmp = setup_vault();
-    let (status, _json, stderr) = find_json(&tmp, &["--limit", "0"]);
+    let (status, json, _stderr) = find_json(&tmp, &["--limit", "0"]);
     assert!(
-        !status.success(),
-        "--limit 0 should fail but exited successfully"
+        status.success(),
+        "--limit 0 should succeed (unlimited), but failed"
     );
-    assert!(
-        stderr.contains("invalid value '0' for '--limit"),
-        "expected clap error about invalid value, got: {stderr}"
-    );
+    // Should return all results with no truncation.
+    let results = json["results"].as_array().unwrap();
+    assert!(!results.is_empty(), "expected results with --limit 0");
 }
 
 // ---------------------------------------------------------------------------
@@ -3114,11 +3113,11 @@ title: B
 }
 
 // ---------------------------------------------------------------------------
-// Bug 5 — --limit 0 must be rejected
+// --limit 0 = unlimited (no cap) — previously rejected, now allowed
 // ---------------------------------------------------------------------------
 
 #[test]
-fn find_limit_zero_rejected() {
+fn find_limit_zero_unlimited() {
     let dir = tempfile::tempdir().unwrap();
     write_md(
         dir.path(),
@@ -3142,15 +3141,14 @@ title: A
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "expected failure for --limit 0; exit code: {:?}",
+        output.status.success(),
+        "--limit 0 should succeed (unlimited); exit code: {:?}",
         output.status.code()
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("limit must be at least 1"),
-        "expected 'limit must be at least 1' in stderr; got: {stderr}"
-    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "expected 1 result with --limit 0");
 }
 
 // ---------------------------------------------------------------------------

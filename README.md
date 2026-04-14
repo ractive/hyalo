@@ -92,7 +92,7 @@ Most flags have short aliases for quick interactive use:
 | `-s` | `--section` | find, read |
 | `-f` | `--file` | find, read, set, remove, append, task, backlinks, mv |
 | `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary, links fix |
-| `-n` | `--limit` | find, lint |
+| `-n` | `--limit` | find, lint, tags summary, properties summary, backlinks |
 | `-n` | `--recent` | summary |
 | `-l` | `--lines` | read |
 | `-l` | `--line` | task read, task toggle, task set |
@@ -107,15 +107,18 @@ Place a `.hyalo.toml` file in your working directory to set defaults for global 
 
 ```toml
 # .hyalo.toml
-dir = "./my-vault"   # default: "."
-format = "text"      # default: "json"
-hints = false        # default: true (set to false to suppress drill-down hints)
-site_prefix = "docs" # override auto-derived prefix for absolute link resolution
+dir = "./my-vault"     # default: "."
+format = "text"        # default: "json"
+hints = false          # default: true (set to false to suppress drill-down hints)
+site_prefix = "docs"   # override auto-derived prefix for absolute link resolution
+default_limit = 100    # default: 50 (max results for list commands; 0 = unlimited)
 ```
 
 All fields are optional. CLI flags always take precedence over config values. If `.hyalo.toml` is missing, hyalo silently uses built-in defaults; if the file is present but cannot be read or is malformed/invalid, hyalo warns on stderr and falls back to the built-in defaults.
 
 Use `--no-hints` to explicitly disable hints when the config file enables them.
+
+**Default output limits:** List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at most 50 results by default. When results are truncated, the output shows "showing N of M matches" and a hint to get all results. Use `--limit 0` for unlimited output, or set `default_limit` in `.hyalo.toml` to change the project-wide default.
 
 ### Absolute link resolution (site prefix)
 
@@ -347,6 +350,7 @@ Subcommand group for property operations.
 # Aggregate summary of unique property names with inferred types and file counts
 hyalo properties summary
 hyalo properties summary --glob "notes/*.md"
+hyalo properties summary --limit 0              # show all (default: 50)
 
 # Bulk rename a property key across all files
 hyalo properties rename --from old-key --to new-key
@@ -361,6 +365,7 @@ Subcommand group for tag operations.
 # Aggregate summary of unique tags with file counts
 hyalo tags summary
 hyalo tags summary --glob "notes/*.md"
+hyalo tags summary --limit 0                    # show all (default: 50)
 
 # Bulk rename a tag across all files
 hyalo tags rename --from old-tag --to new-tag
@@ -463,6 +468,7 @@ Reverse link lookup — find all files that link to a given file. Scans all `.md
 
 ```sh
 hyalo backlinks --file path/to/note.md
+hyalo backlinks --file path/to/note.md --limit 0   # show all (default: 50)
 ```
 
 **JSON output** (default):

@@ -405,17 +405,19 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Properties {
-                action: Some(crate::cli::args::PropertiesAction::Summary { glob }),
+                action: Some(crate::cli::args::PropertiesAction::Summary { glob, limit }),
             } => {
                 let mut ctx = HintContext::from_common(HintSource::PropertiesSummary, &common);
                 ctx.glob.clone_from(glob);
+                ctx.has_limit = limit.is_some();
                 Some(ctx)
             }
             Commands::Tags {
-                action: Some(crate::cli::args::TagsAction::Summary { glob }),
+                action: Some(crate::cli::args::TagsAction::Summary { glob, limit }),
             } => {
                 let mut ctx = HintContext::from_common(HintSource::TagsSummary, &common);
                 ctx.glob.clone_from(glob);
+                ctx.has_limit = limit.is_some();
                 Some(ctx)
             }
             Commands::Tags { action: None } => {
@@ -531,11 +533,13 @@ fn run_inner() -> Result<(), AppError> {
             Commands::Backlinks {
                 file_positional,
                 file,
+                limit,
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Backlinks, &common);
                 if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
                     ctx.file_targets = vec![f.clone()];
                 }
+                ctx.has_limit = limit.is_some();
                 Some(ctx)
             }
             Commands::Mv {
@@ -620,11 +624,12 @@ fn run_inner() -> Result<(), AppError> {
                 glob,
                 fix: _,
                 dry_run,
-                limit: _,
+                limit,
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Lint, &common);
                 ctx.glob.clone_from(glob);
                 ctx.dry_run = *dry_run;
+                ctx.has_limit = limit.is_some();
                 let mut targets: Vec<String> = file.clone();
                 if let Some(pos) = file_positional {
                     targets.insert(0, pos.clone());
@@ -712,6 +717,7 @@ fn run_inner() -> Result<(), AppError> {
     };
 
     let config_language_owned = config.search_language.clone();
+    let config_default_limit = config.default_limit;
     let schema = config.schema;
     let mut ctx = CommandContext {
         dir: &dir,
@@ -723,6 +729,7 @@ fn run_inner() -> Result<(), AppError> {
         config_language: config_language_owned.as_deref(),
         schema: &schema,
         exit_code_override: None,
+        config_default_limit,
     };
     let result = dispatch(cli.command, &mut ctx);
     let exit_code_override = ctx.exit_code_override;
