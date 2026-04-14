@@ -214,7 +214,7 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
     /// Maximum number of results to return (0 = unlimited).
-    /// Default: 50. Not applied when --jq or --count is used
+    /// Not applied when --jq or --count is used
     #[arg(short = 'n', long, value_parser = parse_limit)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -365,7 +365,7 @@ pub(crate) enum Commands {
         alias = "show",
         long_about = "Read the body content of a markdown file.\n\n\
             Returns the raw text after the YAML frontmatter block. Use --section to extract a \
-            specific section by heading (case-insensitive whole-string match; use leading '#' to \
+            specific section by heading (case-insensitive substring match; use leading '#' to \
             pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
@@ -461,7 +461,7 @@ pub(crate) enum Commands {
         /// Target file to find backlinks for (relative to --dir) — flag form
         #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
         file: Option<String>,
-        /// Maximum number of backlinks to return (0 = unlimited, default: 50).
+        /// Maximum number of backlinks to return (0 = unlimited).
         /// Not applied when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -1057,7 +1057,7 @@ pub(crate) enum PropertiesAction {
         /// Glob pattern(s) to select files (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
-        /// Maximum number of results to return (0 = unlimited, default: 50).
+        /// Maximum number of results to return (0 = unlimited).
         /// Not applied when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -1093,7 +1093,7 @@ pub(crate) enum TagsAction {
         /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
-        /// Maximum number of results to return (0 = unlimited, default: 50).
+        /// Maximum number of results to return (0 = unlimited).
         /// Not applied when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,

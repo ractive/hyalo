@@ -130,7 +130,7 @@ hyalo lint --format text --index .hyalo-index
 
 If `hyalo types list` returns zero types but files have a `type` property, propose
 creating type schemas. Use `hyalo properties summary` to discover common property
-values, then suggest `hyalo types create <name>` + `hyalo types set <name> --required ...`
+values, then suggest `hyalo types set <name> --required ...`
 commands for the user's most common document types. Don't create them unilaterally —
 report the suggestion in Phase 5.
 

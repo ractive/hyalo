@@ -504,3 +504,30 @@ fn default_limit_bypassed_with_count() {
         "--count should report true total of 60, got {count}"
     );
 }
+
+#[test]
+fn default_limit_bypassed_with_jq_tags_summary() {
+    let tmp = TempDir::new().unwrap();
+    // Write files with 60 unique tags.
+    for i in 0..60usize {
+        write_md(
+            tmp.path(),
+            &format!("file-{i:03}.md"),
+            &format!("---\ntitle: Note {i}\ntags:\n  - tag-{i:03}\n---\n"),
+        );
+    }
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["tags", "--jq", ".results | length"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let count: usize = stdout.trim().parse().unwrap();
+    assert_eq!(
+        count, 60,
+        "tags summary --jq should bypass default limit and return all 60 tags, got {count}"
+    );
+}
