@@ -117,6 +117,8 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Default output limits:
     List commands (find, lint, tags summary, properties summary, backlinks) return
     at most 50 results by default. Use --limit 0 for unlimited output.
+    The default limit is NOT applied when --jq or --count is used (pipelines
+    need complete data).
     Override the default in .hyalo.toml:  default_limit = 100
 
 COOKBOOK:

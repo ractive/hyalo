@@ -464,3 +464,43 @@ fn default_limit_applies_to_properties_summary() {
         "total should exceed 50"
     );
 }
+
+#[test]
+fn default_limit_bypassed_with_jq() {
+    let tmp = TempDir::new().unwrap();
+    write_many_notes(tmp.path(), 60);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--jq", ".results | length"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let count: usize = stdout.trim().parse().unwrap();
+    assert_eq!(
+        count, 60,
+        "--jq should bypass default limit and return all 60 results, got {count}"
+    );
+}
+
+#[test]
+fn default_limit_bypassed_with_count() {
+    let tmp = TempDir::new().unwrap();
+    write_many_notes(tmp.path(), 60);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--count"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let count: usize = stdout.trim().parse().unwrap();
+    assert_eq!(
+        count, 60,
+        "--count should report true total of 60, got {count}"
+    );
+}

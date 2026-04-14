@@ -118,6 +118,24 @@ git log --diff-filter=A --name-only --since="4 weeks ago" -- "hyalo-knowledgebas
 
 All queries below use `--index .hyalo-index` — no additional disk scans needed.
 
+### Schema & lint
+Check if type schemas are defined, and run lint to detect frontmatter violations:
+```bash
+# Are any types defined?
+hyalo types list --format text
+
+# Run lint to detect schema violations (missing required, wrong type, bad enum, etc.)
+hyalo lint --format text --index .hyalo-index
+```
+
+If `hyalo types list` returns zero types but files have a `type` property, propose
+creating type schemas. Use `hyalo properties summary` to discover common property
+values, then suggest `hyalo types create <name>` + `hyalo types set <name> --required ...`
+commands for the user's most common document types. Don't create them unilaterally —
+report the suggestion in Phase 5.
+
+If lint reports fixable violations, note the counts for Phase 4.
+
 ### Broken links
 ```bash
 # Dry-run shows broken links with proposed fixes and confidence scores
@@ -136,6 +154,13 @@ Not all orphans are problems. Expect these to be legitimately orphaned:
 - Older completed items in `done/` directories
 
 Focus on **actionable orphans**: active/planned items that should be cross-referenced.
+
+### Dead-end files
+```bash
+hyalo find --dead-end --index .hyalo-index --jq '.results | map(.file)'
+```
+Dead-end files have inbound links but no outbound links — often stubs or leaf nodes
+that could benefit from cross-references. Not always a problem, but worth reviewing.
 
 ### Stale statuses
 ```bash
@@ -186,6 +211,19 @@ each change, note what you did and why.
 **Keep using `--index .hyalo-index`** for all mutations — hyalo now patches the index
 in-place after each file write, so it stays current for subsequent queries. No need to
 drop the index before making changes. Only drop it at the very end (Phase 5).
+
+### Fix lint violations
+If lint reported fixable violations in Phase 3, auto-fix them:
+```bash
+# Preview what will be fixed
+hyalo lint --fix --dry-run --format text --index .hyalo-index
+
+# Apply fixes (inserts defaults, corrects enum typos, normalizes dates, infers types)
+hyalo lint --fix --format text --index .hyalo-index
+```
+
+Review the dry-run output first. Unfixable violations (e.g. missing required properties
+without defaults) are reported in Phase 5 for human attention.
 
 ### Fix broken links
 Use `hyalo links fix` to auto-repair broken links. It uses fuzzy matching to find the

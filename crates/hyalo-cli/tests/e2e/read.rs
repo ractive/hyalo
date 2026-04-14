@@ -656,3 +656,22 @@ fn read_frontmatter_valid_works() {
         "expected frontmatter in output; got: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// show alias
+// ---------------------------------------------------------------------------
+
+#[test]
+fn show_alias_works() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["show", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("# Heading One"));
+    assert!(stdout.contains("First paragraph."));
+}
