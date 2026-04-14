@@ -730,6 +730,7 @@ fn run_inner() -> Result<(), AppError> {
         schema: &schema,
         exit_code_override: None,
         config_default_limit,
+        programmatic_output: jq_filter.is_some() || cli.count,
     };
     let result = dispatch(cli.command, &mut ctx);
     let exit_code_override = ctx.exit_code_override;

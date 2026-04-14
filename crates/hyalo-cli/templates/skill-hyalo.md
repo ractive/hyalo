@@ -61,10 +61,29 @@ hyalo find --property 'title~=draft'      # title contains "draft"
 hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
 ```
 
+`--title` filters by the displayed title (frontmatter `title` or first H1 heading).
+Case-insensitive substring by default; use `"/regex/"` for regex. Note: `--title` checks
+the *displayed* title, while `--property title~=` only checks the frontmatter property.
+
+```bash
+hyalo find --title "meeting"           # substring match on displayed title
+hyalo find --title "/^Design/i"        # regex on displayed title
+```
+
 `--section` uses case-insensitive **substring** matching by default — `"Tasks"` matches
 `"Tasks [4/4]"`, `"My Tasks"`, etc. Use `"/regex/"` for regex. Prefix `##` to pin heading level.
 
 `--glob` supports negation with `!` prefix to exclude files: `--glob '!**/draft-*'`.
+
+`--sort` controls result ordering. Available: `file` (default), `modified`, `date`, `title`,
+`backlinks_count`, `links_count`, or `property:<KEY>` for any frontmatter property. Add
+`--reverse` to flip the direction.
+
+```bash
+hyalo find --sort modified --reverse --limit 10   # recently modified files
+hyalo find --sort property:priority                # sort by custom property
+hyalo find --sort backlinks_count --reverse        # most-linked files first
+```
 
 The `--fields` flag controls which data is returned. Available fields: `properties`,
 `properties-typed`, `tags`, `sections`, `tasks`, `links`, `backlinks`, `title`. Default fields are
@@ -78,6 +97,7 @@ scanning all files to build the link graph. Each backlink entry contains `source
 hyalo find --fields backlinks --file my-note.md       # see who links to this note (--file required: positional is PATTERN)
 hyalo find --orphan                                        # find orphan files (no inbound or outbound links)
 hyalo find --dead-end                                      # find dead-end files (inbound but no outbound links)
+hyalo find --broken-links                                  # find files with at least one unresolved link
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
 
@@ -170,9 +190,18 @@ Precedence: `--site-prefix` flag > `.hyalo.toml` > auto-derived from `--dir`.
 
 ## When to use hyalo vs. built-in tools
 
-- **hyalo:** queries, frontmatter reads/mutations, tag management, task toggling, bulk updates, **moving/renaming files**
+- **hyalo:** queries, frontmatter reads/mutations, tag management, task toggling, bulk updates, **moving/renaming files**, extracting sections
 - **Edit tool:** body prose changes (rewriting paragraphs) that hyalo can't handle
 - **Write tool:** creating brand new markdown files
+
+Use `hyalo read` to extract file content without opening the full file:
+
+```bash
+hyalo read my-note.md                              # full body (no frontmatter)
+hyalo read my-note.md --section "Tasks"            # extract one section
+hyalo read my-note.md --lines 1:20                 # line range (1-based)
+hyalo read my-note.md --frontmatter                # include YAML frontmatter
+```
 
 Start with `hyalo summary --format text` to orient yourself in a new directory.
 
@@ -282,6 +311,7 @@ hyalo views list --format text
 **If you run the same multi-filter find command 3+ times, save it as a view:**
 ```bash
 hyalo views set stale-iterations --property type=iteration --property status=in-progress
+hyalo views set perf-research "performance" --tag research   # BM25 pattern + filter
 hyalo find --view stale-iterations                    # reuse later
 hyalo find --view stale-iterations --limit 5          # compose with overrides
 ```

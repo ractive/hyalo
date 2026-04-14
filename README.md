@@ -118,7 +118,7 @@ All fields are optional. CLI flags always take precedence over config values. If
 
 Use `--no-hints` to explicitly disable hints when the config file enables them.
 
-**Default output limits:** List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at most 50 results by default. When results are truncated, the output shows "showing N of M matches" and a hint to get all results. Use `--limit 0` for unlimited output, or set `default_limit` in `.hyalo.toml` to change the project-wide default.
+**Default output limits:** List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at most 50 results by default. When results are truncated, the output shows "showing N of M matches" and a hint to get all results. Use `--limit 0` for unlimited output, or set `default_limit` in `.hyalo.toml` to change the project-wide default. The default limit is **not applied** when `--jq` or `--count` is used — programmatic pipelines always receive complete results.
 
 ### Absolute link resolution (site prefix)
 
@@ -319,7 +319,7 @@ limit = 20
 
 ### read
 
-Read the body content of a markdown file, optionally filtered by section or line range. Defaults to plain text output.
+Read the body content of a markdown file, optionally filtered by section or line range. Defaults to plain text output. `hyalo show` is an alias for `hyalo read`.
 
 ```sh
 # Read full body (text output)

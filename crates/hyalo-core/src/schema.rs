@@ -77,6 +77,13 @@ impl SchemaConfig {
             }
         }
 
+        // Auto-add required properties that lack an explicit definition as string.
+        for r in &required {
+            properties
+                .entry(r.clone())
+                .or_insert(PropertyConstraint::String { pattern: None });
+        }
+
         TypeSchema {
             required,
             filename_template: type_schema.and_then(|ts| ts.filename_template.clone()),
@@ -468,5 +475,54 @@ required = ["title", "date"]
         // "title" must appear exactly once (no duplicate from both default and type)
         assert_eq!(merged.required.iter().filter(|r| *r == "title").count(), 1);
         assert_eq!(merged.required.len(), 2);
+    }
+
+    #[test]
+    fn merged_schema_auto_adds_string_for_required_without_property() {
+        let toml = r#"
+[schema.default]
+required = ["title", "type"]
+
+[schema.types.docs]
+required = ["title", "type", "date", "status"]
+
+[schema.types.docs.properties.date]
+type = "date"
+
+[schema.types.docs.properties.status]
+type = "enum"
+values = ["active", "archived", "draft"]
+"#;
+        let raw: toml::Value = toml::from_str(toml).expect("valid toml");
+        let raw_schema: RawSchemaConfig = raw
+            .get("schema")
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or_else(|| RawSchemaConfig {
+                default: None,
+                types: HashMap::new(),
+            });
+        let cfg = SchemaConfig::from(raw_schema);
+
+        let merged = cfg.merged_schema_for_type("docs");
+        // All 4 required fields should have property definitions
+        assert_eq!(merged.properties.len(), 4);
+        // title and type should be auto-added as string
+        assert!(matches!(
+            merged.properties.get("title"),
+            Some(PropertyConstraint::String { pattern: None })
+        ));
+        assert!(matches!(
+            merged.properties.get("type"),
+            Some(PropertyConstraint::String { pattern: None })
+        ));
+        // Explicit definitions should be preserved
+        assert!(matches!(
+            merged.properties.get("date"),
+            Some(PropertyConstraint::Date)
+        ));
+        assert!(matches!(
+            merged.properties.get("status"),
+            Some(PropertyConstraint::Enum { .. })
+        ));
     }
 }

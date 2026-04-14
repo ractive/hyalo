@@ -47,25 +47,39 @@ pub(crate) struct CommandContext<'a> {
     /// `Some(0)` = unlimited.
     /// `Some(n)` = limit to n.
     pub config_default_limit: Option<usize>,
+    /// When true, the output is consumed programmatically (`--jq` or `--count`),
+    /// so the default limit should not apply — only an explicit `--limit` is honoured.
+    pub programmatic_output: bool,
 }
 
 /// Resolve the effective limit for a list command.
 ///
 /// Precedence (highest first):
 /// 1. `cli_limit = Some(n)` — user passed `--limit n` (0 = unlimited → returns `None`)
-/// 2. `config_default` = `Some(n)` from `.hyalo.toml` (0 = unlimited → returns `None`)
-/// 3. `DEFAULT_OUTPUT_LIMIT` — hard-coded fallback
+/// 2. If `programmatic` is true (`--jq` or `--count`), skip the default limit — the
+///    output is consumed by a pipeline that needs complete results.
+/// 3. `config_default` = `Some(n)` from `.hyalo.toml` (0 = unlimited → returns `None`)
+/// 4. `DEFAULT_OUTPUT_LIMIT` — hard-coded fallback
 ///
 /// Returns `None` for unlimited, `Some(n)` for an effective cap.
-fn resolve_limit(cli_limit: Option<usize>, config_default: Option<usize>) -> Option<usize> {
+fn resolve_limit(
+    cli_limit: Option<usize>,
+    config_default: Option<usize>,
+    programmatic: bool,
+) -> Option<usize> {
     match cli_limit {
         Some(0) => None, // explicit --limit 0 = unlimited
         Some(n) => Some(n),
-        None => match config_default {
-            Some(0) => None, // config default_limit = 0 = unlimited
-            Some(n) => Some(n),
-            None => Some(DEFAULT_OUTPUT_LIMIT),
-        },
+        None => {
+            if programmatic {
+                return None;
+            }
+            match config_default {
+                Some(0) => None, // config default_limit = 0 = unlimited
+                Some(n) => Some(n),
+                None => Some(DEFAULT_OUTPUT_LIMIT),
+            }
+        }
     }
 }
 
@@ -264,7 +278,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &parsed_fields,
                     sort_field.as_ref(),
                     reverse,
-                    resolve_limit(limit, ctx.config_default_limit),
+                    resolve_limit(limit, ctx.config_default_limit, ctx.programmatic_output),
                     broken_links,
                     orphan,
                     dead_end,
@@ -337,7 +351,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                     idx,
                                     file_filter,
                                     effective_format,
-                                    resolve_limit(cli_limit, ctx.config_default_limit),
+                                    resolve_limit(
+                                        cli_limit,
+                                        ctx.config_default_limit,
+                                        ctx.programmatic_output,
+                                    ),
                                 )
                             }
                         }
@@ -347,7 +365,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             &build.index,
                             None,
                             effective_format,
-                            resolve_limit(cli_limit, ctx.config_default_limit),
+                            resolve_limit(
+                                cli_limit,
+                                ctx.config_default_limit,
+                                ctx.programmatic_output,
+                            ),
                         )
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),
@@ -403,7 +425,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                     idx,
                                     file_filter,
                                     effective_format,
-                                    resolve_limit(cli_limit, ctx.config_default_limit),
+                                    resolve_limit(
+                                        cli_limit,
+                                        ctx.config_default_limit,
+                                        ctx.programmatic_output,
+                                    ),
                                 )
                             }
                         }
@@ -413,7 +439,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             &build.index,
                             None,
                             effective_format,
-                            resolve_limit(cli_limit, ctx.config_default_limit),
+                            resolve_limit(
+                                cli_limit,
+                                ctx.config_default_limit,
+                                ctx.programmatic_output,
+                            ),
                         )
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),
@@ -667,7 +697,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &file,
                     dir,
                     effective_format,
-                    resolve_limit(cli_limit, ctx.config_default_limit),
+                    resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
                 ),
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }
@@ -781,7 +811,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 &file_pairs,
                 ctx.schema,
                 fix_mode,
-                resolve_limit(cli_limit, ctx.config_default_limit),
+                resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
             )?;
 
             // Signal exit code 1 when errors remain after fixes (set before returning).
