@@ -103,7 +103,7 @@ hyalo lint --fix --dry-run
 
 **Never fabricated.** Missing required properties without defaults are reported but never invented; a human or tool must supply the value. Fixes preserve the existing frontmatter key order and the document body byte-for-byte.
 
-Pass `--dry-run` together with `--fix` to print the fixes that *would* be applied without modifying any files. The JSON output gains a top-level `fixes` array listing the actions per file:
+Pass `--dry-run` together with `--fix` to print the fixes that *would* be applied without modifying any files. The JSON output includes a `fixes` array inside the standard `results` envelope, listing the actions per file:
 
 ```json
 {

@@ -193,11 +193,36 @@ fn is_iso8601_date(s: &str) -> bool {
         return false;
     }
     let b = s.as_bytes();
-    b[4] == b'-'
-        && b[7] == b'-'
-        && b[..4].iter().all(u8::is_ascii_digit)
-        && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[8..10].iter().all(u8::is_ascii_digit)
+    if b[4] != b'-'
+        || b[7] != b'-'
+        || !b[..4].iter().all(u8::is_ascii_digit)
+        || !b[5..7].iter().all(u8::is_ascii_digit)
+        || !b[8..10].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    // Validate month/day ranges to prevent matching impossible dates.
+    let month = u32::from(b[5] - b'0') * 10 + u32::from(b[6] - b'0');
+    let day = u32::from(b[8] - b'0') * 10 + u32::from(b[9] - b'0');
+    if !(1..=12).contains(&month) {
+        return false;
+    }
+    let max_day = match month {
+        2 => {
+            let y = u32::from(b[0] - b'0') * 1000
+                + u32::from(b[1] - b'0') * 100
+                + u32::from(b[2] - b'0') * 10
+                + u32::from(b[3] - b'0');
+            if (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400) {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=max_day).contains(&day)
 }
 
 /// Errors that can occur while parsing a filename template.
@@ -253,6 +278,24 @@ mod tests {
         assert!(t.matches("journal/2026-04-13.md"));
         assert!(!t.matches("journal/April-13.md"));
         assert!(!t.matches("journal/2026-4-13.md"));
+    }
+
+    #[test]
+    fn date_placeholder_rejects_impossible_dates() {
+        let t = FilenameTemplate::parse("journal/{date}.md").unwrap();
+        assert!(!t.matches("journal/2026-99-99.md"));
+        assert!(!t.matches("journal/2026-02-30.md"));
+        assert!(!t.matches("journal/2026-00-01.md"));
+        assert!(!t.matches("journal/2026-13-01.md"));
+    }
+
+    #[test]
+    fn date_placeholder_feb_leap_year() {
+        let t = FilenameTemplate::parse("journal/{date}.md").unwrap();
+        assert!(t.matches("journal/2024-02-29.md")); // 2024 is a leap year
+        assert!(!t.matches("journal/2023-02-29.md")); // 2023 is not
+        assert!(t.matches("journal/2000-02-29.md")); // 2000 divisible by 400
+        assert!(!t.matches("journal/1900-02-29.md")); // 1900 divisible by 100 but not 400
     }
 
     #[test]

@@ -479,7 +479,22 @@ fn normalize_date(s: &str) -> Option<String> {
     }
     let mi: u32 = m.parse().ok()?;
     let di: u32 = d.parse().ok()?;
-    if !(1..=12).contains(&mi) || !(1..=31).contains(&di) {
+    if !(1..=12).contains(&mi) {
+        return None;
+    }
+    let max_day = match mi {
+        2 => {
+            let yi: u32 = y.parse().ok()?;
+            if (yi.is_multiple_of(4) && !yi.is_multiple_of(100)) || yi.is_multiple_of(400) {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=max_day).contains(&di) {
         return None;
     }
     Some(format!("{y}-{mi:02}-{di:02}"))
@@ -1260,6 +1275,14 @@ mod tests {
     fn normalize_rejects_out_of_range() {
         assert!(normalize_date("2026-13-01").is_none());
         assert!(normalize_date("2026-00-01").is_none());
+    }
+
+    #[test]
+    fn normalize_rejects_impossible_day_for_month() {
+        assert!(normalize_date("2026-02-30").is_none());
+        assert!(normalize_date("2026-04-31").is_none());
+        assert!(normalize_date("2023-02-29").is_none()); // not a leap year
+        assert!(normalize_date("2024-02-29").is_some()); // leap year
     }
 
     #[test]

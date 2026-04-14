@@ -603,12 +603,18 @@ fn fix_dry_run_does_not_modify_files() {
     let body = "---\ntitle: Iter\ntype: iteration\nstatus: planed\ndate: 2026-04-13\n---\nBody\n";
     write_md(tmp.path(), "iterations/iteration-5-e.md", body);
 
-    hyalo_no_hints()
+    let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["lint", "--fix", "--dry-run", "iterations/iteration-5-e.md"])
         .output()
         .unwrap();
 
+    // dry-run should succeed (exit 0) because the enum typo is fixable.
+    assert_eq!(
+        output.status.code().unwrap(),
+        0,
+        "dry-run with fixable issues should exit 0"
+    );
     let content = std::fs::read_to_string(tmp.path().join("iterations/iteration-5-e.md")).unwrap();
     assert_eq!(content, body, "dry-run must not modify the file");
 }
