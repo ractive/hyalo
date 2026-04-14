@@ -1,10 +1,13 @@
 ---
-title: "Reduce test compilation time"
+title: Reduce test compilation time
 type: iteration
 date: 2026-04-14
-status: planned
+status: completed
 branch: iter-111/test-compile-time
-tags: [testing, performance, developer-experience]
+tags:
+  - testing
+  - performance
+  - developer-experience
 ---
 
 # iter-111: Reduce test compilation time
@@ -44,7 +47,22 @@ Cons: more work, arbitrary grouping.
 
 ## Tasks
 
-- [ ] Benchmark current compile time vs test execution time
-- [ ] Implement chosen option
-- [ ] Verify no tests lost in consolidation
-- [ ] Measure improvement
+- [x] Benchmark current compile time vs test execution time
+- [x] Implement chosen option
+- [x] Verify no tests lost in consolidation
+- [x] Measure improvement
+
+## Results
+
+Implemented **Option A**: consolidated 31 separate e2e test binaries into a single `e2e` test binary.
+
+- Moved `tests/e2e_*.rs` → `tests/e2e/*.rs` (stripped `e2e_` prefix)
+- Moved `tests/common/` → `tests/e2e/common/`
+- Created `tests/e2e/mod.rs` as the single entry point with `[[test]]` in Cargo.toml
+- Updated all `use common::` → `use super::common::` in submodules
+
+**Before:** `cargo test --workspace` took **3m13s** (31 separate link steps)
+**After:** `cargo test --workspace` takes **~25s** clean build, **~1.6s** incremental
+**Test count preserved:** 453 (hyalo-cli unit) + 796 (e2e) + 572 (hyalo-core) = 1821 tests
+
+Trade-off: individual test files can no longer be run with `cargo test --test e2e_find`, but tests can still be filtered with `cargo test --test e2e find::`.
