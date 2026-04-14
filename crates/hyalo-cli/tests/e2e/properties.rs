@@ -513,13 +513,13 @@ fn properties_glob_negation_excludes_files() {
 #[test]
 fn properties_bare_defaults_to_summary() {
     let tmp = tempfile::tempdir().unwrap();
-    super::common::write_md(
+    write_md(
         tmp.path(),
         "a.md",
         "---\ntitle: A\nstatus: draft\n---\n# A\n",
     );
 
-    let output = super::common::hyalo_no_hints()
+    let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .arg("properties")
         .output()

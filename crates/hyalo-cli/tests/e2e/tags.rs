@@ -748,8 +748,6 @@ fn tags_rename_scalar_tag_already_has_new() {
 
 #[test]
 fn tags_glob_negation_excludes_files() {
-    use super::common::write_tagged;
-
     let tmp = tempfile::tempdir().unwrap();
     write_tagged(tmp.path(), "keep.md", &["rust", "cli"]);
     write_tagged(tmp.path(), "exclude.md", &["exclusive-tag"]);
