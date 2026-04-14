@@ -182,7 +182,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **read** — extract body content, a section, or line range
 - **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
 - **lint** — validate frontmatter against the `[schema]` in `.hyalo.toml` (read-only); exit 1 when errors found
-- **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, create, remove, set)
+- **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, set, remove)
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts

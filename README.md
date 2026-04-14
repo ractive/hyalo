@@ -92,7 +92,7 @@ Most flags have short aliases for quick interactive use:
 | `-s` | `--section` | find, read |
 | `-f` | `--file` | find, read, set, remove, append, task, backlinks, mv |
 | `-g` | `--glob` | find, set, remove, append, properties summary, properties rename, tags summary, tags rename, summary, links fix |
-| `-n` | `--limit` | find |
+| `-n` | `--limit` | find, lint |
 | `-n` | `--recent` | summary |
 | `-l` | `--lines` | read |
 | `-l` | `--line` | task read, task toggle, task set |

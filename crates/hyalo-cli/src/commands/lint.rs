@@ -84,6 +84,12 @@ pub struct LintOutput {
     pub files: Vec<FileLintResult>,
     /// Total number of violations found across all files.
     pub total: usize,
+    /// Number of error-severity violations across all files (not limited by `--limit`).
+    pub errors: usize,
+    /// Number of warn-severity violations across all files (not limited by `--limit`).
+    pub warnings: usize,
+    /// Number of files with at least one violation (not limited by `--limit`).
+    pub files_with_issues: usize,
     /// Number of files that were checked.
     pub files_checked: usize,
     /// Fixes that were applied (or previewed) per file. Omitted when no
@@ -184,6 +190,9 @@ pub fn lint_files_with_options(
     let output = LintOutput {
         files: results,
         total,
+        errors: counts.errors,
+        warnings: counts.warnings,
+        files_with_issues: counts.files_with_issues,
         files_checked,
         fixes: fix_results,
         dry_run: matches!(fix, FixMode::DryRun),

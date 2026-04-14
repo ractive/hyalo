@@ -611,4 +611,46 @@ fn lint_limit_caps_output() {
         Some(true),
         "expected limited=true when output was truncated"
     );
+    // errors/warnings/files_with_issues should reflect all files, not just the limited slice
+    assert!(
+        inner["errors"].as_u64().is_some(),
+        "expected errors field in LintOutput"
+    );
+    assert!(
+        inner["warnings"].as_u64().is_some(),
+        "expected warnings field in LintOutput"
+    );
+    let files_with_issues = inner["files_with_issues"].as_u64().unwrap();
+    assert!(
+        files_with_issues > 1,
+        "expected files_with_issues > 1 (full count, not limited), got {files_with_issues}"
+    );
+}
+
+#[test]
+fn lint_limit_text_format_shows_truncation_notice() {
+    let tmp = setup_vault_with_schema();
+    write_md(
+        tmp.path(),
+        "extra_bad.md",
+        "---\ntitle: Extra Bad\ntype: note\n---\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "--limit", "1"])
+        .output()
+        .unwrap();
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    assert!(
+        stdout.contains("showing 1 of"),
+        "expected truncation notice in text output, got:\n{stdout}"
+    );
+    // Summary should reflect all files_with_issues, not just the 1 shown
+    // e.g. "X files checked, N with issues (..."
+    assert!(
+        stdout.contains("with issues"),
+        "expected 'with issues' summary in text output, got:\n{stdout}"
+    );
 }

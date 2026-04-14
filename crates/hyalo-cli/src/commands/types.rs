@@ -339,10 +339,9 @@ pub(crate) fn set_type(
         if prop_type_map.contains_key(f.as_str()) || prop_values_map.contains_key(f.as_str()) {
             continue;
         }
-        // Skip if the property already exists in TOML.
-        let already_has = doc
-            .get("schema")
-            .and_then(|s| s.as_table())
+        // Skip if the property already exists in the type-local or default TOML table.
+        let schema_item = doc.get("schema").and_then(|s| s.as_table());
+        let in_type = schema_item
             .and_then(|t| t.get("types"))
             .and_then(|t| t.as_table())
             .and_then(|t| t.get(type_name))
@@ -351,6 +350,14 @@ pub(crate) fn set_type(
             .and_then(|t| t.as_table())
             .and_then(|t| t.get(f.as_str()))
             .is_some();
+        let in_default = schema_item
+            .and_then(|t| t.get("default"))
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get("properties"))
+            .and_then(|t| t.as_table())
+            .and_then(|t| t.get(f.as_str()))
+            .is_some();
+        let already_has = in_type || in_default;
         if !already_has {
             toml_changes.push(format!("auto-add property {f}: type=string"));
             if !dry_run {
