@@ -5,6 +5,8 @@ date: 2026-03-26
 origin: dogfooding v0.4.1
 priority: low
 status: completed
+tags:
+  - cli,ux
 ---
 
 `hyalo tags` and `hyalo properties` exit with code 2 (usage error) instead of defaulting to the `summary` subcommand. This is a friction point — `hyalo tags` is the intuitive first thing to try.

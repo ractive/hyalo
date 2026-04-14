@@ -7,6 +7,8 @@ origin: >-
   /docs/debugtest/debugging.md/)
 priority: low
 status: completed
+tags:
+  - links,bug-fix
 ---
 
 Link `/docs/debugtest/debugging.md/` (with trailing `/`) fails to resolve even though `debugtest/debugging.md` exists. The trailing slash should be stripped before resolution.

@@ -5,6 +5,8 @@ date: 2026-03-26
 origin: dogfooding v0.4.1 on GitHub Docs and VS Code Docs
 priority: medium
 status: completed
+tags:
+  - find,links,sorting
 ---
 
 `find --sort backlinks_count` errors with "unknown sort field". Only `file` and `modified` are valid. This makes it impossible to natively find the most-linked-to files — users must pipe through jq.

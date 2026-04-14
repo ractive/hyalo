@@ -5,6 +5,8 @@ date: 2026-03-28
 origin: dogfooding v0.4.1 + v0.4.2
 priority: medium
 status: completed
+tags:
+  - cli,validation
 ---
 
 `hyalo find --limit 0` returns ALL files (330,981 lines of JSON on docs/content). It behaves as if `--limit` were omitted entirely — `0` is treated as "no limit".

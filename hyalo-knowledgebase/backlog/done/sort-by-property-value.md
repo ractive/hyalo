@@ -5,6 +5,8 @@ date: 2026-03-28
 status: completed
 priority: medium
 origin: dogfooding v0.4.2 on docs/content and vscode-docs/docs
+tags:
+  - find,sorting,ux
 ---
 
 Currently `--sort` only accepts `file`, `modified`, `backlinks_count`, `links_count`. Users naturally expect `--sort title` and `--sort date` (or any frontmatter property).
