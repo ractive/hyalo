@@ -158,6 +158,7 @@ pub fn task_toggle(
     format: Format,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
+    dry_run: bool,
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
         Ok(r) => r,
@@ -177,6 +178,39 @@ pub fn task_toggle(
             )));
         }
     };
+
+    if dry_run {
+        // In dry-run mode: compute the toggled state without writing to disk.
+        // Read the current task state and invert the done flag.
+        let mut results: Vec<TaskReadResult> = Vec::with_capacity(resolved.len());
+        for &line_num in &resolved {
+            match hyalo_core::tasks::read_task(&full_path, line_num)? {
+                None => {
+                    let msg = format!("line {line_num} is not a task");
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        format,
+                        &msg,
+                        Some(&rel_path),
+                        None,
+                        None,
+                    )));
+                }
+                Some(info) => {
+                    // Simulate what toggle would do: flip done state.
+                    let new_done = !info.done;
+                    let new_status = if new_done { 'x' } else { ' ' };
+                    results.push(TaskReadResult {
+                        file: rel_path.clone(),
+                        line: info.line,
+                        status: new_status,
+                        text: info.text,
+                        done: new_done,
+                    });
+                }
+            }
+        }
+        return Ok(CommandOutcome::success(format_results(&results, format)));
+    }
 
     match hyalo_core::tasks::toggle_tasks(&full_path, &resolved) {
         Ok(infos) => {
@@ -384,6 +418,7 @@ mod tests {
                 Format::Json,
                 &mut None,
                 None,
+                false,
             )
             .unwrap(),
         );
@@ -409,6 +444,7 @@ mod tests {
                 Format::Json,
                 &mut None,
                 None,
+                false,
             )
             .unwrap(),
         );
@@ -430,9 +466,41 @@ mod tests {
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn task_toggle_dry_run_does_not_modify_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = "- [ ] My task\n";
+        fs::write(tmp.path().join("note.md"), original).unwrap();
+
+        let out = unwrap_success(
+            task_toggle(
+                tmp.path(),
+                "note.md",
+                &[1],
+                None,
+                false,
+                Format::Json,
+                &mut None,
+                None,
+                true, // dry_run
+            )
+            .unwrap(),
+        );
+
+        // Output should reflect the toggled state (done=true)
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["status"], "x");
+        assert_eq!(parsed["done"], true);
+
+        // But the file on disk must be unchanged
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert_eq!(content, original, "file was modified during --dry-run");
     }
 
     // --- task_set_status ---

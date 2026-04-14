@@ -101,6 +101,29 @@ impl FilenameTemplate {
         Ok(Self { segments })
     }
 
+    /// Convert the template to a glob pattern suitable for use with `--glob`.
+    ///
+    /// Each placeholder is replaced with the most permissive wildcard that still
+    /// constrains the character class:
+    ///
+    /// - `{n}`    -> `[0-9]*`  (one or more digits)
+    /// - `{slug}` -> `*`       (any characters - glob has no slug-char class)
+    /// - `{date}` -> `????-??-??` (four digits, dash, two digits, dash, two digits)
+    ///
+    /// Literal segments are passed through unchanged.
+    pub fn to_glob(&self) -> String {
+        let mut out = String::new();
+        for seg in &self.segments {
+            match seg {
+                Segment::Literal(s) => out.push_str(s),
+                Segment::Placeholder(Placeholder::N) => out.push_str("[0-9]*"),
+                Segment::Placeholder(Placeholder::Slug) => out.push('*'),
+                Segment::Placeholder(Placeholder::Date) => out.push_str("????-??-??"),
+            }
+        }
+        out
+    }
+
     /// Returns `true` if the given relative path matches this template.
     ///
     /// Path separators are normalized to `/` for matching, so templates can

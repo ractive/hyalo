@@ -162,6 +162,18 @@ pub fn append(
         for arg in property_args {
             let (name, raw_value) =
                 parse_kv(arg).map_err(|e| anyhow::anyhow!("invalid property argument: {e}"))?;
+            // Reject empty values for the tags property -- `tags=` would silently
+            // insert an empty string into the list, which is never meaningful.
+            if name == "tags" && raw_value.is_empty() {
+                let out = crate::output::format_error(
+                    format,
+                    "append --property tags= requires a non-empty tag value",
+                    None,
+                    Some("example: hyalo append --property tags=my-tag --file note.md"),
+                    None,
+                );
+                return Ok(CommandOutcome::UserError(out));
+            }
             let parsed = frontmatter::parse_value(raw_value, None)
                 .map_err(|e| anyhow::anyhow!("failed to parse value for property '{name}': {e}"))?;
             v.push((name, raw_value, parsed));
@@ -772,5 +784,33 @@ title: Note
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn append_tags_empty_value_returns_user_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: x\n---\n").unwrap();
+        let outcome = append(
+            tmp.path(),
+            &["tags=".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+        )
+        .unwrap();
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(
+                    msg.contains("non-empty tag value"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected UserError, got: {other:?}"),
+        }
     }
 }

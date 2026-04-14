@@ -444,6 +444,45 @@ fn apply_fixes(
         }
     }
 
+    // Step 4: split comma-joined tags (e.g. ["cli,ux"] -> ["cli", "ux"]).
+    if let Some(Value::Array(items)) = props.get("tags") {
+        let needs_fix = items
+            .iter()
+            .any(|v| matches!(v, Value::String(s) if s.contains(',')));
+        if needs_fix {
+            let old_tags: Vec<Value> = items.clone();
+            let new_tags: Vec<Value> = old_tags
+                .iter()
+                .flat_map(|v| match v {
+                    Value::String(s) if s.contains(',') => s
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty())
+                        .map(|p| Value::String(p.to_owned()))
+                        .collect::<Vec<_>>(),
+                    other => vec![other.clone()],
+                })
+                .collect();
+            let old_str = old_tags
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let new_str = new_tags
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            props.insert("tags".to_owned(), Value::Array(new_tags));
+            actions.push(FixAction {
+                kind: "split-comma-tags".to_owned(),
+                property: "tags".to_owned(),
+                old: Some(old_str),
+                new: new_str,
+            });
+        }
+    }
+
     actions
 }
 
@@ -596,6 +635,21 @@ fn validate_properties(
                 && let Some(v) = validate_constraint(name, value, constraint, &mut regex_cache)
             {
                 violations.push(v);
+            }
+            // Check for comma-joined tags (e.g. "cli,ux" instead of ["cli", "ux"]).
+            if let Value::Array(items) = value {
+                for item in items {
+                    if let Value::String(tag) = item
+                        && tag.contains(',')
+                    {
+                        violations.push(Violation {
+                            severity: Severity::Warn,
+                            message: format!(
+                                "tag \"{tag}\" appears to be comma-joined -- should be separate list items"
+                            ),
+                        });
+                    }
+                }
             }
             continue;
         }
@@ -1034,5 +1088,62 @@ mod tests {
         let (_, counts) = lint_files(&files, &schema).unwrap();
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
+    }
+
+    // --- UX-3: comma-joined tag detection and fix ---
+
+    #[test]
+    fn lint_warns_on_comma_joined_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(
+            &path,
+            "---\ntitle: Hello\ntags:\n  - cli,ux\n  - rust\n---\nBody\n",
+        )
+        .unwrap();
+
+        let schema = SchemaConfig::default();
+        let result = lint_file(&path, "note.md", &schema).unwrap();
+        let comma_warn = result
+            .violations
+            .iter()
+            .find(|v| v.severity == Severity::Warn && v.message.contains("cli,ux"));
+        assert!(
+            comma_warn.is_some(),
+            "expected a warning about comma-joined tag, got: {:#?}",
+            result.violations
+        );
+        assert!(
+            comma_warn.unwrap().message.contains("comma-joined"),
+            "message should mention comma-joined"
+        );
+    }
+
+    #[test]
+    fn lint_fix_splits_comma_joined_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(
+            &path,
+            "---\ntitle: Hello\ntags:\n  - cli,ux\n  - rust\n---\nBody\n",
+        )
+        .unwrap();
+
+        let schema = SchemaConfig::default();
+        let files = vec![(path.clone(), "note.md".to_owned())];
+        let (_, counts) = lint_files_with_options(&files, &schema, FixMode::Apply, None).unwrap();
+
+        // After fix, the comma-joined tag warning should be gone.
+        assert_eq!(counts.warnings, 0, "comma-tag warning should be fixed");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        // Both parts of the split tag should be separate items.
+        assert!(content.contains("- cli"), "expected 'cli' as separate tag");
+        assert!(content.contains("- ux"), "expected 'ux' as separate tag");
+        // The original comma-joined form must be gone.
+        assert!(
+            !content.contains("cli,ux"),
+            "comma-joined tag should be removed"
+        );
     }
 }
