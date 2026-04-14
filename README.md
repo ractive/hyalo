@@ -10,6 +10,7 @@ If you maintain an [Obsidian](https://obsidian.md/) vault, a Zettelkasten, docum
 - **Bulk-update metadata** — set, remove, or append to properties and tags across hundreds of files at once
 - **Move files safely** — rename or reorganize files and hyalo rewrites all `[[wikilinks]]` and `[markdown](links)` across the vault
 - **Fix broken links** — detect unresolved links and auto-repair them with fuzzy matching
+- **Validate & fix** — lint frontmatter against type schemas, auto-fix defaults, typos, and date formats
 - **Read content** — extract specific sections or line ranges from files
 - **Get an overview** — see property/tag distributions, task counts, orphan files, and link health at a glance
 
@@ -632,6 +633,25 @@ type = "list"
 When no `[schema]` block is configured, `hyalo lint` exits 0 with zero violations (backwards compatible).
 
 `hyalo summary` shows a one-line lint count (`schema.errors/warnings`) when a schema is configured.
+
+### Lint with auto-fix
+
+```sh
+# Preview what lint --fix would change (no files written)
+hyalo lint --fix --dry-run
+
+# Apply auto-fixes: insert missing defaults, correct enum typos, normalize dates
+hyalo lint --fix
+
+# Fix a single file
+hyalo lint --fix my-doc.md
+```
+
+Auto-fix handles four categories:
+- **Insert defaults** — adds missing required properties with their schema default values
+- **Fix enum typos** — corrects near-matches to valid enum values (Levenshtein distance ≤ 2)
+- **Normalize dates** — rewrites dates to ISO 8601 (YYYY-MM-DD) format  
+- **Infer type** — sets `type` from filename template matches when absent
 
 ### types
 

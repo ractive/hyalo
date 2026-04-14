@@ -41,6 +41,8 @@ pub enum HintSource {
     LinksFix,
     CreateIndex,
     DropIndex,
+    Lint,
+    Types { subcommand: Option<String> },
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -156,6 +158,8 @@ pub fn generate_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> 
         HintSource::LinksFix => hints_for_links_fix(ctx, data),
         HintSource::CreateIndex => hints_for_create_index(ctx, data),
         HintSource::DropIndex => hints_for_drop_index(ctx, data),
+        HintSource::Lint => hints_for_lint(ctx, data),
+        HintSource::Types { .. } => hints_for_types(ctx, data),
     };
     hints.into_iter().take(MAX_HINTS).collect()
 }
@@ -221,6 +225,25 @@ fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
+    }
+    parts.join(" ")
+}
+
+/// Like `build_command_with_glob` but also preserves `--file` / positional file
+/// targets so that lint hints don't widen scope from a single file to the whole
+/// vault.
+fn build_command_with_glob_and_files(ctx: &HintContext, args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    for arg in args {
+        parts.push(shell_quote(arg));
+    }
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    for ft in &ctx.file_targets {
+        parts.push(shell_quote(ft));
     }
     parts.join(" ")
 }
@@ -435,6 +458,35 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             hints.push(Hint::new(
                 "Auto-fix broken links (dry run)",
                 build_command_with_glob(ctx, &["links", "fix"]),
+            ));
+        }
+    }
+
+    // Suggest lint when a schema is defined (schema field present in summary data).
+    if let Some(schema_obj) = data.get("schema") {
+        let errors = schema_obj
+            .get("errors")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let warnings = schema_obj
+            .get("warnings")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if (errors > 0 || warnings > 0) && hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                format!("Lint: {errors} errors, {warnings} warnings"),
+                build_command_with_glob(ctx, &["lint"]),
+            ));
+        } else if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                "Validate frontmatter against schema",
+                build_command_with_glob(ctx, &["lint"]),
+            ));
+        }
+        if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                "Manage type schemas",
+                build_command_no_glob(ctx, &["types", "list"]),
             ));
         }
     }
@@ -1196,6 +1248,162 @@ fn hints_for_drop_index(ctx: &HintContext, _data: &serde_json::Value) -> Vec<Hin
         "Rebuild the index",
         build_command_no_glob(ctx, &["create-index"]),
     )]
+}
+
+fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    // When in dry-run mode and there are pending fixes, suggest applying them.
+    let is_dry_run = data
+        .get("dry_run")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let has_fixes = data
+        .get("fixes")
+        .and_then(|f| f.as_array())
+        .is_some_and(|a| !a.is_empty());
+
+    if is_dry_run && has_fixes && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            "Apply fixes (remove --dry-run)",
+            build_command_with_glob_and_files(ctx, &["lint", "--fix"]),
+        ));
+    }
+
+    // When there are violations and we're not already in fix mode, suggest fixing.
+    let has_violations = data
+        .get("files")
+        .and_then(|f| f.as_array())
+        .is_some_and(|files| {
+            files.iter().any(|file| {
+                file.get("violations")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|v| !v.is_empty())
+            })
+        });
+    if has_violations && !is_dry_run && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            "Preview auto-fixes",
+            build_command_with_glob_and_files(ctx, &["lint", "--fix", "--dry-run"]),
+        ));
+        if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                "Apply auto-fixes",
+                build_command_with_glob_and_files(ctx, &["lint", "--fix"]),
+            ));
+        }
+    }
+
+    // Always suggest listing defined types.
+    if hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            "See defined type schemas",
+            build_command_no_glob(ctx, &["types", "list"]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_types(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let subcommand = match &ctx.source {
+        HintSource::Types { subcommand } => subcommand.as_deref().unwrap_or("list"),
+        _ => "list",
+    };
+
+    let mut hints = Vec::new();
+
+    match subcommand {
+        "list" => {
+            // Suggest showing the first listed type.
+            if let Some(first_type) = data
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|entry| entry.get("type"))
+                .and_then(serde_json::Value::as_str)
+            {
+                hints.push(Hint::new(
+                    format!("Show schema for type: {first_type}"),
+                    build_command_no_glob(ctx, &["types", "show", first_type]),
+                ));
+            }
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::new(
+                    "Validate all files against schema",
+                    build_command_no_glob(ctx, &["lint"]),
+                ));
+            }
+        }
+        "show" => {
+            let type_name = data.get("type").and_then(serde_json::Value::as_str);
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::new(
+                    "Validate files against schema",
+                    build_command_no_glob(ctx, &["lint"]),
+                ));
+            }
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::new(
+                    "List all type schemas",
+                    build_command_no_glob(ctx, &["types", "list"]),
+                ));
+            }
+            if let Some(name) = type_name
+                && hints.len() < MAX_HINTS
+            {
+                let filter = format!("type={name}");
+                hints.push(Hint::new(
+                    format!("Find files of type: {name}"),
+                    build_command_no_glob(ctx, &["find", "--property", &filter]),
+                ));
+            }
+        }
+        "create" => {
+            let type_name = data.get("type").and_then(serde_json::Value::as_str);
+            if let Some(name) = type_name
+                && hints.len() < MAX_HINTS
+            {
+                hints.push(Hint::new(
+                    format!("Show the new type schema: {name}"),
+                    build_command_no_glob(ctx, &["types", "show", name]),
+                ));
+            }
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::new(
+                    "Validate files against schema",
+                    build_command_no_glob(ctx, &["lint"]),
+                ));
+            }
+        }
+        "remove" => {
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::new(
+                    "List remaining type schemas",
+                    build_command_no_glob(ctx, &["types", "list"]),
+                ));
+            }
+        }
+        "set" => {
+            let type_name = data.get("type").and_then(serde_json::Value::as_str);
+            if let Some(name) = type_name
+                && hints.len() < MAX_HINTS
+            {
+                hints.push(Hint::new(
+                    format!("Review updated schema: {name}"),
+                    build_command_no_glob(ctx, &["types", "show", name]),
+                ));
+            }
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::new(
+                    "Validate files against schema",
+                    build_command_no_glob(ctx, &["lint"]),
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    hints
 }
 
 #[cfg(test)]
@@ -1961,6 +2169,150 @@ mod tests {
         assert!(
             !hints.iter().any(|h| h.cmd.contains("links fix")),
             "find results without broken links should not suggest links fix: {hints:?}"
+        );
+    }
+
+    // --- hints_for_lint ---
+
+    #[test]
+    fn lint_hints_suggest_fix_when_violations() {
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{"file": "test.md", "violations": [{"severity": "error", "message": "missing required property"}]}],
+            "total": 1,
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(!hints.is_empty());
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("lint --fix")),
+            "should suggest lint --fix: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_suggest_apply_when_dry_run() {
+        let mut c = ctx(HintSource::Lint);
+        c.dry_run = true;
+        let data = json!({
+            "files": [],
+            "total": 0,
+            "fixes": [{"file": "test.md", "actions": [{"kind": "insert-default", "property": "status", "new": "draft"}]}],
+            "dry_run": true,
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("lint --fix") && !h.cmd.contains("--dry-run")),
+            "dry-run mode should suggest lint --fix without --dry-run: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_always_suggest_types_list() {
+        let c = ctx(HintSource::Lint);
+        let data = json!({"files": [], "total": 0});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types list")),
+            "should always suggest types list: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_never_exceed_max() {
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{"file": "test.md", "violations": [{"severity": "error", "message": "x", "type": "iteration"}]}],
+            "total": 5,
+        });
+        let hints = generate_hints(&c, &data);
+        assert!(hints.len() <= MAX_HINTS);
+    }
+
+    // --- hints_for_types ---
+
+    #[test]
+    fn types_list_hints_suggest_show() {
+        let c = ctx(HintSource::Types {
+            subcommand: Some("list".to_owned()),
+        });
+        let data = json!([
+            {"type": "iteration", "required": ["title"], "has_filename_template": true, "property_count": 3},
+            {"type": "note", "required": [], "has_filename_template": false, "property_count": 1},
+        ]);
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types show")),
+            "should suggest types show: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("lint")),
+            "should suggest lint: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn types_show_hints_suggest_lint_and_find() {
+        let c = ctx(HintSource::Types {
+            subcommand: Some("show".to_owned()),
+        });
+        let data = json!({"type": "iteration", "required": ["title"], "properties": {}});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("lint")),
+            "should suggest lint: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("find --property")),
+            "should suggest find --property: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn types_create_hints_suggest_show_and_lint() {
+        let c = ctx(HintSource::Types {
+            subcommand: Some("create".to_owned()),
+        });
+        let data = json!({"type": "note", "action": "created"});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types show note")),
+            "should suggest types show for created type: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("lint")),
+            "should suggest lint: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn types_remove_hints_suggest_list() {
+        let c = ctx(HintSource::Types {
+            subcommand: Some("remove".to_owned()),
+        });
+        let data = json!({"type": "obsolete", "action": "removed"});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types list")),
+            "should suggest types list after remove: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn types_set_hints_suggest_show_and_lint() {
+        let c = ctx(HintSource::Types {
+            subcommand: Some("set".to_owned()),
+        });
+        let data = json!({"type": "iteration", "action": "updated"});
+        let hints = generate_hints(&c, &data);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types show iteration")),
+            "should suggest types show for updated type: {hints:?}"
+        );
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("lint")),
+            "should suggest lint: {hints:?}"
         );
     }
 }

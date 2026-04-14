@@ -33,7 +33,7 @@ Implement when file scanning becomes a bottleneck on real vaults, or when backli
 
 ## References
 
-- [[iteration-plan#Later — Indexing]]: scoped in the plan
+- [[iterations/done/iteration-02-links#Later — Indexing]]: scoped in the plan
 - [[decision-log#DEC-013]]: defers backlinks/orphans/deadends to indexing
 - [[decision-log#DEC-021]]: defers vault-wide task search to indexing
 - [[decision-log#DEC-014]]: defers shortest-path resolution to indexing

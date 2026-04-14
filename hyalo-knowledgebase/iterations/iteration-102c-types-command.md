@@ -16,7 +16,7 @@ depends-on: iterations/iteration-102a-schema-and-lint.md
 
 ## Goal
 
-Add a `hyalo types` CLI for managing type schemas in `.hyalo.toml` without hand-editing TOML. Depends on **[[iteration-102a-schema-and-lint]]** for the schema data model. Independent of 102b (can ship in parallel).
+Add a `hyalo types` CLI for managing type schemas in `.hyalo.toml` without hand-editing TOML. Depends on **[[iterations/iteration-102a-schema-and-lint]]** for the schema data model. Independent of 102b (can ship in parallel).
 
 ## CLI Surface
 

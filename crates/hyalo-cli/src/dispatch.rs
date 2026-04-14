@@ -710,12 +710,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 lint_commands::FixMode::Off
             };
 
-            let (outcome, counts) = lint_commands::lint_files_with_options(
-                &file_pairs,
-                ctx.schema,
-                ctx.user_format,
-                fix_mode,
-            )?;
+            let (outcome, counts) =
+                lint_commands::lint_files_with_options(&file_pairs, ctx.schema, fix_mode)?;
 
             // Signal exit code 1 when errors remain after fixes (set before returning).
             if counts.errors > 0 {

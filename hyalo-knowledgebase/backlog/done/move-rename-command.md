@@ -40,4 +40,4 @@ Behaviour:
 
 ## References
 
-Originally planned as "Iteration 9 — Move/Rename with Link Updates" in [[iteration-plan]] but was never implemented. Now tracked as a backlog item.
+Originally planned as "Iteration 9 — Move/Rename with Link Updates" in [[iterations/done/iteration-02-links]] but was never implemented. Now tracked as a backlog item.

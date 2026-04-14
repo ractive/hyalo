@@ -15,6 +15,8 @@
 
 use std::path::Path;
 
+use crate::util::is_iso8601_date;
+
 /// A single parsed segment of a filename template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
@@ -186,18 +188,6 @@ fn min_placeholder_len(ph: Placeholder) -> usize {
         Placeholder::N | Placeholder::Slug => 1,
         Placeholder::Date => 10,
     }
-}
-
-fn is_iso8601_date(s: &str) -> bool {
-    if s.len() != 10 {
-        return false;
-    }
-    let b = s.as_bytes();
-    b[4] == b'-'
-        && b[7] == b'-'
-        && b[..4].iter().all(u8::is_ascii_digit)
-        && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[8..10].iter().all(u8::is_ascii_digit)
 }
 
 /// Errors that can occur while parsing a filename template.
