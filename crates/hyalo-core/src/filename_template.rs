@@ -11,7 +11,7 @@
 //! `iterations/iteration-101-bm25.md`. Matching is used by `hyalo lint --fix`
 //! to infer a document's `type` when its frontmatter lacks one.
 //!
-//! The parser is shared with future iterations (e.g. `hyalo types create`).
+//! The parser is shared with `hyalo types set --filename-template`.
 
 use std::path::Path;
 

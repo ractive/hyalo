@@ -84,6 +84,12 @@ pub struct LintOutput {
     pub files: Vec<FileLintResult>,
     /// Total number of violations found across all files.
     pub total: usize,
+    /// Number of error-severity violations across all files (not limited by `--limit`).
+    pub errors: usize,
+    /// Number of warn-severity violations across all files (not limited by `--limit`).
+    pub warnings: usize,
+    /// Number of files with at least one violation (not limited by `--limit`).
+    pub files_with_issues: usize,
     /// Number of files that were checked.
     pub files_checked: usize,
     /// Fixes that were applied (or previewed) per file. Omitted when no
@@ -93,6 +99,9 @@ pub struct LintOutput {
     /// `true` when `--dry-run` was passed and fixes were not written.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
+    /// `true` when `--limit` truncated the file list.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub limited: bool,
 }
 
 /// Fixes applied to a single file.
@@ -123,7 +132,7 @@ pub fn lint_files(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
 ) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_with_options(files, schema, FixMode::Off)
+    lint_files_with_options(files, schema, FixMode::Off, None)
 }
 
 /// Whether — and how — `lint_files_with_options` should apply auto-fixes.
@@ -147,6 +156,7 @@ pub fn lint_files_with_options(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
     fix: FixMode,
+    limit: Option<usize>,
 ) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
     let mut counts = LintCounts::default();
@@ -166,17 +176,27 @@ pub fn lint_files_with_options(
         if !file_fixes.actions.is_empty() {
             fix_results.push(file_fixes);
         }
-        results.push(file_result);
+        if !file_result.violations.is_empty() {
+            results.push(file_result);
+        }
     }
 
     let files_checked = files.len();
     let total = counts.errors + counts.warnings;
+    let limited = limit.is_some_and(|n| results.len() > n);
+    if let Some(n) = limit {
+        results.truncate(n);
+    }
     let output = LintOutput {
         files: results,
         total,
+        errors: counts.errors,
+        warnings: counts.warnings,
+        files_with_issues: counts.files_with_issues,
         files_checked,
         fixes: fix_results,
         dry_run: matches!(fix, FixMode::DryRun),
+        limited,
     };
 
     let val = serde_json::to_value(&output).context("failed to serialize lint output")?;

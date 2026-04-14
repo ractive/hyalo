@@ -822,9 +822,6 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
 
     // File violations.
     let files = map.get("files").and_then(|f| f.as_array());
-    let mut error_count: usize = 0;
-    let mut warn_count: usize = 0;
-    let mut files_with_issues: usize = 0;
     if let Some(files) = files {
         for file_entry in files {
             let file = file_entry
@@ -838,7 +835,6 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
             if violations.is_empty() {
                 continue;
             }
-            files_with_issues += 1;
             let _ = writeln!(s, "{file}:");
             for v in violations {
                 let severity = v
@@ -850,15 +846,49 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
                 let pad = if severity == "error" {
-                    error_count += 1;
                     "error"
                 } else {
-                    warn_count += 1;
                     "warn "
                 };
                 let _ = writeln!(s, "  {pad}  {message}");
             }
         }
+    }
+
+    let error_count: u64 = map
+        .get("errors")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let warn_count: u64 = map
+        .get("warnings")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let files_with_issues: u64 = map
+        .get("files_with_issues")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let limited = map
+        .get("limited")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let shown_files = map
+        .get("files")
+        .and_then(|f| f.as_array())
+        .map_or(0, |arr| {
+            arr.iter()
+                .filter(|e| {
+                    e.get("violations")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|v| !v.is_empty())
+                })
+                .count()
+        });
+
+    if limited {
+        let _ = writeln!(
+            s,
+            "… (showing {shown_files} of {files_with_issues} files with issues)"
+        );
     }
 
     // Summary line.
@@ -1044,7 +1074,7 @@ fn format_type_list_entry_text(map: &serde_json::Map<String, serde_json::Value>)
     };
     let _ = write!(
         s,
-        "{type_name} ({req_count} required, {prop_count} {prop_label})"
+        "{type_name} ({prop_count} {prop_label}, {req_count} required)"
     );
 
     if !req_arr.is_empty() {
