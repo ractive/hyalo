@@ -1044,7 +1044,7 @@ fn format_type_list_entry_text(map: &serde_json::Map<String, serde_json::Value>)
     };
     let _ = write!(
         s,
-        "{type_name} ({req_count} required, {prop_count} {prop_label})"
+        "{type_name} ({prop_count} {prop_label}, {req_count} required)"
     );
 
     if !req_arr.is_empty() {

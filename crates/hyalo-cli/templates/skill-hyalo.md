@@ -215,6 +215,9 @@ hyalo lint --glob "iterations/*.md"
 
 # JSON output
 hyalo lint --format json
+
+# Limit output to first N files with violations
+hyalo lint --limit 10
 ```
 
 Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
@@ -253,15 +256,16 @@ When no `[schema]` block exists, lint exits 0 with zero violations (backwards co
 ```bash
 hyalo types list                                     # list all defined types
 hyalo types show iteration                           # full merged schema for a type
-hyalo types create iteration                         # add a new type entry
 hyalo types remove iteration                         # remove a type entry
-hyalo types set iteration --required title,date      # add required fields
+hyalo types set iteration --required title,date      # create or update type (upsert)
 hyalo types set iteration --default "status=planned" # set default (auto-applies to vault files)
 hyalo types set iteration --property-type "date=date"
 hyalo types set iteration --property-values "status=planned,in-progress,completed"
 hyalo types set iteration --filename-template "iterations/iteration-{n}-{slug}.md"
 hyalo types set iteration --required branch --dry-run  # preview without writing
 ```
+
+`types set` is an upsert — it auto-creates the type if it doesn't exist. When adding `--required` fields, string property constraints are auto-created for fields without an explicit constraint.
 
 When `--default` is used, hyalo applies the default to all vault files of that type missing that property.
 

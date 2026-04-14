@@ -588,6 +588,9 @@ hyalo lint --glob "iterations/*.md"
 
 # JSON output
 hyalo lint --format json
+
+# Limit output to first 10 files with violations
+hyalo lint --limit 10
 ```
 
 **Exit codes:** 0 = clean, 1 = errors found, 2 = internal error.
@@ -655,7 +658,7 @@ Auto-fix handles four categories:
 
 ### types
 
-Manage document-type schemas in `.hyalo.toml` without hand-editing TOML. All mutations preserve existing comments and formatting.
+Manage document-type schemas in `.hyalo.toml` without hand-editing TOML. `types set` is an upsert — it auto-creates the type if it doesn't exist. All mutations preserve existing comments and formatting.
 
 ```sh
 # List all defined types and their required fields
@@ -665,16 +668,7 @@ hyalo types list
 # Show the full merged schema for a type
 hyalo types show iteration
 
-# Add a new type entry to .hyalo.toml
-hyalo types create iteration
-
-# Print the TOML snippet instead of writing it
-hyalo types create iteration --print
-
-# Remove a type entry
-hyalo types remove iteration
-
-# Add required fields to a type
+# Create a new type (or update an existing one) — upsert
 hyalo types set iteration --required title,date,status
 
 # Set a default value (auto-applies to existing vault files of that type)

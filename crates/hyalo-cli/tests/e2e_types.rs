@@ -125,62 +125,6 @@ fn types_show_existing_type() {
 }
 
 // ---------------------------------------------------------------------------
-// types create
-// ---------------------------------------------------------------------------
-
-#[test]
-fn types_create_new_type() {
-    let tmp = setup_empty();
-    let output = hyalo()
-        .current_dir(tmp.path())
-        .args(["types", "create", "iteration"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // The type should now appear in list
-    let list_out = hyalo_no_hints()
-        .current_dir(tmp.path())
-        .args(["types", "list"])
-        .output()
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
-    assert_eq!(json["total"], 1);
-    assert_eq!(json["results"][0]["type"], "iteration");
-}
-
-#[test]
-fn types_create_duplicate_exits_nonzero() {
-    let tmp = setup_with_type();
-    let output = hyalo()
-        .current_dir(tmp.path())
-        .args(["types", "create", "note"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-}
-
-#[test]
-fn types_create_print_outputs_toml_snippet() {
-    let tmp = setup_empty();
-    let output = hyalo()
-        .current_dir(tmp.path())
-        .args(["types", "create", "journal", "--print"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("[schema.types.journal]"),
-        "expected TOML snippet, got: {stdout}"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // types remove
 // ---------------------------------------------------------------------------
 
@@ -405,14 +349,7 @@ fn types_set_default_applies_to_matching_files() {
     write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: note\n---\nBody.");
     write_md(tmp.path(), "b.md", "---\ntitle: B\ntype: other\n---\nBody.");
 
-    // First create the type
-    hyalo()
-        .current_dir(tmp.path())
-        .args(["types", "create", "note"])
-        .output()
-        .unwrap();
-
-    // Set default
+    // Set default (types set auto-creates the type)
     let output = hyalo()
         .current_dir(tmp.path())
         .args(["types", "set", "note", "--default", "status=draft"])
@@ -443,12 +380,6 @@ fn types_set_default_applies_to_matching_files() {
 fn types_set_default_dry_run_does_not_modify_files() {
     let tmp = setup_empty();
     write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: note\n---\nBody.");
-
-    hyalo()
-        .current_dir(tmp.path())
-        .args(["types", "create", "note"])
-        .output()
-        .unwrap();
 
     let output = hyalo()
         .current_dir(tmp.path())
@@ -487,14 +418,32 @@ fn types_set_no_flags_exits_nonzero() {
 }
 
 #[test]
-fn types_set_unknown_type_exits_nonzero() {
+fn types_set_creates_type_when_missing() {
     let tmp = setup_empty();
     let output = hyalo()
         .current_dir(tmp.path())
         .args(["types", "set", "ghost", "--required", "title"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The type should now exist.
+    let list_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "list"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["results"][0]["type"], "ghost");
+
+    // The action field should indicate creation.
+    let set_json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(set_json["results"]["action"], "created_and_updated");
 }
 
 // ---------------------------------------------------------------------------
@@ -592,7 +541,7 @@ fn types_list_format_text_has_type_headers_and_separation() {
     // Add a second type so we can verify blank-line separation.
     hyalo()
         .current_dir(tmp.path())
-        .args(["types", "create", "note"])
+        .args(["types", "set", "note", "--required", "title"])
         .output()
         .unwrap();
 
@@ -633,7 +582,7 @@ fn types_list_format_text_has_type_headers_and_separation() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn types_create_preserves_existing_toml_comments() {
+fn types_set_preserves_existing_toml_comments() {
     let tmp = setup_empty();
     // Write a TOML with a comment
     fs::write(
@@ -644,7 +593,7 @@ fn types_create_preserves_existing_toml_comments() {
 
     hyalo()
         .current_dir(tmp.path())
-        .args(["types", "create", "note"])
+        .args(["types", "set", "note", "--required", "title"])
         .output()
         .unwrap();
 
@@ -653,4 +602,67 @@ fn types_create_preserves_existing_toml_comments() {
         content.contains("# My vault config"),
         "comment should be preserved:\n{content}"
     );
+}
+
+#[test]
+fn types_set_auto_creates_string_properties_for_required() {
+    let tmp = setup_empty();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "note", "--required", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The TOML should have a string property constraint auto-created for "status".
+    let toml_content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        toml_content.contains("type = \"string\""),
+        "expected auto-created string property for 'status', got:\n{toml_content}"
+    );
+
+    // Verify via types show that the property constraint exists.
+    let show = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "note"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    let props = &json["results"]["properties"];
+    assert!(
+        props.get("status").is_some(),
+        "expected 'status' in properties, got:\n{props}"
+    );
+}
+
+#[test]
+fn types_set_upsert_does_not_duplicate_type() {
+    let tmp = setup_with_type();
+    // "note" already exists — calling types set again should not duplicate it.
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "note", "--required", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let list_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "list"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    assert_eq!(json["total"], 1, "type should appear exactly once");
+
+    // Action should be "updated" not "created_and_updated".
+    let set_json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(set_json["results"]["action"], "updated");
 }

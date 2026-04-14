@@ -19,16 +19,16 @@ Dogfooding found issues with the `types` and `lint` commands:
 ## Tasks
 
 ### types set upsert
-- [ ] Make `types set` auto-create the type if it doesn't exist (upsert)
-- [ ] Remove the `types create` subcommand
-- [ ] When adding `--required` fields, auto-create `string` property entries for any that don't already have a constraint
-- [ ] Update help text, hints, args to remove `create` references
-- [ ] Update e2e tests for types
+- [x] Make `types set` auto-create the type if it doesn't exist (upsert)
+- [x] Remove the `types create` subcommand
+- [x] When adding `--required` fields, auto-create `string` property entries for any that don't already have a constraint
+- [x] Update help text, hints, args to remove `create` references
+- [x] Update e2e tests for types
 
 ### lint output cleanup
-- [ ] Only include files with violations in lint JSON output
-- [ ] Add `--limit` flag to `hyalo lint` (same pattern as `find --limit`)
-- [ ] Update e2e tests for lint
+- [x] Only include files with violations in lint JSON output
+- [x] Add `--limit` flag to `hyalo lint` (same pattern as `find --limit`)
+- [x] Update e2e tests for lint
 
 ### docs
-- [ ] Update CLAUDE.md skill and knowledgebase docs
+- [x] Update CLAUDE.md skill and knowledgebase docs

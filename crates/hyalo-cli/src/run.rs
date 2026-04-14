@@ -620,6 +620,7 @@ fn run_inner() -> Result<(), AppError> {
                 glob,
                 fix: _,
                 dry_run,
+                limit: _,
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Lint, &common);
                 ctx.glob.clone_from(glob);
@@ -636,7 +637,6 @@ fn run_inner() -> Result<(), AppError> {
                 let subcommand = match action {
                     Some(TypesAction::List) | None => Some("list".to_owned()),
                     Some(TypesAction::Show { .. }) => Some("show".to_owned()),
-                    Some(TypesAction::Create { .. }) => Some("create".to_owned()),
                     Some(TypesAction::Remove { .. }) => Some("remove".to_owned()),
                     Some(TypesAction::Set { .. }) => Some("set".to_owned()),
                 };

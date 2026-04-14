@@ -1373,31 +1373,6 @@ fn hints_for_types(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
                 ));
             }
         }
-        "create" => {
-            let type_name = data.get("type").and_then(serde_json::Value::as_str);
-            if let Some(name) = type_name
-                && hints.len() < MAX_HINTS
-            {
-                hints.push(Hint::new(
-                    format!("Show the new type schema: {name}"),
-                    build_command_no_glob(ctx, &["types", "show", name]),
-                ));
-            }
-            if hints.len() < MAX_HINTS {
-                hints.push(Hint::new(
-                    "Validate files against schema",
-                    build_command_no_glob(ctx, &["lint"]),
-                ));
-            }
-        }
-        "remove" => {
-            if hints.len() < MAX_HINTS {
-                hints.push(Hint::new(
-                    "List remaining type schemas",
-                    build_command_no_glob(ctx, &["types", "list"]),
-                ));
-            }
-        }
         "set" => {
             let type_name = data.get("type").and_then(serde_json::Value::as_str);
             if let Some(name) = type_name
@@ -2281,36 +2256,6 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("find --property")),
             "should suggest find --property: {hints:?}"
-        );
-    }
-
-    #[test]
-    fn types_create_hints_suggest_show_and_lint() {
-        let c = ctx(HintSource::Types {
-            subcommand: Some("create".to_owned()),
-        });
-        let data = json!({"type": "note", "action": "created"});
-        let hints = generate_hints(&c, &data);
-        assert!(
-            hints.iter().any(|h| h.cmd.contains("types show note")),
-            "should suggest types show for created type: {hints:?}"
-        );
-        assert!(
-            hints.iter().any(|h| h.cmd.contains("lint")),
-            "should suggest lint: {hints:?}"
-        );
-    }
-
-    #[test]
-    fn types_remove_hints_suggest_list() {
-        let c = ctx(HintSource::Types {
-            subcommand: Some("remove".to_owned()),
-        });
-        let data = json!({"type": "obsolete", "action": "removed"});
-        let hints = generate_hints(&c, &data);
-        assert!(
-            hints.iter().any(|h| h.cmd.contains("types list")),
-            "should suggest types list after remove: {hints:?}"
         );
     }
 

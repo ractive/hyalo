@@ -762,6 +762,7 @@ Repeatable (AND).\n\
             \u{00a0} hyalo lint iterations/iteration-101-bm25.md\n\
             \u{00a0} hyalo lint --glob \"iterations/*.md\"\n\
             \u{00a0} hyalo lint --format json\n\
+            \u{00a0} hyalo lint --limit 10\n\
             \u{00a0} hyalo lint --fix\n\
             \u{00a0} hyalo lint --fix --dry-run\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
@@ -784,10 +785,13 @@ Repeatable (AND).\n\
         /// With --fix, preview changes without writing files
         #[arg(long, requires = "fix")]
         dry_run: bool,
+        /// Maximum number of files to include in output
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
-        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - create: Add a new type entry (fails if the type already exists).\n            - remove: Delete a type entry.\n            - set:    Update required fields, defaults, property constraints, or the filename template.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: create/remove/set modify .hyalo.toml. list and show are read-only."
+        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only."
     )]
     Types {
         #[command(subcommand)]
@@ -867,18 +871,6 @@ pub(crate) enum TypesAction {
         #[arg(value_name = "TYPE")]
         type_name: String,
     },
-    /// Add a new type entry to `.hyalo.toml`
-    #[command(
-        long_about = "Create a new `[schema.types.<name>]` section in `.hyalo.toml`.\n\n            Fails if the type already exists. Creates an empty section with `required = []`.\n            Use --print to write the TOML snippet to stdout instead of modifying the file.\n\n            OUTPUT: JSON result or, with --print, raw TOML snippet to stdout.\n            SIDE EFFECTS: Modifies .hyalo.toml (unless --print is used)."
-    )]
-    Create {
-        /// Type name to create
-        #[arg(value_name = "TYPE")]
-        type_name: String,
-        /// Print the TOML snippet to stdout instead of writing to .hyalo.toml
-        #[arg(long)]
-        print: bool,
-    },
     /// Remove a type entry from `.hyalo.toml`
     #[command(
         long_about = "Remove a `[schema.types.<name>]` section from `.hyalo.toml`.\n\n            Fails with a user error if the type does not exist.\n\n            OUTPUT: JSON result with action and type name.\n            SIDE EFFECTS: Modifies .hyalo.toml."
@@ -888,9 +880,9 @@ pub(crate) enum TypesAction {
         #[arg(value_name = "TYPE")]
         type_name: String,
     },
-    /// Update a type schema's required fields, defaults, or property constraints
+    /// Create or update a type schema's required fields, defaults, or property constraints
     #[command(
-        long_about = "Update a type schema in `.hyalo.toml`.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/number/boolean/list/enum).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/number/boolean/list/enum).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
     )]
     Set {
         /// Type name to update

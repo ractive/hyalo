@@ -100,57 +100,6 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// create
-// ---------------------------------------------------------------------------
-
-/// `hyalo types create <type> [--print]` — add a new type entry.
-pub(crate) fn create_type(type_name: &str, print: bool) -> Result<CommandOutcome> {
-    if let Err(msg) = validate_type_name(type_name) {
-        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
-    }
-
-    if print {
-        // Output raw TOML snippet to stdout, no envelope.
-        let snippet = format!("\n[schema.types.{type_name}]\nrequired = []\n");
-        return Ok(CommandOutcome::RawOutput(snippet));
-    }
-
-    let mut doc = read_toml_doc()?;
-
-    // Ensure schema.types.<name> doesn't already exist.
-    if toml_type_exists(&doc, type_name) {
-        return Ok(CommandOutcome::UserError(format!(
-            "Error: type '{type_name}' already exists\n\n  tip: use 'hyalo types show {type_name}' to inspect it"
-        )));
-    }
-
-    // Create [schema.types.<name>] with required = []
-    if let Err(msg) = ensure_schema_types_table(&mut doc) {
-        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
-    }
-
-    {
-        let schema = doc["schema"].as_table_mut().expect("schema is a table");
-        let types = schema["types"].as_table_mut().expect("types is a table");
-        let mut type_table = toml_edit::Table::new();
-        type_table.insert(
-            "required",
-            toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new())),
-        );
-        types.insert(type_name, toml_edit::Item::Table(type_table));
-    }
-
-    write_toml_doc(&doc)?;
-
-    let val = serde_json::json!({
-        "action": "created",
-        "type": type_name,
-        "dry_run": false,
-    });
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
-}
-
-// ---------------------------------------------------------------------------
 // remove
 // ---------------------------------------------------------------------------
 
@@ -228,6 +177,11 @@ pub(crate) fn set_type(
     filename_template: Option<&str>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
+    // Validate type name before anything else.
+    if let Err(msg) = validate_type_name(type_name) {
+        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+    }
+
     // Require at least one mutation flag.
     if required_args.is_empty()
         && default_args.is_empty()
@@ -298,15 +252,25 @@ pub(crate) fn set_type(
     // Load TOML doc.
     let mut doc = read_toml_doc()?;
 
-    // Type must exist.
-    if !toml_type_exists(&doc, type_name) {
-        return Ok(CommandOutcome::UserError(format!(
-            "Error: type '{type_name}' not found\n\n  tip: run 'hyalo types list' to see available types"
-        )));
-    }
-
     // Collect what will change (used for dry-run preview and result).
     let mut toml_changes: Vec<String> = Vec::new();
+
+    // Upsert: create the type if it doesn't exist (in-memory; disk write guarded below).
+    let is_new = !toml_type_exists(&doc, type_name);
+    if is_new {
+        if let Err(msg) = ensure_schema_types_table(&mut doc) {
+            return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+        }
+        let schema = doc["schema"].as_table_mut().expect("schema is a table");
+        let types = schema["types"].as_table_mut().expect("types is a table");
+        let mut type_table = toml_edit::Table::new();
+        type_table.insert(
+            "required",
+            toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new())),
+        );
+        types.insert(type_name, toml_edit::Item::Table(type_table));
+        toml_changes.push(format!("create type: {type_name}"));
+    }
 
     // Apply --required additions.
     if !required_fields.is_empty() {
@@ -366,6 +330,32 @@ pub(crate) fn set_type(
         toml_changes.push(format!("set property {k}: type={pt}"));
         if !dry_run {
             set_property_type_field(&mut doc, type_name, k, pt);
+        }
+    }
+
+    // Auto-create string property entries for required fields without constraints.
+    if !dry_run {
+        for f in &required_fields {
+            // Skip if this field already has a property-type or property-values in this invocation.
+            if prop_type_map.contains_key(f.as_str()) || prop_values_map.contains_key(f.as_str()) {
+                continue;
+            }
+            // Skip if the property already exists in TOML.
+            let already_has = doc
+                .get("schema")
+                .and_then(|s| s.as_table())
+                .and_then(|t| t.get("types"))
+                .and_then(|t| t.as_table())
+                .and_then(|t| t.get(type_name))
+                .and_then(|t| t.as_table())
+                .and_then(|t| t.get("properties"))
+                .and_then(|t| t.as_table())
+                .and_then(|t| t.get(f.as_str()))
+                .is_some();
+            if !already_has {
+                set_property_type_field(&mut doc, type_name, f, "string");
+                toml_changes.push(format!("auto-add property {f}: type=string"));
+            }
         }
     }
 
@@ -481,7 +471,7 @@ pub(crate) fn set_type(
     }
 
     let val = serde_json::json!({
-        "action": "updated",
+        "action": if is_new { "created_and_updated" } else { "updated" },
         "type": type_name,
         "dry_run": dry_run,
         "toml_changes": toml_changes,

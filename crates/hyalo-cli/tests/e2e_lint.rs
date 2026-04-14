@@ -539,3 +539,76 @@ type = "date"
         "total (violations) and files_checked must differ in this fixture"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Filter and limit tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_json_excludes_clean_files() {
+    let tmp = setup_vault_with_schema();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
+
+    let inner = &val["results"];
+    let files = inner["files"].as_array().unwrap();
+
+    // Every file in the output should have at least one violation.
+    for f in files {
+        let violations = f["violations"].as_array().unwrap();
+        assert!(
+            !violations.is_empty(),
+            "clean files should not appear in output: {}",
+            f["file"]
+        );
+    }
+}
+
+#[test]
+fn lint_limit_caps_output() {
+    let tmp = setup_vault_with_schema();
+    // setup_vault_with_schema already has missing_date.md and bad_status.md (2 files with violations)
+    // Add a third to ensure we have more than 1 violated file.
+    write_md(
+        tmp.path(),
+        "extra_bad.md",
+        "---\ntitle: Extra Bad\ntype: note\n---\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--limit", "1"])
+        .output()
+        .unwrap();
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
+
+    let inner = &val["results"];
+    let files = inner["files"].as_array().unwrap();
+    assert!(
+        files.len() <= 1,
+        "expected at most 1 file in output, got {}",
+        files.len()
+    );
+    // total should still reflect ALL violations (not just the limited output)
+    assert!(
+        inner["total"].as_u64().unwrap() >= 1,
+        "total should reflect all violations"
+    );
+    // limited flag should be present and true
+    assert_eq!(
+        inner["limited"].as_bool(),
+        Some(true),
+        "expected limited=true when output was truncated"
+    );
+}
