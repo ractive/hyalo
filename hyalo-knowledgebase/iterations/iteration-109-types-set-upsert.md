@@ -1,10 +1,16 @@
 ---
-title: "types set upsert, lint output cleanup"
+title: types set upsert, lint output cleanup
 type: iteration
 date: 2026-04-14
-status: in-progress
+status: completed
 branch: iter-109/types-set-upsert
-tags: [types, schema, ux, cli, dogfooding, lint]
+tags:
+  - types
+  - schema
+  - ux
+  - cli
+  - dogfooding
+  - lint
 ---
 
 # iter-109: types set upsert, lint output cleanup
