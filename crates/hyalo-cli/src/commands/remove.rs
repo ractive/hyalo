@@ -4,7 +4,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::Path;
 
-use crate::commands::tags::validate_tag;
 use crate::commands::{FilesOrOutcome, collect_files, mutation, require_file_or_glob};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::{self, PropertyFilter};
@@ -190,21 +189,9 @@ pub fn remove(
         return Ok(outcome);
     }
 
-    // Validate tag names before touching files
-    for tag in tag_args {
-        if let Err(msg) = validate_tag(tag) {
-            let out = crate::output::format_error(
-                format,
-                &msg,
-                None,
-                Some(
-                    "tag names may contain letters, digits, _, -, / and must have at least one non-numeric character",
-                ),
-                None,
-            );
-            return Ok(CommandOutcome::UserError(out));
-        }
-    }
+    // Note: tag names are NOT validated for removal because the user may need
+    // to remove malformed tags that were created with comma-joined values (e.g.
+    // "cli,ux"). Validation only applies when adding tags.
 
     // Validate all property args before touching files
     for arg in property_args {
@@ -971,5 +958,47 @@ priority: low
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn remove_tag_with_comma_succeeds() {
+        // Malformed comma-joined tags should be removable without validation errors.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+tags:
+  - cli,ux
+  - rust
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = remove(
+            tmp.path(),
+            &[],
+            &["cli,ux".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+        )
+        .unwrap();
+        let CommandOutcome::Success { output: out, .. } = outcome else {
+            panic!("expected success, got: {outcome:?}")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["tag"], "cli,ux");
+        assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
+
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("cli,ux"));
+        assert!(content.contains("rust"));
     }
 }

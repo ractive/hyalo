@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::{
     Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, is_low_discriminative,
-    parse_language, resolve_language, tokenize_document,
+    parse_language, query_is_operator_only, resolve_language, tokenize_document,
 };
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
@@ -441,6 +441,19 @@ pub fn find(
     } else {
         None
     };
+
+    // Warn when a BM25 search returns nothing because the entire pattern was consumed
+    // as a boolean operator keyword (e.g. the user typed `find "and"` or `find "or"`).
+    if let (Some(score_map), Some(pat)) = (&bm25_score_map, pattern)
+        && score_map.is_empty()
+        && query_is_operator_only(pat)
+    {
+        // Extract the first operator word for a targeted message.
+        let word = pat.split_whitespace().next().unwrap_or(pat);
+        crate::warn::warn(format!(
+            r#""{word}" was interpreted as a boolean operator, leaving an empty query. To search for the literal word, quote it: '"{word}"'"#
+        ));
+    }
 
     let mut results: Vec<FileObject> = Vec::new();
     let mut total_matching: usize = 0;

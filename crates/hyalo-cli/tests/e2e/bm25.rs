@@ -851,3 +851,101 @@ fn bm25_section_scoped_search_excludes_other_section() {
         "multi_section.md should NOT match 'rust' in --section 'Python Section': {arr:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-3: Bare boolean operator queries warn the user
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bm25_bare_and_operator_emits_warning() {
+    let tmp = setup_bm25_vault();
+    // "and" is consumed as a boolean operator keyword, producing an empty query.
+    // The user should receive a warning directing them to quote the literal word.
+    let (status, json, stderr) = find_json(&tmp, &["and"]);
+    assert!(status.success(), "command should still succeed: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.is_empty(),
+        "bare 'and' query should return no results: {arr:?}"
+    );
+    assert!(
+        stderr.contains("was interpreted as a boolean operator"),
+        "expected operator warning in stderr, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(r#""and""#),
+        "warning should suggest quoting the word, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn bm25_bare_or_operator_emits_warning() {
+    let tmp = setup_bm25_vault();
+    let (status, json, stderr) = find_json(&tmp, &["or"]);
+    assert!(status.success(), "command should still succeed: {stderr}");
+
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.is_empty(),
+        "bare 'or' query should return no results: {arr:?}"
+    );
+    assert!(
+        stderr.contains("was interpreted as a boolean operator"),
+        "expected operator warning in stderr, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn bm25_uppercase_and_operator_emits_warning() {
+    let tmp = setup_bm25_vault();
+    // "AND" (uppercase) is also consumed as an operator keyword.
+    let (status, _json, stderr) = find_json(&tmp, &["AND"]);
+    assert!(status.success(), "command should still succeed: {stderr}");
+    assert!(
+        stderr.contains("was interpreted as a boolean operator"),
+        "uppercase AND should also trigger the warning, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn bm25_real_word_does_not_emit_operator_warning() {
+    let tmp = setup_bm25_vault();
+    // "rust" is a real search term — no operator warning should be emitted.
+    let (status, _json, stderr) = find_json(&tmp, &["rust"]);
+    assert!(status.success(), "command should succeed: {stderr}");
+    assert!(
+        !stderr.contains("was interpreted as a boolean operator"),
+        "real word should not trigger operator warning, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn bm25_quoted_and_finds_literal_word() {
+    let tmp = TempDir::new().unwrap();
+    // Create a document that actually contains the word "and".
+    write_md(
+        tmp.path(),
+        "connector.md",
+        md!(r"
+---
+title: Connector Words
+---
+# Connector Words
+
+Words like and, or, but are conjunctions.
+"),
+    );
+    // Searching for the quoted phrase '"and"' should find the document.
+    let (status, json, stderr) = find_json(&tmp, &[r#""and""#]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("was interpreted as a boolean operator"),
+        "quoted 'and' should not trigger operator warning, got: {stderr:?}"
+    );
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.iter().any(|v| v["file"] == "connector.md"),
+        "quoted 'and' should match connector.md: {arr:?}"
+    );
+}

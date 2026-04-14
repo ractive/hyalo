@@ -456,6 +456,9 @@ hyalo task toggle --file note.md --section "Acceptance criteria"
 # Every task in the file
 hyalo task toggle --file note.md --all
 
+# Preview toggle without writing
+hyalo task toggle --file note.md --line 5 --dry-run
+
 # Set custom status on all tasks in a section
 hyalo task set --file note.md --section Tasks --status /
 ```
@@ -597,7 +600,12 @@ hyalo lint --format json
 
 # Limit output to first 10 files with violations
 hyalo lint --limit 10
+
+# Lint only files matching a named type's filename template
+hyalo lint --type iteration
 ```
+
+Lint also warns about comma-joined tags (e.g. `"cli,ux"` instead of separate list items); `--fix` splits them automatically.
 
 **Exit codes:** 0 = clean, 1 = errors found, 2 = internal error.
 

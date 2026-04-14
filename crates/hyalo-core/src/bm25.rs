@@ -701,6 +701,21 @@ impl Bm25InvertedIndex {
     }
 }
 
+/// Returns `true` if every token in `query` is a boolean operator keyword (`and`, `or`)
+/// and no searchable terms remain after parsing.
+///
+/// Use this to detect queries like `"and"` or `"or"` that are silently consumed as
+/// operators, leaving an empty query that matches nothing.
+pub fn query_is_operator_only(query: &str) -> bool {
+    let segments = tokenize_query_segments(query);
+    if segments.is_empty() {
+        return false;
+    }
+    segments
+        .iter()
+        .all(|s| matches!(s, QuerySegment::Or | QuerySegment::And))
+}
+
 /// Returns `true` if the BM25 results suggest the query has low discriminative power
 /// (e.g. all terms are very common stop-words). Heuristic: more than 80% of documents
 /// matched and the top score is below 1.0.
@@ -1497,5 +1512,78 @@ mod tests {
             .collect();
         matches.push(make_match("high.md", 2.5));
         assert!(!is_low_discriminative(&matches, 10));
+    }
+
+    // ------------------------------------------------------------------
+    // query_is_operator_only
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_query_is_operator_only_and() {
+        assert!(
+            query_is_operator_only("and"),
+            "bare 'and' should be operator-only"
+        );
+        assert!(
+            query_is_operator_only("AND"),
+            "case-insensitive 'AND' should be operator-only"
+        );
+    }
+
+    #[test]
+    fn test_query_is_operator_only_or() {
+        assert!(
+            query_is_operator_only("or"),
+            "bare 'or' should be operator-only"
+        );
+        assert!(
+            query_is_operator_only("OR"),
+            "case-insensitive 'OR' should be operator-only"
+        );
+    }
+
+    #[test]
+    fn test_query_is_operator_only_multiple_operators() {
+        assert!(
+            query_is_operator_only("and or"),
+            "multiple operator keywords should be operator-only"
+        );
+        assert!(
+            query_is_operator_only("or and"),
+            "reversed order should still be operator-only"
+        );
+    }
+
+    #[test]
+    fn test_query_is_operator_only_mixed_returns_false() {
+        assert!(
+            !query_is_operator_only("rust and"),
+            "mixed query should not be operator-only"
+        );
+        assert!(
+            !query_is_operator_only("foo OR bar"),
+            "query with real terms should not be operator-only"
+        );
+    }
+
+    #[test]
+    fn test_query_is_operator_only_plain_word_returns_false() {
+        assert!(!query_is_operator_only("rust"), "'rust' is not an operator");
+        assert!(
+            !query_is_operator_only("not"),
+            "'not' is not handled as a boolean operator"
+        );
+    }
+
+    #[test]
+    fn test_query_is_operator_only_empty_returns_false() {
+        assert!(
+            !query_is_operator_only(""),
+            "empty query should return false"
+        );
+        assert!(
+            !query_is_operator_only("   "),
+            "whitespace-only query should return false"
+        );
     }
 }

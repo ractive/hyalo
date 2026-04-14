@@ -912,3 +912,79 @@ fn task_set_status_json_has_all_required_fields() {
     assert!(json["text"].is_string(), "missing text field");
     assert!(json["done"].is_boolean(), "missing done field");
 }
+
+// ---------------------------------------------------------------------------
+// BUG-4: Deeply indented checkboxes (0, 4, 8, 16 spaces) are detected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_all_deeply_indented_checkboxes() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Create a file with checkboxes at 0, 4, 8, and 16 spaces indentation.
+    // Use concat! to avoid line-continuation whitespace trimming in string literals.
+    let content = concat!(
+        "---\ntitle: Nested Tasks\n---\n# Tasks\n",
+        "- [ ] Task at 0 spaces\n",
+        "    - [ ] Task at 4 spaces\n",
+        "        - [ ] Task at 8 spaces\n",
+        "                - [ ] Task at 16 spaces\n",
+    );
+    write_md(tmp.path(), "nested.md", content);
+
+    let (status, json, stderr) =
+        run_task_cmd_json(&tmp, &["task", "toggle", "--file", "nested.md", "--all"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(
+        results.len(),
+        4,
+        "all 4 indentation levels should be detected: {results:?}"
+    );
+
+    let content_after = fs::read_to_string(tmp.path().join("nested.md")).unwrap();
+    assert!(
+        content_after.contains("- [x] Task at 0 spaces"),
+        "0-space task should be toggled"
+    );
+    assert!(
+        content_after.contains("    - [x] Task at 4 spaces"),
+        "4-space task should be toggled"
+    );
+    assert!(
+        content_after.contains("        - [x] Task at 8 spaces"),
+        "8-space task should be toggled"
+    );
+    assert!(
+        content_after.contains("                - [x] Task at 16 spaces"),
+        "16-space task should be toggled"
+    );
+}
+
+#[test]
+fn task_read_all_deeply_indented_checkboxes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let content = concat!(
+        "- [ ] Top level\n",
+        "    - [x] Four spaces\n",
+        "        - [ ] Eight spaces\n",
+        "                - [x] Sixteen spaces\n",
+    );
+    write_md(tmp.path(), "nested.md", content);
+
+    let (status, json, stderr) =
+        run_task_cmd_json(&tmp, &["task", "read", "--file", "nested.md", "--all"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(
+        results.len(),
+        4,
+        "all 4 indentation levels should be read: {results:?}"
+    );
+    // Verify done state is correctly detected at all indentation levels
+    assert_eq!(results[0]["done"], false, "top level task is incomplete");
+    assert_eq!(results[1]["done"], true, "4-space task is complete");
+    assert_eq!(results[2]["done"], false, "8-space task is incomplete");
+    assert_eq!(results[3]["done"], true, "16-space task is complete");
+}

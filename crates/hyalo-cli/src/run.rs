@@ -315,7 +315,7 @@ fn run_inner() -> Result<(), AppError> {
         ..
     } = cli.command
     {
-        let views = crate::commands::views::load_views();
+        let views = crate::commands::views::load_views(&dir);
         match views.get(view_name) {
             Some(base) => {
                 let overlay = std::mem::take(filters);
@@ -563,6 +563,7 @@ fn run_inner() -> Result<(), AppError> {
                         line,
                         section,
                         all,
+                        dry_run: _,
                     } => (
                         HintSource::TaskToggle,
                         file_positional,
@@ -622,6 +623,7 @@ fn run_inner() -> Result<(), AppError> {
                 file_positional,
                 file,
                 glob,
+                r#type: _,
                 fix: _,
                 dry_run,
                 limit,

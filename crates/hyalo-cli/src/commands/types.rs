@@ -4,7 +4,7 @@
 /// formatting in the user's config file are preserved.
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -15,7 +15,7 @@ use hyalo_core::schema::{SchemaConfig, expand_default};
 
 use crate::output::{CommandOutcome, Format, format_success};
 
-const TOML_PATH: &str = ".hyalo.toml";
+const TOML_FILENAME: &str = ".hyalo.toml";
 
 // ---------------------------------------------------------------------------
 // list
@@ -104,8 +104,9 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
 // ---------------------------------------------------------------------------
 
 /// `hyalo types remove <type>` — remove a type entry.
-pub(crate) fn remove_type(type_name: &str) -> Result<CommandOutcome> {
-    let mut doc = read_toml_doc()?;
+pub(crate) fn remove_type(dir: &Path, type_name: &str) -> Result<CommandOutcome> {
+    let toml_path = resolve_toml_path(dir);
+    let mut doc = read_toml_doc(&toml_path)?;
 
     if !toml_type_exists(&doc, type_name) {
         return Ok(CommandOutcome::UserError(format!(
@@ -119,7 +120,7 @@ pub(crate) fn remove_type(type_name: &str) -> Result<CommandOutcome> {
         types.remove(type_name);
     }
 
-    write_toml_doc(&doc)?;
+    write_toml_doc(&toml_path, &doc)?;
 
     let val = serde_json::json!({
         "action": "removed",
@@ -250,7 +251,8 @@ pub(crate) fn set_type(
     }
 
     // Load TOML doc.
-    let mut doc = read_toml_doc()?;
+    let toml_path = resolve_toml_path(dir);
+    let mut doc = read_toml_doc(&toml_path)?;
 
     // Collect what will change (used for dry-run preview and result).
     let mut toml_changes: Vec<String> = Vec::new();
@@ -368,7 +370,7 @@ pub(crate) fn set_type(
 
     // Write TOML to disk (unless dry-run).
     if !dry_run {
-        write_toml_doc(&doc)?;
+        write_toml_doc(&toml_path, &doc)?;
     }
 
     // --- Side effects: --default auto-apply ---
@@ -493,9 +495,14 @@ pub(crate) fn set_type(
 // TOML helpers (toml_edit)
 // ---------------------------------------------------------------------------
 
+/// Returns the path to `.hyalo.toml` within the given directory.
+fn resolve_toml_path(dir: &Path) -> PathBuf {
+    dir.join(TOML_FILENAME)
+}
+
 /// Read `.hyalo.toml` as a `DocumentMut`, or return an empty doc if not found.
-fn read_toml_doc() -> Result<toml_edit::DocumentMut> {
-    match fs::read_to_string(TOML_PATH) {
+fn read_toml_doc(toml_path: &Path) -> Result<toml_edit::DocumentMut> {
+    match fs::read_to_string(toml_path) {
         Ok(contents) => contents
             .parse::<toml_edit::DocumentMut>()
             .context("failed to parse .hyalo.toml"),
@@ -505,8 +512,8 @@ fn read_toml_doc() -> Result<toml_edit::DocumentMut> {
 }
 
 /// Write a `DocumentMut` back to `.hyalo.toml`.
-fn write_toml_doc(doc: &toml_edit::DocumentMut) -> Result<()> {
-    fs::write(TOML_PATH, doc.to_string()).context("failed to write .hyalo.toml")
+fn write_toml_doc(toml_path: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
+    fs::write(toml_path, doc.to_string()).context("failed to write .hyalo.toml")
 }
 
 /// Returns `true` when `[schema.types.<name>]` exists in the doc.
@@ -938,5 +945,62 @@ mod tests {
     #[test]
     fn parse_kv_empty_key() {
         assert!(parse_kv("=value", "--default").is_err());
+    }
+
+    // --- set_type / remove_type respect --dir ---
+
+    #[test]
+    fn set_type_writes_to_custom_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path();
+
+        let outcome = set_type(
+            dir,
+            "note",
+            &["title".to_owned()],
+            &[],
+            &[],
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::Success { .. }));
+
+        // Config must be written inside the temp dir, not in CWD.
+        let toml_path = dir.join(".hyalo.toml");
+        assert!(toml_path.exists(), ".hyalo.toml not found in custom dir");
+        let contents = std::fs::read_to_string(&toml_path).unwrap();
+        assert!(contents.contains("note"), "type 'note' not in written TOML");
+    }
+
+    #[test]
+    fn remove_type_reads_from_custom_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path();
+
+        // First create the type in the custom dir.
+        set_type(
+            dir,
+            "note",
+            &["title".to_owned()],
+            &[],
+            &[],
+            &[],
+            None,
+            false,
+        )
+        .unwrap();
+
+        // Now remove it — should succeed and update the same file.
+        let outcome = remove_type(dir, "note").unwrap();
+        assert!(matches!(outcome, CommandOutcome::Success { .. }));
+
+        let toml_path = dir.join(".hyalo.toml");
+        let contents = std::fs::read_to_string(&toml_path).unwrap();
+        assert!(
+            !contents.contains("[schema.types.note]"),
+            "type 'note' should have been removed"
+        );
     }
 }

@@ -774,14 +774,18 @@ Repeatable (AND).\n\
     )]
     Lint {
         /// Target file (relative to --dir) — positional form
-        #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "type"])]
         file_positional: Option<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with_all = ["glob", "type"])]
         file: Vec<String>,
         /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with_all = ["file", "type"])]
         glob: Vec<String>,
+        /// Restrict linting to files matching the named type's filename template.
+        /// Equivalent to --glob <template-as-glob>. Mutually exclusive with --file and --glob.
+        #[arg(long = "type", conflicts_with_all = ["file", "glob", "file_positional"])]
+        r#type: Option<String>,
         /// Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
         #[arg(long)]
         fix: bool,
@@ -1004,6 +1008,9 @@ pub(crate) enum TaskAction {
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
         all: bool,
+        /// Preview the toggle result without writing the file
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Set a custom single-character status on one or more tasks
     #[command(

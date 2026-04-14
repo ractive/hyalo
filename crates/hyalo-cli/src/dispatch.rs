@@ -486,6 +486,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 line,
                 section,
                 all,
+                dry_run,
             } => {
                 let file = match resolve_single_file(file_positional, file) {
                     Ok(f) => f,
@@ -500,6 +501,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     snapshot_index,
                     index_path,
+                    dry_run,
                 )
             }
             TaskAction::Set {
@@ -781,21 +783,83 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             file,
             glob,
+            r#type: lint_type,
             fix,
             dry_run,
             limit: cli_limit,
         } => {
+            // Resolve --type to a glob pattern from its filename_template.
+            let type_glob: Option<String> = if let Some(type_name) = lint_type {
+                use hyalo_core::filename_template::FilenameTemplate;
+                match ctx.schema.types.get(&type_name) {
+                    Some(ts) => match &ts.filename_template {
+                        Some(template_str) => match FilenameTemplate::parse(template_str) {
+                            Ok(tpl) => Some(tpl.to_glob()),
+                            Err(e) => {
+                                return Ok(crate::output::CommandOutcome::UserError(
+                                    crate::output::format_error(
+                                        ctx.user_format,
+                                        &format!(
+                                            "invalid filename_template for type '{type_name}': {e}"
+                                        ),
+                                        None,
+                                        None,
+                                        None,
+                                    ),
+                                ));
+                            }
+                        },
+                        None => {
+                            return Ok(crate::output::CommandOutcome::UserError(
+                                crate::output::format_error(
+                                    ctx.user_format,
+                                    &format!("type '{type_name}' has no filename_template defined"),
+                                    None,
+                                    Some(
+                                        "set one with: hyalo types set <name> --filename-template <pattern>",
+                                    ),
+                                    None,
+                                ),
+                            ));
+                        }
+                    },
+                    None => {
+                        return Ok(crate::output::CommandOutcome::UserError(
+                            crate::output::format_error(
+                                ctx.user_format,
+                                &format!("unknown type '{type_name}'"),
+                                None,
+                                Some("run `hyalo types list` to see available types"),
+                                None,
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+
             // Build the file list. Positional arg is treated as a single --file.
             let mut files_arg: Vec<String> = file;
             if let Some(pos) = file_positional {
                 files_arg.insert(0, pos);
             }
+            // --type expands to a glob that overrides file/glob args.
+            let effective_glob: Vec<String> = if let Some(g) = type_glob {
+                vec![g]
+            } else {
+                glob
+            };
 
-            let file_pairs =
-                match crate::commands::collect_files(dir, &files_arg, &glob, ctx.user_format)? {
-                    crate::commands::FilesOrOutcome::Files(f) => f,
-                    crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
-                };
+            let file_pairs = match crate::commands::collect_files(
+                dir,
+                &files_arg,
+                &effective_glob,
+                ctx.user_format,
+            )? {
+                crate::commands::FilesOrOutcome::Files(f) => f,
+                crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
+            };
 
             let fix_mode = if fix {
                 if dry_run {
@@ -830,7 +894,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Views { action } => {
             let action = action.unwrap_or(ViewsAction::List);
             match action {
-                ViewsAction::List => crate::commands::views::list_views(),
+                ViewsAction::List => crate::commands::views::list_views(dir),
                 ViewsAction::Set {
                     name,
                     pattern,
@@ -842,9 +906,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         ));
                     }
                     filters.pattern = pattern;
-                    crate::commands::views::set_view(&name, &filters)
+                    crate::commands::views::set_view(dir, &name, &filters)
                 }
-                ViewsAction::Remove { name } => crate::commands::views::remove_view(&name),
+                ViewsAction::Remove { name } => crate::commands::views::remove_view(dir, &name),
             }
         }
         Commands::Types { action } => {
@@ -855,7 +919,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     Ok(crate::commands::types::show_type(&type_name, ctx.schema))
                 }
                 TypesAction::Remove { type_name } => {
-                    crate::commands::types::remove_type(&type_name)
+                    crate::commands::types::remove_type(dir, &type_name)
                 }
                 TypesAction::Set {
                     type_name,
