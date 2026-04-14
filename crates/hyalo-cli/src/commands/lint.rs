@@ -82,7 +82,10 @@ pub struct FixAction {
 #[derive(Debug, Serialize)]
 pub struct LintOutput {
     pub files: Vec<FileLintResult>,
+    /// Total number of violations found across all files.
     pub total: usize,
+    /// Number of files that were checked.
+    pub files_checked: usize,
     /// Fixes that were applied (or previewed) per file. Omitted when no
     /// `--fix` run produced any changes.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -166,10 +169,12 @@ pub fn lint_files_with_options(
         results.push(file_result);
     }
 
-    let total = files.len();
+    let files_checked = files.len();
+    let total = counts.errors + counts.warnings;
     let output = LintOutput {
         files: results,
         total,
+        files_checked,
         fixes: fix_results,
         dry_run: matches!(fix, FixMode::DryRun),
     };

@@ -466,3 +466,76 @@ fn summary_no_schema_field_without_config() {
         "schema field should be absent when no schema is configured"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bug regression: lint JSON total counts violations, not files
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_json_total_counts_violations_not_files() {
+    // Use a type-specific schema so we can have a clean file (no warnings) and
+    // two files with exactly one error each.  The "no type property" warning is
+    // suppressed by giving every file a `type` property.
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.default]
+required = ["title"]
+
+[schema.types.note]
+required = ["title", "date"]
+
+[schema.types.note.properties.date]
+type = "date"
+"#,
+    );
+    // Clean file: has both title and date → zero violations
+    write_md(
+        tmp.path(),
+        "clean.md",
+        "---\ntitle: OK\ntype: note\ndate: 2026-01-01\ntags:\n  - x\n---\nBody\n",
+    );
+    // Two files missing required 'date' → 1 error each, 0 warnings (type present)
+    write_md(
+        tmp.path(),
+        "bad1.md",
+        "---\ntitle: Bad One\ntype: note\ntags:\n  - x\n---\nBody\n",
+    );
+    write_md(
+        tmp.path(),
+        "bad2.md",
+        "---\ntitle: Bad Two\ntype: note\ntags:\n  - x\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value =
+        serde_json::from_str(stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    let results = &val["results"];
+    let total = results["total"].as_u64().expect("total should be a number");
+    let files_checked = results["files_checked"]
+        .as_u64()
+        .expect("files_checked should be a number");
+
+    // 2 violations (one error per bad file), 3 files checked
+    assert_eq!(
+        total, 2,
+        "total should count violations, not files: {results}"
+    );
+    assert_eq!(
+        files_checked, 3,
+        "files_checked should count all scanned files: {results}"
+    );
+    // Sanity: they must be different (this was the original bug)
+    assert_ne!(
+        total, files_checked,
+        "total (violations) and files_checked must differ in this fixture"
+    );
+}

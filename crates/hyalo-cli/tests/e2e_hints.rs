@@ -1737,3 +1737,117 @@ fn summary_hints_mention_lint_when_schema_defined() {
         "summary should mention lint when schema is defined: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bug regression: summary hints include `lint` when schema has violations
+// (even when many other hints compete for MAX_HINTS slots)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summary_hints_include_lint_when_violations_not_pushed_out() {
+    // Build a vault that would normally saturate all hint slots with
+    // tasks + orphans + dead-ends, leaving no room for lint.
+    // The fix moves the lint hint earlier when violations exist.
+    let tmp = TempDir::new().unwrap();
+
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.default]
+required = ["title"]
+"#,
+    )
+    .unwrap();
+
+    // Three standalone files (orphans — no wikilinks pointing to them)
+    // with open tasks to also trigger the task hint.
+    for i in 0..3 {
+        write_md(
+            tmp.path(),
+            &format!("orphan{i}.md"),
+            &format!(
+                "---\ntitle: Orphan {i}\nstatus: in-progress\ntags:\n  - x\n---\n- [ ] Task\n"
+            ),
+        );
+    }
+    // File missing required `title` → 1 lint error
+    write_md(tmp.path(), "bad.md", "---\nfoo: bar\n---\nBody\n");
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["summary", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let hints = parsed["hints"].as_array().expect("hints should be array");
+    let has_lint_hint = hints
+        .iter()
+        .any(|h| h["cmd"].as_str().unwrap_or("").contains("lint"));
+    assert!(
+        has_lint_hint,
+        "summary hints should include 'lint' when there are schema violations, \
+         even when many other hints compete for slots: {hints:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bug regression: lint --fix --dry-run hints suggest `lint --fix` to apply
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_fix_dry_run_hints_suggest_apply_without_dry_run() {
+    let tmp = TempDir::new().unwrap();
+
+    // Schema with a required property that has a default → lint --fix can
+    // insert it automatically, producing a fix action in dry-run.
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.default]
+required = ["title", "status"]
+
+[schema.default.defaults]
+status = "draft"
+"#,
+    )
+    .unwrap();
+
+    // File missing `status` — fixable via the schema default
+    write_md(tmp.path(), "fixable.md", "---\ntitle: My Note\n---\nBody\n");
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--dry-run", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    // The results must show dry_run=true and fixes
+    let results = &parsed["results"];
+    assert_eq!(
+        results["dry_run"], true,
+        "expected dry_run=true in results: {results}"
+    );
+    assert!(
+        results["fixes"].as_array().is_some_and(|a| !a.is_empty()),
+        "expected non-empty fixes in dry-run output: {results}"
+    );
+
+    // Hints must include `lint --fix` without `--dry-run`
+    let hints = parsed["hints"].as_array().expect("hints should be array");
+    let apply_hint = hints.iter().find(|h| {
+        let cmd = h["cmd"].as_str().unwrap_or("");
+        cmd.contains("lint --fix") && !cmd.contains("--dry-run")
+    });
+    assert!(
+        apply_hint.is_some(),
+        "lint --fix --dry-run should hint `lint --fix` (without --dry-run) to apply fixes: {hints:#?}"
+    );
+}

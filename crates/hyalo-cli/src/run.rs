@@ -211,7 +211,19 @@ fn run_inner() -> Result<(), AppError> {
     let dir_from_cli = cli.dir.is_some();
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
-    let dir = cli.dir.unwrap_or(config.dir);
+    // Determine the effective vault directory and the config to use:
+    //
+    // - When --dir is explicitly provided on the CLI, reload .hyalo.toml from
+    //   the target directory so its schema, format, hints, site_prefix, and
+    //   search config apply — not the caller's CWD config.
+    // - Otherwise, keep the CWD config (already loaded) and use its dir.
+    let (dir, config) = if let Some(cli_dir) = cli.dir {
+        let target_config = crate::config::load_config_from(&cli_dir);
+        (cli_dir, target_config)
+    } else {
+        let config_dir = config.dir.clone();
+        (config_dir, config)
+    };
 
     // Validate that --dir exists and is a directory (symlinks to directories are fine).
     if !dir.exists() {
