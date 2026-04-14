@@ -930,6 +930,24 @@ fn format_type_show_text(map: &serde_json::Map<String, serde_json::Value>) -> St
         let _ = write!(s, "\n\nRequired: {}", list.join(", "));
     }
 
+    // Defaults block.
+    if let Some(serde_json::Value::Object(defaults)) = map.get("defaults")
+        && !defaults.is_empty()
+    {
+        let _ = write!(s, "\n\nDefaults:");
+        let mut keys: Vec<&str> = defaults.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        for key in keys {
+            if let Some(value) = defaults.get(key) {
+                let display = match value {
+                    serde_json::Value::String(sv) => sv.clone(),
+                    other => other.to_string(),
+                };
+                let _ = write!(s, "\n  {key}: {display}");
+            }
+        }
+    }
+
     // Properties block.
     if let Some(serde_json::Value::Object(props)) = map.get("properties")
         && !props.is_empty()
@@ -1038,7 +1056,7 @@ fn format_type_list_entry_text(map: &serde_json::Map<String, serde_json::Value>)
     }
 
     if has_filename {
-        let _ = write!(s, "\n  filename: (see `hyalo types show {type_name}`)");
+        let _ = write!(s, "\n  filename: (see type details)");
     }
 
     s

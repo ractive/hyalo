@@ -14,7 +14,7 @@ tags:
 status: in-progress
 branch: iter-108/dogfood-v0110-fixes
 related:
-  - dogfood-results/dogfood-v0110-lint-types.md
+  - "[[dogfood-results/dogfood-v0110-lint-types]]"
 ---
 
 # Iteration 108 — v0.11.0 Dogfood Fixes
@@ -32,7 +32,7 @@ See [[dogfood-results/dogfood-v0110-lint-types]] for full findings.
 ### Bug 1: `lint` JSON `total` counts files, not violations
 - `"total": 228` when only 13 violations exist — 228 is the file count
 - Consumers parsing JSON expect `total` to mean violation count
-- **Fix:** rename to `total_files` and add `total_violations` (or keep `total` as violation count and add `files_checked`)
+- **Fix (shipped):** `total` now counts violations (errors + warnings), new `files_checked` field counts scanned files
 
 ### Bug 2: `summary` hints don't mention `lint` when schema has warnings
 - Summary reports `schema: {files_with_issues: 13, warnings: 13}` but hints only suggest `properties`, `tags`, `find`

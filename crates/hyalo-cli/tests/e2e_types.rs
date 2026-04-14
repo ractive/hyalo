@@ -518,6 +518,9 @@ values = ["planned", "in-progress", "completed"]
 
 [schema.types.iteration.properties.date]
 type = "date"
+
+[schema.types.iteration.defaults]
+status = "planned"
 "#,
     )
     .unwrap();
@@ -566,6 +569,15 @@ fn types_show_format_text_has_indentation() {
     assert!(
         text.lines().any(|l| l.starts_with("    type:")),
         "expected '    type:' line with 4-space indent, got:\n{text}"
+    );
+    // Defaults block
+    assert!(
+        text.contains("Defaults:"),
+        "expected 'Defaults:' section, got:\n{text}"
+    );
+    assert!(
+        text.lines().any(|l| l.starts_with("  status: planned")),
+        "expected '  status: planned' in Defaults block, got:\n{text}"
     );
     // Filename template shown
     assert!(
