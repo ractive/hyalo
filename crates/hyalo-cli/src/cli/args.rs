@@ -214,7 +214,7 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
     /// Maximum number of results to return (0 = unlimited).
-    /// Not applied when --jq or --count is used
+    /// Default cap is bypassed when --jq or --count is used
     #[arg(short = 'n', long, value_parser = parse_limit)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
@@ -462,7 +462,7 @@ pub(crate) enum Commands {
         #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
         file: Option<String>,
         /// Maximum number of backlinks to return (0 = unlimited).
-        /// Not applied when --jq or --count is used
+        /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
     },
@@ -789,7 +789,7 @@ Repeatable (AND).\n\
         #[arg(long, requires = "fix")]
         dry_run: bool,
         /// Maximum number of files to include in output.
-        /// Not applied when --jq or --count is used
+        /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
     },
@@ -1058,7 +1058,7 @@ pub(crate) enum PropertiesAction {
         #[arg(short, long)]
         glob: Vec<String>,
         /// Maximum number of results to return (0 = unlimited).
-        /// Not applied when --jq or --count is used
+        /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
     },
@@ -1094,7 +1094,7 @@ pub(crate) enum TagsAction {
         #[arg(short, long)]
         glob: Vec<String>,
         /// Maximum number of results to return (0 = unlimited).
-        /// Not applied when --jq or --count is used
+        /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
     },
