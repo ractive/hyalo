@@ -93,6 +93,30 @@ type = "date"
 type = "enum"
 values = ["active", "archived", "draft"]
 
+[schema.types.pitch]
+required = ["title", "type", "date", "status"]
+
+[schema.types.pitch.properties]
+
+[schema.types.pitch.properties.status]
+type = "enum"
+values = ["active", "archived", "draft"]
+
+[schema.types.pitch.properties.date]
+type = "date"
+
+[schema.types.decisions]
+required = ["title", "type", "date", "status"]
+
+[schema.types.decisions.properties]
+
+[schema.types.decisions.properties.status]
+type = "enum"
+values = ["active", "archived", "reference"]
+
+[schema.types.decisions.properties.date]
+type = "date"
+
 [views.completed-with-todos]
 fields = ["tasks"]
 properties = ["status=completed"]
