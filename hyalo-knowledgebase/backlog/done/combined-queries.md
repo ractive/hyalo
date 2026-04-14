@@ -19,7 +19,7 @@ Finding files that match multiple criteria requires separate CLI calls and manua
 
 ## Proposal
 
-This is what [[iteration-plan#Iteration 7 — Search]] addresses. The `search` command should support:
+This is what [[iterations/done/iteration-02-links#Iteration 7 — Search]] addresses. The `search` command should support:
 
 ```sh
 hyalo search 'tag:iteration [status:in-progress]'

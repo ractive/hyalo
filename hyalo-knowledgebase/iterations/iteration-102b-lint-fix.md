@@ -16,12 +16,12 @@ depends-on: iterations/iteration-102a-schema-and-lint.md
 
 ## Goal
 
-> **Superseded by [[iteration-102c-types-command]]** — the `lint --fix` work in
+> **Superseded by [[iterations/iteration-102c-types-command]]** — the `lint --fix` work in
 > this plan (auto-fix, filename-template parsing, type inference, date
 > normalization, enum-typo correction, `--dry-run`) was implemented as part of
 > iter-102c rather than on a separate branch.
 
-Add auto-remediation to `hyalo lint`. Depends on **[[iteration-102a-schema-and-lint]]** — schema model, validation, and read-only `lint` must land first.
+Add auto-remediation to `hyalo lint`. Depends on **[[iterations/iteration-102a-schema-and-lint]]** — schema model, validation, and read-only `lint` must land first.
 
 ## `--fix` Auto-Fixes
 

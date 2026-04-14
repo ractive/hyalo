@@ -119,6 +119,34 @@ When a schema is configured, `hyalo summary` includes a one-line lint count in t
 
 Run `hyalo lint` to see the full violation report.
 
+## Lint --fix
+
+`hyalo lint --fix` automatically repairs common frontmatter issues. Use `--dry-run` to preview changes without writing any files.
+
+```bash
+# Preview what --fix would change (no files written)
+hyalo lint --fix --dry-run
+
+# Apply auto-fixes
+hyalo lint --fix
+
+# Fix a single file
+hyalo lint --fix iterations/iteration-101-bm25.md
+```
+
+**Note:** `--dry-run` requires `--fix` — it has no effect on a plain `hyalo lint` (which is already read-only).
+
+### Fix categories
+
+| Category | What it does |
+|----------|-------------|
+| **Insert defaults** | Adds missing required properties using their schema default values |
+| **Fix enum typos** | Corrects near-matches to valid enum values (Levenshtein distance ≤ 2) |
+| **Normalize dates** | Rewrites dates to ISO 8601 (YYYY-MM-DD) format |
+| **Infer type** | Sets `type` from filename template matches when absent |
+
+Each fix is reported in the output with the category, property name, and old/new values.
+
 ## Backwards Compatibility
 
 Vaults without a `[schema]` block in `.hyalo.toml` are fully supported: `hyalo lint` exits 0 with zero violations, and `hyalo summary` omits the `schema` field.

@@ -1535,3 +1535,205 @@ No broken links here.
         "find --broken-links should hint at 'links fix': {hints:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Fixture helpers for lint / types hint tests
+// ---------------------------------------------------------------------------
+
+/// A vault with a schema configured in .hyalo.toml, suitable for lint/types hint tests.
+fn setup_vault_with_schema() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    // Write .hyalo.toml with a schema
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"
+[schema.default]
+required = ["title"]
+
+[schema.default.properties.title]
+type = "string"
+
+[schema.default.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed"]
+
+[schema.types.note]
+required = ["title", "tags"]
+
+[schema.types.note.properties.tags]
+type = "list"
+"#,
+    )
+    .unwrap();
+
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: Good File
+status: planned
+type: note
+tags: [test]
+---
+# Good
+"),
+    );
+
+    // File with violations: missing required 'title', bad status value
+    write_md(
+        tmp.path(),
+        "bad.md",
+        md!(r"
+---
+status: invalid-status
+type: note
+---
+# Bad File
+"),
+    );
+
+    tmp
+}
+
+// ---------------------------------------------------------------------------
+// lint --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_hints_json_has_hints_envelope() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["lint", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert!(parsed.get("results").is_some(), "missing 'results' key");
+    assert!(parsed.get("hints").is_some(), "missing 'hints' key");
+
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(
+        hints.len() >= 2,
+        "lint should produce at least 2 hints, got {}: {hints:?}",
+        hints.len()
+    );
+    for hint in hints {
+        assert!(
+            hint["cmd"].as_str().unwrap().starts_with("hyalo"),
+            "hint cmd should start with hyalo: {hint}"
+        );
+    }
+}
+
+#[test]
+fn lint_hints_text_has_arrow_lines() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["lint", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("  -> hyalo"),
+        "should have hint lines with arrow prefix: {stdout}"
+    );
+}
+
+#[test]
+fn lint_hints_suggest_fix() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["lint", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Should suggest --fix since there are violations
+    assert!(
+        stdout.contains("lint --fix"),
+        "should suggest lint --fix when there are violations: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// types --hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn types_list_hints_json_has_hints_envelope() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "list", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert!(parsed.get("results").is_some(), "missing 'results' key");
+    assert!(parsed.get("hints").is_some(), "missing 'hints' key");
+
+    let hints = parsed["hints"].as_array().unwrap();
+    assert!(
+        hints.len() >= 2,
+        "types list should produce at least 2 hints, got {}: {hints:?}",
+        hints.len()
+    );
+}
+
+#[test]
+fn types_list_hints_text_suggests_show() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "list", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("types show"),
+        "should suggest types show: {stdout}"
+    );
+    assert!(stdout.contains("lint"), "should suggest lint: {stdout}");
+}
+
+#[test]
+fn types_show_hints_text_suggests_lint() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "show", "note", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("lint"),
+        "types show should suggest lint: {stdout}"
+    );
+}
+
+#[test]
+fn summary_hints_mention_lint_when_schema_defined() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["summary", "--hints", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    // Summary should mention lint when a schema is present
+    assert!(
+        stdout.contains("lint") || stdout.contains("Lint"),
+        "summary should mention lint when schema is defined: {stdout}"
+    );
+}

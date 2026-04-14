@@ -587,14 +587,43 @@ fn run_inner() -> Result<(), AppError> {
             Commands::DropIndex { .. } => {
                 Some(HintContext::from_common(HintSource::DropIndex, &common))
             }
+            Commands::Lint {
+                file_positional,
+                file,
+                glob,
+                fix: _,
+                dry_run,
+            } => {
+                let mut ctx = HintContext::from_common(HintSource::Lint, &common);
+                ctx.glob.clone_from(glob);
+                ctx.dry_run = *dry_run;
+                let mut targets: Vec<String> = file.clone();
+                if let Some(pos) = file_positional {
+                    targets.insert(0, pos.clone());
+                }
+                ctx.file_targets = targets;
+                Some(ctx)
+            }
+            Commands::Types { action } => {
+                use crate::cli::args::TypesAction;
+                let subcommand = match action {
+                    Some(TypesAction::List) | None => Some("list".to_owned()),
+                    Some(TypesAction::Show { .. }) => Some("show".to_owned()),
+                    Some(TypesAction::Create { .. }) => Some("create".to_owned()),
+                    Some(TypesAction::Remove { .. }) => Some("remove".to_owned()),
+                    Some(TypesAction::Set { .. }) => Some("set".to_owned()),
+                };
+                Some(HintContext::from_common(
+                    HintSource::Types { subcommand },
+                    &common,
+                ))
+            }
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
-            | Commands::Views { .. }
-            | Commands::Types { .. }
-            | Commands::Lint { .. } => None,
+            | Commands::Views { .. } => None,
         }
     } else {
         None

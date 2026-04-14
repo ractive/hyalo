@@ -22,6 +22,7 @@ use serde_json::Value;
 use hyalo_core::filename_template::FilenameTemplate;
 use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter};
 use hyalo_core::schema::{self, PropertyConstraint, SchemaConfig, TypeSchema};
+use hyalo_core::util::is_iso8601_date;
 
 use crate::output::{CommandOutcome, Format, format_success};
 
@@ -143,7 +144,7 @@ pub enum FixMode {
 pub fn lint_files_with_options(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
-    format: Format,
+    _format: Format,
     fix: FixMode,
 ) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
@@ -175,16 +176,8 @@ pub fn lint_files_with_options(
         dry_run: matches!(fix, FixMode::DryRun),
     };
 
-    let outcome = match format {
-        Format::Json => {
-            let val = serde_json::to_value(&output).context("failed to serialize lint output")?;
-            CommandOutcome::success(format_success(Format::Json, &val))
-        }
-        Format::Text => {
-            let text = format_text_output(&output, &counts);
-            CommandOutcome::RawOutput(text)
-        }
-    };
+    let val = serde_json::to_value(&output).context("failed to serialize lint output")?;
+    let outcome = CommandOutcome::success(format_success(Format::Json, &val));
 
     Ok((outcome, counts))
 }
@@ -730,93 +723,9 @@ fn value_as_str(v: &Value) -> Option<&str> {
     }
 }
 
-/// Returns `true` for YYYY-MM-DD formatted dates.
-fn is_iso8601_date(s: &str) -> bool {
-    if s.len() != 10 {
-        return false;
-    }
-    let b = s.as_bytes();
-    b[4] == b'-'
-        && b[7] == b'-'
-        && b[..4].iter().all(u8::is_ascii_digit)
-        && b[5..7].iter().all(u8::is_ascii_digit)
-        && b[8..10].iter().all(u8::is_ascii_digit)
-}
-
 // ---------------------------------------------------------------------------
 // Text formatter
 // ---------------------------------------------------------------------------
-
-fn format_text_output(output: &LintOutput, counts: &LintCounts) -> String {
-    use std::fmt::Write as _;
-
-    let mut s = String::new();
-
-    // Fixes section — shown first so the user sees what changed.
-    let fix_count: usize = output.fixes.iter().map(|f| f.actions.len()).sum();
-    if fix_count > 0 {
-        let verb = if output.dry_run { "Would fix" } else { "Fixed" };
-        for file in &output.fixes {
-            if file.actions.is_empty() {
-                continue;
-            }
-            let _ = writeln!(s, "{verb} {}:", file.file);
-            for a in &file.actions {
-                match (&a.kind[..], &a.old) {
-                    ("insert-default", _) => {
-                        let _ = writeln!(s, "  insert  {} = {:?}", a.property, a.new);
-                    }
-                    ("infer-type", _) => {
-                        let _ = writeln!(s, "  infer   type = {:?}", a.new);
-                    }
-                    ("fix-enum-typo", Some(old)) => {
-                        let _ = writeln!(s, "  enum    {}: {:?} -> {:?}", a.property, old, a.new);
-                    }
-                    ("normalize-date", Some(old)) => {
-                        let _ = writeln!(s, "  date    {}: {:?} -> {:?}", a.property, old, a.new);
-                    }
-                    _ => {
-                        let _ = writeln!(s, "  {}  {} = {:?}", a.kind, a.property, a.new);
-                    }
-                }
-            }
-        }
-    }
-
-    for file in &output.files {
-        if file.violations.is_empty() {
-            continue;
-        }
-        let _ = writeln!(s, "{}:", file.file);
-        for v in &file.violations {
-            let pad = if v.severity == Severity::Error {
-                "error"
-            } else {
-                "warn "
-            };
-            let _ = writeln!(s, "  {pad}  {}", v.message);
-        }
-    }
-
-    // Summary line.
-    let files_checked = output.total;
-    let files_label = if files_checked == 1 { "file" } else { "files" };
-    if counts.errors == 0 && counts.warnings == 0 {
-        let _ = write!(s, "{files_checked} {files_label} checked, no issues");
-    } else {
-        let _ = write!(
-            s,
-            "{files_checked} {files_label} checked, {} with issues ({} errors, {} warnings)",
-            counts.files_with_issues, counts.errors, counts.warnings,
-        );
-    }
-    if fix_count > 0 {
-        let fixed_label = if output.dry_run { "would fix" } else { "fixed" };
-        let _ = write!(s, " — {fixed_label} {fix_count}");
-    }
-
-    s
-}
 
 // ---------------------------------------------------------------------------
 // Unit tests
@@ -1102,51 +1011,5 @@ mod tests {
         let (_, counts) = lint_files(&files, &schema, Format::Text).unwrap();
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
-    }
-
-    #[test]
-    fn format_text_output_clean() {
-        let output = LintOutput {
-            files: vec![],
-            total: 3,
-            fixes: Vec::new(),
-            dry_run: false,
-        };
-        let counts = LintCounts::default();
-        let text = format_text_output(&output, &counts);
-        assert!(text.contains("3 files checked"));
-        assert!(text.contains("no issues"));
-    }
-
-    #[test]
-    fn format_text_output_with_violations() {
-        let output = LintOutput {
-            files: vec![FileLintResult {
-                file: "note.md".to_owned(),
-                violations: vec![
-                    Violation {
-                        severity: Severity::Error,
-                        message: "missing required property \"date\"".to_owned(),
-                    },
-                    Violation {
-                        severity: Severity::Warn,
-                        message: "no tags defined".to_owned(),
-                    },
-                ],
-            }],
-            total: 1,
-            fixes: Vec::new(),
-            dry_run: false,
-        };
-        let counts = LintCounts {
-            errors: 1,
-            warnings: 1,
-            files_with_issues: 1,
-        };
-        let text = format_text_output(&output, &counts);
-        assert!(text.contains("note.md:"));
-        assert!(text.contains("error"));
-        assert!(text.contains("warn"));
-        assert!(text.contains("1 file checked, 1 with issues"));
     }
 }
