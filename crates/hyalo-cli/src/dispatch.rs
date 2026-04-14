@@ -26,6 +26,11 @@ pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 50;
 /// Shared context for command dispatch.
 pub(crate) struct CommandContext<'a> {
     pub dir: &'a Path,
+    /// The directory where `.hyalo.toml` was loaded from.  This is the
+    /// project root when `dir` comes from `dir = "subdir"` in the config,
+    /// or the `--dir` target when the user passes `--dir` explicitly.
+    /// Views and types are stored in `config_dir/.hyalo.toml`.
+    pub config_dir: &'a Path,
     pub site_prefix: Option<&'a str>,
     /// Internal format — always Json; commands build JSON, pipeline handles conversion.
     pub effective_format: Format,
@@ -894,7 +899,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Views { action } => {
             let action = action.unwrap_or(ViewsAction::List);
             match action {
-                ViewsAction::List => crate::commands::views::list_views(dir),
+                ViewsAction::List => crate::commands::views::list_views(ctx.config_dir),
                 ViewsAction::Set {
                     name,
                     pattern,
@@ -906,9 +911,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         ));
                     }
                     filters.pattern = pattern;
-                    crate::commands::views::set_view(dir, &name, &filters)
+                    crate::commands::views::set_view(ctx.config_dir, &name, &filters)
                 }
-                ViewsAction::Remove { name } => crate::commands::views::remove_view(dir, &name),
+                ViewsAction::Remove { name } => {
+                    crate::commands::views::remove_view(ctx.config_dir, &name)
+                }
             }
         }
         Commands::Types { action } => {
@@ -919,7 +926,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     Ok(crate::commands::types::show_type(&type_name, ctx.schema))
                 }
                 TypesAction::Remove { type_name } => {
-                    crate::commands::types::remove_type(dir, &type_name)
+                    crate::commands::types::remove_type(ctx.config_dir, &type_name)
                 }
                 TypesAction::Set {
                     type_name,
@@ -930,7 +937,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     filename_template,
                     dry_run,
                 } => crate::commands::types::set_type(
-                    dir,
+                    ctx.config_dir,
                     &type_name,
                     &required,
                     &default,

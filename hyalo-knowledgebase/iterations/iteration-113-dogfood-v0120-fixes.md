@@ -2,7 +2,7 @@
 title: Iteration 113 — Dogfood v0.12.0 Fixes
 type: iteration
 date: 2026-04-14
-status: in-progress
+status: completed
 branch: iter-113/dogfood-v0120-fixes
 tags:
   - iteration
