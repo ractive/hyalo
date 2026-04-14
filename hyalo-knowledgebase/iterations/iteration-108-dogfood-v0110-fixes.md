@@ -11,7 +11,7 @@ tags:
   - hints
   - bug-fix
   - ux
-status: in-progress
+status: completed
 branch: iter-108/dogfood-v0110-fixes
 related:
   - "[[dogfood-results/dogfood-v0110-lint-types]]"
