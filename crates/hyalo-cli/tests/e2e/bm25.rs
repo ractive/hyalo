@@ -912,7 +912,8 @@ fn bm25_uppercase_and_operator_emits_warning() {
 fn bm25_real_word_does_not_emit_operator_warning() {
     let tmp = setup_bm25_vault();
     // "rust" is a real search term — no operator warning should be emitted.
-    let (_status, _json, stderr) = find_json(&tmp, &["rust"]);
+    let (status, _json, stderr) = find_json(&tmp, &["rust"]);
+    assert!(status.success(), "command should succeed: {stderr}");
     assert!(
         !stderr.contains("was interpreted as a boolean operator"),
         "real word should not trigger operator warning, got: {stderr:?}"

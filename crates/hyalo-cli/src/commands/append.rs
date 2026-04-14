@@ -164,7 +164,7 @@ pub fn append(
                 parse_kv(arg).map_err(|e| anyhow::anyhow!("invalid property argument: {e}"))?;
             // Reject empty values for the tags property -- `tags=` would silently
             // insert an empty string into the list, which is never meaningful.
-            if name == "tags" && raw_value.is_empty() {
+            if name == "tags" && raw_value.trim().is_empty() {
                 let out = crate::output::format_error(
                     format,
                     "append --property tags= requires a non-empty tag value",

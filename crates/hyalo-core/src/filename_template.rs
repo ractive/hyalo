@@ -106,9 +106,9 @@ impl FilenameTemplate {
     /// Each placeholder is replaced with the most permissive wildcard that still
     /// constrains the character class:
     ///
-    /// - `{n}`    -> `[0-9]*`  (one or more digits)
-    /// - `{slug}` -> `*`       (any characters - glob has no slug-char class)
-    /// - `{date}` -> `????-??-??` (four digits, dash, two digits, dash, two digits)
+    /// - `{n}`    -> `[0-9][0-9]*`  (one or more digits)
+    /// - `{slug}` -> `*`             (any characters - glob has no slug-char class)
+    /// - `{date}` -> `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]` (YYYY-MM-DD digits only)
     ///
     /// Literal segments are passed through unchanged.
     pub fn to_glob(&self) -> String {
@@ -116,9 +116,11 @@ impl FilenameTemplate {
         for seg in &self.segments {
             match seg {
                 Segment::Literal(s) => out.push_str(s),
-                Segment::Placeholder(Placeholder::N) => out.push_str("[0-9]*"),
+                Segment::Placeholder(Placeholder::N) => out.push_str("[0-9][0-9]*"),
                 Segment::Placeholder(Placeholder::Slug) => out.push('*'),
-                Segment::Placeholder(Placeholder::Date) => out.push_str("????-??-??"),
+                Segment::Placeholder(Placeholder::Date) => {
+                    out.push_str("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]");
+                }
             }
         }
         out
