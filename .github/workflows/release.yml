@@ -421,6 +421,11 @@ jobs:
             exit 1
           fi
 
+      - name: Sync winget-pkgs fork
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: gh repo sync ractive/winget-pkgs
+
       - name: Submit to winget-pkgs
         uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
