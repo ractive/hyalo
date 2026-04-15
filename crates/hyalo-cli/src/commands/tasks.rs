@@ -67,18 +67,11 @@ fn resolve_task_lines(
     bail!("specify at least one of --line, --section, or --all")
 }
 
-/// Format results: single object when exactly 1 task, Vec when multiple.
-/// The output pipeline later wraps this in the `{"results": ..., "hints": [...]}` envelope.
-fn format_results(results: &[TaskReadResult], format: Format) -> String {
-    if let [single] = results {
-        crate::output::format_output(format, single)
-    } else {
-        crate::output::format_output(format, &results)
-    }
-}
-
-/// Same as `format_results` but for dry-run results that carry `old_status`.
-fn format_dry_run_results(results: &[TaskDryRunResult], format: Format) -> String {
+/// Format a slice of results: single object when exactly 1 element, Vec when
+/// multiple. The output pipeline later wraps this in the
+/// `{"results": ..., "hints": [...]}` envelope. Generic over the result type
+/// so both `TaskReadResult` and `TaskDryRunResult` share the same branching.
+fn format_one_or_many<T: serde::Serialize>(results: &[T], format: Format) -> String {
     if let [single] = results {
         crate::output::format_output(format, single)
     } else {
@@ -149,7 +142,9 @@ pub fn task_read(
         }
     }
 
-    Ok(CommandOutcome::success(format_results(&results, format)))
+    Ok(CommandOutcome::success(format_one_or_many(
+        &results, format,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -190,16 +185,24 @@ pub fn task_toggle(
 
     if dry_run {
         // In dry-run mode: compute the toggled state without writing to disk.
-        // Read the current task state and invert the done flag.
+        //
+        // Single-pass scan: collect every task in the file once, then look up
+        // each resolved target line. Avoids O(n * file_length) from calling
+        // `read_task` per line when --all or a large --line list is used.
         //
         // We emit `TaskDryRunResult` (carrying both `old_status` and `status`)
-        // so that the text formatter can render `line N: [old] -> [new]` and
-        // make the direction of change explicit. The dispatch layer always
+        // so the text formatter can render `"file":line [old] -> [new] text`
+        // and make the direction of change explicit. The dispatch layer always
         // forces JSON here; text rendering happens later in the output
         // pipeline via a shape-specific jq filter.
+        let tasks_by_line: std::collections::HashMap<usize, hyalo_core::types::FindTaskInfo> =
+            hyalo_core::tasks::find_task_lines(&full_path)?
+                .into_iter()
+                .map(|t| (t.line, t))
+                .collect();
         let mut results: Vec<TaskDryRunResult> = Vec::with_capacity(resolved.len());
         for &line_num in &resolved {
-            match hyalo_core::tasks::read_task(&full_path, line_num)? {
+            match tasks_by_line.get(&line_num) {
                 None => {
                     let msg = format!("line {line_num} is not a task");
                     return Ok(CommandOutcome::UserError(crate::output::format_error(
@@ -219,13 +222,13 @@ pub fn task_toggle(
                         line: info.line,
                         old_status: info.status,
                         status: new_status,
-                        text: info.text,
+                        text: info.text.clone(),
                         done: new_done,
                     });
                 }
             }
         }
-        return Ok(CommandOutcome::success(format_dry_run_results(
+        return Ok(CommandOutcome::success(format_one_or_many(
             &results, format,
         )));
     }
@@ -245,7 +248,9 @@ pub fn task_toggle(
                     done: info.done,
                 })
                 .collect();
-            Ok(CommandOutcome::success(format_results(&results, format)))
+            Ok(CommandOutcome::success(format_one_or_many(
+                &results, format,
+            )))
         }
         Err(e) => {
             let msg = e.to_string();
@@ -311,7 +316,9 @@ pub fn task_set_status(
                     done: info.done,
                 })
                 .collect();
-            Ok(CommandOutcome::success(format_results(&results, format)))
+            Ok(CommandOutcome::success(format_one_or_many(
+                &results, format,
+            )))
         }
         Err(e) => {
             let msg = e.to_string();

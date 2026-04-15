@@ -33,7 +33,7 @@ KBs exercised:
 query. (2) `--index=./relative` resolved relative to vault dir, not CWD.
 
 **Test 1 — space-separated warning**:
-```
+```bash
 $ hyalo find --index hyalo-knowledgebase/.hyalo-index --count
 warning: --index PATH (space-separated) passes PATH as the search query, not as an index file; use --index=PATH (with =) to specify an index file
 22
@@ -42,7 +42,7 @@ Warning is clear and actionable. The command still runs (backward-compat), but t
 is told what happened.
 
 **Test 2 — relative path with `=`**:
-```
+```bash
 $ hyalo find --index=hyalo-knowledgebase/.hyalo-index "snapshot" --count
 30
 ```
@@ -62,7 +62,7 @@ were preserved as strings but never fed into the link graph. `backlinks`, `--orp
 
 **Test 1 — backlinks via `related:` frontmatter (test KB)**:
 Created `a.md` with `related: ["[[b]]", "[[c]]"]` and `depends-on: ["[[d]]"]`.
-```
+```bash
 $ hyalo --dir /tmp/test backlinks b.md
 2 backlinks for "b.md"
   a.md: line 1
@@ -71,7 +71,7 @@ $ hyalo --dir /tmp/test backlinks b.md
 Line 1 = frontmatter, line 15 = body wikilink. Both detected.
 
 **Test 2 — backlinks via `depends-on:` (test KB)**:
-```
+```bash
 $ hyalo --dir /tmp/test backlinks d.md
 1 backlink for "d.md"
   a.md: line 1
@@ -79,7 +79,7 @@ $ hyalo --dir /tmp/test backlinks d.md
 `depends-on:` property wikilinks are extracted.
 
 **Test 3 — real KB: iteration-113 backlinks**:
-```
+```bash
 $ hyalo backlinks iterations/iteration-113-dogfood-v0120-fixes.md
 3 backlinks for "iterations/iteration-113-dogfood-v0120-fixes.md"
   dogfood-results/dogfood-v0120-followup-iter113b.md: line 1
@@ -105,7 +105,7 @@ inbound links), not c.md/d.md. Correct.
 instead of the wikilink string.
 
 **Test 1 — set with wikilink**:
-```
+```bash
 $ hyalo --dir /tmp/test set wikitest.md --property 'related=[[foo/bar]]'
 # Result in file:
 related: "[[foo/bar]]"
@@ -113,7 +113,7 @@ related: "[[foo/bar]]"
 Stored as a quoted string, not a YAML flow list.
 
 **Test 2 — append second wikilink**:
-```
+```bash
 $ hyalo --dir /tmp/test append wikitest.md --property 'related=[[baz/qux]]'
 # Result in file:
 related:
@@ -123,21 +123,21 @@ related:
 Flat list of strings. No nested lists.
 
 **Test 3 — wikilink with spaces**:
-```
+```bash
 $ hyalo set wikitest2.md --property 'related=[[path/with spaces]]'
 # Result: related: "[[path/with spaces]]"
 ```
 Handled correctly.
 
 **Test 4 — wikilink with pipe alias**:
-```
+```bash
 $ hyalo set wikitest3.md --property 'related=[[path/to/file|alias]]'
 # Result: related: "[[path/to/file|alias]]"
 ```
 Pipe aliases preserved as literal strings.
 
 **Test 5 — append to empty list then wikilink**:
-```
+```bash
 $ hyalo set appendtest.md --property 'related=[]'
 $ hyalo append appendtest.md --property 'related=[[some/link]]'
 # Result:
@@ -154,7 +154,7 @@ Correctly appended to the empty list.
 `lint` caught these after the fact.
 
 **Test 1 — `--validate` rejects enum violation**:
-```
+```bash
 $ hyalo set iterations/iteration-999-test.md --property 'status=bogus-status' --validate
 {
   "error": "iterations/iteration-999-test.md: property \"status\" value \"bogus-status\" not in [planned, in-progress, completed, superseded, shelved, deferred] (did you mean \"completed\"?)",
@@ -165,7 +165,7 @@ exit: 1
 Rejected with a helpful "did you mean" suggestion.
 
 **Test 2 — `--validate` rejects pattern violation**:
-```
+```bash
 $ hyalo set iterations/iteration-999-test.md --property 'branch=bad-branch' --validate
 {
   "error": "...property \"branch\" value \"bad-branch\" does not match pattern \"^iter-\\\\d+[a-z]*/\"",
@@ -175,7 +175,7 @@ exit: 1
 ```
 
 **Test 3 — `--validate` allows valid values**:
-```
+```bash
 $ hyalo set iterations/iteration-999-test.md --property 'status=completed' --validate
 # 1/1 modified, exit: 0
 ```
@@ -192,14 +192,14 @@ require modifying `.hyalo.toml`).
 "set requires --file or --glob".
 
 **Test 1 — `--where-property` without `--file`/`--glob`**:
-```
+```bash
 $ hyalo --dir /tmp/test set --where-property 'status=active' --property 'tested=true'
 # scanned: 6, total: 5, modified: [a.md, b.md, c.md, d.md, wikitest.md]
 ```
 Correctly defaulted to scanning all `**/*.md` files and filtered by the where-predicate.
 
 **Test 2 — `--where-tag` without `--file`/`--glob`**:
-```
+```bash
 $ hyalo --dir /tmp/test set --where-tag test --property 'marker=found'
 # scanned: 9, total: 0
 ```
@@ -211,7 +211,7 @@ Ran without error (0 matches because no files had that tag). Previously would ha
 
 ### UX-1: `--stemmer` alias for `find --language` — FIXED
 
-```
+```bash
 $ hyalo find --stemmer english "tests" --count
 154
 
@@ -227,7 +227,7 @@ markdown code-block language."
 
 ### UX-2: `lint --count` — FIXED
 
-```
+```bash
 $ hyalo lint --count
 0
 ```
@@ -246,7 +246,7 @@ because the dispatch layer forces JSON internally; iter-116 reworked this via a
 dedicated `TaskDryRunResult` shape and a shape-based text filter.
 
 **Text output** (iter-116):
-```
+```bash
 $ hyalo task toggle tasks.md --all --dry-run --format text
 "tasks.md":6 [x] -> [ ] Completed task
 "tasks.md":7 [ ] -> [x] Open task
@@ -260,7 +260,7 @@ so the direction is explicit in both formats.
 
 ### UX-4: `properties <typo>` hint — FIXED
 
-```
+```bash
 $ hyalo properties versions
 error: unrecognized subcommand 'versions'
 
@@ -276,7 +276,7 @@ points to valid `properties` subcommands.
 
 Added `[lint] ignore = ["validate-test.md"]` to `.hyalo.toml` in the test KB:
 
-```
+```bash
 $ hyalo --dir /tmp/test lint --format text
 6 files checked, no issues
 ```
@@ -298,7 +298,7 @@ Closed together with UX-3 above. See `[[iterations/iteration-116-dogfood-v0120-i
 MDN files use absolute URL-style links (`/en-US/docs/Web/...`) rather than relative
 wikilinks. These show as `(unresolved)` in `find --fields links`:
 
-```
+```bash
 $ hyalo --dir .../mdn find --file web/javascript/.../promise/any/index.md --fields links
   "/en-US/docs/Web/JavaScript/Reference/Iteration_protocols" (unresolved)
   "/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise" (unresolved)
