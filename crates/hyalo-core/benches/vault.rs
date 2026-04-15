@@ -99,7 +99,7 @@ fn bench_link_graph_build(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(30));
     group.bench_function("build", |b| {
-        b.iter(|| LinkGraph::build(black_box(&vault), None).unwrap());
+        b.iter(|| LinkGraph::build(black_box(&vault), None, None).unwrap());
     });
     group.finish();
 }

@@ -134,8 +134,12 @@ pub(crate) struct Cli {
 
     /// Use a pre-built snapshot index instead of scanning files from disk.
     ///
-    /// When passed without a value (`--index`), uses `.hyalo-index` in the
-    /// vault directory. Use `--index=PATH` for a different index file.
+    /// Bare `--index` (no value) uses `.hyalo-index` in the vault directory.
+    /// `--index=PATH` (with `=`) resolves a relative PATH against the current
+    /// working directory, not the vault dir. Absolute paths are used as-is.
+    ///
+    /// Note: `--index PATH` (space-separated) passes PATH as the query pattern,
+    /// not the index file. Always use `--index=PATH` when specifying a file.
     ///
     /// Read-only commands (find, summary, tags summary, properties summary,
     /// backlinks) use the index to skip disk scans entirely.
@@ -236,8 +240,12 @@ pub(crate) struct FindFilters {
     #[arg(long)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Stemming language for BM25 body search (default: english). Supported: arabic, danish, dutch, english, finnish, french, german, greek, hungarian, italian, norwegian, portuguese, romanian, russian, spanish, swedish, tamil, turkish
-    #[arg(long, value_name = "LANG")]
+    /// Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
+    /// tokenization — NOT markdown code-block language.
+    /// Default: english. Supported: arabic, danish, dutch, english, finnish, french, german,
+    /// greek, hungarian, italian, norwegian, portuguese, romanian, russian, spanish, swedish,
+    /// tamil, turkish
+    #[arg(long, alias = "stemmer", value_name = "LANG")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }
@@ -541,6 +549,10 @@ Repeatable (AND).\n\
         /// Preview changes without modifying any files
         #[arg(long)]
         dry_run: bool,
+        /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
+        #[arg(long, alias = "strict")]
+        validate: bool,
     },
     /// Remove frontmatter properties and/or tags from file(s)
     #[command(
@@ -699,6 +711,10 @@ Repeatable (AND).\n\
         /// Preview changes without modifying any files
         #[arg(long)]
         dry_run: bool,
+        /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
+        #[arg(long, alias = "strict")]
+        validate: bool,
     },
     /// Manage saved views (named find filter sets stored in .hyalo.toml)
     #[command(

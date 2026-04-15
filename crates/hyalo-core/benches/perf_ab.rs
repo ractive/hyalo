@@ -111,6 +111,7 @@ fn bench_index_build(c: &mut Criterion) {
         scan_body: true,
         bm25_tokenize: false,
         default_language: None,
+        frontmatter_link_props: None,
     };
 
     let mut group = c.benchmark_group("index_build");

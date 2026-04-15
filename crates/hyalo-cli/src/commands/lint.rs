@@ -191,8 +191,15 @@ pub fn prepend_file_result(
     }
 
     let new_payload = format_success(Format::Json, &value);
+    // The outcome's `total` (used by `--count`) tracks files-with-issues —
+    // bump it by 1 when the prepended pseudo-file has at least one violation,
+    // so `--count` stays in sync with `files_with_issues` in the JSON payload.
+    let extra_counts_toward_total = !extra.violations.is_empty();
     Ok(match total {
-        Some(t) => CommandOutcome::success_with_total(new_payload, t),
+        Some(t) => CommandOutcome::success_with_total(
+            new_payload,
+            if extra_counts_toward_total { t + 1 } else { t },
+        ),
         None => CommandOutcome::success(new_payload),
     })
 }
@@ -348,7 +355,11 @@ pub fn lint_files_with_options(
     };
 
     let val = serde_json::to_value(&output).context("failed to serialize lint output")?;
-    let outcome = CommandOutcome::success(format_success(Format::Json, &val));
+    // Use success_with_total so that `--count` returns the number of files with issues.
+    let outcome = CommandOutcome::success_with_total(
+        format_success(Format::Json, &val),
+        counts.files_with_issues as u64,
+    );
 
     Ok((outcome, counts))
 }
@@ -946,6 +957,24 @@ fn value_as_str(v: &Value) -> Option<&str> {
     } else {
         None
     }
+}
+
+// ---------------------------------------------------------------------------
+// Public validation helper (used by set/append --validate)
+// ---------------------------------------------------------------------------
+
+/// Validate a single property value against a constraint without a shared regex cache.
+///
+/// Returns `Some(error_message)` when the value violates the constraint, `None`
+/// when it is valid. Regex patterns are compiled fresh for each call — use the
+/// private [`validate_constraint`] with a shared cache in hot paths.
+pub fn validate_constraint_simple(
+    name: &str,
+    value: &Value,
+    constraint: &PropertyConstraint,
+) -> Option<String> {
+    let mut cache = HashMap::new();
+    validate_constraint(name, value, constraint, &mut cache).map(|v| v.message)
 }
 
 // ---------------------------------------------------------------------------

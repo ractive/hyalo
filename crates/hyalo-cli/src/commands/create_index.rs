@@ -69,6 +69,7 @@ pub fn create_index(
             scan_body: true,
             bm25_tokenize: true,
             default_language,
+            frontmatter_link_props: None,
         },
     )?;
 

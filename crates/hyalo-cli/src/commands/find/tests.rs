@@ -85,6 +85,7 @@ fn run_find_ext(
             scan_body: true,
             bm25_tokenize: false,
             default_language: None,
+            frontmatter_link_props: None,
         },
     )?;
     find(
@@ -1547,6 +1548,7 @@ fn content_search_works_with_frontmatter_only_index() {
             scan_body: false,
             bm25_tokenize: false,
             default_language: None,
+            frontmatter_link_props: None,
         },
     )
     .unwrap();

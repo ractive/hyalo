@@ -185,7 +185,10 @@ pub fn remove(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    if let Some(outcome) = require_file_or_glob(files, globs, "remove", format) {
+    // Allow omitting --file/--glob when --where-property or --where-tag is provided;
+    // in that case, the command defaults to all vault files.
+    let has_where = !where_property_filters.is_empty() || !where_tag_filters.is_empty();
+    if !has_where && let Some(outcome) = require_file_or_glob(files, globs, "remove", format) {
         return Ok(outcome);
     }
 

@@ -12,6 +12,31 @@ struct SearchConfig {
     language: Option<String>,
 }
 
+/// Link-extraction configuration from `[links]` in `.hyalo.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinksConfig {
+    /// Frontmatter property names whose values are scanned for `[[wikilink]]`
+    /// strings and included in the link graph. Overrides the built-in defaults
+    /// (`related`, `depends-on`, `supersedes`, `superseded-by`).
+    frontmatter_properties: Option<Vec<String>>,
+}
+
+/// Lint configuration from `[lint]` in `.hyalo.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LintConfig {
+    /// Vault-relative paths or glob patterns to skip during `hyalo lint`.
+    /// Files matching any entry are excluded from lint output. Entries without
+    /// glob meta-characters are matched literally against the normalized
+    /// vault-relative path (`/` separators); other entries use the standard
+    /// globset semantics (`**/*.md`, `dir/*.md`, etc.). This only affects the
+    /// `lint` command — read-only commands still surface their own frontmatter
+    /// parse-error warnings for these files.
+    #[serde(default)]
+    ignore: Vec<String>,
+}
+
 /// Raw deserialized representation of `.hyalo.toml`.
 ///
 /// All fields are optional so that a partial config file is valid.
@@ -34,9 +59,18 @@ struct ConfigFile {
     views: Option<HashMap<String, toml::Value>>,
     /// Search configuration (BM25 stemming language, etc.)
     search: Option<SearchConfig>,
+    /// Link extraction configuration (frontmatter property names to scan).
+    links: Option<LinksConfig>,
+    /// When `true`, schema validation runs automatically on every `set`/`append`.
+    /// Accepted as a top-level key for backwards compatibility; the documented
+    /// location is `[schema] validate_on_write`.
+    validate_on_write: Option<bool>,
+    /// Lint-specific configuration (`[lint]` section).
+    lint: Option<LintConfig>,
     /// Schema configuration for document type validation.
     /// Stored as raw TOML value to avoid `deny_unknown_fields` issues with
-    /// the deeply nested schema structure.
+    /// the deeply nested schema structure. Also hosts `validate_on_write` —
+    /// see `extract_schema_validate_on_write`.
     #[serde(default)]
     schema: Option<toml::Value>,
     /// Default output limit for list commands (0 = unlimited).
@@ -57,6 +91,14 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) site_prefix: Option<String>,
     /// Default stemming language for BM25 search from `[search] language` in `.hyalo.toml`.
     pub(crate) search_language: Option<String>,
+    /// Frontmatter property names scanned for `[[wikilink]]` values in the link graph.
+    /// `None` = use built-in defaults (`related`, `depends-on`, etc.).
+    pub(crate) frontmatter_link_props: Option<Vec<String>>,
+    /// When `true`, schema validation is applied on every `set`/`append` operation.
+    /// From `validate_on_write = true` in `.hyalo.toml`.
+    pub(crate) validate_on_write: bool,
+    /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore`.
+    pub(crate) lint_ignore: Vec<String>,
     /// Parsed schema configuration from `[schema.*]` sections.
     pub(crate) schema: SchemaConfig,
     /// Default output limit for list commands.
@@ -76,6 +118,9 @@ impl PartialEq for ResolvedDefaults {
             && self.hints == other.hints
             && self.site_prefix == other.site_prefix
             && self.search_language == other.search_language
+            && self.frontmatter_link_props == other.frontmatter_link_props
+            && self.validate_on_write == other.validate_on_write
+            && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
     }
 }
@@ -89,6 +134,9 @@ impl ResolvedDefaults {
             hints: true,
             site_prefix: None,
             search_language: None,
+            frontmatter_link_props: None,
+            validate_on_write: false,
+            lint_ignore: Vec::new(),
             schema: SchemaConfig::default(),
             default_limit: None,
         }
@@ -167,6 +215,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     }
 
     let defaults = ResolvedDefaults::hardcoded();
+    // Resolve `validate_on_write` from either `[schema] validate_on_write`
+    // (documented location) or the top-level `validate_on_write` key
+    // (backwards-compatible alternate). The `[schema]` table wins if both set.
+    let schema_validate_on_write = extract_schema_validate_on_write(cfg.schema.as_ref());
+    let validate_on_write = schema_validate_on_write
+        .or(cfg.validate_on_write)
+        .unwrap_or(false);
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
@@ -175,9 +230,19 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
         search_language: cfg.search.and_then(|s| s.language),
+        frontmatter_link_props: cfg.links.and_then(|l| l.frontmatter_properties),
+        validate_on_write,
+        lint_ignore: cfg.lint.map(|l| l.ignore).unwrap_or_default(),
         schema,
         default_limit: cfg.default_limit,
     }
+}
+
+/// Extract `[schema] validate_on_write` from the raw TOML if present. Returns
+/// `None` if the key is absent or not a boolean (in which case the caller falls
+/// back to the top-level `validate_on_write` key, then to the default `false`).
+fn extract_schema_validate_on_write(raw: Option<&toml::Value>) -> Option<bool> {
+    raw?.get("validate_on_write")?.as_bool()
 }
 
 /// Parse a `SchemaConfig` from the raw `[schema]` TOML value.
@@ -362,5 +427,110 @@ site_prefix = "docs"
             dir.path().to_path_buf(),
             "config_dir should be where .hyalo.toml lives, not the vault subdir"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // UX-5: [lint] ignore list
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn lint_ignore_list_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[lint]\nignore = [\"templates/template.md\", \"_drafts/draft.md\"]\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.lint_ignore,
+            vec![
+                "templates/template.md".to_owned(),
+                "_drafts/draft.md".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn lint_ignore_empty_by_default() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.lint_ignore.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // [links] frontmatter_properties config
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn links_frontmatter_properties_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\nfrontmatter_properties = [\"related\", \"custom-ref\"]\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.frontmatter_link_props,
+            Some(vec!["related".to_owned(), "custom-ref".to_owned()])
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // validate_on_write config
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn validate_on_write_config() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "validate_on_write = true\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.validate_on_write);
+    }
+
+    #[test]
+    fn validate_on_write_under_schema_table() {
+        // The documented location is `[schema] validate_on_write = true`.
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[schema]\nvalidate_on_write = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(
+            resolved.validate_on_write,
+            "`[schema] validate_on_write` should enable write-time validation"
+        );
+    }
+
+    #[test]
+    fn validate_on_write_schema_table_wins_over_top_level() {
+        // If both are set, `[schema] validate_on_write` wins.
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "validate_on_write = false\n[schema]\nvalidate_on_write = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.validate_on_write);
+    }
+
+    #[test]
+    fn validate_on_write_default_false() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(!resolved.validate_on_write);
     }
 }

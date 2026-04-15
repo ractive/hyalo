@@ -16,7 +16,9 @@ use std::time::SystemTime;
 use crate::bm25::{Bm25InvertedIndex, resolve_language, tokenize};
 use crate::filter::extract_tags;
 use crate::frontmatter;
-use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
+use crate::link_graph::{
+    DEFAULT_FRONTMATTER_LINK_PROPERTIES, FileLinks, LinkGraph, LinkGraphVisitor,
+};
 use crate::links::Link;
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::tasks::TaskExtractor;
@@ -92,7 +94,7 @@ pub trait VaultIndex {
 /// will be empty.  This is an optimization for commands that only need
 /// frontmatter data (e.g. `properties summary`, `tags summary`,
 /// `find --property status=planned` without body fields).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ScanOptions<'a> {
     /// When false, only frontmatter is read.
     pub scan_body: bool,
@@ -105,6 +107,9 @@ pub struct ScanOptions<'a> {
     /// Used as the fallback language when a document has no `language` frontmatter
     /// property. `None` falls back to English.
     pub default_language: Option<&'a str>,
+    /// Frontmatter property names scanned for `[[wikilink]]` values during link
+    /// graph construction. `None` uses [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
+    pub frontmatter_link_props: Option<&'a [String]>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +164,15 @@ impl ScannedIndex {
         let mut warnings: Vec<IndexWarning> = Vec::new();
 
         let default_language = options.default_language;
+        let fm_link_props: Vec<String> = options.frontmatter_link_props.map_or_else(
+            || {
+                DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect()
+            },
+            <[String]>::to_vec,
+        );
         let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> = files
             .par_iter()
             .map(|(full_path, rel_path)| {
@@ -168,6 +182,7 @@ impl ScannedIndex {
                     options.scan_body,
                     options.bm25_tokenize,
                     default_language,
+                    &fm_link_props,
                 )
             })
             .collect();
@@ -282,6 +297,12 @@ pub struct SnapshotIndex {
     header: SnapshotHeader,
     /// Persisted BM25 inverted index (if the snapshot was built with `bm25_tokenize = true`).
     bm25_index: Option<Bm25InvertedIndex>,
+    /// Frontmatter property names scanned for `[[wikilink]]` values when
+    /// `rescan_entry` / `rename_entry` re-scan a file after a mutation. Not
+    /// persisted in the snapshot — callers must set it for each session via
+    /// [`SnapshotIndex::set_frontmatter_link_props`]; `None` falls back to
+    /// [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
+    frontmatter_link_props: Option<Vec<String>>,
 }
 
 impl SnapshotIndex {
@@ -320,6 +341,27 @@ impl SnapshotIndex {
         &mut self.graph
     }
 
+    /// Set the frontmatter-property list used by `rescan_entry` / `rename_entry`
+    /// when they re-scan a file after a mutation. Callers typically set this
+    /// once after loading the snapshot from the active `.hyalo.toml` config so
+    /// incremental re-scans produce the same link set as the initial build.
+    ///
+    /// Pass `None` to fall back to [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
+    pub fn set_frontmatter_link_props(&mut self, props: Option<Vec<String>>) {
+        self.frontmatter_link_props = props;
+    }
+
+    /// Resolved frontmatter property list — either the session-configured list
+    /// or the built-in defaults.
+    fn effective_frontmatter_link_props(&self) -> Vec<String> {
+        self.frontmatter_link_props.clone().unwrap_or_else(|| {
+            DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect()
+        })
+    }
+
     /// Re-scan a single file and replace its index entry.
     ///
     /// Returns the `FileLinks` for the re-scanned file so the caller can
@@ -330,7 +372,9 @@ impl SnapshotIndex {
             return Ok(None);
         };
         let full_path = dir.join(rel_path);
-        let (entry, file_links) = scan_one_file(&full_path, rel_path, true, false, None)?;
+        let fm_props = self.effective_frontmatter_link_props();
+        let (entry, file_links) =
+            scan_one_file(&full_path, rel_path, true, false, None, &fm_props)?;
         self.entries[idx] = entry;
         Ok(file_links)
     }
@@ -370,7 +414,9 @@ impl SnapshotIndex {
 
         // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
-        let (entry, _file_links) = scan_one_file(&full_path, new_rel, true, false, None)?;
+        let fm_props = self.effective_frontmatter_link_props();
+        let (entry, _file_links) =
+            scan_one_file(&full_path, new_rel, true, false, None, &fm_props)?;
 
         // Remove without triggering a path-index rebuild.
         self.entries.remove(old_idx);
@@ -438,6 +484,7 @@ impl SnapshotIndex {
                     graph: data.graph,
                     header: data.header,
                     bm25_index: data.bm25_index,
+                    frontmatter_link_props: None,
                 })
             }
             Err(e) => {
@@ -680,6 +727,7 @@ pub(crate) fn scan_one_file(
     scan_body: bool,
     bm25_tokenize: bool,
     default_language: Option<&str>,
+    frontmatter_link_props: &[String],
 ) -> Result<(IndexEntry, Option<FileLinks>)> {
     let mut fm = FrontmatterCollector::new(scan_body);
     let mut body_collector = BodyCollector::new(bm25_tokenize);
@@ -687,7 +735,10 @@ pub(crate) fn scan_one_file(
     let (sections, tasks, links, file_links) = if scan_body {
         let mut section_scanner = SectionScanner::new();
         let mut task_extractor = TaskExtractor::new();
-        let mut link_visitor = LinkGraphVisitor::new(PathBuf::from(rel_path));
+        let mut link_visitor = LinkGraphVisitor::with_frontmatter_props(
+            PathBuf::from(rel_path),
+            frontmatter_link_props.to_vec(),
+        );
 
         scanner::scan_file_multi(
             full_path,
@@ -1073,6 +1124,7 @@ See [[a]] for details.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1090,6 +1142,7 @@ See [[a]] for details.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1115,6 +1168,7 @@ See [[a]] for details.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1141,6 +1195,7 @@ See [[a]] for details.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1163,6 +1218,7 @@ See [[a]] for details.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1203,6 +1259,7 @@ Content.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1221,6 +1278,7 @@ Content.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1242,6 +1300,7 @@ Content.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -1279,6 +1338,7 @@ Content.
                 scan_body: false,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();

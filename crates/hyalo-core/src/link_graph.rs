@@ -47,9 +47,16 @@ impl LinkGraph {
     /// `/docs/page.md` resolves to `page.md` relative to the vault root.
     /// Pass `None` when `dir` is `"."` (repo root).
     ///
+    /// `frontmatter_link_props` controls which frontmatter property names are
+    /// scanned for `[[wikilink]]` strings. Pass `None` to use the defaults.
+    ///
     /// Files with malformed frontmatter are skipped and reported in
     /// `LinkGraphBuild::warnings` so callers can decide how to surface them.
-    pub fn build(dir: &Path, site_prefix: Option<&str>) -> Result<LinkGraphBuild> {
+    pub fn build(
+        dir: &Path,
+        site_prefix: Option<&str>,
+        frontmatter_link_props: Option<&[String]>,
+    ) -> Result<LinkGraphBuild> {
         let files = discovery::discover_files(dir)?;
         let pairs: Vec<(PathBuf, PathBuf)> = files
             .into_iter()
@@ -58,7 +65,7 @@ impl LinkGraph {
                 (f, rel)
             })
             .collect();
-        Self::build_from_files(&pairs, site_prefix)
+        Self::build_from_files(&pairs, site_prefix, frontmatter_link_props)
     }
 
     /// Build a link graph from a pre-collected list of `(absolute_path, relative_path)` pairs.
@@ -66,17 +73,32 @@ impl LinkGraph {
     /// `site_prefix` is an optional path prefix stripped from absolute links
     /// (those starting with `/`) before resolution.  See [`LinkGraph::build`] for details.
     ///
+    /// `frontmatter_link_props` controls which frontmatter property names are
+    /// scanned for `[[wikilink]]` strings. Pass `None` to use the defaults.
+    ///
     /// Use this when the caller already has the file list (e.g. from `collect_files`)
     /// to avoid a redundant directory traversal.
     pub fn build_from_files(
         files: &[(PathBuf, PathBuf)],
         site_prefix: Option<&str>,
+        frontmatter_link_props: Option<&[String]>,
     ) -> Result<LinkGraphBuild> {
+        let fm_props: Vec<String> = frontmatter_link_props.map_or_else(
+            || {
+                DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect()
+            },
+            <[String]>::to_vec,
+        );
+
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::with_capacity(files.len());
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
 
         for (full_path, rel) in files {
-            let mut visitor = LinkGraphVisitor::new(rel.clone());
+            let mut visitor =
+                LinkGraphVisitor::with_frontmatter_props(rel.clone(), fm_props.clone());
             match scanner::scan_file_multi(full_path, &mut [&mut visitor]) {
                 Ok(()) => {}
                 Err(e) if frontmatter::is_parse_error(&e) => {
@@ -282,21 +304,28 @@ fn insert_file_links(
     }
 }
 
+/// Default frontmatter properties scanned for wikilinks in the link graph.
+pub const DEFAULT_FRONTMATTER_LINK_PROPERTIES: &[&str] =
+    &["related", "depends-on", "supersedes", "superseded-by"];
+
 /// Visitor that collects links with their line numbers.
-/// Skips frontmatter parsing for performance.
+/// Also scans configured frontmatter properties for [[wikilink]] strings.
 pub(crate) struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
     scratch: Vec<Link>,
+    /// Frontmatter property names to scan for [[wikilink]] patterns.
+    frontmatter_props: Vec<String>,
 }
 
 impl LinkGraphVisitor {
-    /// Create a new visitor for the given source file (vault-relative path).
-    pub fn new(source: PathBuf) -> Self {
+    /// Create a new visitor with a custom frontmatter property list.
+    pub fn with_frontmatter_props(source: PathBuf, frontmatter_props: Vec<String>) -> Self {
         Self {
             source,
             links: Vec::new(),
             scratch: Vec::new(),
+            frontmatter_props,
         }
     }
 
@@ -307,9 +336,53 @@ impl LinkGraphVisitor {
             links: self.links,
         }
     }
+
+    /// Extract wikilinks from a string value and add them to `self.links`.
+    ///
+    /// Uses line 1 as the line number for all frontmatter-derived links
+    /// (frontmatter doesn't have meaningful line numbers for link resolution).
+    fn extract_frontmatter_wikilinks(&mut self, value: &str) {
+        self.scratch.clear();
+        extract_links_from_text_with_original(value, value, &mut self.scratch);
+        for link in self.scratch.drain(..) {
+            if link.kind == crate::links::LinkKind::Wikilink {
+                self.links.push((1, link));
+            }
+        }
+    }
 }
 
 impl FileVisitor for LinkGraphVisitor {
+    fn on_frontmatter(
+        &mut self,
+        props: indexmap::IndexMap<String, serde_json::Value>,
+    ) -> ScanAction {
+        // Collect values first to avoid a simultaneous immutable borrow of
+        // `self.frontmatter_props` and a mutable borrow from `extract_frontmatter_wikilinks`.
+        let mut values_to_scan: Vec<String> = Vec::new();
+        for prop_name in &self.frontmatter_props {
+            if let Some(value) = props.get(prop_name.as_str()) {
+                match value {
+                    serde_json::Value::String(s) => {
+                        values_to_scan.push(s.clone());
+                    }
+                    serde_json::Value::Array(arr) => {
+                        for item in arr {
+                            if let serde_json::Value::String(s) = item {
+                                values_to_scan.push(s.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for v in &values_to_scan {
+            self.extract_frontmatter_wikilinks(v);
+        }
+        ScanAction::Continue
+    }
+
     fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
         // Use `cleaned` (inline code and comments stripped) so that [[links]]
         // inside backtick spans are not indexed as real links.
@@ -323,7 +396,11 @@ impl FileVisitor for LinkGraphVisitor {
     }
 
     fn needs_frontmatter(&self) -> bool {
-        false
+        // Only require frontmatter parsing when there is at least one property
+        // to scan. Callers that pass an empty `frontmatter_props` list get the
+        // old behavior (skip frontmatter entirely) so malformed YAML does not
+        // prevent body-link indexing.
+        !self.frontmatter_props.is_empty()
     }
 }
 
@@ -456,7 +533,7 @@ mod tests {
             ("b.md", "---\ntitle: B\n---\nSee [[a]] and [[c]]\n"),
             ("c.md", "---\ntitle: C\n---\nNo links here\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl_b = graph.backlinks("b");
@@ -483,7 +560,7 @@ mod tests {
             // `../a.md` from `sub/` resolves to `a.md` at the vault root.
             ("sub/b.md", "Back to [a](../a.md)\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         // Down-path links are stored normalized (no change needed).
@@ -505,7 +582,7 @@ mod tests {
             ("assets/img.md", "# Image\n"),
             ("notes/page.md", "See [img](../assets/img.md)\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("assets/img.md");
@@ -525,7 +602,7 @@ mod tests {
             ("target.md", "# Target\n"),
             ("sub/a.md", "[link](../target.md)\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("target.md");
@@ -552,7 +629,7 @@ mod tests {
     #[test]
     fn build_graph_with_alias() {
         let vault = create_vault(&[("a.md", "See [[b|my note B]]\n")]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("b");
@@ -566,7 +643,7 @@ mod tests {
             ("a.md", "Link to [[notes]]\n"),
             ("b.md", "Link to [text](notes.md)\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         // Query with .md finds both the .md link and the bare wikilink
@@ -581,7 +658,7 @@ mod tests {
     #[test]
     fn links_inside_code_blocks_ignored() {
         let vault = create_vault(&[("a.md", "---\ntitle: A\n---\n```\n[[b]]\n```\nReal [[c]]\n")]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         assert!(graph.backlinks("b").is_empty());
@@ -591,7 +668,7 @@ mod tests {
     #[test]
     fn links_inside_inline_code_ignored() {
         let vault = create_vault(&[("a.md", "Use `[[b]]` syntax and [[c]]\n")]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         assert!(graph.backlinks("b").is_empty());
@@ -599,12 +676,17 @@ mod tests {
     }
 
     #[test]
-    fn malformed_yaml_ignored_when_frontmatter_not_needed() {
-        // With needs_frontmatter=false, malformed YAML is never parsed — file is still indexed
+    fn malformed_yaml_produces_warning_and_body_links_skipped() {
+        // The LinkGraphVisitor now always reads frontmatter (needs_frontmatter = true)
+        // to extract wikilinks from configured frontmatter properties.
+        // As a result, a file with malformed YAML is skipped entirely (warning issued)
+        // rather than partially indexed for body links.
         let vault = create_vault(&[("a.md", "---\n: bad yaml [[\n---\n[[b]]\n")]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
-        let graph = build.graph;
-        assert_eq!(graph.backlinks("b").len(), 1);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        // The file was skipped due to malformed frontmatter — no body links indexed.
+        assert_eq!(build.graph.backlinks("b").len(), 0);
+        // A warning is issued for the skipped file.
+        assert_eq!(build.warnings.len(), 1);
     }
 
     #[test]
@@ -619,7 +701,7 @@ mod tests {
             ),
             ("also_good.md", "---\ntitle: Also Good\n---\n[[target]]\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
 
         // Warning should mention the bad file
         assert_eq!(build.warnings.len(), 1);
@@ -642,7 +724,7 @@ mod tests {
         huge_fm.push_str("[[target]]\n");
 
         let vault = create_vault(&[("good.md", "[[target]]\n"), ("huge.md", &huge_fm)]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("target");
@@ -652,7 +734,7 @@ mod tests {
     #[test]
     fn empty_vault() {
         let vault = create_vault(&[]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
         assert!(graph.backlinks("anything").is_empty());
     }
@@ -706,7 +788,7 @@ mod tests {
                 "---\ntitle: Iter 1\n---\nSee [[backlog/item]]\n",
             ),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("backlog/item");
@@ -728,7 +810,7 @@ mod tests {
             ("backlog/item.md", "Content\n"),
             ("a.md", "See [[backlog/item.md]]\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("backlog/item.md");
@@ -746,7 +828,7 @@ mod tests {
             ("other/target.md", "Content\n"),
             ("sub/source.md", "See [[other/target]]\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         // Must find the backlink via vault-relative path
@@ -770,7 +852,7 @@ mod tests {
             ("target.md", "Content\n"),
             ("sub/source.md", "See [link](../target.md)\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("target.md");
@@ -790,7 +872,7 @@ mod tests {
             ("source.md", "[link](/docs/target.md)\n"),
             ("target.md", "# Target\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), Some("docs")).unwrap();
+        let build = LinkGraph::build(vault.path(), Some("docs"), None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("target.md");
@@ -803,7 +885,7 @@ mod tests {
         // With site_prefix = None, `/page.md` resolves to `page.md` by
         // stripping only the leading `/`.
         let vault = create_vault(&[("source.md", "[link](/page.md)\n"), ("page.md", "# Page\n")]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("page.md");
@@ -827,7 +909,7 @@ mod tests {
             ("a.md", "Self-reference: [[a]] and also [[b]]\n"),
             ("b.md", "Link to [[a]]\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         // Raw backlinks for "a" include the self-link from a.md
@@ -859,7 +941,7 @@ mod tests {
             ("a.md", "Self: [me](a.md)\n"),
             ("b.md", "Also: [a](a.md)\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl = graph.backlinks("a.md");
@@ -882,7 +964,7 @@ mod tests {
         // a.md only links to itself — raw backlinks has one entry (the self-link).
         // After filtering with is_self_link the result is empty.
         let vault = create_vault(&[("a.md", "See [[a]] for details.\n")]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let raw_a = graph.backlinks("a");
@@ -916,7 +998,7 @@ mod tests {
         ]);
 
         // Path 1: build via the standard scanner
-        let build1 = LinkGraph::build(vault.path(), None).unwrap();
+        let build1 = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph1 = build1.graph;
 
         // Path 2: scan with LinkGraphVisitor, collect FileLinks, then from_file_links
@@ -928,7 +1010,14 @@ mod tests {
                     .strip_prefix(vault.path())
                     .unwrap_or(full_path)
                     .to_path_buf();
-                let mut visitor = LinkGraphVisitor::new(rel);
+                // Use the same default frontmatter-link properties as
+                // `LinkGraph::build(.., None)` above, so both paths see the
+                // same link set (frontmatter + body).
+                let fm_props: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
                 crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
                 visitor.into_file_links()
             })
@@ -971,7 +1060,7 @@ mod tests {
                 "Wiki: [[docs/a]] and md: [link](../notes/b.md)\n",
             ),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let graph = build.graph;
 
         let bl_a = graph.backlinks("docs/a");
@@ -993,7 +1082,7 @@ mod tests {
             ("notes/old.md", "See [[unrelated]]\n"),
             ("unrelated.md", "Content\n"),
         ]);
-        let build = LinkGraph::build(vault.path(), None).unwrap();
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let mut graph = build.graph;
 
         graph.rename_path("notes/old.md", "notes/new.md");
@@ -1042,5 +1131,83 @@ mod tests {
             src_fwd, "notes/new.md",
             "source path must be updated to new path"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // BUG-B: Frontmatter wikilinks in link graph
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn frontmatter_related_wikilink_indexed() {
+        // A file with `related: [[target]]` should produce a backlink to "target".
+        let vault = create_vault(&[("source.md", "---\nrelated: '[[target]]'\n---\nBody text\n")]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let bl = build.graph.backlinks("target");
+        assert_eq!(
+            bl.len(),
+            1,
+            "frontmatter [[wikilink]] in `related` should be indexed"
+        );
+        assert_eq!(bl[0].source, PathBuf::from("source.md"));
+    }
+
+    #[test]
+    fn frontmatter_related_list_of_wikilinks_indexed() {
+        // A file with `related: [[[a]], [[b]]]` — list of wikilinks — should produce
+        // backlinks for both "a" and "b".
+        let vault = create_vault(&[(
+            "source.md",
+            "---\nrelated:\n  - '[[a]]'\n  - '[[b]]'\n---\nBody\n",
+        )]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let bl_a = build.graph.backlinks("a");
+        let bl_b = build.graph.backlinks("b");
+        assert_eq!(bl_a.len(), 1, "first wikilink in list should be indexed");
+        assert_eq!(bl_b.len(), 1, "second wikilink in list should be indexed");
+    }
+
+    #[test]
+    fn frontmatter_non_default_prop_not_indexed_by_default() {
+        // A property not in the default list (e.g. `custom_ref`) is NOT indexed
+        // unless explicitly configured.
+        let vault = create_vault(&[("source.md", "---\ncustom_ref: '[[target]]'\n---\nBody\n")]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let bl = build.graph.backlinks("target");
+        assert_eq!(
+            bl.len(),
+            0,
+            "non-default frontmatter property should not be indexed"
+        );
+    }
+
+    #[test]
+    fn frontmatter_custom_props_configured() {
+        // With `frontmatter_link_props = Some(&["custom_ref"])`, the custom property
+        // IS indexed, and the default properties are NOT.
+        let vault = create_vault(&[(
+            "source.md",
+            "---\ncustom_ref: '[[target]]'\nrelated: '[[skipped]]'\n---\nBody\n",
+        )]);
+        let props: Vec<String> = vec!["custom_ref".to_owned()];
+        let build = LinkGraph::build(vault.path(), None, Some(&props)).unwrap();
+        // custom_ref should be indexed
+        let bl_target = build.graph.backlinks("target");
+        assert_eq!(bl_target.len(), 1, "configured property should be indexed");
+        // related is NOT in the custom list, so it's skipped
+        let bl_skipped = build.graph.backlinks("skipped");
+        assert_eq!(
+            bl_skipped.len(),
+            0,
+            "non-configured property should not be indexed when custom list is set"
+        );
+    }
+
+    #[test]
+    fn frontmatter_depends_on_wikilink_indexed() {
+        // `depends-on` is a default property.
+        let vault = create_vault(&[("source.md", "---\ndepends-on: '[[dep]]'\n---\nBody\n")]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let bl = build.graph.backlinks("dep");
+        assert_eq!(bl.len(), 1, "`depends-on` should be indexed by default");
     }
 }

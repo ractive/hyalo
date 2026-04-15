@@ -6,7 +6,7 @@ use crate::output::{
 };
 
 /// Error message for `--count` on non-list commands (shared across match arms).
-pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks)";
+pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks, lint)";
 
 /// Encapsulates the post-command output pipeline: jq filtering, hint generation,
 /// and envelope wrapping.

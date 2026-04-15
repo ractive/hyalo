@@ -270,6 +270,7 @@ mod tests {
                 scan_body: false,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )?;
         let file_filter: Option<Vec<String>> = file.map(|f| vec![f.to_owned()]);

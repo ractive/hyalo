@@ -165,7 +165,7 @@ pub(crate) fn resolve_index<'a>(
     format: Format,
     site_prefix: Option<&str>,
     needs_full_vault: bool,
-    options: ScanOptions<'_>,
+    options: &ScanOptions<'_>,
 ) -> Result<IndexResolution<'a>> {
     if let Some(idx) = snapshot {
         return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)));
@@ -177,7 +177,7 @@ pub(crate) fn resolve_index<'a>(
         format,
         site_prefix,
         needs_full_vault,
-        &options,
+        options,
     )?;
     match outcome {
         ScannedIndexOutcome::Index(build) => {
