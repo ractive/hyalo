@@ -132,6 +132,7 @@ properties = ["!type"]
 task = "todo"
 
 [views.orphans]
+orphan = true
 fields = ["backlinks"]
 
 [views.planned]

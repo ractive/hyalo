@@ -250,6 +250,30 @@ mod tests {
     }
 
     #[test]
+    fn load_views_supports_orphan_and_dead_end_flags() {
+        // Regression: views must be able to filter by `orphan` / `dead_end`
+        // the same way CLI flags do.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join(".hyalo.toml"),
+            "[views.orphans]\norphan = true\n\n[views.dead-ends]\ndead_end = true\n",
+        )
+        .unwrap();
+
+        let views = load_views(dir);
+        let orphan_view = views.get("orphans").expect("orphans view missing");
+        assert!(orphan_view.orphan, "view should have orphan = true");
+        assert!(
+            !orphan_view.dead_end,
+            "view should not have dead_end = true"
+        );
+
+        let dead_view = views.get("dead-ends").expect("dead-ends view missing");
+        assert!(dead_view.dead_end, "view should have dead_end = true");
+    }
+
+    #[test]
     fn set_view_preserves_existing_sections_and_order() {
         let tmp = tempfile::TempDir::new().unwrap();
         let dir = tmp.path();

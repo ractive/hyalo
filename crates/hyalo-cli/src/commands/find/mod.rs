@@ -448,10 +448,29 @@ pub fn find(
         && score_map.is_empty()
         && query_is_operator_only(pat)
     {
-        // Extract the first operator word for a targeted message.
-        let word = pat.split_whitespace().next().unwrap_or(pat);
+        // Collect every operator word in the query so that e.g. `find "AND OR"`
+        // reports both, not just the first. Preserve the user's original casing
+        // for a natural error message.
+        let operators: Vec<&str> = pat
+            .split_whitespace()
+            .filter(|w| {
+                let lw = w.to_ascii_lowercase();
+                lw == "and" || lw == "or"
+            })
+            .collect();
+        let quoted: Vec<String> = operators.iter().map(|w| format!("\"{w}\"")).collect();
+        let list = quoted.join(", ");
+        let phrase = if operators.len() <= 1 {
+            "was interpreted as a boolean operator"
+        } else {
+            "were interpreted as boolean operators"
+        };
+        let literal_hint = operators
+            .first()
+            .map_or_else(|| "'\"and\"'".to_owned(), |w| format!("'\"{w}\"'"));
         crate::warn::warn(format!(
-            r#""{word}" was interpreted as a boolean operator, leaving an empty query. To search for the literal word, quote it: '"{word}"'"#
+            "{list} {phrase}, leaving an empty query. \
+             To search for the literal word, quote it: {literal_hint}"
         ));
     }
 

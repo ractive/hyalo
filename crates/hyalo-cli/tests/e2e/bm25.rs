@@ -909,6 +909,27 @@ fn bm25_uppercase_and_operator_emits_warning() {
 }
 
 #[test]
+fn bm25_combined_and_or_operators_listed_together() {
+    // BUG-3 follow-up (iter-114): when both AND and OR are stripped as bare
+    // operators, the warning must mention BOTH — not just the first.
+    let tmp = setup_bm25_vault();
+    let (status, _json, stderr) = find_json(&tmp, &["AND OR"]);
+    assert!(status.success(), "command should still succeed: {stderr}");
+    assert!(
+        stderr.contains(r#""AND""#),
+        "warning should mention AND, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(r#""OR""#),
+        "warning should mention OR, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("were interpreted as boolean operators"),
+        "warning should use plural phrasing when multiple operators stripped, got: {stderr:?}"
+    );
+}
+
+#[test]
 fn bm25_real_word_does_not_emit_operator_warning() {
     let tmp = setup_bm25_vault();
     // "rust" is a real search term — no operator warning should be emitted.

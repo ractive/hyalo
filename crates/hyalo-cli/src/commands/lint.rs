@@ -135,6 +135,154 @@ pub fn lint_files(
     lint_files_with_options(files, schema, FixMode::Off, None)
 }
 
+/// Prepend an additional `FileLintResult` (e.g. `.hyalo.toml` view violations)
+/// to the outcome produced by [`lint_files_with_options`]. Adjusts the totals
+/// and the `files_with_issues` counter in the serialized payload to stay
+/// consistent with the new entry.
+pub fn prepend_file_result(
+    outcome: CommandOutcome,
+    extra: &FileLintResult,
+) -> Result<CommandOutcome> {
+    let (payload, total) = match outcome {
+        CommandOutcome::Success { output, total } => (output, total),
+        other => return Ok(other),
+    };
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&payload).context("failed to re-parse lint output JSON")?;
+
+    if let Some(obj) = value.as_object_mut() {
+        let extra_errors = extra
+            .violations
+            .iter()
+            .filter(|v| matches!(v.severity, Severity::Error))
+            .count();
+        let extra_warnings = extra.violations.len() - extra_errors;
+
+        if let Some(files) = obj.get_mut("files").and_then(|f| f.as_array_mut()) {
+            let extra_value = serde_json::to_value(extra)
+                .context("failed to serialize .hyalo.toml lint result")?;
+            files.insert(0, extra_value);
+        }
+        if let Some(n) = obj.get_mut("total").and_then(|v| v.as_u64()) {
+            obj.insert(
+                "total".to_string(),
+                serde_json::Value::from(n + extra.violations.len() as u64),
+            );
+        }
+        if let Some(n) = obj.get_mut("errors").and_then(|v| v.as_u64()) {
+            obj.insert(
+                "errors".to_string(),
+                serde_json::Value::from(n + extra_errors as u64),
+            );
+        }
+        if let Some(n) = obj.get_mut("warnings").and_then(|v| v.as_u64()) {
+            obj.insert(
+                "warnings".to_string(),
+                serde_json::Value::from(n + extra_warnings as u64),
+            );
+        }
+        if let Some(n) = obj.get_mut("files_with_issues").and_then(|v| v.as_u64()) {
+            obj.insert(
+                "files_with_issues".to_string(),
+                serde_json::Value::from(n + 1),
+            );
+        }
+    }
+
+    let new_payload = format_success(Format::Json, &value);
+    Ok(match total {
+        Some(t) => CommandOutcome::success_with_total(new_payload, t),
+        None => CommandOutcome::success(new_payload),
+    })
+}
+
+/// Validate `.hyalo.toml` view definitions and return a pseudo-file lint
+/// result when at least one view looks suspicious.
+///
+/// Current checks:
+/// - Views whose only narrowing mechanism is `fields = ["backlinks"]` or
+///   similar — `fields` controls display columns, not filtering, so such a
+///   view matches every file. The likely intent is `orphan = true`.
+///
+/// Returns `None` when there is nothing to report.
+pub fn validate_views(dir: &Path) -> Option<FileLintResult> {
+    // Keys that actually *narrow* the result set.
+    const NARROWING_KEYS: &[&str] = &[
+        "pattern",
+        "regexp",
+        "properties",
+        "tag",
+        "task",
+        "sections",
+        "file",
+        "glob",
+        "broken_links",
+        "orphan",
+        "dead_end",
+        "title",
+        "language",
+    ];
+
+    let toml_path = dir.join(".hyalo.toml");
+    let contents = std::fs::read_to_string(&toml_path).ok()?;
+    let table: toml::Table = toml::from_str(&contents).ok()?;
+    let Some(toml::Value::Table(views_table)) = table.get("views") else {
+        return None;
+    };
+
+    let mut violations: Vec<Violation> = Vec::new();
+    for (name, value) in views_table {
+        let Some(view_tbl) = value.as_table() else {
+            continue;
+        };
+
+        let has_narrowing = view_tbl.iter().any(|(k, v)| {
+            if !NARROWING_KEYS.contains(&k.as_str()) {
+                return false;
+            }
+            // Treat `orphan = false` / `dead_end = false` as non-narrowing.
+            if matches!(k.as_str(), "orphan" | "dead_end" | "broken_links") {
+                return matches!(v, toml::Value::Boolean(true));
+            }
+            // List-typed narrowing keys with empty values don't narrow either.
+            if let toml::Value::Array(a) = v {
+                return !a.is_empty();
+            }
+            true
+        });
+
+        let has_fields = view_tbl.contains_key("fields");
+
+        if !has_narrowing && has_fields {
+            violations.push(Violation {
+                severity: Severity::Warn,
+                message: format!(
+                    "view '{name}' has no narrowing filter — `fields` controls display columns only, \
+                     not filtering. Did you mean `orphan = true` or `dead_end = true`?"
+                ),
+            });
+        } else if !has_narrowing {
+            violations.push(Violation {
+                severity: Severity::Warn,
+                message: format!(
+                    "view '{name}' has no narrowing filter — add at least one of: \
+                     tag, properties, task, orphan, dead_end, broken_links, glob, file, title"
+                ),
+            });
+        }
+    }
+
+    if violations.is_empty() {
+        None
+    } else {
+        Some(FileLintResult {
+            file: ".hyalo.toml".to_string(),
+            violations,
+        })
+    }
+}
+
 /// Whether — and how — `lint_files_with_options` should apply auto-fixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixMode {

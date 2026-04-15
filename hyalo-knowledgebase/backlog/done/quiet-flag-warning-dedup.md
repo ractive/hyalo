@@ -6,7 +6,8 @@ status: completed
 priority: low
 origin: dogfooding v0.4.2 on docs/content
 tags:
-  - cli,ux
+  - cli
+  - ux
 ---
 
 The warning `skipping code-security/concepts/index.md: unclosed frontmatter` appears on every full-scan command. When running multiple commands in sequence (common in batch/scripting), this adds noise.

@@ -9,6 +9,55 @@ pub fn unknown_arg_is(err: &clap::Error, flag: &str) -> bool {
     })
 }
 
+/// Identify the first top-level subcommand token in `args`, accounting for
+/// global value-taking flags (e.g. `--dir <path>`).
+///
+/// Returns `None` if no known top-level subcommand appears before `--` / end.
+///
+/// This is used by callers that need to show subcommand-specific error hints
+/// (e.g. `hyalo append --tag …`) without being fooled by argv positions that
+/// merely *contain* the subcommand name as a value (`hyalo read append …` or
+/// `hyalo --dir append …`).
+pub fn top_level_subcommand<'a>(args: &'a [String], cmd: &clap::Command) -> Option<&'a str> {
+    // Value-taking root flags whose next token must be skipped (e.g. `--dir`).
+    let value_flags: Vec<&str> = cmd
+        .get_arguments()
+        .filter(|a| a.get_num_args().is_some_and(|r| r.min_values() > 0))
+        .filter_map(|a| a.get_long())
+        .collect();
+
+    let top_level_names: Vec<&str> = cmd.get_subcommands().map(clap::Command::get_name).collect();
+
+    let mut skip_next = false;
+    for arg in args.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--" {
+            break;
+        }
+        if let Some(flag) = arg.strip_prefix("--") {
+            if value_flags.contains(&flag) {
+                skip_next = true;
+            }
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        if let Some(name) = top_level_names.iter().find(|&&n| n == arg.as_str()) {
+            // Return a slice of the matching argv element rather than the
+            // borrowed name table entry, so lifetimes tie to `args`.
+            return args
+                .iter()
+                .find(|a| a.as_str() == *name)
+                .map(String::as_str);
+        }
+    }
+    None
+}
+
 /// Given the raw CLI args and the clap Command tree, detect when an unknown
 /// `--flag` matches a known subcommand name and return a corrected command suggestion.
 ///

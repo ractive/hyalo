@@ -118,6 +118,19 @@ pub fn was_emitted(msg: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Return whether any tracked warning key starts with the given prefix.
+///
+/// Useful when the exact message contains a path that's known only at runtime.
+/// **For use in tests only.**
+#[cfg(test)]
+pub fn any_tracked_starts_with(prefix: &str) -> bool {
+    SUPPRESSED
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|m| m.keys().any(|k| k.starts_with(prefix))))
+        .unwrap_or(false)
+}
+
 /// Return the total number of suppressed (duplicate) warning occurrences.
 ///
 /// **For use in tests only.**

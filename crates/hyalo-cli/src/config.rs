@@ -147,6 +147,25 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         }
     };
 
+    // Warn when the resolved config points its `dir` at a subdirectory that
+    // itself contains a `.hyalo.toml`. The inner file is shadowed by this
+    // parent config, and `hyalo` currently doesn't merge nested configs —
+    // surfacing the shadow at least makes the silent shadowing visible.
+    //
+    // Routed through `warn::warn`, so `--quiet` suppresses it and the dedup
+    // tracker prevents multiple prints per run. It's a warning (not a hint),
+    // so `--no-hints` intentionally does *not* gate it.
+    if let Some(ref sub) = cfg.dir {
+        let nested = dir.join(sub).join(".hyalo.toml");
+        if nested.is_file() {
+            crate::warn::warn(format!(
+                "ignoring nested config {}/.hyalo.toml (shadowed by {}/.hyalo.toml)",
+                sub.trim_end_matches('/'),
+                dir.display()
+            ));
+        }
+    }
+
     let defaults = ResolvedDefaults::hardcoded();
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
     ResolvedDefaults {
@@ -308,6 +327,26 @@ site_prefix = "docs"
 
         let resolved = load_config_from(dir.path());
         assert_eq!(resolved.search_language, None);
+    }
+
+    #[test]
+    fn nested_config_emits_shadow_warning() {
+        // Parent `.hyalo.toml` sets dir = "subkb" and `subkb/` contains its own
+        // `.hyalo.toml`. The nested file is shadowed, so a warning must fire.
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        let dir = make_temp();
+        fs::create_dir_all(dir.path().join("subkb")).unwrap();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"subkb\"\n").unwrap();
+        fs::write(dir.path().join("subkb").join(".hyalo.toml"), "# nested\n").unwrap();
+        let _ = load_config_from(dir.path());
+        // The warning message is built with dir.display() which is a tempdir path,
+        // so we verify the "ignoring nested config" fragment got tracked by
+        // walking all recorded keys.
+        let tracked =
+            crate::warn::any_tracked_starts_with("ignoring nested config subkb/.hyalo.toml");
+        assert!(tracked, "expected nested-config warning to fire");
     }
 
     #[test]

@@ -6,7 +6,8 @@ origin: dogfooding v0.4.0 (ISSUE-7) and v0.4.1 confirmed
 priority: medium
 status: completed
 tags:
-  - cli,filtering
+  - cli
+  - filtering
 ---
 
 `--glob` cannot be passed multiple times. Users want `--glob 'rest/**' --glob '!rest/**/index.md'` to include + exclude in one call. Currently errors with "cannot be used multiple times".

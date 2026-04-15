@@ -87,9 +87,19 @@ pub fn plan_mv(
     let dir_changed = old_dir != new_dir;
 
     // Step 2: gather inbound backlinks, grouped by source file.
+    //
+    // Skip self-links here — links that point from the moved file to itself
+    // are handled as outbound rewrites. Leaving them in the inbound set would
+    // produce a plan whose `path` still refers to `old_rel`, which no longer
+    // exists on disk after `fs::rename` (NEW-BUG-2).
     let backlinks = graph.backlinks(old_rel);
+    let old_rel_norm = old_rel.replace('\\', "/");
     let mut by_source: HashMap<PathBuf, Vec<_>> = HashMap::new();
     for entry in backlinks {
+        let source_norm = entry.source.to_string_lossy().replace('\\', "/");
+        if source_norm == old_rel_norm {
+            continue;
+        }
         by_source
             .entry(entry.source.clone())
             .or_default()
@@ -129,46 +139,123 @@ pub fn plan_mv(
         }
     }
 
-    // Step 4: plan outbound link updates for the moved file itself,
-    // but only when its directory context changes.
-    if dir_changed {
-        let old_abs = dir.join(old_rel);
-        let content = std::fs::read_to_string(&old_abs)
-            .with_context(|| format!("reading {}", old_abs.display()))?;
+    // Step 4: plan outbound link updates for the moved file itself.
+    //
+    // Always run — the moved file may contain self-links that need rewriting
+    // even when its directory didn't change (NEW-BUG-2). When the directory
+    // does change, relative links to other files are also rebased here.
+    let old_abs = dir.join(old_rel);
+    let content = std::fs::read_to_string(&old_abs)
+        .with_context(|| format!("reading {}", old_abs.display()))?;
 
-        let outbound_replacements = plan_outbound_rewrites(&content, old_rel, new_rel);
+    let outbound_replacements = plan_outbound_rewrites(&content, old_rel, new_rel, dir_changed);
 
-        if !outbound_replacements.is_empty() {
-            let moved_key = PathBuf::from(old_rel.replace('\\', "/"));
-            // The path targets the NEW location — after fs::rename, that's
-            // where the file lives and where the rewritten content must be
-            // written by execute_plans.
-            let new_abs = dir.join(new_rel);
+    if !outbound_replacements.is_empty() {
+        let moved_key = PathBuf::from(old_rel.replace('\\', "/"));
+        // The path targets the NEW location — after fs::rename, that's where
+        // the file lives and where the rewritten content must be written by
+        // execute_plans.
+        let new_abs = dir.join(new_rel);
 
-            if let Some(existing) = plans.get_mut(&moved_key) {
-                // The moved file already has an inbound plan; merge.
-                // Update path to point to the new location and re-apply
-                // all replacements (inbound + outbound) together.
-                existing.path = new_abs;
-                existing.rel_path = new_rel.to_string();
-                existing.replacements.extend(outbound_replacements);
-                existing.rewritten_content = apply_replacements(&content, &existing.replacements);
-            } else {
-                let rewritten_content = apply_replacements(&content, &outbound_replacements);
-                plans.insert(
-                    moved_key,
-                    RewritePlan {
-                        path: new_abs,
-                        rel_path: new_rel.to_string(),
-                        replacements: outbound_replacements,
-                        rewritten_content,
-                    },
-                );
-            }
+        if let Some(existing) = plans.get_mut(&moved_key) {
+            existing.path = new_abs;
+            existing.rel_path = new_rel.to_string();
+            existing.replacements.extend(outbound_replacements);
+            existing.rewritten_content = apply_replacements(&content, &existing.replacements);
+        } else {
+            let rewritten_content = apply_replacements(&content, &outbound_replacements);
+            plans.insert(
+                moved_key,
+                RewritePlan {
+                    path: new_abs,
+                    rel_path: new_rel.to_string(),
+                    replacements: outbound_replacements,
+                    rewritten_content,
+                },
+            );
         }
     }
 
     Ok(plans.into_values().collect())
+}
+
+/// Split a markdown-link target into its path portion and any trailing
+/// `#fragment`. Returns `(path, fragment_including_hash)`.
+///
+/// For `"peer.md#intro"` this returns `("peer.md", "#intro")`; for a target
+/// without a fragment the second element is `""`.
+fn split_target_fragment(target: &str) -> (&str, &str) {
+    match target.find('#') {
+        Some(idx) => (&target[..idx], &target[idx..]),
+        None => (target, ""),
+    }
+}
+
+/// Decide whether a markdown-link target should be considered for rewriting
+/// when a file moves.
+///
+/// Returns `false` (skip) for link targets that clearly do **not** point at a
+/// vault markdown file:
+/// - Site-absolute paths (start with `/`) — these are left untouched so that
+///   downstream site renderers can resolve them from their own root.
+/// - URL schemes (`http://`, `mailto:`, …) and fragment-only refs (`#anchor`).
+///   Windows drive-letter paths like `C:\notes\x.md` are **not** treated as
+///   URL schemes.
+/// - Bare tokens with no `.md` suffix *and* no path separator — these look
+///   like Obsidian wikilink labels or plain anchor text rather than file
+///   paths.
+///
+/// Any trailing `#fragment` on the target is ignored when classifying — the
+/// file portion is what matters. So `peer.md#intro` is still treated as an
+/// `.md` link, and `#anchor` alone is still a pure fragment.
+///
+/// Inbound rewriting already narrows by string-equality against the moved
+/// file's rel/stem, so this extra guard mostly protects outbound rewriting
+/// from blindly rebasing non-filesystem references.
+fn should_rewrite_outbound_target(target: &str) -> bool {
+    if target.is_empty() || target.starts_with('#') {
+        return false;
+    }
+    let (path_part, _) = split_target_fragment(target);
+    if path_part.is_empty() {
+        return false;
+    }
+    if path_part.starts_with('/') {
+        return false;
+    }
+    // URL schemes: `http://`, `https://`, `mailto:`, `tel:`, …
+    //
+    // Exclude Windows drive-letter paths (single ASCII letter followed by `:`
+    // and a path separator) — they are filesystem paths, not URLs.
+    if let Some(colon) = path_part.find(':') {
+        let scheme = &path_part[..colon];
+        let is_drive_letter = colon == 1
+            && scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+            && path_part
+                .as_bytes()
+                .get(colon + 1)
+                .is_some_and(|b| *b == b'/' || *b == b'\\');
+        if !is_drive_letter
+            && !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
+            return false;
+        }
+    }
+    // Bare token with no `.md` suffix and no path separator: treat as label.
+    let has_path_sep = path_part.contains('/') || path_part.contains('\\');
+    let is_md = std::path::Path::new(path_part)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+    if !has_path_sep && !is_md {
+        return false;
+    }
+    true
 }
 
 /// Execute rewrite plans: write each plan's `rewritten_content` back to disk.
@@ -346,7 +433,16 @@ fn plan_inbound_rewrites(
 /// file moves to `new_rel`.
 ///
 /// Wikilinks are vault-relative and never change.
-fn plan_outbound_rewrites(content: &str, old_rel: &str, new_rel: &str) -> Vec<Replacement> {
+///
+/// `dir_changed` indicates whether the move crosses directory boundaries.
+/// When `false`, only self-links (pointing at `old_rel` itself) need updating;
+/// all other relative links remain valid.
+fn plan_outbound_rewrites(
+    content: &str,
+    old_rel: &str,
+    new_rel: &str,
+    dir_changed: bool,
+) -> Vec<Replacement> {
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
     let mut in_comment_fence = false;
@@ -398,11 +494,40 @@ fn plan_outbound_rewrites(content: &str, old_rel: &str, new_rel: &str) -> Vec<Re
                 continue;
             }
 
-            // Resolve target relative to the OLD location's directory.
-            let resolved = normalize_target(Path::new(old_rel), &span.link.target);
+            // Skip targets that aren't vault markdown paths (site-absolute,
+            // URL schemes, bare labels). See `should_rewrite_outbound_target`.
+            if !should_rewrite_outbound_target(&span.link.target) {
+                continue;
+            }
 
-            // Compute new relative path from the NEW location.
-            let new_target = relative_path_between(new_rel, &resolved);
+            // Strip any trailing `#fragment` for resolution / comparison, then
+            // re-attach it to the rewritten path so anchored file links keep
+            // their anchor.
+            let (target_path, target_fragment) = split_target_fragment(&span.link.target);
+
+            // Resolve target relative to the OLD location's directory.
+            let resolved = normalize_target(Path::new(old_rel), target_path);
+
+            // Self-links: the file moves to `new_rel`, so the link should
+            // continue to refer to the file at its new location.
+            let target_after_move = if resolved == old_rel {
+                new_rel.to_string()
+            } else {
+                // When the directory hasn't changed, relative links to other
+                // files in the same directory are still valid — skip them.
+                if !dir_changed {
+                    continue;
+                }
+                resolved
+            };
+
+            // Compute new relative path from the NEW location, then re-attach
+            // any fragment that was stripped above.
+            let new_target = format!(
+                "{}{}",
+                relative_path_between(new_rel, &target_after_move),
+                target_fragment
+            );
 
             // Original target as written in the file.
             let original_target = &line[span.target_start..span.target_end];
@@ -903,6 +1028,202 @@ mod tests {
         assert_eq!(
             plans[0].replacements[0].new_text,
             "[settings](/docs/config/settings)"
+        );
+    }
+
+    // ---- Self-link tests (NEW-BUG-2) ----
+
+    #[test]
+    fn plan_mv_self_link_same_directory() {
+        // `self.md` contains a markdown link to itself. Moving it to `other.md`
+        // in the same directory must (1) succeed, (2) produce a plan whose path
+        // points to the NEW location, and (3) rewrite the self-link.
+        let vault = create_vault(&[("self.md", "A link to [me](self.md).\n")]);
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        let plan = &plans[0];
+        assert_eq!(plan.rel_path, "other.md");
+        assert_eq!(plan.path, vault.path().join("other.md"));
+        assert_eq!(plan.replacements.len(), 1);
+        assert_eq!(plan.replacements[0].old_text, "[me](self.md)");
+        assert_eq!(plan.replacements[0].new_text, "[me](other.md)");
+    }
+
+    #[test]
+    fn execute_plans_self_link_same_directory_e2e() {
+        // Full mv flow: rename + rewrite without canonicalization error.
+        let vault = create_vault(&[("self.md", "A link to [me](self.md).\n")]);
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        fs::rename(vault.path().join("self.md"), vault.path().join("other.md")).unwrap();
+        execute_plans(vault.path(), &plans).unwrap();
+        let content = fs::read_to_string(vault.path().join("other.md")).unwrap();
+        assert!(content.contains("[me](other.md)"), "got: {content:?}");
+        assert!(!content.contains("self.md"));
+    }
+
+    // ---- Outbound skip-rule tests (BUG-6) ----
+
+    #[test]
+    fn plan_mv_outbound_skips_site_absolute_links() {
+        // Site-absolute links (/…) must NOT be rewritten when the moved file's
+        // directory changes.
+        let vault = create_vault(&[
+            (
+                "games/anatomy/index.md",
+                "See [MDN](/en-US/docs/Web/API/Web_Workers).\n",
+            ),
+            ("games/anatomy-renamed/.gitkeep", ""),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "games/anatomy/index.md",
+            "games/anatomy-renamed/index.md",
+            None,
+        )
+        .unwrap();
+        let moved_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "games/anatomy-renamed/index.md");
+        assert!(
+            moved_plan.is_none(),
+            "site-absolute link must not trigger a rewrite: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_outbound_skips_url_schemes() {
+        let vault = create_vault(&[(
+            "sub/note.md",
+            "See [link](https://example.com/x) and [mail](mailto:a@b.c).\n",
+        )]);
+        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None).unwrap();
+        let moved_plan = plans.iter().find(|p| p.rel_path == "archive/note.md");
+        assert!(
+            moved_plan.is_none(),
+            "URL-scheme links must not be rewritten: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_outbound_skips_fragment_only() {
+        let vault = create_vault(&[("sub/note.md", "Jump to [top](#top).\n")]);
+        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None).unwrap();
+        let moved_plan = plans.iter().find(|p| p.rel_path == "archive/note.md");
+        assert!(
+            moved_plan.is_none(),
+            "fragment-only links must not be rewritten: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_outbound_skips_bare_token_without_md_extension() {
+        // `[obsidian](Note One)` — no `.md`, no path separator. Must be left
+        // alone (treated as a label / Obsidian-style reference).
+        let vault = create_vault(&[("sub/note.md", "See [obsidian](Note One) here.\n")]);
+        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None).unwrap();
+        let moved_plan = plans.iter().find(|p| p.rel_path == "archive/note.md");
+        assert!(
+            moved_plan.is_none(),
+            "bare non-md link must not be rewritten: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_outbound_rewrites_genuine_relative_link() {
+        // Regression: genuine relative links that would resolve differently
+        // after the move are rebased. Here `sub/a.md` moves to `a.md` at the
+        // root; the link `peer.md` (previously sub/peer.md) must be rewritten
+        // to `sub/peer.md` from the new location.
+        let vault = create_vault(&[
+            ("sub/a.md", "See [peer](peer.md).\n"),
+            ("sub/peer.md", "peer\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let moved_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a.md")
+            .expect("expected rewrite plan");
+        assert_eq!(moved_plan.replacements.len(), 1);
+        assert_eq!(moved_plan.replacements[0].old_text, "[peer](peer.md)");
+        assert_eq!(moved_plan.replacements[0].new_text, "[peer](sub/peer.md)");
+    }
+
+    #[test]
+    fn should_rewrite_outbound_target_rules() {
+        assert!(!should_rewrite_outbound_target(""));
+        assert!(!should_rewrite_outbound_target("/en-US/docs/x"));
+        assert!(!should_rewrite_outbound_target("/page.md"));
+        assert!(!should_rewrite_outbound_target("#anchor"));
+        assert!(!should_rewrite_outbound_target("https://a.b/c"));
+        assert!(!should_rewrite_outbound_target("mailto:a@b.c"));
+        assert!(!should_rewrite_outbound_target("tel:+1"));
+        assert!(!should_rewrite_outbound_target("Note One"));
+        assert!(!should_rewrite_outbound_target("plain-label"));
+        // Rewritable:
+        assert!(should_rewrite_outbound_target("../notes/x.md"));
+        assert!(should_rewrite_outbound_target("sub/x.md"));
+        assert!(should_rewrite_outbound_target("x.md"));
+        assert!(should_rewrite_outbound_target("sub/label"));
+        // Fragments: classify by the path portion, not the whole target.
+        assert!(
+            should_rewrite_outbound_target("x.md#intro"),
+            "anchored .md link should be rewritable"
+        );
+        assert!(
+            should_rewrite_outbound_target("sub/x.md#section-1"),
+            "anchored nested .md link should be rewritable"
+        );
+        assert!(
+            !should_rewrite_outbound_target("#anchor-with-dashes"),
+            "fragment-only target must still be skipped"
+        );
+        // Windows drive-letter paths are filesystem paths, not URL schemes.
+        assert!(
+            should_rewrite_outbound_target("C:/notes/x.md"),
+            "Windows drive-letter forward-slash path should be rewritable"
+        );
+        assert!(
+            should_rewrite_outbound_target("C:\\notes\\x.md"),
+            "Windows drive-letter backslash path should be rewritable"
+        );
+    }
+
+    #[test]
+    fn plan_mv_outbound_rewrites_anchored_self_link() {
+        // NEW-BUG-2 follow-up: self-links with fragments must still be rewritten
+        // to point at the file's new location while preserving the anchor.
+        let vault = create_vault(&[("self.md", "Jump to [intro](self.md#intro) in this file.\n")]);
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        let plan = &plans[0];
+        assert_eq!(plan.rel_path, "other.md");
+        assert_eq!(plan.replacements.len(), 1);
+        assert_eq!(plan.replacements[0].old_text, "[intro](self.md#intro)");
+        assert_eq!(plan.replacements[0].new_text, "[intro](other.md#intro)");
+    }
+
+    #[test]
+    fn plan_mv_outbound_rewrites_anchored_relative_link_on_dir_change() {
+        // Anchored relative links must be rebased when the directory changes.
+        // `sub/a.md` moves to `a.md`; the link `peer.md#heading` should become
+        // `sub/peer.md#heading` from the new location.
+        let vault = create_vault(&[
+            ("sub/a.md", "See [peer](peer.md#heading).\n"),
+            ("sub/peer.md", "peer\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let moved_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a.md")
+            .expect("expected rewrite plan");
+        assert_eq!(moved_plan.replacements.len(), 1);
+        assert_eq!(
+            moved_plan.replacements[0].old_text,
+            "[peer](peer.md#heading)"
+        );
+        assert_eq!(
+            moved_plan.replacements[0].new_text,
+            "[peer](sub/peer.md#heading)"
         );
     }
 

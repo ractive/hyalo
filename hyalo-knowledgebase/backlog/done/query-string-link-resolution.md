@@ -6,7 +6,8 @@ origin: dogfooding v0.4.1 on VS Code Docs (setup/windows.md links to /docs/?dv=w
 priority: low
 status: completed
 tags:
-  - links,bug-fix
+  - links
+  - bug-fix
 ---
 
 Link `/docs/?dv=winzip` is not resolved because the `?dv=winzip` query string is included in the path lookup. Similarly, `#fragment` anchors should be stripped.
