@@ -7,6 +7,7 @@ use hyalo_core::util::levenshtein;
 
 use crate::commands::lint::lint_counts_from_properties;
 use crate::output::{CommandOutcome, Format};
+use hyalo_core::case_index::CaseInsensitiveIndex;
 use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::detect_broken_links_from_index;
@@ -107,6 +108,7 @@ pub fn summary(
     site_prefix: Option<&str>,
     format: Format,
     schema: &SchemaConfig,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
     let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
@@ -308,7 +310,7 @@ pub fn summary(
     // consistent with the disk-scan path and ensures the report is meaningful
     // (scoped results would produce misleadingly low counts).
     let link_health = {
-        let report = detect_broken_links_from_index(dir, index, site_prefix);
+        let report = detect_broken_links_from_index(dir, index, site_prefix, case_index);
         LinkHealthSummary {
             total: report.total_links,
             broken: report.broken.len(),
@@ -419,6 +421,7 @@ mod tests {
             site_prefix,
             format,
             &schema,
+            None, // case_index
         )
     }
 
@@ -860,7 +863,18 @@ Body.
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let schema = hyalo_core::schema::SchemaConfig::default();
         let index_val = unwrap_success(
-            summary(dir, &loaded, &[], 10, None, prefix, Format::Json, &schema).unwrap(),
+            summary(
+                dir,
+                &loaded,
+                &[],
+                10,
+                None,
+                prefix,
+                Format::Json,
+                &schema,
+                None,
+            )
+            .unwrap(),
         );
         let index_orphans = index_val["orphans"].as_u64().unwrap();
 
@@ -951,7 +965,18 @@ Body.
         let loaded = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let schema = hyalo_core::schema::SchemaConfig::default();
         let index_val = unwrap_success(
-            summary(dir, &loaded, &[], 10, None, None, Format::Json, &schema).unwrap(),
+            summary(
+                dir,
+                &loaded,
+                &[],
+                10,
+                None,
+                None,
+                Format::Json,
+                &schema,
+                None,
+            )
+            .unwrap(),
         );
         let index_dead_ends = index_val["dead_ends"].as_u64().unwrap();
 

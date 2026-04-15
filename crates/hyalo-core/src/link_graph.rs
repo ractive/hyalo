@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
+use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery;
 use crate::frontmatter;
 use crate::links::{Link, LinkKind, extract_links_from_text_with_original};
@@ -26,6 +27,8 @@ pub struct LinkGraphBuild {
     pub graph: LinkGraph,
     /// Files that were skipped due to parse errors, with the error message.
     pub warnings: Vec<(PathBuf, String)>,
+    /// Case-insensitive index of all vault-relative paths discovered during build.
+    pub case_index: CaseInsensitiveIndex,
 }
 
 /// In-memory reverse index mapping link targets to their sources.
@@ -95,8 +98,14 @@ impl LinkGraph {
 
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::with_capacity(files.len());
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
+        let mut case_index = CaseInsensitiveIndex::new();
 
         for (full_path, rel) in files {
+            // Insert each discovered path into the case-insensitive index using
+            // forward-slash form so lookups are platform-independent.
+            let rel_fwd = rel.to_string_lossy().replace('\\', "/");
+            case_index.insert(&rel_fwd);
+
             let mut visitor =
                 LinkGraphVisitor::with_frontmatter_props(rel.clone(), fm_props.clone());
             match scanner::scan_file_multi(full_path, &mut [&mut visitor]) {
@@ -113,6 +122,7 @@ impl LinkGraph {
         Ok(LinkGraphBuild {
             graph: Self { index },
             warnings,
+            case_index,
         })
     }
 
@@ -130,12 +140,18 @@ impl LinkGraph {
     ) -> LinkGraphBuild {
         let mut index: HashMap<String, Vec<BacklinkEntry>> =
             HashMap::with_capacity(file_links.len());
+        let mut case_index = CaseInsensitiveIndex::new();
+        for fl in &file_links {
+            let rel_fwd = fl.source.to_string_lossy().replace('\\', "/");
+            case_index.insert(&rel_fwd);
+        }
         for fl in file_links {
             insert_file_links(&mut index, fl, site_prefix);
         }
         LinkGraphBuild {
             graph: Self { index },
             warnings: Vec::new(),
+            case_index,
         }
     }
 
@@ -157,6 +173,34 @@ impl LinkGraph {
                 entry.source.to_string_lossy().replace('\\', "/")
             })
             .collect()
+    }
+
+    /// Look up all files that link to the given target, including links whose
+    /// written target differs from `target` only in ASCII case.
+    ///
+    /// This is the case-insensitive companion to [`LinkGraph::backlinks`].  The
+    /// graph stores entries under the **written** key (e.g. `"Web/Foo"`), not
+    /// the canonical on-disk path.  This method iterates all index keys and
+    /// collects any that are ASCII-case-equal to `target` or its `.md`-toggled
+    /// form.
+    ///
+    /// Self-links are **not** filtered here — same contract as `backlinks`.
+    pub(crate) fn backlinks_case_insensitive(&self, target: &str) -> Vec<&BacklinkEntry> {
+        let target_lower = target.to_ascii_lowercase();
+        let alt = if let Some(stem) = target.strip_suffix(".md") {
+            stem.to_ascii_lowercase()
+        } else {
+            format!("{target_lower}.md")
+        };
+
+        let mut results = Vec::new();
+        for (key, entries) in &self.index {
+            let key_lower = key.to_ascii_lowercase();
+            if key_lower == target_lower || key_lower == alt {
+                results.extend(entries);
+            }
+        }
+        results
     }
 
     /// Look up all files that link to the given target.
@@ -1209,5 +1253,99 @@ mod tests {
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl = build.graph.backlinks("dep");
         assert_eq!(bl.len(), 1, "`depends-on` should be indexed by default");
+    }
+
+    // ---------------------------------------------------------------------------
+    // case_index tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn build_populates_case_index() {
+        // The case index must contain all discovered vault paths in their
+        // actual on-disk casing.
+        let vault = create_vault(&[
+            ("web/foo.md", "See [[Web/Foo]]\n"),
+            ("notes/bar.md", "Content\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+
+        // Both paths must be discoverable via their lowercase key.
+        assert_eq!(
+            build.case_index.lookup_unique("web/foo.md"),
+            Some("web/foo.md"),
+            "web/foo.md must be in case index"
+        );
+        assert_eq!(
+            build.case_index.lookup_unique("notes/bar.md"),
+            Some("notes/bar.md"),
+            "notes/bar.md must be in case index"
+        );
+    }
+
+    #[test]
+    fn case_insensitive_backlink_resolution() {
+        // File is `web/foo.md` (lowercase) but the link is written as `[[Web/Foo]]`.
+        // The backlink graph stores the link under whatever key the linker wrote,
+        // but backlinks() is queried with the canonical path — both should resolve.
+        let vault = create_vault(&[
+            ("web/foo.md", "Content\n"),
+            ("other.md", "See [[Web/Foo]]\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let graph = &build.graph;
+
+        // The link is stored under the written key "Web/Foo".
+        // backlinks("web/foo") (lowercase canonical form) may not find it unless
+        // the caller normalises. This test verifies the case_index was built.
+        assert!(
+            !build.case_index.is_empty(),
+            "case index should contain at least one entry"
+        );
+        assert_eq!(
+            build.case_index.lookup_unique("web/foo.md"),
+            Some("web/foo.md"),
+            "case index must resolve 'web/foo.md' to the canonical on-disk path"
+        );
+
+        // The raw graph entry for the written link "Web/Foo" should exist.
+        let bl = graph.backlinks("Web/Foo");
+        assert_eq!(
+            bl.len(),
+            1,
+            "backlinks for the written key 'Web/Foo' should find 1 entry"
+        );
+        assert_eq!(bl[0].source, PathBuf::from("other.md"));
+    }
+
+    #[test]
+    fn from_file_links_populates_case_index() {
+        // from_file_links should also populate the case index from the FileLinks sources.
+        let vault = create_vault(&[
+            ("a.md", "---\ntitle: A\n---\n"),
+            ("b.md", "---\ntitle: B\n---\n"),
+        ]);
+
+        let files = crate::discovery::discover_files(vault.path()).unwrap();
+        let file_links: Vec<FileLinks> = files
+            .iter()
+            .map(|full_path| {
+                let rel = full_path
+                    .strip_prefix(vault.path())
+                    .unwrap_or(full_path)
+                    .to_path_buf();
+                let fm_props: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
+                crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
+                visitor.into_file_links()
+            })
+            .collect();
+
+        let build = LinkGraph::from_file_links(file_links, None);
+        assert_eq!(build.case_index.lookup_unique("a.md"), Some("a.md"));
+        assert_eq!(build.case_index.lookup_unique("b.md"), Some("b.md"));
+        assert_eq!(build.case_index.len(), 2);
     }
 }

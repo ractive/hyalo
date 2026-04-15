@@ -1,4 +1,5 @@
 pub mod bm25;
+pub mod case_index;
 pub mod content_search;
 pub mod discovery;
 pub mod filename_template;

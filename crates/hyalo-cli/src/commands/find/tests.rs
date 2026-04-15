@@ -111,6 +111,7 @@ fn run_find_ext(
         format,
         None, // language
         None, // config_language
+        None, // case_index
     )
 }
 
@@ -1578,6 +1579,7 @@ fn content_search_works_with_frontmatter_only_index() {
             Format::Json,
             None,
             None,
+            None, // case_index
         )
         .unwrap(),
     );

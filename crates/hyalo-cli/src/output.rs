@@ -369,9 +369,9 @@ const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" en
 /// Empty case: `No backlinks found for "file"`.
 const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
 
-/// `LinksFix result`: `{applied, broken, fixable, fixes, ignored, unfixable, unfixable_links}`
-/// Format: summary line with fix status.
-const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\nApplied: \(if .applied then "yes" else "no" end)\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)""#;
+/// `LinksFix result`: `{applied, broken, case_mismatch_fixes, case_mismatches, fixable, fixes, ignored, unfixable, unfixable_links}`
+/// Format: summary line with fix status. Includes case-mismatch count when non-zero.
+const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
@@ -446,7 +446,9 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result
-        "applied,broken,fixable,fixes,ignored,unfixable,unfixable_links" => Some(LINKS_FIX_FILTER),
+        "applied,broken,case_mismatch_fixes,case_mismatches,fixable,fixes,ignored,unfixable,unfixable_links" => {
+            Some(LINKS_FIX_FILTER)
+        }
         // MvResult
         "dry_run,from,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)

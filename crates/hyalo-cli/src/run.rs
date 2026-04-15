@@ -806,6 +806,7 @@ fn run_inner() -> Result<(), AppError> {
     let frontmatter_link_props_owned = config.frontmatter_link_props;
     let validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
+    let case_insensitive_mode = config.case_insensitive_mode;
 
     // Propagate the configured frontmatter-link property list into the loaded
     // snapshot so that per-file refreshes (`rescan_entry` / `rename_entry`) use
@@ -826,6 +827,7 @@ fn run_inner() -> Result<(), AppError> {
         schema: &schema,
         validate_on_write,
         lint_ignore: &lint_ignore,
+        case_insensitive_mode,
         exit_code_override: None,
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,

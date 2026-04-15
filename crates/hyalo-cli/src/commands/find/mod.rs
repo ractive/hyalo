@@ -15,6 +15,7 @@ use hyalo_core::bm25::{
     Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, is_low_discriminative,
     parse_language, query_is_operator_only, resolve_language, tokenize_document,
 };
+use hyalo_core::case_index::CaseInsensitiveIndex;
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
 use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField};
@@ -61,6 +62,7 @@ pub fn find(
     format: Format,
     language: Option<&str>,
     config_language: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> Result<CommandOutcome> {
     if pattern.is_some_and(|p| p.trim().is_empty()) {
         return Ok(CommandOutcome::UserError(
@@ -646,8 +648,12 @@ pub fn find(
                     .links
                     .iter()
                     .map(|(_, link)| {
-                        let path =
-                            discovery::resolve_target(&canonical_dir, &link.target, site_prefix);
+                        let path = discovery::resolve_target(
+                            &canonical_dir,
+                            &link.target,
+                            site_prefix,
+                            case_index,
+                        );
                         LinkInfo {
                             target: link.target.clone(),
                             path,

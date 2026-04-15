@@ -942,7 +942,12 @@ pub(crate) enum LinksAction {
             2. Extension mismatch (.md present/absent)\n\
             3. Unique stem match anywhere in the vault (shortest-path)\n\
             4. Jaro-Winkler fuzzy match above --threshold\n\n\
-            Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.")]
+            Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
+            Case-mismatch detection: when case-insensitive resolution is active (controlled by\n\
+            `[links] case_insensitive` in .hyalo.toml — \"auto\", \"true\", or \"false\"), broken links\n\
+            that differ only in casing from an on-disk file are reported as case_mismatches and\n\
+            rewritten to the canonical casing when --apply is used. On macOS and Windows,\n\
+            \"auto\" (the default) enables this automatically.")]
     Fix {
         /// Preview changes without modifying files (default when --apply is omitted)
         #[arg(long)]

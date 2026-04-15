@@ -228,6 +228,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **append** — add to list properties (supports `--validate`; note: tags are not appendable; use `set --tag` instead)
 - **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`; `--dry-run` to preview toggles)
 - **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
+- **links fix** — detect broken wikilinks/markdown links and auto-repair (dry-run by default; `--apply` to write). Also detects case mismatches when `[links] case_insensitive` is enabled (default `"auto"` on macOS/Windows)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
 - **create-index** — build a snapshot index for faster repeated read-only queries
 - **drop-index** — delete a snapshot index file created with create-index

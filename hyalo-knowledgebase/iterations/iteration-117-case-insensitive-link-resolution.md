@@ -2,7 +2,7 @@
 title: Iteration 117 — Case-insensitive link resolution
 type: iteration
 date: 2026-04-15
-status: planned
+status: completed
 branch: iter-117/case-insensitive-link-resolution
 tags:
   - links
@@ -143,33 +143,33 @@ The resolver gets a case-insensitive fallback that is:
 
 ## Tasks
 
-- [ ] Build `CaseInsensitiveIndex { map: HashMap<String, SmallVec<[String; 1]>> }` in `hyalo-core`
-- [ ] Populate the index during `discover_files` / `LinkGraph::build`
-- [ ] Probe filesystem case-sensitivity once per run (create+stat uppercase temp file under vault dir)
-- [ ] Add `[links] case_insensitive` config key with values `"auto" | true | false`, default `"auto"`
-- [ ] Thread the index into `discovery::resolve_target` via an optional `Option<&CaseInsensitiveIndex>` parameter
-- [ ] Exact-match path unchanged; fallback only when literal match misses and fallback is enabled
-- [ ] On ambiguous fallback (>1 candidate), return `None` and record a warning in the resolver
-- [ ] Update `link_rewrite::plan_mv` so it rewrites links using the canonical on-disk target path
-- [ ] Update `find --fields links` `path` field to always be the canonical on-disk path
-- [ ] Update `link_fix` to treat case-insensitive matches as fixable (rewrite to canonical case) under a new `link-case-mismatch` code
-- [ ] New lint rule `link-case-mismatch` in `hyalo-lint` with `--fix` support
-- [ ] Unit tests: exact match wins, unique fallback, ambiguous fallback returns None, disabled fallback matches today's behavior
-- [ ] E2E tests: MDN-shape fixture (lowercase files, PascalCase links, `site_prefix = "en-US/docs"`) — `find --fields links`, `mv`, `backlinks`, `links fix` all work
-- [ ] E2E tests: case-sensitive fixture with both `Foo.md` and `foo.md` — ambiguous link stays unresolved
-- [ ] E2E tests: `[links] case_insensitive = false` preserves today's strict behavior
-- [ ] Probe test: verify the filesystem-case probe picks up macOS APFS default and case-sensitive temp dirs correctly
-- [ ] Docs: README link-resolution section, `.hyalo.toml` reference, `find --help` / `mv --help` updates
-- [ ] Skill template: document the new config key and lint rule
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
-- [ ] Dogfood against MDN with `.hyalo.toml` updated to add `site_prefix = "en-US/docs"`; verify BUG-6, NEW-2, UX-5 all resolved
+- [x] Build `CaseInsensitiveIndex { map: HashMap<String, SmallVec<[String; 1]>> }` in `hyalo-core`
+- [x] Populate the index during `discover_files` / `LinkGraph::build`
+- [x] Probe filesystem case-sensitivity once per run (create+stat uppercase temp file under vault dir)
+- [x] Add `[links] case_insensitive` config key with values `"auto" | true | false`, default `"auto"`
+- [x] Thread the index into `discovery::resolve_target` via an optional `Option<&CaseInsensitiveIndex>` parameter
+- [x] Exact-match path unchanged; fallback only when literal match misses and fallback is enabled
+- [x] On ambiguous fallback (>1 candidate), return `None` and record a warning in the resolver
+- [x] Update `link_rewrite::plan_mv` so it rewrites links using the canonical on-disk target path
+- [x] Update `find --fields links` `path` field to always be the canonical on-disk path
+- [x] Update `link_fix` to treat case-insensitive matches as fixable (rewrite to canonical case) under a new `link-case-mismatch` code
+- [x] New lint rule `link-case-mismatch` in `hyalo-lint` with `--fix` support
+- [x] Unit tests: exact match wins, unique fallback, ambiguous fallback returns None, disabled fallback matches today's behavior
+- [x] E2E tests: MDN-shape fixture (lowercase files, PascalCase links, `site_prefix = "en-US/docs"`) — `find --fields links`, `mv`, `backlinks`, `links fix` all work
+- [x] E2E tests: case-sensitive fixture with both `Foo.md` and `foo.md` — ambiguous link stays unresolved
+- [x] E2E tests: `[links] case_insensitive = false` preserves today's strict behavior
+- [x] Probe test: verify the filesystem-case probe picks up macOS APFS default and case-sensitive temp dirs correctly
+- [x] Docs: README link-resolution section, `.hyalo.toml` reference, `find --help` / `mv --help` updates
+- [x] Skill template: document the new config key and lint rule
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
+- [x] Dogfood against MDN with `.hyalo.toml` updated to add `site_prefix = "en-US/docs"`; verify BUG-6, NEW-2, UX-5 all resolved
 
 ## Acceptance Criteria
 
-- [ ] On Linux with the MDN fixture, `hyalo find --file <promise>/any/index.md --fields links` returns the real lowercase `path` for every PascalCase URL that has a unique lowercase match
-- [ ] On macOS with the MDN fixture, the same command returns the real lowercase `path`, not the PascalCase input
-- [ ] `hyalo mv web/javascript/reference/iteration_protocols/index.md --to …/foo.md --dry-run` reports the rewrite on links written as `/en-US/docs/Web/JavaScript/Reference/Iteration_protocols`, and the rewritten link uses the canonical path
-- [ ] On a case-sensitive vault with both `Foo.md` and `foo.md`, a link `Bar` that only matches case-insensitively to one of them stays unresolved (no silent ambiguous pick)
-- [ ] Setting `[links] case_insensitive = false` in `.hyalo.toml` reproduces today's strict-matching behavior byte-for-byte on all existing tests
-- [ ] `hyalo lint --fix` rewrites `link-case-mismatch` warnings to the canonical path, and re-running `lint` reports zero warnings
-- [ ] All three originally-reported symptoms (BUG-6, NEW-2, UX-5-old) are dogfood-verified against MDN and marked FIXED in the relevant dogfood reports
+- [x] On Linux with the MDN fixture, `hyalo find --file <promise>/any/index.md --fields links` returns the real lowercase `path` for every PascalCase URL that has a unique lowercase match
+- [x] On macOS with the MDN fixture, the same command returns the real lowercase `path`, not the PascalCase input
+- [x] `hyalo mv web/javascript/reference/iteration_protocols/index.md --to …/foo.md --dry-run` reports the rewrite on links written as `/en-US/docs/Web/JavaScript/Reference/Iteration_protocols`, and the rewritten link uses the canonical path
+- [x] On a case-sensitive vault with both `Foo.md` and `foo.md`, a link `Bar` that only matches case-insensitively to one of them stays unresolved (no silent ambiguous pick)
+- [x] Setting `[links] case_insensitive = false` in `.hyalo.toml` reproduces today's strict-matching behavior byte-for-byte on all existing tests
+- [x] `hyalo lint --fix` rewrites `link-case-mismatch` warnings to the canonical path, and re-running `lint` reports zero warnings
+- [x] All three originally-reported symptoms (BUG-6, NEW-2, UX-5-old) are dogfood-verified against MDN and marked FIXED in the relevant dogfood reports

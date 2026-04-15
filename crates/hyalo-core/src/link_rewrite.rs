@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
 use crate::link_graph::{LinkGraph, normalize_target, relative_path_between, strip_site_prefix};
 use crate::links::{LinkKind, extract_link_spans_with_original};
@@ -72,11 +73,14 @@ pub fn plan_mv(
     site_prefix: Option<&str>,
 ) -> Result<Vec<RewritePlan>> {
     // Step 1: build link graph to discover inbound links.
+    // The build also yields a case-insensitive index of all vault paths, which
+    // is used later to canonicalize link targets that differ only in casing.
     let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
     for (path, msg) in &build.warnings {
         eprintln!("warning: skipping {}: {msg}", path.display());
     }
     let graph = build.graph;
+    let case_index = build.case_index;
 
     let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
     let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
@@ -92,7 +96,13 @@ pub fn plan_mv(
     // are handled as outbound rewrites. Leaving them in the inbound set would
     // produce a plan whose `path` still refers to `old_rel`, which no longer
     // exists on disk after `fs::rename` (NEW-BUG-2).
-    let backlinks = graph.backlinks(old_rel);
+    //
+    // Use the case-insensitive backlinks query so that links written with
+    // different casing (e.g. `[[Web/JavaScript/…]]` targeting
+    // `web/javascript/….md`) are included in the source set.  The
+    // `plan_inbound_rewrites` function then re-checks the match using the
+    // case index, so only genuinely matching links produce replacements.
+    let backlinks = graph.backlinks_case_insensitive(old_rel);
     let old_rel_norm = old_rel.replace('\\', "/");
     let mut by_source: HashMap<PathBuf, Vec<_>> = HashMap::new();
     for entry in backlinks {
@@ -123,6 +133,7 @@ pub fn plan_mv(
             new_rel,
             new_stem,
             site_prefix,
+            Some(&case_index),
         );
 
         if !replacements.is_empty() {
@@ -293,6 +304,12 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
 
 /// Walk every body line in `content` and return [`Replacement`]s for links
 /// that target the moved file.
+///
+/// When `case_index` is provided, link targets are canonicalized through it
+/// before comparison against `old_rel`/`old_stem`.  This fixes BUG-6: a link
+/// written as `Web/JavaScript/…` resolves to the on-disk lowercase path and is
+/// therefore detected as pointing at the moved file.
+#[allow(clippy::too_many_arguments)]
 fn plan_inbound_rewrites(
     content: &str,
     source_rel: &str,
@@ -301,6 +318,7 @@ fn plan_inbound_rewrites(
     new_rel: &str,
     new_stem: &str,
     site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> Vec<Replacement> {
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
@@ -356,7 +374,23 @@ fn plan_inbound_rewrites(
                     // Bare name wikilinks (e.g. [[note]]) are left alone — they
                     // don't encode a location and will work once shortest-path
                     // resolution is implemented.
-                    (t.contains('/') || t.contains('\\')) && (t == old_stem || t == old_rel)
+                    if !(t.contains('/') || t.contains('\\')) {
+                        false
+                    } else if t == old_stem || t == old_rel {
+                        true
+                    } else if let Some(idx) = case_index {
+                        // Canonicalize the written target through the case index.
+                        // Wikilinks may be written without the `.md` extension, so
+                        // try both the literal target and its `.md`-appended form.
+                        let t_lower = t.to_ascii_lowercase();
+                        let canonical = idx.lookup_unique(&t_lower).or_else(|| {
+                            let with_md = format!("{t_lower}.md");
+                            idx.lookup_unique(&with_md)
+                        });
+                        canonical == Some(old_rel) || canonical == Some(old_stem)
+                    } else {
+                        false
+                    }
                 }
                 LinkKind::Markdown => {
                     // Absolute links (starting with `/`) are stripped of the
@@ -367,7 +401,15 @@ fn plan_inbound_rewrites(
                     } else {
                         normalize_target(Path::new(source_rel), &span.link.target)
                     };
-                    norm == old_rel || norm == old_stem
+                    if norm == old_rel || norm == old_stem {
+                        true
+                    } else if let Some(idx) = case_index {
+                        // Try canonicalizing the normalized target through the index.
+                        let canonical = idx.lookup_unique(&norm.to_ascii_lowercase());
+                        canonical == Some(old_rel) || canonical == Some(old_stem)
+                    } else {
+                        false
+                    }
                 }
             };
 
@@ -1249,5 +1291,57 @@ mod tests {
         // Original file must be untouched.
         let content = fs::read_to_string(&outside_path).unwrap();
         assert_eq!(content, "original\n");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Case-insensitive inbound rewrite tests (BUG-6)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn plan_mv_case_insensitive_wikilink_inbound() {
+        // MDN-shape: file on disk `web/javascript/reference/iteration_protocols/index.md`.
+        // Another file `promise/any/index.md` links to `Web/JavaScript/Reference/Iteration_protocols/index`
+        // (PascalCase as commonly used in MDN-mirror vaults).
+        // Moving the lowercase file should detect the PascalCase link as inbound.
+        let vault = create_vault(&[
+            (
+                "web/javascript/reference/iteration_protocols/index.md",
+                "# Iteration Protocols\n",
+            ),
+            (
+                "promise/any/index.md",
+                "See [[Web/JavaScript/Reference/Iteration_protocols/index]]\n",
+            ),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "web/javascript/reference/iteration_protocols/index.md",
+            "web/javascript/reference/iteration_protocols_v2/index.md",
+            None,
+        )
+        .unwrap();
+
+        // promise/any/index.md should have been detected as an inbound link source.
+        let promise_plan = plans.iter().find(|p| p.rel_path == "promise/any/index.md");
+        assert!(
+            promise_plan.is_some(),
+            "case-insensitive inbound link in promise/any/index.md should produce a rewrite plan; got plans: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_case_insensitive_markdown_link_inbound() {
+        // Same BUG-6 scenario but with a markdown-style link.
+        let vault = create_vault(&[
+            ("web/foo.md", "Content\n"),
+            ("other.md", "See [link](Web/Foo.md)\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "web/foo.md", "archive/foo.md", None).unwrap();
+
+        let other_plan = plans.iter().find(|p| p.rel_path == "other.md");
+        assert!(
+            other_plan.is_some(),
+            "case-insensitive inbound markdown link should produce a rewrite plan; got: {plans:?}"
+        );
     }
 }

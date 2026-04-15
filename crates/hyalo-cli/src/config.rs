@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context as _;
 use serde::Deserialize;
 
+use hyalo_core::case_index::CaseInsensitiveMode;
 use hyalo_core::schema::{RawSchemaConfig, SchemaConfig};
 
 /// Search-specific configuration from `[search]` in `.hyalo.toml`.
@@ -20,6 +22,14 @@ struct LinksConfig {
     /// strings and included in the link graph. Overrides the built-in defaults
     /// (`related`, `depends-on`, `supersedes`, `superseded-by`).
     frontmatter_properties: Option<Vec<String>>,
+    /// Case-insensitive link resolution mode.
+    ///
+    /// Accepted values: `"auto"` (default), `"true"`, `"false"`.
+    /// - `"auto"` — enables fallback only on case-insensitive filesystems.
+    /// - `"true"` — always enable case-insensitive fallback.
+    /// - `"false"` — always disable; exact-match only.
+    #[serde(default)]
+    case_insensitive: Option<String>,
 }
 
 /// Lint configuration from `[lint]` in `.hyalo.toml`.
@@ -106,6 +116,8 @@ pub(crate) struct ResolvedDefaults {
     /// `Some(0)` = unlimited.
     /// `Some(n)` = limit to n.
     pub(crate) default_limit: Option<usize>,
+    /// Case-insensitive link resolution mode from `[links] case_insensitive`.
+    pub(crate) case_insensitive_mode: CaseInsensitiveMode,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -122,6 +134,7 @@ impl PartialEq for ResolvedDefaults {
             && self.validate_on_write == other.validate_on_write
             && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
+            && self.case_insensitive_mode == other.case_insensitive_mode
     }
 }
 
@@ -139,6 +152,7 @@ impl ResolvedDefaults {
             lint_ignore: Vec::new(),
             schema: SchemaConfig::default(),
             default_limit: None,
+            case_insensitive_mode: CaseInsensitiveMode::Auto,
         }
     }
 
@@ -166,6 +180,18 @@ pub(crate) fn load_config() -> ResolvedDefaults {
             ));
             ResolvedDefaults::hardcoded()
         }
+    }
+}
+
+/// Parse the `[links] case_insensitive` value into a [`CaseInsensitiveMode`].
+///
+/// Returns `Ok(None)` when the key is absent, `Ok(Some(mode))` on success,
+/// and `Err(...)` when the value is not one of `"auto"`, `"true"`, or `"false"`.
+fn parse_case_insensitive_mode(raw: Option<&str>) -> anyhow::Result<CaseInsensitiveMode> {
+    match raw {
+        None => Ok(CaseInsensitiveMode::Auto),
+        Some(s) => CaseInsensitiveMode::parse(s)
+            .with_context(|| format!("[links] case_insensitive = {s:?}")),
     }
 }
 
@@ -223,6 +249,22 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         .or(cfg.validate_on_write)
         .unwrap_or(false);
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
+
+    // Parse [links] fields — borrow before moving.
+    let case_insensitive_mode = match parse_case_insensitive_mode(
+        cfg.links
+            .as_ref()
+            .and_then(|l| l.case_insensitive.as_deref()),
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            crate::warn::warn(format!(
+                "invalid [links] case_insensitive in .hyalo.toml: {e}"
+            ));
+            CaseInsensitiveMode::Auto
+        }
+    };
+
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
         config_dir: dir.to_path_buf(),
@@ -235,6 +277,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         lint_ignore: cfg.lint.map(|l| l.ignore).unwrap_or_default(),
         schema,
         default_limit: cfg.default_limit,
+        case_insensitive_mode,
     }
 }
 
@@ -532,5 +575,88 @@ site_prefix = "docs"
 
         let resolved = load_config_from(dir.path());
         assert!(!resolved.validate_on_write);
+    }
+
+    // ---------------------------------------------------------------------------
+    // [links] case_insensitive config
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn case_insensitive_missing_key_defaults_to_auto() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.case_insensitive_mode,
+            CaseInsensitiveMode::Auto,
+            "missing key should default to Auto"
+        );
+    }
+
+    #[test]
+    fn case_insensitive_auto_value() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\ncase_insensitive = \"auto\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.case_insensitive_mode, CaseInsensitiveMode::Auto);
+    }
+
+    #[test]
+    fn case_insensitive_true_value() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\ncase_insensitive = \"true\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.case_insensitive_mode, CaseInsensitiveMode::On);
+    }
+
+    #[test]
+    fn case_insensitive_false_value() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\ncase_insensitive = \"false\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.case_insensitive_mode, CaseInsensitiveMode::Off);
+    }
+
+    #[test]
+    fn case_insensitive_invalid_value_falls_back_to_auto() {
+        // Invalid values emit a warning and fall back to Auto.
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\ncase_insensitive = \"maybe\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.case_insensitive_mode,
+            CaseInsensitiveMode::Auto,
+            "invalid value should fall back to Auto"
+        );
+        let warned =
+            crate::warn::any_tracked_starts_with("invalid [links] case_insensitive in .hyalo.toml");
+        assert!(
+            warned,
+            "expected a warning for invalid case_insensitive value"
+        );
     }
 }
