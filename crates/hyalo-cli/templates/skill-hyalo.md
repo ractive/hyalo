@@ -219,7 +219,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; file arg is positional or `--file`, repeatable)
 - **remove** — delete properties or tags
 - **append** — add to list properties
-- **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`)
+- **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`; `--dry-run` to preview toggles)
 - **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
 - **create-index** — build a snapshot index for faster repeated read-only queries
@@ -242,12 +242,22 @@ hyalo lint iterations/iteration-42-feature.md
 # Lint with a glob
 hyalo lint --glob "iterations/*.md"
 
+# Lint only files matching a named type's filename template
+hyalo lint --type iteration
+
 # JSON output
 hyalo lint --format json
 
 # Limit output to first N files with violations
 hyalo lint --limit 10
+
+# Auto-fix: defaults, enum typos, date format, type inference, comma-joined tags
+hyalo lint --fix --dry-run
+hyalo lint --fix
 ```
+
+Lint also warns about comma-joined tags (e.g. `tags: ["cli,ux"]` instead of two list
+items); `--fix` splits them into proper list entries automatically.
 
 Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
 
