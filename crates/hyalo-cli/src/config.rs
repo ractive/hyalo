@@ -26,9 +26,13 @@ struct LinksConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LintConfig {
-    /// Vault-relative paths (or glob-like patterns) to skip during `hyalo lint`.
-    /// Files matching any entry are silently excluded from lint output and from
-    /// the frontmatter parse-error warnings that lint normally emits.
+    /// Vault-relative paths or glob patterns to skip during `hyalo lint`.
+    /// Files matching any entry are excluded from lint output. Entries without
+    /// glob meta-characters are matched literally against the normalized
+    /// vault-relative path (`/` separators); other entries use the standard
+    /// globset semantics (`**/*.md`, `dir/*.md`, etc.). This only affects the
+    /// `lint` command — read-only commands still surface their own frontmatter
+    /// parse-error warnings for these files.
     #[serde(default)]
     ignore: Vec<String>,
 }
@@ -58,12 +62,15 @@ struct ConfigFile {
     /// Link extraction configuration (frontmatter property names to scan).
     links: Option<LinksConfig>,
     /// When `true`, schema validation runs automatically on every `set`/`append`.
+    /// Accepted as a top-level key for backwards compatibility; the documented
+    /// location is `[schema] validate_on_write`.
     validate_on_write: Option<bool>,
     /// Lint-specific configuration (`[lint]` section).
     lint: Option<LintConfig>,
     /// Schema configuration for document type validation.
     /// Stored as raw TOML value to avoid `deny_unknown_fields` issues with
-    /// the deeply nested schema structure.
+    /// the deeply nested schema structure. Also hosts `validate_on_write` —
+    /// see `extract_schema_validate_on_write`.
     #[serde(default)]
     schema: Option<toml::Value>,
     /// Default output limit for list commands (0 = unlimited).
@@ -208,6 +215,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     }
 
     let defaults = ResolvedDefaults::hardcoded();
+    // Resolve `validate_on_write` from either `[schema] validate_on_write`
+    // (documented location) or the top-level `validate_on_write` key
+    // (backwards-compatible alternate). The `[schema]` table wins if both set.
+    let schema_validate_on_write = extract_schema_validate_on_write(cfg.schema.as_ref());
+    let validate_on_write = schema_validate_on_write
+        .or(cfg.validate_on_write)
+        .unwrap_or(false);
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
@@ -217,11 +231,18 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         site_prefix: cfg.site_prefix,
         search_language: cfg.search.and_then(|s| s.language),
         frontmatter_link_props: cfg.links.and_then(|l| l.frontmatter_properties),
-        validate_on_write: cfg.validate_on_write.unwrap_or(false),
+        validate_on_write,
         lint_ignore: cfg.lint.map(|l| l.ignore).unwrap_or_default(),
         schema,
         default_limit: cfg.default_limit,
     }
+}
+
+/// Extract `[schema] validate_on_write` from the raw TOML if present. Returns
+/// `None` if the key is absent or not a boolean (in which case the caller falls
+/// back to the top-level `validate_on_write` key, then to the default `false`).
+fn extract_schema_validate_on_write(raw: Option<&toml::Value>) -> Option<bool> {
+    raw?.get("validate_on_write")?.as_bool()
 }
 
 /// Parse a `SchemaConfig` from the raw `[schema]` TOML value.
@@ -468,6 +489,37 @@ site_prefix = "docs"
     fn validate_on_write_config() {
         let dir = make_temp();
         fs::write(dir.path().join(".hyalo.toml"), "validate_on_write = true\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.validate_on_write);
+    }
+
+    #[test]
+    fn validate_on_write_under_schema_table() {
+        // The documented location is `[schema] validate_on_write = true`.
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[schema]\nvalidate_on_write = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(
+            resolved.validate_on_write,
+            "`[schema] validate_on_write` should enable write-time validation"
+        );
+    }
+
+    #[test]
+    fn validate_on_write_schema_table_wins_over_top_level() {
+        // If both are set, `[schema] validate_on_write` wins.
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "validate_on_write = false\n[schema]\nvalidate_on_write = true\n",
+        )
+        .unwrap();
 
         let resolved = load_config_from(dir.path());
         assert!(resolved.validate_on_write);

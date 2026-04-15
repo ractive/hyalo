@@ -199,6 +199,64 @@ pub fn append(
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); parsed_args.len()];
 
+    // --- Pre-validation pass (BUG-D): validate all proposed writes before any file
+    //     is modified. Unlike `set`, `append` validates the *merged post-append*
+    //     value so that list constraints (e.g. `type = "list"`) see the resulting
+    //     list rather than the individual element.
+    if validate && let Some(schema) = schema {
+        for (full_path, rel_path) in &files {
+            let props = match frontmatter::read_frontmatter(full_path) {
+                Ok(p) => p,
+                Err(e) if frontmatter::is_parse_error(&e) => continue,
+                Err(e) => return Err(e),
+            };
+            if !filter::matches_frontmatter_filters(
+                &props,
+                where_property_filters,
+                where_tag_filters,
+            ) {
+                continue;
+            }
+            // Apply append mutations in-memory to compute the post-mutation props.
+            let mut merged = props.clone();
+            for (name, raw_value, new_val) in &parsed_args {
+                // Errors here (e.g. appending to a mapping) are surfaced during
+                // the write loop; validation only needs to run when the mutation
+                // succeeds.
+                let _ = append_value_in_memory(&mut merged, name, raw_value, new_val);
+            }
+            let doc_type = merged.get("type").and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.as_str()),
+                _ => None,
+            });
+            let effective_schema = match doc_type {
+                Some(t) => schema.merged_schema_for_type(t),
+                None => schema.default_schema().clone(),
+            };
+            for (name, raw_value, _) in &parsed_args {
+                if let Some(constraint) = effective_schema.properties.get(*name)
+                    && let Some(merged_value) = merged.get(*name)
+                    && let Some(violation) = crate::commands::lint::validate_constraint_simple(
+                        name,
+                        merged_value,
+                        constraint,
+                    )
+                {
+                    let out = crate::output::format_error(
+                        format,
+                        &format!("{rel_path}: {violation}"),
+                        None,
+                        Some(&format!(
+                            "rerun without --validate or fix the value (provided: {raw_value:?})"
+                        )),
+                        None,
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+            }
+        }
+    }
+
     let mut index_dirty = false;
 
     // Outer loop: one read-modify-write per file
@@ -215,39 +273,6 @@ pub fn append(
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
             continue;
-        }
-
-        // --validate: check new values against schema constraints.
-        if validate && let Some(schema) = schema {
-            let doc_type = props.get("type").and_then(|v| {
-                if let serde_json::Value::String(s) = v {
-                    Some(s.as_str())
-                } else {
-                    None
-                }
-            });
-            let effective_schema = match doc_type {
-                Some(t) => schema.merged_schema_for_type(t),
-                None => schema.default_schema().clone(),
-            };
-            for (name, raw_value, new_value) in &parsed_args {
-                if let Some(constraint) = effective_schema.properties.get(*name)
-                    && let Some(violation) = crate::commands::lint::validate_constraint_simple(
-                        name, new_value, constraint,
-                    )
-                {
-                    let out = crate::output::format_error(
-                        format,
-                        &format!("{rel_path}: {violation}"),
-                        None,
-                        Some(&format!(
-                            "remove --validate or fix the value (provided: {raw_value:?})"
-                        )),
-                        None,
-                    );
-                    return Ok(CommandOutcome::UserError(out));
-                }
-            }
         }
 
         let mut file_changed = false;
@@ -888,5 +913,138 @@ title: Note
             }
             other => panic!("expected UserError, got: {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // BUG-D: `append --validate` validates the merged (post-append) list value.
+    // Appending a valid element to an existing list must pass even when the
+    // per-element shape looks "incompatible" with a list-typed constraint.
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn append_validate_passes_with_merged_list_value() {
+        use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+        use std::collections::HashMap;
+
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: My Note
+type: post
+tags:
+  - alpha
+---
+"),
+        )
+        .unwrap();
+
+        // Schema: post.tags is list-typed. Without the fix, validation would
+        // run against the raw scalar "beta" and fail ("expected list, got
+        // \"beta\""). With the fix, validation runs on the merged list value
+        // ["alpha", "beta"], which satisfies the List constraint.
+        let mut type_props = HashMap::new();
+        type_props.insert("tags".to_owned(), PropertyConstraint::List);
+        let schema = SchemaConfig {
+            default: TypeSchema::default(),
+            types: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "post".to_owned(),
+                    TypeSchema {
+                        required: vec![],
+                        properties: type_props,
+                        filename_template: None,
+                        defaults: HashMap::new(),
+                    },
+                );
+                m
+            },
+        };
+
+        let outcome = append(
+            tmp.path(),
+            &["tags=beta".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            true, // validate = true — merged list ["alpha","beta"] must pass
+            Some(&schema),
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, CommandOutcome::Success { .. }),
+            "append of valid element should succeed under --validate"
+        );
+    }
+
+    #[test]
+    fn append_validate_rejects_when_merged_list_violates_constraint() {
+        use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+        use std::collections::HashMap;
+
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+title: My Note
+type: post
+author: alice
+---
+"),
+        )
+        .unwrap();
+
+        // `author` is a single-valued String property. Appending a second
+        // value converts it into a list, which the merged-value validation
+        // must reject ("expected string, got <array>").
+        let mut type_props = HashMap::new();
+        type_props.insert(
+            "author".to_owned(),
+            PropertyConstraint::String { pattern: None },
+        );
+        let schema = SchemaConfig {
+            default: TypeSchema::default(),
+            types: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "post".to_owned(),
+                    TypeSchema {
+                        required: vec![],
+                        properties: type_props,
+                        filename_template: None,
+                        defaults: HashMap::new(),
+                    },
+                );
+                m
+            },
+        };
+
+        let outcome = append(
+            tmp.path(),
+            &["author=bob".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            true,
+            Some(&schema),
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, CommandOutcome::UserError(_)),
+            "append that violates merged-value constraint should fail under --validate"
+        );
     }
 }

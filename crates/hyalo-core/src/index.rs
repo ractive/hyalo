@@ -297,6 +297,12 @@ pub struct SnapshotIndex {
     header: SnapshotHeader,
     /// Persisted BM25 inverted index (if the snapshot was built with `bm25_tokenize = true`).
     bm25_index: Option<Bm25InvertedIndex>,
+    /// Frontmatter property names scanned for `[[wikilink]]` values when
+    /// `rescan_entry` / `rename_entry` re-scan a file after a mutation. Not
+    /// persisted in the snapshot — callers must set it for each session via
+    /// [`SnapshotIndex::set_frontmatter_link_props`]; `None` falls back to
+    /// [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
+    frontmatter_link_props: Option<Vec<String>>,
 }
 
 impl SnapshotIndex {
@@ -335,6 +341,27 @@ impl SnapshotIndex {
         &mut self.graph
     }
 
+    /// Set the frontmatter-property list used by `rescan_entry` / `rename_entry`
+    /// when they re-scan a file after a mutation. Callers typically set this
+    /// once after loading the snapshot from the active `.hyalo.toml` config so
+    /// incremental re-scans produce the same link set as the initial build.
+    ///
+    /// Pass `None` to fall back to [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
+    pub fn set_frontmatter_link_props(&mut self, props: Option<Vec<String>>) {
+        self.frontmatter_link_props = props;
+    }
+
+    /// Resolved frontmatter property list — either the session-configured list
+    /// or the built-in defaults.
+    fn effective_frontmatter_link_props(&self) -> Vec<String> {
+        self.frontmatter_link_props.clone().unwrap_or_else(|| {
+            DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect()
+        })
+    }
+
     /// Re-scan a single file and replace its index entry.
     ///
     /// Returns the `FileLinks` for the re-scanned file so the caller can
@@ -345,10 +372,7 @@ impl SnapshotIndex {
             return Ok(None);
         };
         let full_path = dir.join(rel_path);
-        let fm_props: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
+        let fm_props = self.effective_frontmatter_link_props();
         let (entry, file_links) =
             scan_one_file(&full_path, rel_path, true, false, None, &fm_props)?;
         self.entries[idx] = entry;
@@ -390,10 +414,7 @@ impl SnapshotIndex {
 
         // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
-        let fm_props: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
+        let fm_props = self.effective_frontmatter_link_props();
         let (entry, _file_links) =
             scan_one_file(&full_path, new_rel, true, false, None, &fm_props)?;
 
@@ -463,6 +484,7 @@ impl SnapshotIndex {
                     graph: data.graph,
                     header: data.header,
                     bm25_index: data.bm25_index,
+                    frontmatter_link_props: None,
                 })
             }
             Err(e) => {

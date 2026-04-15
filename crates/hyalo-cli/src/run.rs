@@ -806,6 +806,13 @@ fn run_inner() -> Result<(), AppError> {
     let frontmatter_link_props_owned = config.frontmatter_link_props;
     let validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
+
+    // Propagate the configured frontmatter-link property list into the loaded
+    // snapshot so that per-file refreshes (`rescan_entry` / `rename_entry`) use
+    // the same list as the initial index build.
+    if let Some(idx) = snapshot_index.as_mut() {
+        idx.set_frontmatter_link_props(frontmatter_link_props_owned.clone());
+    }
     let mut ctx = CommandContext {
         dir: &dir,
         config_dir: &config_dir,

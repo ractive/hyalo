@@ -396,7 +396,11 @@ impl FileVisitor for LinkGraphVisitor {
     }
 
     fn needs_frontmatter(&self) -> bool {
-        true
+        // Only require frontmatter parsing when there is at least one property
+        // to scan. Callers that pass an empty `frontmatter_props` list get the
+        // old behavior (skip frontmatter entirely) so malformed YAML does not
+        // prevent body-link indexing.
+        !self.frontmatter_props.is_empty()
     }
 }
 
@@ -1006,7 +1010,14 @@ mod tests {
                     .strip_prefix(vault.path())
                     .unwrap_or(full_path)
                     .to_path_buf();
-                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, Vec::new());
+                // Use the same default frontmatter-link properties as
+                // `LinkGraph::build(.., None)` above, so both paths see the
+                // same link set (frontmatter + body).
+                let fm_props: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
                 crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
                 visitor.into_file_links()
             })

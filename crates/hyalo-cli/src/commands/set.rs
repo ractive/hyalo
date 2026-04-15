@@ -243,6 +243,62 @@ pub fn set(
     let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); tag_args.len()];
 
+    // --- Pre-validation pass (BUG-D): validate all proposed writes before any file
+    //     is modified. This keeps batch mutations atomic — if any file would fail
+    //     validation, no files are written. The schema is chosen from the merged
+    //     `type` property (post-mutation), so `--property type=X` selects X's schema.
+    if validate && let Some(schema) = schema {
+        for (full_path, rel_path) in &files {
+            let props = match frontmatter::read_frontmatter(full_path) {
+                Ok(p) => p,
+                // Parse errors are reported as warnings during the write loop; skip here.
+                Err(e) if frontmatter::is_parse_error(&e) => continue,
+                Err(e) => return Err(e),
+            };
+            if !filter::matches_frontmatter_filters(
+                &props,
+                where_property_filters,
+                where_tag_filters,
+            ) {
+                continue;
+            }
+            // Apply set mutations in-memory to compute the post-mutation props.
+            let mut merged = props.clone();
+            for (name, _, value) in &parsed_props {
+                merged.insert((*name).to_owned(), value.clone());
+            }
+            let doc_type = merged.get("type").and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.as_str()),
+                _ => None,
+            });
+            let effective_schema = match doc_type {
+                Some(t) => schema.merged_schema_for_type(t),
+                None => schema.default_schema().clone(),
+            };
+            for (name, raw_value, _) in &parsed_props {
+                if let Some(constraint) = effective_schema.properties.get(*name)
+                    && let Some(merged_value) = merged.get(*name)
+                    && let Some(violation) = crate::commands::lint::validate_constraint_simple(
+                        name,
+                        merged_value,
+                        constraint,
+                    )
+                {
+                    let out = crate::output::format_error(
+                        format,
+                        &format!("{rel_path}: {violation}"),
+                        None,
+                        Some(&format!(
+                            "rerun without --validate or fix the value (provided: {raw_value:?})"
+                        )),
+                        None,
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+            }
+        }
+    }
+
     let mut index_dirty = false;
 
     // Outer loop: one read-modify-write per file
@@ -259,39 +315,6 @@ pub fn set(
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
             continue;
-        }
-
-        // --validate: check new property values against schema constraints.
-        if validate && let Some(schema) = schema {
-            let doc_type = props.get("type").and_then(|v| {
-                if let serde_json::Value::String(s) = v {
-                    Some(s.as_str())
-                } else {
-                    None
-                }
-            });
-            let effective_schema = match doc_type {
-                Some(t) => schema.merged_schema_for_type(t),
-                None => schema.default_schema().clone(),
-            };
-            for (name, raw_value, new_value) in &parsed_props {
-                if let Some(constraint) = effective_schema.properties.get(*name)
-                    && let Some(violation) = crate::commands::lint::validate_constraint_simple(
-                        name, new_value, constraint,
-                    )
-                {
-                    let out = crate::output::format_error(
-                        format,
-                        &format!("{rel_path}: {violation}"),
-                        None,
-                        Some(&format!(
-                            "remove --validate or fix the value (provided: {raw_value:?})"
-                        )),
-                        None,
-                    );
-                    return Ok(CommandOutcome::UserError(out));
-                }
-            }
         }
 
         let mut file_changed = false;

@@ -191,8 +191,15 @@ pub fn prepend_file_result(
     }
 
     let new_payload = format_success(Format::Json, &value);
+    // The outcome's `total` (used by `--count`) tracks files-with-issues —
+    // bump it by 1 when the prepended pseudo-file has at least one violation,
+    // so `--count` stays in sync with `files_with_issues` in the JSON payload.
+    let extra_counts_toward_total = !extra.violations.is_empty();
     Ok(match total {
-        Some(t) => CommandOutcome::success_with_total(new_payload, t),
+        Some(t) => CommandOutcome::success_with_total(
+            new_payload,
+            if extra_counts_toward_total { t + 1 } else { t },
+        ),
         None => CommandOutcome::success(new_payload),
     })
 }

@@ -109,7 +109,9 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
 ///
 /// Conditions (all must hold):
 /// 1. Starts with `[[` and ends with `]]`
-/// 2. Contains no top-level comma (would indicate a multi-element flow sequence)
+/// 2. Contains no comma in the inner content (a comma indicates a multi-element
+///    flow sequence; the check is intentionally conservative and rejects any
+///    comma rather than trying to distinguish nested vs. top-level)
 /// 3. The inner content has no extra `[` or `]` beyond the matched outer pair
 /// 4. The inner content has no unquoted `:` (would indicate a YAML mapping key)
 ///
@@ -124,7 +126,8 @@ fn is_wikilink_value(raw: &str) -> bool {
         return false;
     }
     let inner = &raw[2..raw.len() - 2];
-    // Has top-level comma → treat as YAML flow (e.g. [[a, b], [c]])
+    // Any comma → treat as YAML flow (e.g. [[a, b], [c]]). Intentionally
+    // conservative — we don't try to distinguish nested vs. top-level commas.
     if inner.contains(',') {
         return false;
     }

@@ -123,9 +123,11 @@ frontmatter_properties = ["related", "depends-on", "supersedes", "superseded-by"
 [schema]
 validate_on_write = false
 
-# Files (exact paths or globs) to skip during lint, and whose parse-error warnings
-# are suppressed in read-only commands. Handy for known-malformed files in imported
-# vaults that you can't easily fix.
+# Vault-relative paths or glob patterns to skip during `hyalo lint`. Entries
+# without glob meta-characters are matched literally; patterns like
+# `vendor/**/*.md` use the same glob semantics as `--glob` elsewhere. Only
+# affects the `lint` command — read-only commands still emit parse-error
+# warnings for these files.
 [lint]
 ignore = ["legacy/known-bad.md", "vendor/**/*.md"]
 ```

@@ -899,19 +899,52 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             };
 
             // Filter out files matching `[lint] ignore` entries.
+            //
+            // Each entry is matched against the vault-relative path (with `/`
+            // separators) as a glob: `vendor/**/*.md`, `legacy/known-bad.md`,
+            // `templates/*.md`. An entry without glob meta-characters is matched
+            // literally (exact path equality on the normalized path).
             let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() {
                 file_pairs
             } else {
-                file_pairs
-                    .into_iter()
-                    .filter(|(_, rel)| {
-                        !ctx.lint_ignore.iter().any(|ignore| {
+                use globset::{GlobBuilder, GlobSetBuilder};
+                let mut builder = GlobSetBuilder::new();
+                let mut build_failed = false;
+                for pat in ctx.lint_ignore {
+                    match GlobBuilder::new(pat)
+                        .literal_separator(true)
+                        .backslash_escape(true)
+                        .build()
+                    {
+                        Ok(g) => {
+                            builder.add(g);
+                        }
+                        Err(e) => {
+                            crate::warn::warn(format!(
+                                "invalid [lint] ignore pattern {pat:?}: {e}"
+                            ));
+                            build_failed = true;
+                        }
+                    }
+                }
+                let set = if build_failed {
+                    None
+                } else {
+                    builder.build().ok()
+                };
+                match set {
+                    Some(set) => file_pairs
+                        .into_iter()
+                        .filter(|(_, rel)| {
                             let norm = rel.replace('\\', "/");
-                            norm == ignore.as_str()
-                                || norm.ends_with(&format!("/{}", ignore.trim_start_matches('/')))
+                            !set.is_match(&norm)
                         })
-                    })
-                    .collect()
+                        .collect(),
+                    // If building the set failed (warning already emitted above),
+                    // fall back to no filtering rather than silently ignoring
+                    // potentially relevant files.
+                    None => file_pairs,
+                }
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_with_options(
