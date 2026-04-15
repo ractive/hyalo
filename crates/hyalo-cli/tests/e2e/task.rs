@@ -988,3 +988,72 @@ fn task_read_all_deeply_indented_checkboxes() {
     assert_eq!(results[2]["done"], false, "8-space task is incomplete");
     assert_eq!(results[3]["done"], true, "16-space task is complete");
 }
+
+// ---------------------------------------------------------------------------
+// UX-3 / NEW-1: `task toggle --dry-run` surfaces the direction of change
+// via `old_status` in JSON and `[old] -> [new]` in text output.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_dry_run_json_includes_old_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let content = "- [ ] Open task\n- [x] Done task\n";
+    write_md(tmp.path(), "tasks.md", content);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &["task", "toggle", "--file", "tasks.md", "--all", "--dry-run"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+
+    // Line 1: [ ] -> [x]
+    assert_eq!(results[0]["line"], 1);
+    assert_eq!(results[0]["old_status"], " ");
+    assert_eq!(results[0]["status"], "x");
+    assert_eq!(results[0]["done"], true);
+
+    // Line 2: [x] -> [ ]
+    assert_eq!(results[1]["line"], 2);
+    assert_eq!(results[1]["old_status"], "x");
+    assert_eq!(results[1]["status"], " ");
+    assert_eq!(results[1]["done"], false);
+
+    // File on disk must be unchanged
+    let after = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert_eq!(after, content, "file was modified during --dry-run");
+}
+
+#[test]
+fn task_toggle_dry_run_text_uses_arrow_format() {
+    let tmp = tempfile::tempdir().unwrap();
+    let content = "- [ ] Open task\n- [x] Done task\n";
+    write_md(tmp.path(), "tasks.md", content);
+
+    let (status, stdout, stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--file",
+            "tasks.md",
+            "--all",
+            "--dry-run",
+            "--format",
+            "text",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    // Expect lines shaped like: "tasks.md":1 [ ] -> [x] Open task
+    assert!(
+        stdout.contains(r#""tasks.md":1 [ ] -> [x] Open task"#),
+        "missing arrow format for incomplete->complete:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(r#""tasks.md":2 [x] -> [ ] Done task"#),
+        "missing arrow format for complete->incomplete:\n{stdout}"
+    );
+}
