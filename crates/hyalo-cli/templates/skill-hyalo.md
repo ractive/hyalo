@@ -165,6 +165,11 @@ hyalo mv backlog/my-item.md --to backlog/done/my-item.md
 hyalo mv old-path.md --to new-path.md --dry-run
 ```
 
+`hyalo mv` rewrites relative `.md` paths only. It leaves untouched: site-absolute links
+(`/docs/...`, handled separately via site prefix), URL-scheme links (`http://`, `mailto:`),
+fragment-only links (`#section`), and bare non-`.md` wiki tokens. File permissions (e.g.
+`0644`) are preserved through all atomic rewrites.
+
 ## Absolute link resolution (site prefix)
 
 Documentation sites often use root-absolute links like `/docs/guides/setup.md`. Hyalo resolves
@@ -218,7 +223,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **tags rename** — bulk rename a tag across files (`--from old --to new`)
 - **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; file arg is positional or `--file`, repeatable)
 - **remove** — delete properties or tags
-- **append** — add to list properties
+- **append** — add to list properties (note: tags are not appendable; use `set --tag` instead)
 - **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`; `--dry-run` to preview toggles)
 - **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
@@ -258,6 +263,10 @@ hyalo lint --fix
 
 Lint also warns about comma-joined tags (e.g. `tags: ["cli,ux"]` instead of two list
 items); `--fix` splits them into proper list entries automatically.
+
+Lint additionally validates saved views in `.hyalo.toml`: if a `[views.*]` entry only
+sets `fields` (which controls output columns, not which files match), lint flags it so
+you can add a real filter like `orphan = true` or `tags = [...]`.
 
 Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
 
@@ -322,6 +331,8 @@ hyalo views list --format text
 ```bash
 hyalo views set stale-iterations --property type=iteration --property status=in-progress
 hyalo views set perf-research "performance" --tag research   # BM25 pattern + filter
+hyalo views set orphans --orphan                             # files with no inbound/outbound links
+hyalo views set dead-ends --dead-end                         # files with inbound but no outbound links
 hyalo find --view stale-iterations                    # reuse later
 hyalo find --view stale-iterations --limit 5          # compose with overrides
 ```

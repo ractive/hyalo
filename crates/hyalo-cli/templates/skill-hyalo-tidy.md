@@ -136,6 +136,11 @@ report the suggestion in Phase 5.
 
 If lint reports fixable violations, note the counts for Phase 4.
 
+Lint also validates `[views.*]` in `.hyalo.toml`. A view whose only narrowing key is
+`fields` (display columns, not a filter) is surfaced as a warning — suggest adding an
+explicit filter like `orphan = true`, `dead_end = true`, or `tags = [...]` when you see
+one in Phase 5.
+
 ### Broken links
 ```bash
 # Dry-run shows broken links with proposed fixes and confidence scores
