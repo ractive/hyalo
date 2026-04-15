@@ -122,8 +122,14 @@ fn run_inner() -> Result<(), AppError> {
             // scalar list items, so there is nothing to "append" in the
             // property-level sense — `hyalo set --tag T` is the right tool.
             // Surface that hint instead of clap's generic unknown-arg error.
+            //
+            // Gate the hint on the *resolved* top-level subcommand rather
+            // than a substring scan, so unrelated commands whose args happen
+            // to include `append` (e.g. `hyalo find append`) don't get the
+            // `hyalo append`-specific message.
             if e.kind() == clap::error::ErrorKind::UnknownArgument
-                && raw_args.iter().any(|a| a == "append")
+                && crate::suggest::top_level_subcommand(&raw_args, &Cli::command())
+                    == Some("append")
                 && (crate::suggest::unknown_arg_is(&e, "--tag")
                     || crate::suggest::unknown_arg_is(&e, "-t"))
             {

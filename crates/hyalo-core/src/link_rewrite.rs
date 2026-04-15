@@ -179,6 +179,18 @@ pub fn plan_mv(
     Ok(plans.into_values().collect())
 }
 
+/// Split a markdown-link target into its path portion and any trailing
+/// `#fragment`. Returns `(path, fragment_including_hash)`.
+///
+/// For `"peer.md#intro"` this returns `("peer.md", "#intro")`; for a target
+/// without a fragment the second element is `""`.
+fn split_target_fragment(target: &str) -> (&str, &str) {
+    match target.find('#') {
+        Some(idx) => (&target[..idx], &target[idx..]),
+        None => (target, ""),
+    }
+}
+
 /// Decide whether a markdown-link target should be considered for rewriting
 /// when a file moves.
 ///
@@ -187,24 +199,47 @@ pub fn plan_mv(
 /// - Site-absolute paths (start with `/`) — these are left untouched so that
 ///   downstream site renderers can resolve them from their own root.
 /// - URL schemes (`http://`, `mailto:`, …) and fragment-only refs (`#anchor`).
+///   Windows drive-letter paths like `C:\notes\x.md` are **not** treated as
+///   URL schemes.
 /// - Bare tokens with no `.md` suffix *and* no path separator — these look
 ///   like Obsidian wikilink labels or plain anchor text rather than file
 ///   paths.
+///
+/// Any trailing `#fragment` on the target is ignored when classifying — the
+/// file portion is what matters. So `peer.md#intro` is still treated as an
+/// `.md` link, and `#anchor` alone is still a pure fragment.
 ///
 /// Inbound rewriting already narrows by string-equality against the moved
 /// file's rel/stem, so this extra guard mostly protects outbound rewriting
 /// from blindly rebasing non-filesystem references.
 fn should_rewrite_outbound_target(target: &str) -> bool {
-    if target.is_empty() {
+    if target.is_empty() || target.starts_with('#') {
         return false;
     }
-    if target.starts_with('/') || target.starts_with('#') {
+    let (path_part, _) = split_target_fragment(target);
+    if path_part.is_empty() {
+        return false;
+    }
+    if path_part.starts_with('/') {
         return false;
     }
     // URL schemes: `http://`, `https://`, `mailto:`, `tel:`, …
-    if let Some(colon) = target.find(':') {
-        let scheme = &target[..colon];
-        if !scheme.is_empty()
+    //
+    // Exclude Windows drive-letter paths (single ASCII letter followed by `:`
+    // and a path separator) — they are filesystem paths, not URLs.
+    if let Some(colon) = path_part.find(':') {
+        let scheme = &path_part[..colon];
+        let is_drive_letter = colon == 1
+            && scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+            && path_part
+                .as_bytes()
+                .get(colon + 1)
+                .is_some_and(|b| *b == b'/' || *b == b'\\');
+        if !is_drive_letter
+            && !scheme.is_empty()
             && scheme
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
@@ -213,8 +248,8 @@ fn should_rewrite_outbound_target(target: &str) -> bool {
         }
     }
     // Bare token with no `.md` suffix and no path separator: treat as label.
-    let has_path_sep = target.contains('/') || target.contains('\\');
-    let is_md = std::path::Path::new(target)
+    let has_path_sep = path_part.contains('/') || path_part.contains('\\');
+    let is_md = std::path::Path::new(path_part)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
     if !has_path_sep && !is_md {
@@ -465,8 +500,13 @@ fn plan_outbound_rewrites(
                 continue;
             }
 
+            // Strip any trailing `#fragment` for resolution / comparison, then
+            // re-attach it to the rewritten path so anchored file links keep
+            // their anchor.
+            let (target_path, target_fragment) = split_target_fragment(&span.link.target);
+
             // Resolve target relative to the OLD location's directory.
-            let resolved = normalize_target(Path::new(old_rel), &span.link.target);
+            let resolved = normalize_target(Path::new(old_rel), target_path);
 
             // Self-links: the file moves to `new_rel`, so the link should
             // continue to refer to the file at its new location.
@@ -481,8 +521,13 @@ fn plan_outbound_rewrites(
                 resolved
             };
 
-            // Compute new relative path from the NEW location.
-            let new_target = relative_path_between(new_rel, &target_after_move);
+            // Compute new relative path from the NEW location, then re-attach
+            // any fragment that was stripped above.
+            let new_target = format!(
+                "{}{}",
+                relative_path_between(new_rel, &target_after_move),
+                target_fragment
+            );
 
             // Original target as written in the file.
             let original_target = &line[span.target_start..span.target_end];
@@ -1119,6 +1164,67 @@ mod tests {
         assert!(should_rewrite_outbound_target("sub/x.md"));
         assert!(should_rewrite_outbound_target("x.md"));
         assert!(should_rewrite_outbound_target("sub/label"));
+        // Fragments: classify by the path portion, not the whole target.
+        assert!(
+            should_rewrite_outbound_target("x.md#intro"),
+            "anchored .md link should be rewritable"
+        );
+        assert!(
+            should_rewrite_outbound_target("sub/x.md#section-1"),
+            "anchored nested .md link should be rewritable"
+        );
+        assert!(
+            !should_rewrite_outbound_target("#anchor-with-dashes"),
+            "fragment-only target must still be skipped"
+        );
+        // Windows drive-letter paths are filesystem paths, not URL schemes.
+        assert!(
+            should_rewrite_outbound_target("C:/notes/x.md"),
+            "Windows drive-letter forward-slash path should be rewritable"
+        );
+        assert!(
+            should_rewrite_outbound_target("C:\\notes\\x.md"),
+            "Windows drive-letter backslash path should be rewritable"
+        );
+    }
+
+    #[test]
+    fn plan_mv_outbound_rewrites_anchored_self_link() {
+        // NEW-BUG-2 follow-up: self-links with fragments must still be rewritten
+        // to point at the file's new location while preserving the anchor.
+        let vault = create_vault(&[("self.md", "Jump to [intro](self.md#intro) in this file.\n")]);
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        let plan = &plans[0];
+        assert_eq!(plan.rel_path, "other.md");
+        assert_eq!(plan.replacements.len(), 1);
+        assert_eq!(plan.replacements[0].old_text, "[intro](self.md#intro)");
+        assert_eq!(plan.replacements[0].new_text, "[intro](other.md#intro)");
+    }
+
+    #[test]
+    fn plan_mv_outbound_rewrites_anchored_relative_link_on_dir_change() {
+        // Anchored relative links must be rebased when the directory changes.
+        // `sub/a.md` moves to `a.md`; the link `peer.md#heading` should become
+        // `sub/peer.md#heading` from the new location.
+        let vault = create_vault(&[
+            ("sub/a.md", "See [peer](peer.md#heading).\n"),
+            ("sub/peer.md", "peer\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let moved_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a.md")
+            .expect("expected rewrite plan");
+        assert_eq!(moved_plan.replacements.len(), 1);
+        assert_eq!(
+            moved_plan.replacements[0].old_text,
+            "[peer](peer.md#heading)"
+        );
+        assert_eq!(
+            moved_plan.replacements[0].new_text,
+            "[peer](sub/peer.md#heading)"
+        );
     }
 
     #[test]

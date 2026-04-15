@@ -151,6 +151,10 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     // itself contains a `.hyalo.toml`. The inner file is shadowed by this
     // parent config, and `hyalo` currently doesn't merge nested configs —
     // surfacing the shadow at least makes the silent shadowing visible.
+    //
+    // Routed through `warn::warn`, so `--quiet` suppresses it and the dedup
+    // tracker prevents multiple prints per run. It's a warning (not a hint),
+    // so `--no-hints` intentionally does *not* gate it.
     if let Some(ref sub) = cfg.dir {
         let nested = dir.join(sub).join(".hyalo.toml");
         if nested.is_file() {

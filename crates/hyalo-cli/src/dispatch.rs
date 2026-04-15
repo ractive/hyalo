@@ -884,7 +884,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )?;
 
             // Additional config-level lint: check view definitions.
-            let config_violations = lint_commands::validate_views(dir);
+            //
+            // Views live in `.hyalo.toml`, which is located in `ctx.config_dir`
+            // — that directory can differ from `dir` when the config sets
+            // `dir = "subkb"` and the `.hyalo.toml` sits in the parent.
+            let config_violations = lint_commands::validate_views(ctx.config_dir);
             let outcome = if let Some(view_result) = config_violations {
                 for v in &view_result.violations {
                     match v.severity {

@@ -178,3 +178,53 @@ fn suggest_help_for_typo() {
         "expected '--help' suggestion in stderr; got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NEW-UX-1: `append --tag` → friendly hint, not clap's unknown-arg error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_tag_shows_friendly_hint() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_file(&tmp);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["append", "tasks.md", "--tag", "foo"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`hyalo append` does not accept --tag"),
+        "expected friendly hint in stderr; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("hyalo set"),
+        "expected `hyalo set` recommendation in stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn append_tag_hint_only_fires_for_real_append_subcommand() {
+    // CodeRabbit review finding: the hint previously matched any argv element
+    // equal to "append", so commands like `hyalo find append --tag foo` also
+    // got the `hyalo append`-specific message. Gate on the resolved top-level
+    // subcommand instead.
+    let tmp = tempfile::tempdir().unwrap();
+    setup_file(&tmp);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "append", "--tag", "foo"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("`hyalo append` does not accept --tag"),
+        "append-specific hint must not fire when subcommand is `find`; got: {stderr}"
+    );
+}
