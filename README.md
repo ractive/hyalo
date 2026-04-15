@@ -625,7 +625,7 @@ hyalo lint --limit 10
 hyalo lint --type iteration
 ```
 
-Lint also warns about comma-joined tags (e.g. `"cli,ux"` instead of separate list items); `--fix` splits them automatically. Lint additionally validates `[views.*]` in `.hyalo.toml` — views whose only narrowing key is `fields` (which picks output columns, not matches) are flagged so you can add an actual filter like `orphan = true` or `tags = [...]`.
+Lint also warns about comma-joined tags (e.g. `"cli,ux"` instead of separate list items); `--fix` splits them automatically. Lint additionally validates `[views.*]` in `.hyalo.toml` — views whose only narrowing key is `fields` (which picks output columns, not matches) are flagged so you can add an actual filter like `orphan = true` or `tag = [...]` (saved views store tags under the `tag` key, not `tags`).
 
 **Exit codes:** 0 = clean, 1 = errors found, 2 = internal error.
 

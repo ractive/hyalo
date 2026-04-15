@@ -266,7 +266,8 @@ items); `--fix` splits them into proper list entries automatically.
 
 Lint additionally validates saved views in `.hyalo.toml`: if a `[views.*]` entry only
 sets `fields` (which controls output columns, not which files match), lint flags it so
-you can add a real filter like `orphan = true` or `tags = [...]`.
+you can add a real filter like `orphan = true` or `tag = [...]` (saved views
+store tags under the `tag` key).
 
 Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
 
