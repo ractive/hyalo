@@ -183,6 +183,7 @@ pub fn task_toggle(
         // In dry-run mode: compute the toggled state without writing to disk.
         // Read the current task state and invert the done flag.
         let mut results: Vec<TaskReadResult> = Vec::with_capacity(resolved.len());
+        let mut dry_run_changes: Vec<(usize, char, char)> = Vec::with_capacity(resolved.len()); // (line, old, new)
         for &line_num in &resolved {
             match hyalo_core::tasks::read_task(&full_path, line_num)? {
                 None => {
@@ -197,8 +198,10 @@ pub fn task_toggle(
                 }
                 Some(info) => {
                     // Simulate what toggle would do: flip done state.
+                    let old_status = info.status;
                     let new_done = !info.done;
                     let new_status = if new_done { 'x' } else { ' ' };
+                    dry_run_changes.push((info.line, old_status, new_status));
                     results.push(TaskReadResult {
                         file: rel_path.clone(),
                         line: info.line,
@@ -208,6 +211,15 @@ pub fn task_toggle(
                     });
                 }
             }
+        }
+        // In text mode, produce the `line N: [old] -> [new]` format.
+        // In JSON mode, produce the standard envelope (new state).
+        if format == Format::Text {
+            let lines_out: Vec<String> = dry_run_changes
+                .iter()
+                .map(|(ln, old, new)| format!("line {ln}: [{old}] -> [{new}]"))
+                .collect();
+            return Ok(CommandOutcome::success(lines_out.join("\n")));
         }
         return Ok(CommandOutcome::success(format_results(&results, format)));
     }

@@ -406,6 +406,7 @@ mod tests {
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )?;
         let schema = hyalo_core::schema::SchemaConfig::default();
@@ -843,6 +844,7 @@ Body.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();
@@ -933,6 +935,7 @@ Body.
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: None,
             },
         )
         .unwrap();

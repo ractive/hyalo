@@ -41,8 +41,16 @@ pub(crate) struct CommandContext<'a> {
     pub index_path: Option<&'a Path>,
     /// Default stemming language from `[search] language` in `.hyalo.toml`.
     pub config_language: Option<&'a str>,
+    /// Frontmatter property names to scan for `[[wikilink]]` values in the link graph.
+    /// Comes from `[links] frontmatter_properties` in `.hyalo.toml`. `None` = use defaults.
+    pub frontmatter_link_props: Option<&'a [String]>,
     /// Parsed schema configuration from `[schema.*]` sections in `.hyalo.toml`.
     pub schema: &'a SchemaConfig,
+    /// When `true`, schema validation runs on every `set`/`append` operation even
+    /// without `--validate`. Comes from `validate_on_write = true` in `.hyalo.toml`.
+    pub validate_on_write: bool,
+    /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore` in `.hyalo.toml`.
+    pub lint_ignore: &'a [String],
     /// Optional exit code override set by commands that need a non-0/2 exit code
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
     /// to override its own exit code calculation.
@@ -262,10 +270,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 needs_full_vault,
-                ScanOptions {
+                &ScanOptions {
                     scan_body,
                     bm25_tokenize: false,
                     default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
                 },
             )? {
                 IndexResolution::Resolved(resolved) => find_commands::find(
@@ -333,10 +342,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     site_prefix,
                     false,
-                    ScanOptions {
+                    &ScanOptions {
                         scan_body: false,
                         bm25_tokenize: false,
                         default_language: None,
+                        frontmatter_link_props: ctx.frontmatter_link_props,
                     },
                 )? {
                     IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
@@ -407,10 +417,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     site_prefix,
                     false,
-                    ScanOptions {
+                    &ScanOptions {
                         scan_body: false,
                         bm25_tokenize: false,
                         default_language: None,
+                        frontmatter_link_props: ctx.frontmatter_link_props,
                     },
                 )? {
                     IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
@@ -561,10 +572,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             effective_format,
             site_prefix,
             true,
-            ScanOptions {
+            &ScanOptions {
                 scan_body: true,
                 bm25_tokenize: false,
                 default_language: None,
+                frontmatter_link_props: ctx.frontmatter_link_props,
             },
         )? {
             IndexResolution::Resolved(resolved) => summary_commands::summary(
@@ -588,6 +600,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             where_properties,
             where_tags,
             dry_run,
+            validate,
         } => {
             if !file_positional.is_empty() {
                 file = file_positional;
@@ -598,6 +611,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
+            let do_validate = validate || ctx.validate_on_write;
             set_commands::set(
                 dir,
                 &properties,
@@ -610,6 +624,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 snapshot_index,
                 index_path,
                 dry_run,
+                do_validate,
+                if do_validate { Some(ctx.schema) } else { None },
             )
         }
         Commands::Remove {
@@ -653,6 +669,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             where_properties,
             where_tags,
             dry_run,
+            validate,
         } => {
             if !file_positional.is_empty() {
                 file = file_positional;
@@ -663,6 +680,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     return Ok(CommandOutcome::UserError(format!("Error: {e}")));
                 }
             };
+            let do_validate = validate || ctx.validate_on_write;
             append_commands::append(
                 dir,
                 &properties,
@@ -674,6 +692,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 snapshot_index,
                 index_path,
                 dry_run,
+                do_validate,
+                if do_validate { Some(ctx.schema) } else { None },
             )
         }
         Commands::Backlinks {
@@ -693,10 +713,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 true,
-                ScanOptions {
+                &ScanOptions {
                     scan_body: true,
                     bm25_tokenize: false,
                     default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
                 },
             )? {
                 IndexResolution::Resolved(resolved) => backlinks_commands::backlinks(
@@ -765,10 +786,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 effective_format,
                 site_prefix,
                 true,
-                ScanOptions {
+                &ScanOptions {
                     scan_body: true,
                     bm25_tokenize: false,
                     default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
                 },
             )? {
                 IndexResolution::Resolved(resolved) => links_commands::links_fix(
@@ -876,8 +898,24 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 lint_commands::FixMode::Off
             };
 
+            // Filter out files matching `[lint] ignore` entries.
+            let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() {
+                file_pairs
+            } else {
+                file_pairs
+                    .into_iter()
+                    .filter(|(_, rel)| {
+                        !ctx.lint_ignore.iter().any(|ignore| {
+                            let norm = rel.replace('\\', "/");
+                            norm == ignore.as_str()
+                                || norm.ends_with(&format!("/{}", ignore.trim_start_matches('/')))
+                        })
+                    })
+                    .collect()
+            };
+
             let (outcome, mut counts) = lint_commands::lint_files_with_options(
-                &file_pairs,
+                &filtered_pairs,
                 ctx.schema,
                 fix_mode,
                 resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),

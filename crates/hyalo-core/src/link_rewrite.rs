@@ -72,7 +72,7 @@ pub fn plan_mv(
     site_prefix: Option<&str>,
 ) -> Result<Vec<RewritePlan>> {
     // Step 1: build link graph to discover inbound links.
-    let build = LinkGraph::build(dir, site_prefix).context("building link graph")?;
+    let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
     for (path, msg) in &build.warnings {
         eprintln!("warning: skipping {}: {msg}", path.display());
     }

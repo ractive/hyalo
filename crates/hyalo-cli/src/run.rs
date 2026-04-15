@@ -154,8 +154,13 @@ fn run_inner() -> Result<(), AppError> {
 
             // Suggest --version / --help when the user types a close misspelling
             // as a bare subcommand (e.g. `hyalo versio`, `hyalo hep`).
+            // BUT: scope this to top-level subcommands only — don't fire when the
+            // parent context is already a known subcommand like `properties`.
             if e.kind() == clap::error::ErrorKind::InvalidSubcommand {
                 use clap::error::{ContextKind, ContextValue};
+                let parent_is_properties = raw_args
+                    .iter()
+                    .any(|a| a == "properties" || a == "property");
                 if let Some(invalid) = e.context().find_map(|(k, v)| {
                     if k == ContextKind::InvalidSubcommand {
                         if let ContextValue::String(s) = v {
@@ -167,6 +172,13 @@ fn run_inner() -> Result<(), AppError> {
                         None
                     }
                 }) {
+                    // Special hint for `hyalo properties <something>` typos.
+                    if parent_is_properties {
+                        eprintln!(
+                            "{e}\n  hint: 'properties' has subcommands; try 'hyalo properties summary' or 'hyalo properties rename'\n"
+                        );
+                        return Err(AppError::Exit(2));
+                    }
                     for (target, suggestion) in [("version", "--version"), ("help", "--help")] {
                         if strsim::damerau_levenshtein(invalid, target) <= 2 {
                             eprintln!("{e}\n  tip: did you mean `hyalo {suggestion}`?\n");
@@ -687,17 +699,63 @@ fn run_inner() -> Result<(), AppError> {
         None
     };
 
+    // Detect whether --index was given with an explicit path value.
+    // When the user writes `--index=PATH`, `require_equals = true` means only
+    // `--index=PATH` form is valid. The default_missing_value is ".hyalo-index".
+    // So if cli.index == Some(".hyalo-index") we can't easily tell apart
+    // `--index` (bare) from `--index=.hyalo-index` (explicit). To distinguish,
+    // we pre-scan argv for `--index=` prefix.
+    let index_has_explicit_path = raw_args
+        .iter()
+        .any(|a| a.starts_with("--index=") && a != "--index=");
+
     // Load snapshot index if --index is provided.
     // Read-only commands use it to skip disk scans. Mutation commands use it to
     // keep the index up-to-date after each file write (they still read/write
     // individual files on disk, but patch the index entry in-place).
     //
-    // Resolve relative --index paths against the vault directory so that
-    // `--index .hyalo-index` (the default) works regardless of CWD.
+    // Resolution rules:
+    // - Bare `--index` (no explicit path) → resolve against vault dir (so
+    //   `.hyalo-index` in the vault is found from any CWD).
+    // - `--index=PATH` (explicit path) → resolve relative paths against CWD
+    //   (POSIX convention; absolute paths are used as-is).
     if let Some(ref p) = cli.index
         && p.is_relative()
     {
-        cli.index = Some(dir.join(p));
+        if index_has_explicit_path {
+            // Explicit path: resolve against CWD
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            cli.index = Some(cwd.join(p));
+        } else {
+            // Bare --index: resolve against vault dir
+            cli.index = Some(dir.join(p));
+        }
+    }
+
+    // Warn when `--index` (bare, valueless) is also present and the first
+    // positional argument to `find` looks like a file path or index file.
+    // This means the user probably wrote `--index PATH query` thinking PATH
+    // was consumed by --index, but it was actually the query pattern.
+    if !index_has_explicit_path
+        && cli.index.is_some()
+        && let Commands::Find {
+            ref pattern,
+            ref file_positional,
+            ..
+        } = cli.command
+    {
+        let query_candidate = pattern
+            .as_deref()
+            .or_else(|| file_positional.first().map(String::as_str));
+        if let Some(q) = query_candidate {
+            let looks_like_index = q.ends_with(".hyalo-index") || std::path::Path::new(q).exists();
+            if looks_like_index {
+                crate::warn::warn(
+                    "--index PATH (space-separated) passes PATH as the search query, \
+                     not as an index file; use --index=PATH (with =) to specify an index file",
+                );
+            }
+        }
     }
     let uses_index = !matches!(
         &cli.command,
@@ -745,6 +803,9 @@ fn run_inner() -> Result<(), AppError> {
     let config_language_owned = config.search_language.clone();
     let config_default_limit = config.default_limit;
     let schema = config.schema;
+    let frontmatter_link_props_owned = config.frontmatter_link_props;
+    let validate_on_write = config.validate_on_write;
+    let lint_ignore = config.lint_ignore;
     let mut ctx = CommandContext {
         dir: &dir,
         config_dir: &config_dir,
@@ -754,7 +815,10 @@ fn run_inner() -> Result<(), AppError> {
         snapshot_index: &mut snapshot_index,
         index_path: cli.index.as_deref(),
         config_language: config_language_owned.as_deref(),
+        frontmatter_link_props: frontmatter_link_props_owned.as_deref(),
         schema: &schema,
+        validate_on_write,
+        lint_ignore: &lint_ignore,
         exit_code_override: None,
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,

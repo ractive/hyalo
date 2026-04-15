@@ -112,6 +112,22 @@ format = "text"        # default: "json"
 hints = false          # default: true (set to false to suppress drill-down hints)
 site_prefix = "docs"   # override auto-derived prefix for absolute link resolution
 default_limit = 100    # default: 50 (max results for list commands; 0 = unlimited)
+
+# Which list-valued frontmatter properties contribute to the link graph.
+# Wikilinks found in these properties' values feed backlinks/orphan/dead-end.
+[links]
+frontmatter_properties = ["related", "depends-on", "supersedes", "superseded-by"]
+
+# Schema validation on write: when true, `set`/`append` behave as if `--validate`
+# were always passed — writes that would create lint errors are rejected.
+[schema]
+validate_on_write = false
+
+# Files (exact paths or globs) to skip during lint, and whose parse-error warnings
+# are suppressed in read-only commands. Handy for known-malformed files in imported
+# vaults that you can't easily fix.
+[lint]
+ignore = ["legacy/known-bad.md", "vendor/**/*.md"]
 ```
 
 All fields are optional. CLI flags always take precedence over config values. If `.hyalo.toml` is missing, hyalo silently uses built-in defaults; if the file is present but cannot be read or is malformed/invalid, hyalo warns on stderr and falls back to the built-in defaults.
@@ -417,6 +433,16 @@ hyalo set --property status=completed --where-property status=done --glob '**/*.
 
 # Add tag to files matching a tag filter
 hyalo set --tag reviewed --where-tag research --glob '**/*.md'
+
+# --where-property / --where-tag without --file/--glob defaults to all **/*.md
+hyalo set --property status=completed --where-property status=done
+
+# Validate the new value against the schema (rejects enum/pattern violations).
+# Also enable globally via [schema] validate_on_write = true in .hyalo.toml.
+hyalo set --property status=published --validate --file note.md
+
+# Store a wikilink as a literal string (not parsed as a nested YAML list)
+hyalo set --property 'related=[[foo/bar]]' --file note.md
 ```
 
 ### remove
@@ -445,6 +471,9 @@ hyalo append --property tags=serde --glob "crates/*.md"
 
 # Append to list property on files matching a tag
 hyalo append --property aliases=old-name --where-tag renamed --glob '**/*.md'
+
+# --validate runs schema rules against the appended value before writing
+hyalo append --property related=[[baz/qux]] --validate --file note.md
 ```
 
 `append` does not support `--tag` — tags aren't appendable via `append`. Use `hyalo set --tag <name>` to add a tag instead; running `hyalo append --tag …` prints a hint pointing to `set --tag`.

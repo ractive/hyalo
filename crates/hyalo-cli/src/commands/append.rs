@@ -10,6 +10,7 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::{self, PropertyFilter};
 use hyalo_core::frontmatter;
 use hyalo_core::index::SnapshotIndex;
+use hyalo_core::schema::SchemaConfig;
 
 // ---------------------------------------------------------------------------
 // Output type
@@ -113,6 +114,7 @@ fn append_value_in_memory(
 /// - `property_args`: one or more `"K=V"` strings
 /// - Requires `--file` or `--glob`
 /// - At least one `property_args` entry required
+/// - `validate`: when `true`, validates new values against schema constraints.
 #[allow(clippy::too_many_arguments)]
 pub fn append(
     dir: &Path,
@@ -125,6 +127,8 @@ pub fn append(
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
     dry_run: bool,
+    validate: bool,
+    schema: Option<&SchemaConfig>,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() {
         let out = crate::output::format_error(
@@ -137,7 +141,10 @@ pub fn append(
         return Ok(CommandOutcome::UserError(out));
     }
 
-    if let Some(outcome) = require_file_or_glob(files, globs, "append", format) {
+    // Allow omitting --file/--glob when --where-property or --where-tag is provided;
+    // in that case, the command defaults to all vault files.
+    let has_where = !where_property_filters.is_empty() || !where_tag_filters.is_empty();
+    if !has_where && let Some(outcome) = require_file_or_glob(files, globs, "append", format) {
         return Ok(outcome);
     }
 
@@ -208,6 +215,39 @@ pub fn append(
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
             continue;
+        }
+
+        // --validate: check new values against schema constraints.
+        if validate && let Some(schema) = schema {
+            let doc_type = props.get("type").and_then(|v| {
+                if let serde_json::Value::String(s) = v {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            });
+            let effective_schema = match doc_type {
+                Some(t) => schema.merged_schema_for_type(t),
+                None => schema.default_schema().clone(),
+            };
+            for (name, raw_value, new_value) in &parsed_args {
+                if let Some(constraint) = effective_schema.properties.get(*name)
+                    && let Some(violation) = crate::commands::lint::validate_constraint_simple(
+                        name, new_value, constraint,
+                    )
+                {
+                    let out = crate::output::format_error(
+                        format,
+                        &format!("{rel_path}: {violation}"),
+                        None,
+                        Some(&format!(
+                            "remove --validate or fix the value (provided: {raw_value:?})"
+                        )),
+                        None,
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+            }
         }
 
         let mut file_changed = false;
@@ -308,6 +348,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -349,6 +391,8 @@ aliases:
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
 
@@ -382,6 +426,8 @@ aliases:
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -418,6 +464,8 @@ author: Alice
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
 
@@ -452,6 +500,8 @@ author: Alice
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -487,6 +537,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -513,6 +565,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -532,6 +586,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -552,6 +608,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -572,6 +630,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -598,6 +658,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
 
@@ -630,6 +692,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -667,6 +731,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -702,6 +768,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -736,6 +804,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         match outcome {
@@ -761,6 +831,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -781,6 +853,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -801,6 +875,8 @@ title: Note
             &mut None,
             None,
             false,
+            false,
+            None,
         )
         .unwrap();
         match outcome {
