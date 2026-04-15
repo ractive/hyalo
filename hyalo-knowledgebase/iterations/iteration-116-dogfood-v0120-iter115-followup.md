@@ -2,7 +2,7 @@
 title: Iteration 116 — Dogfood v0.12.0 iter-115 Follow-up Fixes
 type: iteration
 date: 2026-04-15
-status: in-progress
+status: completed
 branch: iter-116/dogfood-v0120-iter115-followup
 tags:
   - dogfooding
