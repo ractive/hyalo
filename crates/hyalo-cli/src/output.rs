@@ -324,6 +324,12 @@ const TASK_INFO_FILTER: &str =
 const TASK_READ_RESULT_FILTER: &str =
     r#""\"\(.file)\":\(.line) [\(.status)] \(.text)\(if .done then " (done)" else "" end)""#;
 
+/// `TaskDryRunResult`: `{done, file, line, old_status, status, text}`
+/// Format: `"file":line [old] -> [new] text` — makes the direction of change
+/// explicit for `task toggle --dry-run`.
+const TASK_DRY_RUN_RESULT_FILTER: &str =
+    r#""\"\(.file)\":\(.line) [\(.old_status)] -> [\(.status)] \(.text)""#;
+
 /// `VaultSummary`: `{dead_ends, files, links, orphans, properties, recent_files, status, tags, tasks}`
 /// Compact single-line-per-section format (~20-30 lines regardless of vault size).
 const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
@@ -421,6 +427,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "line,section,text" => Some(CONTENT_MATCH_FILTER),
         // TaskReadResult
         "done,file,line,status,text" => Some(TASK_READ_RESULT_FILTER),
+        // TaskDryRunResult
+        "done,file,line,old_status,status,text" => Some(TASK_DRY_RUN_RESULT_FILTER),
         // VaultSummary
         "dead_ends,files,links,orphans,properties,recent_files,status,tags,tasks"
         | "dead_ends,files,links,orphans,properties,recent_files,schema,status,tags,tasks" => {

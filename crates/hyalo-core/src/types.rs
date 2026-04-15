@@ -121,6 +121,19 @@ pub struct TaskReadResult {
     pub done: bool,
 }
 
+/// Result of a `task toggle --dry-run` simulation.
+/// Carries both the original and the would-be status so the text formatter
+/// can render `line N: [old] -> [new]` and make the direction of change explicit.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskDryRunResult {
+    pub file: String,
+    pub line: usize,
+    pub old_status: char,
+    pub status: char,
+    pub text: String,
+    pub done: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Summary types
 // ---------------------------------------------------------------------------

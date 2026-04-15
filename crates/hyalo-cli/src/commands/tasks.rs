@@ -7,7 +7,7 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery;
 use hyalo_core::heading::{SectionFilter, parse_atx_heading};
 use hyalo_core::index::{SnapshotIndex, format_modified};
-use hyalo_core::types::{TaskInfo, TaskReadResult};
+use hyalo_core::types::{TaskDryRunResult, TaskInfo, TaskReadResult};
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -70,6 +70,15 @@ fn resolve_task_lines(
 /// Format results: single object when exactly 1 task, Vec when multiple.
 /// The output pipeline later wraps this in the `{"results": ..., "hints": [...]}` envelope.
 fn format_results(results: &[TaskReadResult], format: Format) -> String {
+    if let [single] = results {
+        crate::output::format_output(format, single)
+    } else {
+        crate::output::format_output(format, &results)
+    }
+}
+
+/// Same as `format_results` but for dry-run results that carry `old_status`.
+fn format_dry_run_results(results: &[TaskDryRunResult], format: Format) -> String {
     if let [single] = results {
         crate::output::format_output(format, single)
     } else {
@@ -182,8 +191,13 @@ pub fn task_toggle(
     if dry_run {
         // In dry-run mode: compute the toggled state without writing to disk.
         // Read the current task state and invert the done flag.
-        let mut results: Vec<TaskReadResult> = Vec::with_capacity(resolved.len());
-        let mut dry_run_changes: Vec<(usize, char, char)> = Vec::with_capacity(resolved.len()); // (line, old, new)
+        //
+        // We emit `TaskDryRunResult` (carrying both `old_status` and `status`)
+        // so that the text formatter can render `line N: [old] -> [new]` and
+        // make the direction of change explicit. The dispatch layer always
+        // forces JSON here; text rendering happens later in the output
+        // pipeline via a shape-specific jq filter.
+        let mut results: Vec<TaskDryRunResult> = Vec::with_capacity(resolved.len());
         for &line_num in &resolved {
             match hyalo_core::tasks::read_task(&full_path, line_num)? {
                 None => {
@@ -198,13 +212,12 @@ pub fn task_toggle(
                 }
                 Some(info) => {
                     // Simulate what toggle would do: flip done state.
-                    let old_status = info.status;
                     let new_done = !info.done;
                     let new_status = if new_done { 'x' } else { ' ' };
-                    dry_run_changes.push((info.line, old_status, new_status));
-                    results.push(TaskReadResult {
+                    results.push(TaskDryRunResult {
                         file: rel_path.clone(),
                         line: info.line,
+                        old_status: info.status,
                         status: new_status,
                         text: info.text,
                         done: new_done,
@@ -212,16 +225,9 @@ pub fn task_toggle(
                 }
             }
         }
-        // In text mode, produce the `line N: [old] -> [new]` format.
-        // In JSON mode, produce the standard envelope (new state).
-        if format == Format::Text {
-            let lines_out: Vec<String> = dry_run_changes
-                .iter()
-                .map(|(ln, old, new)| format!("line {ln}: [{old}] -> [{new}]"))
-                .collect();
-            return Ok(CommandOutcome::success(lines_out.join("\n")));
-        }
-        return Ok(CommandOutcome::success(format_results(&results, format)));
+        return Ok(CommandOutcome::success(format_dry_run_results(
+            &results, format,
+        )));
     }
 
     match hyalo_core::tasks::toggle_tasks(&full_path, &resolved) {
