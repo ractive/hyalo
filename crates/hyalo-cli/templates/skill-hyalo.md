@@ -48,8 +48,10 @@ hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obs
 
 For literal pattern matching (not stemmed), use regex: `hyalo find -e "exact_string"`.
 
-Language support: `--language french` selects the French stemmer. Per-file override via
-frontmatter `language: french`. Config default via `[search] language = "french"` in `.hyalo.toml`.
+Stemmer language: `--stemmer french` (or the older `--language french`) selects the French
+Snowball stemmer for BM25 tokenization. This is *not* markdown code-block language filtering.
+Per-file override via frontmatter `language: french`. Config default via
+`[search] language = "french"` in `.hyalo.toml`.
 
 Property filters support: `K=V` (eq), `K!=V` (neq), `K>=V`/`K<=V`/`K>V`/`K<V` (comparison),
 `K` (existence), `!K` (absence — files missing the property), `K~=pattern` or `K~=/pattern/flags`
@@ -221,9 +223,9 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
 - **tags summary** — list tags with counts
 - **tags rename** — bulk rename a tag across files (`--from old --to new`)
-- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates; `--property 'K=[a,b,c]'` creates YAML sequences; file arg is positional or `--file`, repeatable)
+- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates, which default to all `**/*.md` when no `--file`/`--glob` is given; `--property 'K=[a,b,c]'` creates YAML sequences; `--property 'K=[[foo/bar]]'` stores a literal wikilink string; `--validate` rejects values that would fail schema lint; file arg is positional or `--file`, repeatable)
 - **remove** — delete properties or tags
-- **append** — add to list properties (note: tags are not appendable; use `set --tag` instead)
+- **append** — add to list properties (supports `--validate`; note: tags are not appendable; use `set --tag` instead)
 - **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`; `--dry-run` to preview toggles)
 - **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
@@ -298,6 +300,15 @@ When no `[schema]` block exists, lint exits 0 with zero violations (backwards co
 
 `hyalo summary` includes a `schema` field with error/warning counts when a schema is configured.
 
+**Validate on write:** `hyalo set` and `hyalo append` accept `--validate` to reject values
+that would fail lint. Enable globally via `[schema] validate_on_write = true` in `.hyalo.toml`.
+
+**Ignore known-bad files:** add `[lint] ignore = ["legacy/known-bad.md", "vendor/**/*.md"]`
+to `.hyalo.toml` to skip listed files during `hyalo lint` (plain strings match literally;
+glob meta-characters use `--glob` semantics). Read-only commands still warn on parse errors.
+
+`hyalo lint --count` returns just the number of files with violations.
+
 ## Types — manage type schemas
 
 `hyalo types` manages `[schema.types.*]` entries in `.hyalo.toml` without hand-editing TOML. All mutations preserve existing comments and formatting.
@@ -359,8 +370,10 @@ If you just need a quick readable overview, use `--format text` (without `--jq`)
 
 Use `hyalo backlinks <path>` to find all files that link to a given file (reverse link
 lookup). This builds an in-memory link graph by scanning all `.md` files in the directory,
-detecting both `[[wikilinks]]` and `[markdown](links)`. The file can be passed positionally
-or with `--file`.
+detecting both `[[wikilinks]]` and `[markdown](links)` in body content *and* in
+list-valued frontmatter properties (default: `related`, `depends-on`, `supersedes`,
+`superseded-by` — configurable via `[links] frontmatter_properties = [...]` in `.hyalo.toml`).
+The file can be passed positionally or with `--file`.
 
 ```bash
 # Which files reference iteration-37?
