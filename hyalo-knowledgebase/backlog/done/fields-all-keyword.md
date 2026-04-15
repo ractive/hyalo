@@ -6,7 +6,9 @@ status: completed
 priority: low
 origin: dogfooding v0.4.2 on docs/content
 tags:
-  - cli,find,ux
+  - cli
+  - find
+  - ux
 ---
 
 `hyalo find --fields all` returns `unknown field "all"`. The help text says "default: all except properties-typed and backlinks", implying `all` should be a valid keyword.

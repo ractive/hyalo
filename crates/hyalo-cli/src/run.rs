@@ -118,6 +118,22 @@ fn run_inner() -> Result<(), AppError> {
                 return Err(AppError::Exit(2));
             }
 
+            // Intercept `--tag` / `-t` on the `append` subcommand. Tags are
+            // scalar list items, so there is nothing to "append" in the
+            // property-level sense — `hyalo set --tag T` is the right tool.
+            // Surface that hint instead of clap's generic unknown-arg error.
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && raw_args.iter().any(|a| a == "append")
+                && (crate::suggest::unknown_arg_is(&e, "--tag")
+                    || crate::suggest::unknown_arg_is(&e, "-t"))
+            {
+                eprintln!(
+                    "error: `hyalo append` does not accept --tag (tags are scalar list items, not appendable)\n\n\
+                     hint: use `hyalo set <file> --tag <tag>` to add a tag\n"
+                );
+                return Err(AppError::Exit(2));
+            }
+
             // Only attempt subcommand suggestions when clap couldn't recognise a
             // flag or subcommand — this avoids misleading tips for other error kinds.
             if matches!(

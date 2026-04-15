@@ -6,7 +6,9 @@ status: completed
 priority: low
 origin: dogfooding v0.4.2 on docs/content
 tags:
-  - cli,find,ux
+  - cli
+  - find
+  - ux
 ---
 
 `title` is the most commonly wanted field when browsing files, but `--fields title` is not supported. Users must use `--fields properties` which returns the entire property bag.

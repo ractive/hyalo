@@ -830,9 +830,13 @@ fn mv_site_prefix_cli_empty_disables_prefix() {
 
 #[test]
 fn mv_rewrites_self_link() {
-    // a.md contains a markdown self-link [me](a.md).
-    // When a.md is moved to archive/a.md the self-link must be rewritten —
-    // just like any other inbound link to the file.
+    // NEW-BUG-2 regression: `a.md` contains a self-link `[me](a.md)`. When
+    // `a.md` is moved to `archive/a.md` the mv must (a) succeed without a
+    // canonicalization error on the old path, and (b) leave the self-link
+    // pointing at the file's new location. A relative link `a.md` from
+    // `archive/a.md` already resolves to `archive/a.md` itself — so no text
+    // change is needed for cross-directory moves; the important contract is
+    // that the resulting link still resolves to the moved file.
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -859,15 +863,56 @@ See [me](a.md) for details.
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["results"]["from"], "a.md");
     assert_eq!(json["results"]["to"], "archive/a.md");
-    assert!(
-        json["results"]["total_links_updated"].as_u64().unwrap() >= 1,
-        "self-link must be counted as rewritten: {json}"
-    );
 
-    // The moved file must exist and the original self-link target must be gone.
+    // The moved file must exist and the self-link must still resolve to the
+    // file's new location (i.e. `archive/a.md`). Relative to `archive/a.md`,
+    // the link target `a.md` points at `archive/a.md` — same file.
     let content = fs::read_to_string(tmp.path().join("archive/a.md")).unwrap();
     assert!(
-        !content.contains("[me](a.md)"),
-        "old self-link must be gone after move: {content}"
+        content.contains("[me](a.md)"),
+        "self-link must remain valid (resolves to new location): {content}"
+    );
+}
+
+#[test]
+fn mv_rewrites_self_link_same_directory() {
+    // NEW-BUG-2: self.md contains `[me](self.md)`. Rename within the same
+    // directory must rewrite the self-link to the new filename.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "self.md",
+        md!(r"
+---
+title: Self
+---
+See [me](self.md) for details.
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "self.md", "--to", "other.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["results"]["total_links_updated"].as_u64().unwrap() >= 1,
+        "self-link must be rewritten on same-dir rename: {json}"
+    );
+    let content = fs::read_to_string(tmp.path().join("other.md")).unwrap();
+    assert!(
+        content.contains("[me](other.md)"),
+        "self-link must point to new filename: {content}"
+    );
+    assert!(
+        !content.contains("[me](self.md)"),
+        "old self-link must be gone after rename: {content}"
     );
 }

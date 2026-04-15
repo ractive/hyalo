@@ -876,12 +876,27 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 lint_commands::FixMode::Off
             };
 
-            let (outcome, counts) = lint_commands::lint_files_with_options(
+            let (outcome, mut counts) = lint_commands::lint_files_with_options(
                 &file_pairs,
                 ctx.schema,
                 fix_mode,
                 resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
             )?;
+
+            // Additional config-level lint: check view definitions.
+            let config_violations = lint_commands::validate_views(dir);
+            let outcome = if let Some(view_result) = config_violations {
+                for v in &view_result.violations {
+                    match v.severity {
+                        lint_commands::Severity::Error => counts.errors += 1,
+                        lint_commands::Severity::Warn => counts.warnings += 1,
+                    }
+                }
+                counts.files_with_issues += 1;
+                lint_commands::prepend_file_result(outcome, &view_result)?
+            } else {
+                outcome
+            };
 
             // Signal exit code 1 when errors remain after fixes (set before returning).
             if counts.errors > 0 {

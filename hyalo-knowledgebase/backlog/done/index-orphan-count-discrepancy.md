@@ -6,7 +6,8 @@ status: completed
 priority: critical
 origin: dogfooding v0.4.2 on vscode-docs/docs
 tags:
-  - index,bug
+  - index
+  - bug
 ---
 
 `hyalo summary` reports **48 orphans** from disk scan but only **25 orphans** from the snapshot index on vscode-docs/docs (339 files). 23 files silently disappear from the orphan list when using `--index`.

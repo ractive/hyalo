@@ -6,7 +6,9 @@ origin: dogfooding v0.4.1 on GitHub Docs
 priority: low
 status: completed
 tags:
-  - cli,find,validation
+  - cli
+  - find
+  - validation
 ---
 
 `hyalo find ""` returns all 3520 files because empty string is a substring of everything. This is technically correct but surprising — no warning is emitted.
