@@ -47,7 +47,7 @@ hyalo create-index
 hyalo views set stale-in-progress --property status=in-progress --fields tasks
 hyalo views set missing-status --property '!status'
 hyalo views set missing-type --property '!type'
-hyalo views set orphans --fields backlinks
+hyalo views set orphans --orphan --fields backlinks
 hyalo views set completed-with-todos --property status=completed --task todo --fields tasks
 ```
 
@@ -135,6 +135,11 @@ commands for the user's most common document types. Don't create them unilateral
 report the suggestion in Phase 5.
 
 If lint reports fixable violations, note the counts for Phase 4.
+
+Lint also validates `[views.*]` in `.hyalo.toml`. A view whose only narrowing key is
+`fields` (display columns, not a filter) is surfaced as a warning — suggest adding an
+explicit filter like `orphan = true`, `dead_end = true`, or `tag = [...]` when you see
+one in Phase 5.
 
 ### Broken links
 ```bash

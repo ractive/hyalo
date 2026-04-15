@@ -116,6 +116,8 @@ default_limit = 100    # default: 50 (max results for list commands; 0 = unlimit
 
 All fields are optional. CLI flags always take precedence over config values. If `.hyalo.toml` is missing, hyalo silently uses built-in defaults; if the file is present but cannot be read or is malformed/invalid, hyalo warns on stderr and falls back to the built-in defaults.
 
+**Nested config shadowing:** If the root `.hyalo.toml` has `dir` pointing at a subdirectory that itself contains a `.hyalo.toml`, the nested config is silently shadowed — only the root config applies. Hyalo emits a warning on stderr (`ignoring nested config <path>/.hyalo.toml (shadowed by <root>/.hyalo.toml)`). Either merge the settings into the root config or remove the nested file. Suppress the warning with `--quiet`.
+
 Use `--no-hints` to explicitly disable hints when the config file enables them.
 
 **Default output limits:** List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at most 50 results by default. When results are truncated, the output shows "showing N of M matches" and a hint to get all results. Use `--limit 0` for unlimited output, or set `default_limit` in `.hyalo.toml` to change the project-wide default. The default limit is **not applied** when `--jq` or `--count` is used — programmatic pipelines always receive complete results.
@@ -301,7 +303,7 @@ hyalo find --view recent-todos --tag rust   # extend the view with additional fi
 |------------|----------|
 | Vec fields (`--property`, `--tag`, `--section`, `--file`, `--glob`) | Extended — extra filters are ANDed on top of the view |
 | Option fields (`--sort`, `--limit`, `--regexp`, `--title`, `--task`, `--fields`) | Override — CLI value takes precedence over the view |
-| Bool fields (`--broken-links`, `--reverse`) | OR'd — enabled if either the view or the CLI sets them |
+| Bool fields (`--broken-links`, `--orphan`, `--dead-end`, `--reverse`) | OR'd — enabled if either the view or the CLI sets them |
 
 **Storage:** Views are persisted as TOML tables in `.hyalo.toml` under `[views.<name>]`:
 
@@ -315,7 +317,15 @@ task = "todo"
 sort = "modified"
 reverse = true
 limit = 20
+
+[views.orphans]
+orphan = true
+
+[views.dead-ends]
+dead_end = true
 ```
+
+`hyalo lint` flags views whose only narrowing key is `fields` (which controls display, not filtering) — add an explicit filter like `orphan = true` or `dead_end = true` to silence the warning.
 
 ### read
 
@@ -437,6 +447,8 @@ hyalo append --property tags=serde --glob "crates/*.md"
 hyalo append --property aliases=old-name --where-tag renamed --glob '**/*.md'
 ```
 
+`append` does not support `--tag` — tags aren't appendable via `append`. Use `hyalo set --tag <name>` to add a tag instead; running `hyalo append --tag …` prints a hint pointing to `set --tag`.
+
 ### task
 
 Read, toggle, or set the status of task checkboxes. Supports three mutually exclusive selectors: `--line` (single, comma-separated, or repeatable), `--section`, and `--all`.
@@ -553,6 +565,14 @@ Use `--dry-run` to preview which files and links would change without modifying 
 
 Root-absolute links (e.g. `/docs/guides/setup.md`) are also rewritten during a move. Hyalo uses the site prefix to map these to vault-relative paths. If `mv` reports 0 links updated but you expect absolute links to be rewritten, check your `--site-prefix` setting (see [Absolute link resolution](#absolute-link-resolution-site-prefix)).
 
+**Targets that are not rewritten** when `mv` updates outbound links inside the moved file:
+- Site-absolute links starting with `/` (resolved via site prefix instead)
+- URL-scheme links (`http://`, `https://`, `mailto:`, `tel:`, …)
+- Fragment-only links (`#heading`)
+- Bare non-md tokens with no path separator (e.g. Obsidian-style `[[Topic]]`)
+
+File permissions are preserved across all atomic rewrites (`set`, `task toggle`, `mv`, `lint --fix`) — files keep their existing mode (e.g. `0644`) rather than dropping to `0600`.
+
 ### links
 
 Subcommand group for link operations.
@@ -605,7 +625,7 @@ hyalo lint --limit 10
 hyalo lint --type iteration
 ```
 
-Lint also warns about comma-joined tags (e.g. `"cli,ux"` instead of separate list items); `--fix` splits them automatically.
+Lint also warns about comma-joined tags (e.g. `"cli,ux"` instead of separate list items); `--fix` splits them automatically. Lint additionally validates `[views.*]` in `.hyalo.toml` — views whose only narrowing key is `fields` (which picks output columns, not matches) are flagged so you can add an actual filter like `orphan = true` or `tag = [...]` (saved views store tags under the `tag` key, not `tags`).
 
 **Exit codes:** 0 = clean, 1 = errors found, 2 = internal error.
 
