@@ -654,15 +654,21 @@ fn incompatible_index_falls_back_for_summary() {
 /// `--index-file=PATH` is inserted after the deepest subcommand token.
 /// For nested subcommands like `["tags", "rename", ...]`, it's inserted after `rename`.
 fn run_with_index(tmp: &TempDir, index_path: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    assert!(
+        !args.is_empty(),
+        "run_with_index requires at least a subcommand name in args"
+    );
     let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
-    // Count how many leading tokens are subcommand names (no leading '--' or '-').
-    // E.g. ["tags", "rename", "--from", ...] → 2 subcommand tokens.
-    let subcmd_count = args
-        .iter()
-        .take_while(|a| !a.starts_with('-'))
-        .count()
-        .max(1);
+    // Use an explicit match on known nested command groups rather than a
+    // heuristic that would miscount positional arguments as subcommand tokens.
+    let subcmd_count = match args.first().copied() {
+        Some("tags" | "properties" | "links" | "task") if matches!(args.get(1), Some(next) if !next.starts_with('-')) => {
+            2
+        }
+        Some(_) => 1,
+        None => 0,
+    };
     let (subcmds, rest) = args.split_at(subcmd_count);
     cmd.args(subcmds);
     cmd.arg(format!("--index-file={}", index_path.display()));
@@ -1495,6 +1501,40 @@ fn bare_index_works_from_different_cwd() {
     );
 }
 
+/// --index-file with a relative path resolves against CWD, not vault dir.
+#[test]
+fn index_file_relative_path_resolves_against_cwd() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Create a subdirectory to serve as a different CWD.
+    let alt_cwd = tmp.path().join("subdir");
+    std::fs::create_dir(&alt_cwd).unwrap();
+
+    // Copy the index into the subdirectory.
+    let relative_name = "copied.idx";
+    std::fs::copy(&index_path, alt_cwd.join(relative_name)).unwrap();
+
+    // Run from alt_cwd with a relative --index-file path.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", &format!("--index-file={relative_name}")])
+        .current_dir(&alt_cwd)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "relative --index-file from different CWD should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        sorted_files(&json),
+        sorted_files(&run_find(&tmp, &[])),
+        "relative --index-file should resolve against CWD and find all files"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // New flag surface tests (iter-118)
 // ---------------------------------------------------------------------------
@@ -1620,7 +1660,14 @@ fn index_file_wins_over_bare_index() {
     let tmp = setup_vault();
     let default_index_path = create_default_index(&tmp);
 
-    // Create a second index at a custom path (same vault, different file name).
+    // Add a file *after* the default index was built so the two indices diverge.
+    std::fs::write(
+        tmp.path().join("extra.md"),
+        "---\ntitle: Extra\n---\nExtra file added after default index.\n",
+    )
+    .unwrap();
+
+    // Build a custom index that includes the new file.
     let custom_index_path = tmp.path().join("custom.idx");
     let create_out = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -1633,7 +1680,7 @@ fn index_file_wins_over_bare_index() {
         .unwrap();
     assert!(create_out.status.success());
 
-    // --index --index-file=custom.idx: custom.idx should be used (both flags present)
+    // --index --index-file=custom.idx: custom.idx should be used (both flags present).
     let arg = format!("--index-file={}", custom_index_path.display());
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -1646,13 +1693,13 @@ fn index_file_wins_over_bare_index() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    // Both indices cover the same vault so file count should match.
-    assert_eq!(
-        sorted_files(&json),
-        sorted_files(&run_find(&tmp, &[])),
-        "--index-file should win and still return all files"
+    let files = sorted_files(&json);
+    // Custom index has the extra file; default index does not.
+    assert!(
+        files.contains(&"extra.md".to_string()),
+        "custom index should include extra.md, proving --index-file wins; got: {files:?}"
     );
-    // Verify the default index still exists (we didn't accidentally delete it).
+    // Verify the default index still exists.
     assert!(default_index_path.exists());
 }
 

@@ -62,9 +62,10 @@ pub(crate) struct IndexFlags {
 impl IndexFlags {
     /// Return the effective index path given the vault directory.
     ///
-    /// - `--index-file PATH` wins over `--index`; relative paths are returned
-    ///   as-is (caller resolves against CWD).
-    /// - Bare `--index` resolves to `vault_dir/.hyalo-index`.
+    /// - `--index-file PATH` wins; relative paths are returned as-is
+    ///   (caller resolves against CWD).
+    /// - Bare `--index` returns `vault_dir/.hyalo-index` (relative to vault,
+    ///   not CWD; caller should not CWD-resolve this).
     /// - Neither flag → `None`.
     pub(crate) fn effective_index_path(&self, vault_dir: &Path) -> Option<PathBuf> {
         if let Some(ref p) = self.index_file {
@@ -424,6 +425,8 @@ pub(crate) enum Commands {
         /// Include the YAML frontmatter in output
         #[arg(long)]
         frontmatter: bool,
+        // TODO: Read doesn't use the snapshot index yet; consider removing
+        // IndexFlags or wiring it in for file resolution.
         #[command(flatten)]
         index_flags: IndexFlags,
     },

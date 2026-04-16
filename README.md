@@ -76,9 +76,14 @@ All commands accept these global flags:
 | `--count` | Print total as bare integer — shortcut for `--jq '.total'` (list commands only) |
 | `--hints` / `--no-hints` | Enable/disable drill-down command hints (default: on) |
 | `--site-prefix <PREFIX>` | Override site prefix for resolving root-absolute links |
-| `--index` | Use the snapshot index at `.hyalo-index` in the vault dir (per-subcommand flag; see [Snapshot Index](#snapshot-index)) |
-| `--index-file <PATH>` | Use the snapshot index at PATH; implies `--index` (per-subcommand flag) |
 | `-q/--quiet` | Suppress warnings on stderr |
+
+Some subcommands also accept snapshot-index flags:
+
+| Flag | Description |
+|------|-------------|
+| `--index` | Use the snapshot index at `.hyalo-index` in the vault dir (see [Snapshot Index](#snapshot-index)) |
+| `--index-file <PATH>` | Use the snapshot index at PATH; implies `--index` |
 
 All JSON output uses a consistent envelope: `{"results": <payload>, "total": N, "hints": [...]}`. `total` is present for list commands (find, tags summary, properties summary, backlinks). `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope, e.g. `--jq '.results[].file'` or `--jq '.total'`.
 
