@@ -970,3 +970,54 @@ Words like and, or, but are conjunctions.
         "quoted 'and' should match connector.md: {arr:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --stemmer / --language ISO 639-1 codes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stemmer_iso_639_1_code_accepted() {
+    let tmp = setup_bm25_vault();
+    let dir = tmp.path().to_str().unwrap();
+
+    // --stemmer en (ISO code for English) should work the same as --stemmer english
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "rust", "--stemmer", "en"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert!(!results.is_empty(), "ISO code 'en' should produce results");
+}
+
+#[test]
+fn stemmer_iso_639_1_de_accepted() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "doc.md",
+        "---\ntitle: Test\n---\nDeutsche Sprache schwere Sprache.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "sprache",
+            "--stemmer",
+            "de",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

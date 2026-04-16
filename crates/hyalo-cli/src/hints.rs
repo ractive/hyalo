@@ -1412,6 +1412,31 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
         }
     }
 
+    // When there are unfixable parse errors, suggest ignoring those files.
+    let has_parse_errors = data
+        .get("files")
+        .and_then(|f| f.as_array())
+        .is_some_and(|files| {
+            files.iter().any(|file| {
+                file.get("violations")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|v| {
+                        v.iter().any(|violation| {
+                            violation
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .is_some_and(|m| m.starts_with("could not parse frontmatter"))
+                        })
+                    })
+            })
+        });
+    if has_parse_errors && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            "Exclude unfixable files via [lint] ignore in .hyalo.toml",
+            "# Add ignore = [\"path/to/file.md\"] under [lint] in .hyalo.toml".to_owned(),
+        ));
+    }
+
     // Always suggest listing defined types.
     if hints.len() < MAX_HINTS {
         hints.push(Hint::new(

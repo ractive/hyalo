@@ -68,6 +68,7 @@ pub fn properties_summary(
 pub struct RenamePropertyResult {
     pub from: String,
     pub to: String,
+    pub dry_run: bool,
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub conflicts: Vec<String>,
@@ -80,11 +81,13 @@ pub struct RenamePropertyResult {
 /// - Preserves value and type (moves the `Value` in the IndexMap)
 /// - Skips files where the source key is absent (reported in `skipped`)
 /// - Skips files where the target key already exists (reported in `conflicts`)
+#[allow(clippy::too_many_arguments)]
 pub fn properties_rename(
     dir: &Path,
     from: &str,
     to: &str,
     globs: &[String],
+    dry_run: bool,
     format: Format,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
@@ -136,20 +139,25 @@ pub fn properties_rename(
         }
 
         props.insert(to.to_owned(), value);
-        frontmatter::write_frontmatter(full_path, &props)?;
-        if let Some(idx) = snapshot_index.as_mut()
-            && let Some(entry) = idx.get_mut(rel_path)
-        {
-            let new_tags = extract_tags(&props);
-            entry.properties = props;
-            entry.tags = new_tags;
-            entry.modified = format_modified(full_path)?;
-            index_dirty = true;
+        if !dry_run {
+            frontmatter::write_frontmatter(full_path, &props)?;
+            if let Some(idx) = snapshot_index.as_mut()
+                && let Some(entry) = idx.get_mut(rel_path)
+            {
+                let new_tags = extract_tags(&props);
+                entry.properties = props;
+                entry.tags = new_tags;
+                entry.modified = format_modified(full_path)?;
+                index_dirty = true;
+            }
         }
         modified.push(rel_path.clone());
     }
 
-    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+    if !dry_run
+        && index_dirty
+        && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path)
+    {
         idx.save_to(idx_path)?;
     }
 
@@ -157,6 +165,7 @@ pub fn properties_rename(
     let result = RenamePropertyResult {
         from: from.to_owned(),
         to: to.to_owned(),
+        dry_run,
         modified,
         skipped,
         conflicts,
@@ -272,6 +281,7 @@ keywords: test
             "keywords",
             "Keywords",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,
@@ -308,6 +318,7 @@ title: Note
             "keywords",
             "Keywords",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,
@@ -341,6 +352,7 @@ Keywords: other
             "keywords",
             "Keywords",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,
@@ -357,9 +369,17 @@ Keywords: other
     #[test]
     fn properties_rename_same_name_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome =
-            properties_rename(tmp.path(), "foo", "foo", &[], Format::Json, &mut None, None)
-                .unwrap();
+        let outcome = properties_rename(
+            tmp.path(),
+            "foo",
+            "foo",
+            &[],
+            false,
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 

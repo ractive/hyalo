@@ -22,6 +22,16 @@
 
 ### Added
 
+- `properties rename --dry-run` and `tags rename --dry-run` — preview which
+  files would be modified without writing to disk.
+- `find --fields outline` — alias for `--fields sections`.
+- `--stemmer` / `--language` now accepts ISO 639-1 two-letter codes (e.g.
+  `en`, `de`, `fr`) in addition to full language names.
+- `create-index` output now notes when replacing an existing index file.
+- `lint` hints now suggest adding unfixable files (e.g. unclosed frontmatter)
+  to `[lint] ignore` in `.hyalo.toml` instead of only showing "See defined
+  type schemas".
+
 - **Case-insensitive link resolution.** Wikilinks and markdown links now
   resolve even when the target file's path differs in case (e.g.
   `[[api/fetch]]` matches `API/Fetch.md`). Controlled via `.hyalo.toml`:

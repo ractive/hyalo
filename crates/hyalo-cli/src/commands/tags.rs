@@ -105,6 +105,7 @@ pub fn tags_summary(
 pub struct RenameTagResult {
     pub from: String,
     pub to: String,
+    pub dry_run: bool,
     pub modified: Vec<String>,
     pub skipped: Vec<String>,
     pub total: usize,
@@ -115,11 +116,13 @@ pub struct RenameTagResult {
 ///
 /// - Atomic per-file: if new tag already exists, only old one is removed
 /// - Skips files where the source tag is absent
+#[allow(clippy::too_many_arguments)]
 pub fn tags_rename(
     dir: &Path,
     from: &str,
     to: &str,
     globs: &[String],
+    dry_run: bool,
     format: Format,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
@@ -203,20 +206,25 @@ pub fn tags_rename(
             props.shift_remove("tags");
         }
 
-        frontmatter::write_frontmatter(full_path, &props)?;
-        if let Some(idx) = snapshot_index.as_mut()
-            && let Some(entry) = idx.get_mut(rel_path)
-        {
-            let new_tags = extract_tags(&props);
-            entry.properties = props;
-            entry.tags = new_tags;
-            entry.modified = format_modified(full_path)?;
-            index_dirty = true;
+        if !dry_run {
+            frontmatter::write_frontmatter(full_path, &props)?;
+            if let Some(idx) = snapshot_index.as_mut()
+                && let Some(entry) = idx.get_mut(rel_path)
+            {
+                let new_tags = extract_tags(&props);
+                entry.properties = props;
+                entry.tags = new_tags;
+                entry.modified = format_modified(full_path)?;
+                index_dirty = true;
+            }
         }
         modified.push(rel_path.clone());
     }
 
-    if index_dirty && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
+    if !dry_run
+        && index_dirty
+        && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path)
+    {
         idx.save_to(idx_path)?;
     }
 
@@ -224,6 +232,7 @@ pub fn tags_rename(
     let result = RenameTagResult {
         from: from.to_owned(),
         to: to.to_owned(),
+        dry_run,
         modified,
         skipped,
         total,
@@ -490,6 +499,7 @@ tags:
             "filtering",
             "filters",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,
@@ -528,6 +538,7 @@ tags:
             "filtering",
             "filters",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,
@@ -566,6 +577,7 @@ tags:
             "filtering",
             "filters",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,
@@ -582,8 +594,17 @@ tags:
     #[test]
     fn tags_rename_same_name_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let outcome =
-            tags_rename(tmp.path(), "foo", "foo", &[], Format::Json, &mut None, None).unwrap();
+        let outcome = tags_rename(
+            tmp.path(),
+            "foo",
+            "foo",
+            &[],
+            false,
+            Format::Json,
+            &mut None,
+            None,
+        )
+        .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
@@ -595,6 +616,7 @@ tags:
             "1984",
             "filters",
             &[],
+            false,
             Format::Json,
             &mut None,
             None,

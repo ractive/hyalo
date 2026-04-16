@@ -72,13 +72,13 @@ impl Fields {
                     "properties" => fields.properties = true,
                     "properties-typed" => fields.properties_typed = true,
                     "tags" => fields.tags = true,
-                    "sections" => fields.sections = true,
+                    "sections" | "outline" => fields.sections = true,
                     "tasks" => fields.tasks = true,
                     "links" => fields.links = true,
                     "backlinks" => fields.backlinks = true,
                     "title" => fields.title = true,
                     unknown => bail!(
-                        "unknown field {unknown:?}: valid fields are all, properties, properties-typed, tags, sections, tasks, links, backlinks, title"
+                        "unknown field {unknown:?}: valid fields are all, properties, properties-typed, tags, sections (alias: outline), tasks, links, backlinks, title"
                     ),
                 }
             }

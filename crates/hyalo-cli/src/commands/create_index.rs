@@ -51,6 +51,9 @@ pub fn create_index(
         }
     }
 
+    // Check if we're replacing an existing index.
+    let replacing_existing = index_path.exists();
+
     // Discover all markdown files
     let all = discovery::discover_files(dir)?;
     let files: Vec<(PathBuf, String)> = all
@@ -113,11 +116,14 @@ pub fn create_index(
     }
 
     let file_count = build.index.entries().len();
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "path": index_path.display().to_string(),
         "files_indexed": file_count,
         "warnings": build.warnings.len(),
     });
+    if replacing_existing {
+        result["note"] = serde_json::json!("replaced existing index");
+    }
 
     Ok(CommandOutcome::success(format_success(format, &result)))
 }

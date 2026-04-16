@@ -441,12 +441,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     from,
                     to,
                     glob,
+                    dry_run,
                     index_flags: _, // consumed in run.rs before dispatch
                 } => properties::properties_rename(
                     dir,
                     &from,
                     &to,
                     &glob,
+                    dry_run,
                     effective_format,
                     snapshot_index,
                     index_path,
@@ -523,12 +525,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     from,
                     to,
                     glob,
+                    dry_run,
                     index_flags: _, // consumed in run.rs before dispatch
                 } => tag_commands::tags_rename(
                     dir,
                     &from,
                     &to,
                     &glob,
+                    dry_run,
                     effective_format,
                     snapshot_index,
                     index_path,

@@ -3755,3 +3755,53 @@ fn find_orphan_and_dead_end_warns_mutually_exclusive() {
         "orphan+dead-end should return no results"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --fields outline (alias for sections)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_fields_outline_is_alias_for_sections() {
+    let tmp = setup_vault();
+    let dir = tmp.path().to_str().unwrap();
+
+    let outline_output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--fields", "outline", "--limit", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        outline_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&outline_output.stderr)
+    );
+
+    let sections_output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--fields", "sections", "--limit", "1"])
+        .output()
+        .unwrap();
+    assert!(sections_output.status.success());
+
+    // Both should produce the same structure (sections key present in results).
+    let outline_json: serde_json::Value = serde_json::from_slice(&outline_output.stdout).unwrap();
+    let sections_json: serde_json::Value = serde_json::from_slice(&sections_output.stdout).unwrap();
+
+    let outline_has_sections = outline_json["results"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap()
+        .get("sections")
+        .is_some();
+    let sections_has_sections = sections_json["results"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap()
+        .get("sections")
+        .is_some();
+    assert!(
+        outline_has_sections,
+        "outline should produce sections field"
+    );
+    assert!(sections_has_sections);
+}

@@ -268,9 +268,10 @@ pub(crate) struct FindFilters {
     pub title: Option<String>,
     /// Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
     /// tokenization — NOT markdown code-block language.
-    /// Default: english. Supported: arabic, danish, dutch, english, finnish, french, german,
-    /// greek, hungarian, italian, norwegian, portuguese, romanian, russian, spanish, swedish,
-    /// tamil, turkish
+    /// Default: english. Accepts full names (english, german, …) or ISO 639-1 codes (en, de, …).
+    /// Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr),
+    /// german (de), greek (el), hungarian (hu), italian (it), norwegian (no), portuguese (pt),
+    /// romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta), turkish (tr)
     #[arg(long, alias = "stemmer", value_name = "LANG")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -352,8 +353,10 @@ pub(crate) enum Commands {
             - Combine freely: 'rust -java', 'rust OR golang', '\"error handling\" -panic'\n\n\
             LANGUAGE: The --language flag (or [search] language in .hyalo.toml, or frontmatter \
             'language' property per file) selects the Snowball stemmer for tokenization. Default: english. \
-            Supported: arabic, danish, dutch, english, finnish, french, german, greek, hungarian, \
-            italian, norwegian, portuguese, romanian, russian, spanish, swedish, tamil, turkish. \
+            Accepts full names or ISO 639-1 codes (e.g. 'en' for english, 'de' for german). \
+            Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr), \
+            german (de), greek (el), hungarian (hu), italian (it), norwegian (no), portuguese (pt), \
+            romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta), turkish (tr). \
             Language precedence: frontmatter > --language > config > english.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
@@ -1162,6 +1165,9 @@ pub(crate) enum PropertiesAction {
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        /// Preview changes without writing to disk
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },
@@ -1200,6 +1206,9 @@ pub(crate) enum TagsAction {
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        /// Preview changes without writing to disk
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },
