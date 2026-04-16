@@ -1332,7 +1332,7 @@ fn hints_for_create_index(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hi
     } else {
         build_command_no_glob(
             ctx,
-            &["find", "--index", index_path.unwrap_or(".hyalo-index")],
+            &["find", "--index-file", index_path.unwrap_or(".hyalo-index")],
         )
     };
 

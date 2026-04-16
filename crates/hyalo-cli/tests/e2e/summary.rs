@@ -929,16 +929,8 @@ No links.
 
     // Index-based summary
     let idx_out = hyalo_no_hints()
-        .args([
-            "--dir",
-            dir_str,
-            "--site-prefix",
-            "docs",
-            "--index",
-            "--format",
-            "json",
-        ])
-        .arg("summary")
+        .args(["--dir", dir_str, "--site-prefix", "docs"])
+        .args(["summary", "--index", "--format", "json"])
         .output()
         .unwrap();
     assert!(
@@ -1137,7 +1129,7 @@ fn summary_dead_end_parity_disk_vs_index() {
 
     // Index-based summary
     let idx_out = hyalo_no_hints()
-        .args(["--dir", dir_str, "--index", "summary", "--format", "json"])
+        .args(["--dir", dir_str, "summary", "--index", "--format", "json"])
         .output()
         .unwrap();
     assert!(

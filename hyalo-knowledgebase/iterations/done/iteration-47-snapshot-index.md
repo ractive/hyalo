@@ -126,3 +126,5 @@ main() decides based on --index flag:
 - stdin/stdout query protocol for tighter skill integration
 - `--index=auto` with env var for transparent session-scoped caching
 - SQLite backend behind `VaultIndex` trait
+
+**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

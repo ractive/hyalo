@@ -2,7 +2,7 @@
 title: Iteration 118 — Split --index into boolean flag + --index-file path
 type: iteration
 date: 2026-04-15
-status: planned
+status: in-progress
 branch: iter-118/split-index-flag
 tags:
   - iteration
@@ -274,92 +274,92 @@ KB uses the default location everywhere. Do not mechanically rewrite to
 
 ### Code changes
 
-- [ ] Remove the current `pub index: Option<PathBuf>` global field from `Cli` in `crates/hyalo-cli/src/cli/args.rs`
-- [ ] Add the `IndexFlags` struct (derive `clap::Args`) with `pub index: bool` and `pub index_file: Option<PathBuf>` — **not** `global = true`
-- [ ] Add the `IndexFlags::effective_index_path(&self, vault_dir: &Path) -> Option<PathBuf>` helper (takes the vault dir from the parent `Cli` since the flag struct doesn't own `--dir`)
-- [ ] Flatten `IndexFlags` into every subcommand variant that consumes an index (see the matrix in the Design section): `Find`, `Summary`, `Tags*`, `Properties*`, `Backlinks`, `Lint`, `Links*`, `Read`, `Set`, `Remove`, `Append`, `Mv`, `Task*`
-- [ ] Do **not** flatten `IndexFlags` into `CreateIndex`, `DropIndex`, `Init`, `Completion`, `Views*`, or `Types*` — these subcommands must not advertise `--index` in their help output
-- [ ] Remove the three-paragraph disambiguation note on the old `--index` field; replace with the per-flag doc comments shown in "New surface"
-- [ ] Update every call site that reads `cli.index` (`run.rs`, dispatch, any command module) — read the flag from the subcommand's flattened `IndexFlags` instead of from `Cli`
-- [ ] Grep for `require_equals` in the crate; confirm no remaining flags depend on it for index-related parsing
-- [ ] Update `crates/hyalo-cli/src/cli/help.rs` and every `long_about` string that mentions `--index` — replace `--index[=PATH]` with the new two-flag pair
-- [ ] Update `crates/hyalo-cli/src/hints.rs` if it suggests `--index=PATH`
+- [x] Remove the current `pub index: Option<PathBuf>` global field from `Cli` in `crates/hyalo-cli/src/cli/args.rs`
+- [x] Add the `IndexFlags` struct (derive `clap::Args`) with `pub index: bool` and `pub index_file: Option<PathBuf>` — **not** `global = true`
+- [x] Add the `IndexFlags::effective_index_path(&self, vault_dir: &Path) -> Option<PathBuf>` helper (takes the vault dir from the parent `Cli` since the flag struct doesn't own `--dir`)
+- [x] Flatten `IndexFlags` into every subcommand variant that consumes an index (see the matrix in the Design section): `Find`, `Summary`, `Tags*`, `Properties*`, `Backlinks`, `Lint`, `Links*`, `Read`, `Set`, `Remove`, `Append`, `Mv`, `Task*`
+- [x] Do **not** flatten `IndexFlags` into `CreateIndex`, `DropIndex`, `Init`, `Completion`, `Views*`, or `Types*` — these subcommands must not advertise `--index` in their help output
+- [x] Remove the three-paragraph disambiguation note on the old `--index` field; replace with the per-flag doc comments shown in "New surface"
+- [x] Update every call site that reads `cli.index` (`run.rs`, dispatch, any command module) — read the flag from the subcommand's flattened `IndexFlags` instead of from `Cli`
+- [x] Grep for `require_equals` in the crate; confirm no remaining flags depend on it for index-related parsing
+- [x] Update `crates/hyalo-cli/src/cli/help.rs` and every `long_about` string that mentions `--index` — replace `--index[=PATH]` with the new two-flag pair
+- [x] Update `crates/hyalo-cli/src/hints.rs` if it suggests `--index=PATH`
 
 ### Tests
 
-- [ ] Update the five `--index={path}` call sites in `crates/hyalo-cli/tests/e2e/index.rs` to use `--index-file={path}`
-- [ ] Add e2e test: `hyalo find --index` (bare boolean) uses the default `.hyalo-index`
-- [ ] Add e2e test: `hyalo find --index-file PATH` (space form) uses PATH
-- [ ] Add e2e test: `hyalo find --index-file=PATH` (equals form) uses PATH
-- [ ] Add e2e test: `hyalo lint --index file.md` — `file.md` is the positional FILE (not the index path); the index is active
-- [ ] Add e2e test: `hyalo find --index=garbage` errors cleanly (clap rejects a value on a boolean flag)
-- [ ] Add e2e test: `hyalo find --index-file` (no PATH) errors cleanly
-- [ ] Add e2e test: `hyalo find --index --index-file=PATH` — `--index-file` wins; verify the right file is read
-- [ ] Add e2e test: `hyalo create-index --index` errors (unknown flag) — proves the flag is no longer global
-- [ ] Add e2e test: `hyalo drop-index --index-file=foo` errors (unknown flag)
-- [ ] Add e2e test: `hyalo init --index` errors (unknown flag)
+- [x] Update the five `--index={path}` call sites in `crates/hyalo-cli/tests/e2e/index.rs` to use `--index-file={path}`
+- [x] Add e2e test: `hyalo find --index` (bare boolean) uses the default `.hyalo-index`
+- [x] Add e2e test: `hyalo find --index-file PATH` (space form) uses PATH
+- [x] Add e2e test: `hyalo find --index-file=PATH` (equals form) uses PATH
+- [x] Add e2e test: `hyalo lint --index file.md` — `file.md` is the positional FILE (not the index path); the index is active
+- [x] Add e2e test: `hyalo find --index=garbage` errors cleanly (clap rejects a value on a boolean flag)
+- [x] Add e2e test: `hyalo find --index-file` (no PATH) errors cleanly
+- [x] Add e2e test: `hyalo find --index --index-file=PATH` — `--index-file` wins; verify the right file is read
+- [x] Add e2e test: `hyalo create-index --index` errors (unknown flag) — proves the flag is no longer global
+- [x] Add e2e test: `hyalo drop-index --index-file=foo` errors (unknown flag)
+- [x] Add e2e test: `hyalo init --index` errors (unknown flag)
 
 ### Help-text audit (manual pass)
 
-- [ ] Run `cargo run -- --help` and every `cargo run -- <subcommand> --help` variant; read output end-to-end
-- [ ] Confirm no `--index=PATH`, `--index[=PATH]`, or "use the equals form" language remains in any help output
-- [ ] Update the long_about prose for every subcommand that referenced the old surface
-- [ ] **Verify `hyalo create-index --help` does NOT list `--index` or `--index-file`** (they made no sense there, previously surfaced via `global = true`)
-- [ ] **Verify `hyalo drop-index --help` does NOT list `--index` or `--index-file`**
-- [ ] Verify `hyalo init --help`, `hyalo completion --help`, `hyalo views --help` (+ list/set/remove), and `hyalo types --help` (+ list/show/remove/set) likewise omit `--index` / `--index-file`
-- [ ] Verify every subcommand marked ✅ in the Design matrix DOES list both flags
+- [x] Run `cargo run -- --help` and every `cargo run -- <subcommand> --help` variant; read output end-to-end
+- [x] Confirm no `--index=PATH`, `--index[=PATH]`, or "use the equals form" language remains in any help output
+- [x] Update the long_about prose for every subcommand that referenced the old surface
+- [x] **Verify `hyalo create-index --help` does NOT list `--index` or `--index-file`** (they made no sense there, previously surfaced via `global = true`)
+- [x] **Verify `hyalo drop-index --help` does NOT list `--index` or `--index-file`**
+- [x] Verify `hyalo init --help`, `hyalo completion --help`, `hyalo views --help` (+ list/set/remove), and `hyalo types --help` (+ list/show/remove/set) likewise omit `--index` / `--index-file`
+- [x] Verify every subcommand marked ✅ in the Design matrix DOES list both flags
 
 ### Repository skill templates
 
-- [ ] Rewrite `crates/hyalo-cli/templates/skill-hyalo-tidy.md` — replace all 27 `--index .hyalo-index` with bare `--index`
-- [ ] Rewrite `crates/hyalo-cli/templates/skill-hyalo.md` — replace all 9 occurrences with the appropriate new form (bare `--index` for default-path examples, `--index-file=...` for explicit-path examples)
-- [ ] Audit `crates/hyalo-cli/templates/rule-knowledgebase.md` for any references
+- [x] Rewrite `crates/hyalo-cli/templates/skill-hyalo-tidy.md` — replace all 27 `--index .hyalo-index` with bare `--index`
+- [x] Rewrite `crates/hyalo-cli/templates/skill-hyalo.md` — replace all 9 occurrences with the appropriate new form (bare `--index` for default-path examples, `--index-file=...` for explicit-path examples)
+- [x] Audit `crates/hyalo-cli/templates/rule-knowledgebase.md` for any references
 
 ### Installed skills (checked into the repo)
 
-- [ ] Rewrite `.claude/skills/hyalo-tidy/SKILL.md` — mirror the template changes (27 occurrences)
-- [ ] Rewrite `.claude/skills/hyalo/SKILL.md` — mirror the template changes (9 occurrences)
-- [ ] Grep `.claude/skills/**/*.md` for any other `--index` references and update
-- [ ] Verify templates and installed copies stay in sync: if a regeneration command exists (`hyalo init` or similar), run it and diff; otherwise the two sets are edited in lockstep in this PR
+- [x] Rewrite `.claude/skills/hyalo-tidy/SKILL.md` — mirror the template changes (27 occurrences)
+- [x] Rewrite `.claude/skills/hyalo/SKILL.md` — mirror the template changes (9 occurrences)
+- [x] Grep `.claude/skills/**/*.md` for any other `--index` references and update
+- [x] Verify templates and installed copies stay in sync: if a regeneration command exists (`hyalo init` or similar), run it and diff; otherwise the two sets are edited in lockstep in this PR
 
 ### README and top-level docs
 
-- [ ] Rewrite all 7 `--index` occurrences in `README.md`
-- [ ] Grep the repo root (`*.md`) for any additional mentions
+- [x] Rewrite all 7 `--index` occurrences in `README.md`
+- [x] Grep the repo root (`*.md`) for any additional mentions
 
 ### Knowledgebase
 
-- [ ] Append a short "superseded by iter-118" note under the `--index=` mentions in:
+- [x] Append a short "superseded by iter-118" note under the `--index=` mentions in:
   - `hyalo-knowledgebase/iterations/iteration-113-dogfood-v0120-fixes.md`
   - `hyalo-knowledgebase/iterations/iteration-115-dogfood-v0120-iter114-followup.md`
   - `hyalo-knowledgebase/iterations/done/iteration-47-snapshot-index.md`
   - `hyalo-knowledgebase/dogfood-results/*.md` (four files)
-- [ ] Do not rewrite the historical content; readers may need to see the prior surface
+- [x] Do not rewrite the historical content; readers may need to see the prior surface
 
 ### CHANGELOG
 
-- [ ] Add a `### Breaking changes` entry with before/after migration example
-- [ ] Add a `### Changed` entry for the new `--index` boolean semantics and the new `--index-file` flag
+- [x] Add a `### Breaking changes` entry with before/after migration example
+- [x] Add a `### Changed` entry for the new `--index` boolean semantics and the new `--index-file` flag
 
 ### Quality gates
 
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace -q`
-- [ ] Build `target/release/hyalo`, then dogfood: run the tidy skill's Phase 2 and Phase 3 commands against `hyalo-knowledgebase/` with the new surface and confirm index usage (wall-clock should drop meaningfully vs. a `drop-index` baseline; if adding `--verbose` "using index: PATH" debug output is easy, include it for deterministic verification)
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace -q`
+- [x] Build `target/release/hyalo`, then dogfood: run the tidy skill's Phase 2 and Phase 3 commands against `hyalo-knowledgebase/` with the new surface and confirm index usage (wall-clock should drop meaningfully vs. a `drop-index` baseline; if adding `--verbose` "using index: PATH" debug output is easy, include it for deterministic verification)
 
 ## Acceptance criteria
 
-- [ ] `--index` is a pure boolean flag; `--index-file PATH` / `--index-file=PATH` takes the explicit path
-- [ ] `hyalo lint --index file.md` parses cleanly: `file.md` is the lint target, `--index` is the toggle
-- [ ] `hyalo ... --index=anything` errors with clap's standard "unexpected value" message — no silent misses, no deprecation shim
-- [ ] The tidy skill's commands use the index (verified via dogfood timing or debug log)
-- [ ] No `require_equals` remains in the crate for index-related flags
-- [ ] `--index` and `--index-file` are **no longer global** — they appear only on subcommands that actually consume the snapshot index (see the Design matrix). `hyalo create-index --help` and `hyalo drop-index --help` do not list them.
-- [ ] Doc comment on `args.rs` drops the three-paragraph workaround note; help output is one paragraph per flag
-- [ ] **Every help text, README entry, skill template, installed skill, and CHANGELOG note is updated in the same PR** — nothing references the old `--index=PATH` surface except the historical knowledgebase notes, which are annotated rather than rewritten
-- [ ] Zero regressions in existing e2e tests; new tests cover both flags
-- [ ] No clippy warnings
+- [x] `--index` is a pure boolean flag; `--index-file PATH` / `--index-file=PATH` takes the explicit path
+- [x] `hyalo lint --index file.md` parses cleanly: `file.md` is the lint target, `--index` is the toggle
+- [x] `hyalo ... --index=anything` errors with clap's standard "unexpected value" message — no silent misses, no deprecation shim
+- [x] The tidy skill's commands use the index (verified via dogfood timing or debug log)
+- [x] No `require_equals` remains in the crate for index-related flags
+- [x] `--index` and `--index-file` are **no longer global** — they appear only on subcommands that actually consume the snapshot index (see the Design matrix). `hyalo create-index --help` and `hyalo drop-index --help` do not list them.
+- [x] Doc comment on `args.rs` drops the three-paragraph workaround note; help output is one paragraph per flag
+- [x] **Every help text, README entry, skill template, installed skill, and CHANGELOG note is updated in the same PR** — nothing references the old `--index=PATH` surface except the historical knowledgebase notes, which are annotated rather than rewritten
+- [x] Zero regressions in existing e2e tests; new tests cover both flags
+- [x] No clippy warnings
 
 ## Out of scope
 
