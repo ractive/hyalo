@@ -491,6 +491,77 @@ fn types_set_enables_validate_on_write_when_schema_is_new() {
         1,
         "validate_on_write should appear exactly once, got:\n{toml_final}"
     );
+    assert!(
+        toml_final.contains("validate_on_write = true"),
+        "validate_on_write should still be true after second type, got:\n{toml_final}"
+    );
+}
+
+#[test]
+fn types_set_dry_run_does_not_write_validate_on_write() {
+    let tmp = setup_empty();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args([
+            "types",
+            "set",
+            "article",
+            "--required",
+            "title",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // The dry-run output should mention the change.
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let changes = json["results"]["toml_changes"]
+        .as_array()
+        .expect("toml_changes is array");
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.as_str().unwrap().contains("validate_on_write")),
+        "dry-run output should report validate_on_write, got: {changes:?}"
+    );
+
+    // But .hyalo.toml on disk should NOT have been modified.
+    let toml = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        !toml.contains("validate_on_write"),
+        "dry-run must not write validate_on_write to disk, got:\n{toml}"
+    );
+}
+
+#[test]
+fn types_set_does_not_add_validate_on_write_to_existing_schema() {
+    let tmp = setup_empty();
+    // Manually create a [schema] section without validate_on_write.
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n\n[schema.default]\nrequired = [\"title\"]\n",
+    )
+    .unwrap();
+
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "article", "--required", "title"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // validate_on_write should NOT have been added since [schema] already existed.
+    let toml = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        !toml.contains("validate_on_write"),
+        "should not retroactively add validate_on_write to existing schema, got:\n{toml}"
+    );
 }
 
 // ---------------------------------------------------------------------------

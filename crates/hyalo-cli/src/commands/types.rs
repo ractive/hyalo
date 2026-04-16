@@ -533,6 +533,11 @@ fn toml_type_exists(doc: &toml_edit::DocumentMut, type_name: &str) -> bool {
 
 /// Ensure `[schema]` and `[schema.types]` tables exist in the doc.
 ///
+/// When the `[schema]` section is created for the first time, also sets
+/// `validate_on_write = true` so that future `set`/`append` operations
+/// enforce schema constraints by default. Existing `[schema]` sections
+/// (e.g. hand-edited or from a prior `types set`) are left untouched.
+///
 /// Returns a user-facing error if `schema` or `schema.types` exist but are not
 /// TOML tables (e.g. the user hand-edited `.hyalo.toml` into something like
 /// `schema = "foo"`). We prefer a clear error over a panic on user input.
