@@ -37,7 +37,7 @@ try edge cases that occur to you naturally.
    hyalo find --tag dogfooding --sort date --reverse --limit 5 --format text
    ```
    Read the most recent reports and collect any bugs marked as found (not yet verified fixed).
-4. **Pick target knowledgebases**: Use a mix of:
+5. **Pick target knowledgebases**: Use a mix of:
    - **Own KB** (`hyalo-knowledgebase/`, ~250 files) — well-structured, has schemas/views
    - **MDN Web Docs** (`../mdn/files/en-us/`, ~14K files) — large, stress-tests performance
    - **GitHub Docs** (`../docs/content/`, ~3.5K files) — complex nested YAML frontmatter

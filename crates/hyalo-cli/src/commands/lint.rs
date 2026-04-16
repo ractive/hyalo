@@ -434,7 +434,7 @@ fn lint_file_with_fix(
                     file: rel_path.to_owned(),
                     violations: vec![Violation {
                         severity: Severity::Error,
-                        message: format!("could not parse frontmatter: {e}"),
+                        message: format!("{}: {e}", crate::hints::PARSE_ERROR_PREFIX),
                     }],
                 },
                 FileFixResult {

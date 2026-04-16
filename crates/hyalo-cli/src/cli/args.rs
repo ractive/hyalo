@@ -270,8 +270,9 @@ pub(crate) struct FindFilters {
     /// tokenization — NOT markdown code-block language.
     /// Default: english. Accepts full names (english, german, …) or ISO 639-1 codes (en, de, …).
     /// Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr),
-    /// german (de), greek (el), hungarian (hu), italian (it), norwegian (no), portuguese (pt),
-    /// romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta), turkish (tr)
+    /// german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn),
+    /// portuguese (pt), romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta),
+    /// turkish (tr)
     #[arg(long, alias = "stemmer", value_name = "LANG")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -355,7 +356,7 @@ pub(crate) enum Commands {
             'language' property per file) selects the Snowball stemmer for tokenization. Default: english. \
             Accepts full names or ISO 639-1 codes (e.g. 'en' for english, 'de' for german). \
             Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr), \
-            german (de), greek (el), hungarian (hu), italian (it), norwegian (no), portuguese (pt), \
+            german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn), portuguese (pt), \
             romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta), turkish (tr). \
             Language precedence: frontmatter > --language > config > english.\n\n\
             FILTERS: All filters are AND'd together.\n\

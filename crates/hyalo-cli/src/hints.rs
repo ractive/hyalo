@@ -7,6 +7,10 @@
 /// Maximum number of hints to return from any generator.
 const MAX_HINTS: usize = 5;
 
+/// Prefix used by lint for frontmatter parse errors. Shared between
+/// `commands::lint` and the hint generator to avoid brittle string coupling.
+pub(crate) const PARSE_ERROR_PREFIX: &str = "could not parse frontmatter";
+
 /// A single drill-down hint: a concrete command plus a short human-readable description.
 #[derive(Debug, Clone)]
 pub struct Hint {
@@ -1412,7 +1416,7 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
         }
     }
 
-    // When there are unfixable parse errors, suggest ignoring those files.
+    // When there are unfixable parse errors, suggest listing all violations.
     let has_parse_errors = data
         .get("files")
         .and_then(|f| f.as_array())
@@ -1425,15 +1429,15 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
                             violation
                                 .get("message")
                                 .and_then(|m| m.as_str())
-                                .is_some_and(|m| m.starts_with("could not parse frontmatter"))
+                                .is_some_and(|m| m.starts_with(PARSE_ERROR_PREFIX))
                         })
                     })
             })
         });
     if has_parse_errors && hints.len() < MAX_HINTS {
         hints.push(Hint::new(
-            "Exclude unfixable files via [lint] ignore in .hyalo.toml",
-            "# Add ignore = [\"path/to/file.md\"] under [lint] in .hyalo.toml".to_owned(),
+            "Show all files with unfixable frontmatter errors",
+            build_command_with_glob_and_files(ctx, &["lint", "--limit", "0"]),
         ));
     }
 

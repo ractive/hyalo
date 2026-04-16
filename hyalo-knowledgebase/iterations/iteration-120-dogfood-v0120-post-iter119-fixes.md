@@ -2,7 +2,7 @@
 title: Iteration 120 — Dogfood v0.12.0 Post-iter-119 Fixes
 type: iteration
 date: 2026-04-16
-status: in-progress
+status: completed
 branch: iter-120/dogfood-post-iter119-fixes
 tags:
   - iteration
@@ -18,23 +18,21 @@ related:
 
 ## Goal
 
-Address the bugs and UX issues found in the post-iter-119 dogfood session. The two
-highest-priority findings are missing `--dry-run` support on bulk mutation commands
-(`properties rename`, `tags rename`) and `mv --dry-run` not previewing link rewrites.
-Also includes two small UX wins carried over from post-iter-118.
+Address the bugs and UX issues found in the post-iter-119 dogfood session. The
+highest-priority finding is missing `--dry-run` support on bulk mutation commands
+(`properties rename`, `tags rename`). Also includes two small UX wins carried
+over from post-iter-118.
 
 ## Bugs
 
-### BUG-1: `mv --dry-run` doesn't preview link rewrites (MEDIUM)
+### BUG-1: `mv --dry-run` doesn't preview link rewrites — NOT A BUG
 
-`decision-log.md` has 14 backlinks. Running `mv decision-log.md --to reference/decision-log.md --dry-run`
-reports `total_files_updated: 0, total_links_updated: 0, updated_files: []`. The dry-run
-should scan for backlinks and show which files and links would be rewritten, so the user
-can assess impact before applying.
-
-**Fix**: In the `mv` dry-run path, still compute link rewrites (scan for backlinks, resolve
-rewrite targets) but skip the actual file writes. Populate `total_files_updated`,
-`total_links_updated`, and `updated_files` with the preview data.
+Investigation revealed this is working as designed. The 14 backlinks to
+`decision-log.md` all use bare wikilinks (`[[decision-log]]`) which are
+name-based references — they don't encode a path and remain valid after a move.
+The `plan_mv` function intentionally skips bare wikilinks (only rewrites
+wikilinks containing a path separator). The dry-run correctly shows 0 rewrites
+because no rewrites are needed.
 
 ### BUG-2: `properties rename` and `tags rename` lack `--dry-run` (MEDIUM)
 
