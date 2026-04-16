@@ -394,7 +394,7 @@ jobs:
 
           cat hyalo.json
 
-          git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/ractive/scoop-hyalo.git" scoop-repo
+          git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/ractive/scoop-bucket.git" scoop-repo
           cp hyalo.json scoop-repo/bucket/hyalo.json
           cd scoop-repo
           git config user.name "github-actions[bot]"

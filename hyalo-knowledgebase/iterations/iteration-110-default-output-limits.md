@@ -2,7 +2,7 @@
 title: Default output limits for all list commands
 type: iteration
 date: 2026-04-14
-status: in-progress
+status: completed
 branch: iter-110/default-output-limits
 tags:
   - cli

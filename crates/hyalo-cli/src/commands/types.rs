@@ -260,8 +260,13 @@ pub(crate) fn set_type(
     // Upsert: create the type if it doesn't exist (in-memory; disk write guarded below).
     let is_new = !toml_type_exists(&doc, type_name);
     if is_new {
-        if let Err(msg) = ensure_schema_types_table(&mut doc) {
-            return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+        match ensure_schema_types_table(&mut doc) {
+            Ok(validate_enabled) => {
+                if validate_enabled {
+                    toml_changes.push("enable validate_on_write (new schema)".to_owned());
+                }
+            }
+            Err(msg) => return Ok(CommandOutcome::UserError(format!("Error: {msg}"))),
         }
         let schema = doc["schema"].as_table_mut().expect("schema is a table");
         let types = schema["types"].as_table_mut().expect("types is a table");
@@ -528,16 +533,32 @@ fn toml_type_exists(doc: &toml_edit::DocumentMut, type_name: &str) -> bool {
 
 /// Ensure `[schema]` and `[schema.types]` tables exist in the doc.
 ///
+/// When the `[schema]` section is created for the first time, also sets
+/// `validate_on_write = true` so that future `set`/`append` operations
+/// enforce schema constraints by default. Existing `[schema]` sections
+/// (e.g. hand-edited or from a prior `types set`) are left untouched.
+///
 /// Returns a user-facing error if `schema` or `schema.types` exist but are not
 /// TOML tables (e.g. the user hand-edited `.hyalo.toml` into something like
 /// `schema = "foo"`). We prefer a clear error over a panic on user input.
-fn ensure_schema_types_table(doc: &mut toml_edit::DocumentMut) -> Result<(), String> {
-    if !doc.contains_key("schema") {
+/// Returns `Ok(true)` when `validate_on_write` was auto-enabled (schema was new).
+fn ensure_schema_types_table(doc: &mut toml_edit::DocumentMut) -> Result<bool, String> {
+    let schema_is_new = !doc.contains_key("schema");
+    if schema_is_new {
         doc["schema"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
     let schema = doc["schema"].as_table_mut().ok_or_else(|| {
         "malformed .hyalo.toml: `schema` is not a table — expected `[schema]` section".to_owned()
     })?;
+    // When creating the [schema] section for the first time, enable
+    // validate_on_write so that `set`/`append` enforce schema constraints
+    // by default once any type has been defined.
+    if schema_is_new {
+        schema.insert(
+            "validate_on_write",
+            toml_edit::Item::Value(toml_edit::Value::Boolean(toml_edit::Formatted::new(true))),
+        );
+    }
     if !schema.contains_key("types") {
         schema.insert("types", toml_edit::Item::Table(toml_edit::Table::new()));
     }
@@ -546,7 +567,7 @@ fn ensure_schema_types_table(doc: &mut toml_edit::DocumentMut) -> Result<(), Str
             "malformed .hyalo.toml: `schema.types` is not a table — expected `[schema.types]` section".to_owned(),
         );
     }
-    Ok(())
+    Ok(schema_is_new)
 }
 
 /// Ensure `[schema.types.<name>.defaults]` table exists.
