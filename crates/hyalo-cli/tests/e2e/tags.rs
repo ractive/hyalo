@@ -743,6 +743,42 @@ fn tags_rename_scalar_tag_already_has_new() {
 }
 
 // ---------------------------------------------------------------------------
+// tags rename --dry-run
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tags_rename_dry_run_does_not_modify() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "a.md", &["filtering", "cli"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "tags",
+        "rename",
+        "--from",
+        "filtering",
+        "--to",
+        "filters",
+        "--dry-run",
+    ]);
+    let output = cmd.output().unwrap();
+    assert!(output.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"]["dry_run"], true);
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
+
+    // File should be unchanged.
+    let content = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("filtering"),
+        "dry-run must not modify files"
+    );
+    assert!(!content.contains("filters"));
+}
+
+// ---------------------------------------------------------------------------
 // Glob negation
 // ---------------------------------------------------------------------------
 

@@ -1,8 +1,8 @@
 ---
-title: "Iteration 120 — Dogfood v0.12.0 Post-iter-119 Fixes"
+title: Iteration 120 — Dogfood v0.12.0 Post-iter-119 Fixes
 type: iteration
 date: 2026-04-16
-status: planned
+status: in-progress
 branch: iter-120/dogfood-post-iter119-fixes
 tags:
   - iteration
@@ -82,49 +82,48 @@ adding the file to `[lint] ignore` in `.hyalo.toml`.
 
 ## Tasks
 
-### BUG-1: `mv --dry-run` link rewrite preview
-- [ ] Refactor mv command to compute link rewrites before deciding to write
-- [ ] Populate `updated_files` and counters in dry-run output
-- [ ] Add text-format output showing affected files and link counts
-- [ ] Add e2e test: mv --dry-run on file with backlinks shows non-zero counts
+### BUG-1: `mv --dry-run` link rewrite preview — NOT A BUG
+Bare wikilinks (e.g. `[[decision-log]]`) are intentionally not rewritten by
+`mv` — they use name-based resolution and remain valid after a move. The
+dry-run correctly shows 0 rewrites. No code change needed.
 
 ### BUG-2: `--dry-run` for `properties rename` and `tags rename`
-- [ ] Add `--dry-run` flag to `properties rename` clap definition
-- [ ] Add `--dry-run` flag to `tags rename` clap definition
-- [ ] Implement dry-run logic: scan and report without writing
-- [ ] Add text-format output for dry-run preview
-- [ ] Add e2e tests for both commands with `--dry-run`
+- [x] Add `--dry-run` flag to `properties rename` clap definition
+- [x] Add `--dry-run` flag to `tags rename` clap definition
+- [x] Implement dry-run logic: scan and report without writing
+- [x] Add text-format output for dry-run preview
+- [x] Add e2e tests for both commands with `--dry-run`
 
 ### BUG-3: `--fields outline` alias
-- [ ] Accept `outline` as alias for `sections` in field parsing
-- [ ] Add e2e test
+- [x] Accept `outline` as alias for `sections` in field parsing
+- [x] Add e2e test
 
 ### BUG-4: `--stemmer` ISO 639-1 codes
-- [ ] Add ISO 639-1 to Snowball name mapping
-- [ ] Update help text to mention both forms
-- [ ] Add e2e test for `--stemmer en`
+- [x] Add ISO 639-1 to Snowball name mapping
+- [x] Update help text to mention both forms
+- [x] Add e2e test for `--stemmer en`
 
 ### UX improvements
-- [ ] `create-index`: note when overwriting existing index
-- [ ] `lint --fix` hint: suggest `[lint] ignore` for unfixable parse errors
+- [x] `create-index`: note when overwriting existing index
+- [x] `lint --fix` hint: suggest `[lint] ignore` for unfixable parse errors
 
 ### Documentation surfaces (keep all in sync)
-- [ ] Update help texts for changed commands
-- [ ] Update CHANGELOG
-- [ ] Update knowledgebase skill if needed
-- [ ] Update README if needed
+- [x] Update help texts for changed commands
+- [x] Update CHANGELOG
+- [x] Update knowledgebase skill if needed (no changes needed)
+- [x] Update README if needed (no changes needed)
 
 ### Quality gates
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace -q`
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace -q`
 
 ## Acceptance Criteria
 
-- [ ] `mv --dry-run` on a file with backlinks shows non-zero `total_files_updated` and `total_links_updated`
-- [ ] `properties rename --dry-run` previews affected files without writing
-- [ ] `tags rename --dry-run` previews affected files without writing
-- [ ] `find --fields outline` works as alias for `--fields sections`
-- [ ] `find --stemmer en` works (maps to English stemmer)
-- [ ] `create-index` output notes when replacing existing index
-- [ ] All existing tests still pass
+- [x] ~~`mv --dry-run`~~: NOT A BUG — bare wikilinks are intentionally skipped
+- [x] `properties rename --dry-run` previews affected files without writing
+- [x] `tags rename --dry-run` previews affected files without writing
+- [x] `find --fields outline` works as alias for `--fields sections`
+- [x] `find --stemmer en` works (maps to English stemmer)
+- [x] `create-index` output notes when replacing existing index
+- [x] All existing tests still pass

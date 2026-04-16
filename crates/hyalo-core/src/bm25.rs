@@ -39,14 +39,49 @@ macro_rules! define_stem_languages {
 
         /// Parses a language name string (case-insensitive) into a [`StemLanguage`].
         ///
+        /// Accepts full names (e.g. "english") or ISO 639-1 codes (e.g. "en").
         /// Returns an error for unrecognised language names.
         pub fn parse_language(s: &str) -> anyhow::Result<StemLanguage> {
-            match s.to_lowercase().as_str() {
-                $( $canonical => Ok(StemLanguage::$variant), )+
-                other => anyhow::bail!("unknown stemming language: {other:?}"),
+            let lower = s.to_lowercase();
+            // Try canonical (full) names first.
+            match lower.as_str() {
+                $( $canonical => return Ok(StemLanguage::$variant), )+
+                _ => {}
+            }
+            // Try ISO 639-1 two-letter codes.
+            match iso639_to_canonical(lower.as_str()) {
+                Some(lang) => Ok(lang),
+                None => anyhow::bail!(
+                    "unknown stemming language: {s:?} (use a full name like \"english\" or an ISO 639-1 code like \"en\")"
+                ),
             }
         }
     };
+}
+
+/// Map ISO 639-1 two-letter codes to [`StemLanguage`] variants.
+fn iso639_to_canonical(code: &str) -> Option<StemLanguage> {
+    match code {
+        "ar" => Some(StemLanguage::Arabic),
+        "da" => Some(StemLanguage::Danish),
+        "nl" => Some(StemLanguage::Dutch),
+        "en" => Some(StemLanguage::English),
+        "fi" => Some(StemLanguage::Finnish),
+        "fr" => Some(StemLanguage::French),
+        "de" => Some(StemLanguage::German),
+        "el" => Some(StemLanguage::Greek),
+        "hu" => Some(StemLanguage::Hungarian),
+        "it" => Some(StemLanguage::Italian),
+        "no" | "nb" | "nn" => Some(StemLanguage::Norwegian),
+        "pt" => Some(StemLanguage::Portuguese),
+        "ro" => Some(StemLanguage::Romanian),
+        "ru" => Some(StemLanguage::Russian),
+        "es" => Some(StemLanguage::Spanish),
+        "sv" => Some(StemLanguage::Swedish),
+        "ta" => Some(StemLanguage::Tamil),
+        "tr" => Some(StemLanguage::Turkish),
+        _ => None,
+    }
 }
 
 define_stem_languages! {
@@ -871,7 +906,19 @@ mod tests {
     fn test_parse_language_invalid() {
         assert!(parse_language("klingon").is_err());
         assert!(parse_language("").is_err());
-        assert!(parse_language("en").is_err());
+        assert!(parse_language("xx").is_err());
+    }
+
+    #[test]
+    fn test_parse_language_iso639_codes() {
+        assert_eq!(parse_language("en").unwrap(), StemLanguage::English);
+        assert_eq!(parse_language("de").unwrap(), StemLanguage::German);
+        assert_eq!(parse_language("fr").unwrap(), StemLanguage::French);
+        assert_eq!(parse_language("es").unwrap(), StemLanguage::Spanish);
+        assert_eq!(parse_language("ar").unwrap(), StemLanguage::Arabic);
+        assert_eq!(parse_language("no").unwrap(), StemLanguage::Norwegian);
+        assert_eq!(parse_language("nb").unwrap(), StemLanguage::Norwegian);
+        assert_eq!(parse_language("EN").unwrap(), StemLanguage::English);
     }
 
     // ------------------------------------------------------------------
