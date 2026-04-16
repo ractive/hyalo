@@ -538,13 +538,18 @@ impl Bm25InvertedIndex {
         Some(Self::build_from_tokens(docs))
     }
 
-    /// Return the total number of postings across all terms.
+    /// Return the total number of posting entries plus positions across all terms.
     ///
     /// Used as a defence-in-depth check during snapshot deserialization: a
     /// crafted index could claim a plausible number of *terms* while hiding an
-    /// enormous number of per-term postings, causing large allocations.
+    /// enormous number of per-term postings or per-posting positions arrays,
+    /// causing large allocations.  Counting both prevents that attack.
     pub(crate) fn total_postings(&self) -> usize {
-        self.postings.values().map(Vec::len).sum()
+        self.postings
+            .values()
+            .flat_map(|posts| posts.iter())
+            .map(|p| 1 + p.positions.len())
+            .sum()
     }
 
     /// Returns **all** matches for `query`, ranked by BM25 score (highest first).
@@ -566,7 +571,7 @@ impl Bm25InvertedIndex {
     /// This method must be called after deserialization before the index is used.
     ///
     /// Returns `true` if the index is structurally consistent, `false` otherwise.
-    pub fn validate_doc_ids(&self) -> bool {
+    pub(crate) fn validate_doc_ids(&self) -> bool {
         let max_id = self.doc_paths.len();
         if self.doc_lengths.len() != max_id {
             return false;

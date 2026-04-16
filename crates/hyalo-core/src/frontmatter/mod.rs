@@ -8,17 +8,27 @@ use anyhow::Context as _;
 pub use parse::{body_only, hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
 pub use types::{infer_type, parse_value};
 
-/// Read a file's modification time for TOCTOU detection.
-pub fn read_mtime(path: &std::path::Path) -> anyhow::Result<std::time::SystemTime> {
-    std::fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
+/// Read a file's modification time and size for TOCTOU detection.
+///
+/// Returns `(mtime, file_size_bytes)`. Using both components strengthens the
+/// fingerprint: on filesystems with coarse mtime granularity (e.g. FAT32 with
+/// 2 s resolution), a file that is written and reverted within the same clock
+/// tick would have the same mtime but a different size, and vice versa.
+pub fn read_mtime(path: &std::path::Path) -> anyhow::Result<(std::time::SystemTime, u64)> {
+    let meta =
+        std::fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    let mtime = meta
         .modified()
-        .with_context(|| format!("mtime not available for {}", path.display()))
+        .with_context(|| format!("mtime not available for {}", path.display()))?;
+    Ok((mtime, meta.len()))
 }
 
-/// Verify that a file's mtime hasn't changed since `expected`.
+/// Verify that a file's fingerprint (mtime + size) hasn't changed since `expected`.
 /// Returns an error if the file was modified concurrently.
-pub fn check_mtime(path: &std::path::Path, expected: std::time::SystemTime) -> anyhow::Result<()> {
+pub fn check_mtime(
+    path: &std::path::Path,
+    expected: (std::time::SystemTime, u64),
+) -> anyhow::Result<()> {
     let current = read_mtime(path)?;
     if current != expected {
         anyhow::bail!(

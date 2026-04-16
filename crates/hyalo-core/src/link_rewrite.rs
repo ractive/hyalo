@@ -55,10 +55,11 @@ pub struct RewritePlan {
     pub replacements: Vec<Replacement>,
     /// Full file content with all replacements already applied.
     pub rewritten_content: String,
-    /// mtime of the file when the plan was built, used to detect concurrent
-    /// modifications before writing. `None` for the moved file's outbound plan
-    /// (which is written to a new path after `fs::rename` and needs no check).
-    pub mtime: Option<std::time::SystemTime>,
+    /// Fingerprint (mtime, file size) of the file when the plan was built, used
+    /// to detect concurrent modifications before writing. `None` for the moved
+    /// file's outbound plan (which is written to a new path after `fs::rename`
+    /// and needs no check).
+    pub mtime: Option<(std::time::SystemTime, u64)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +132,11 @@ pub fn plan_mv(
         let meta = std::fs::metadata(&abs_path)
             .with_context(|| format!("failed to stat {}", abs_path.display()))?;
         let file_size = meta.len();
-        let file_mtime = meta.modified().ok();
+        let file_mtime = Some(
+            meta.modified()
+                .with_context(|| format!("failed to read mtime for {}", abs_path.display()))
+                .map(|t| (t, file_size))?,
+        );
         if file_size > MAX_FILE_SIZE {
             eprintln!(
                 "warning: skipping {} ({} MiB exceeds {} MiB limit)",
@@ -176,9 +181,15 @@ pub fn plan_mv(
     // even when its directory didn't change (NEW-BUG-2). When the directory
     // does change, relative links to other files are also rebased here.
     let old_abs = dir.join(old_rel);
-    let old_file_size = std::fs::metadata(&old_abs)
-        .with_context(|| format!("failed to stat {}", old_abs.display()))?
-        .len();
+    let old_meta = std::fs::metadata(&old_abs)
+        .with_context(|| format!("failed to stat {}", old_abs.display()))?;
+    let old_file_size = old_meta.len();
+    // Capture mtime before reading content so concurrent edits can be detected
+    // after fs::rename (which preserves mtime).
+    let old_file_mtime = old_meta
+        .modified()
+        .with_context(|| format!("failed to read mtime for {}", old_abs.display()))
+        .map(|t| (t, old_file_size))?;
     if old_file_size > MAX_FILE_SIZE {
         eprintln!(
             "warning: skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
@@ -205,9 +216,9 @@ pub fn plan_mv(
             existing.rel_path = new_rel.to_string();
             existing.replacements.extend(outbound_replacements);
             existing.rewritten_content = apply_replacements(&content, &existing.replacements);
-            // This file is being moved; it will be written to a new path after
-            // fs::rename, so the previously captured inbound mtime no longer applies.
-            existing.mtime = None;
+            // Preserve the mtime captured before reading so execute_plans can
+            // still detect concurrent edits (fs::rename preserves mtime).
+            existing.mtime = Some(old_file_mtime);
         } else {
             let rewritten_content = apply_replacements(&content, &outbound_replacements);
             plans.insert(
@@ -217,9 +228,9 @@ pub fn plan_mv(
                     rel_path: new_rel.to_string(),
                     replacements: outbound_replacements,
                     rewritten_content,
-                    // The moved file is written to a new path after fs::rename;
-                    // no prior mtime to check against.
-                    mtime: None,
+                    // Preserve mtime — fs::rename keeps mtime, so execute_plans
+                    // can detect concurrent edits before writing.
+                    mtime: Some(old_file_mtime),
                 },
             );
         }

@@ -30,12 +30,12 @@ Address findings from the comprehensive security audit performed on 2026-04-16. 
 
 ### MED-2: Private filesystem paths in committed KB files
 
-Six knowledgebase files contain `~/devel/...` revealing developer username and directory layout.
+Six knowledgebase files contain absolute user-specific paths (e.g. `/Users/<name>/...`) that expose machine-specific directory layout. Committed KB content should use stable placeholders instead.
 
-- [x] Replace `~/devel/mdn` with `<MDN_DIR>` or `~/devel/mdn` in `dogfood-results/dogfood-v0120-iter115-followup.md`
-- [x] Replace paths in `dogfood-results/dogfood-v0120-multi-kb.md`
-- [x] Replace paths in `dogfood-results/hyalo-run.md`, `hyalo-run2.md`, `hyalo-run3.md`
-- [x] Replace paths in `iterations/iteration-117-case-insensitive-link-resolution.md`
+- [x] Replace local `/Users/...` paths with `<MDN_DIR>` in `dogfood-results/dogfood-v0120-iter115-followup.md`
+- [x] Replace local filesystem paths with placeholders in `dogfood-results/dogfood-v0120-multi-kb.md`
+- [x] Replace local filesystem paths with placeholders in `dogfood-results/hyalo-run.md`, `hyalo-run2.md`, `hyalo-run3.md`
+- [x] Replace local filesystem paths with placeholders in `iterations/iteration-117-case-insensitive-link-resolution.md`
 
 ## Low Severity
 

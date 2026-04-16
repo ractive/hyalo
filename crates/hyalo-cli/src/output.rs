@@ -280,7 +280,7 @@ pub fn format_error(
             if let Some(c) = cause {
                 let _ = write!(msg, "\n  cause: {c}");
             }
-            msg
+            sanitize_control_chars(&msg)
         }
     }
 }
@@ -589,7 +589,7 @@ fn execute_jq_filter(
         .map_err(|e| format!("jq input conversion error: {e}"))?;
     let ctx = Ctx::<D>::new(&filter.lut, Vars::new([]));
 
-    let mut parts = Vec::new();
+    let mut out = String::new();
     let mut total_len: usize = 0;
     for result in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
         match result {
@@ -603,20 +603,27 @@ fn execute_jq_filter(
                     // (numbers, booleans, null, arrays, objects).
                     other => other.to_string(),
                 };
-                total_len += s.len();
+                // Account for the newline separator that will be prepended
+                // between fragments when out is non-empty.
+                total_len = total_len
+                    .saturating_add(s.len())
+                    .saturating_add(usize::from(!out.is_empty()));
                 if total_len > JQ_OUTPUT_CAP {
                     return Err(format!(
                         "jq filter output exceeds {} MiB limit",
                         JQ_OUTPUT_CAP / (1024 * 1024)
                     ));
                 }
-                parts.push(s);
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&s);
             }
             Err(e) => return Err(format!("jq runtime error: {e}")),
         }
     }
 
-    Ok(parts.join("\n"))
+    Ok(out)
 }
 
 /// Look up or compile a jq filter from `cache`, then execute it against `value`.
