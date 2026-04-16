@@ -467,6 +467,40 @@ impl SnapshotIndex {
     fn load_inner(bytes: &[u8], warn: bool) -> Option<Self> {
         match rmp_serde::from_slice::<SnapshotData>(bytes) {
             Ok(data) => {
+                // SEC-1: Validate every rel_path before trusting snapshot data.
+                // Reject the entire snapshot if any path is unsafe — a crafted
+                // snapshot with path-traversal entries could escape the vault.
+                for entry in &data.entries {
+                    let rel_path = &entry.rel_path;
+                    if rel_path.contains('\0') {
+                        if warn {
+                            eprintln!(
+                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                            );
+                        }
+                        return None;
+                    }
+                    if std::path::Path::new(rel_path.as_str()).is_absolute() {
+                        if warn {
+                            eprintln!(
+                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                            );
+                        }
+                        return None;
+                    }
+                    if std::path::Path::new(rel_path.as_str())
+                        .components()
+                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                    {
+                        if warn {
+                            eprintln!(
+                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                            );
+                        }
+                        return None;
+                    }
+                }
+
                 // Entries are stored in sorted order (ScannedIndex::build sorts
                 // before saving).  Re-sort here to guarantee the invariant even
                 // if an older snapshot was created without sorting.
@@ -506,8 +540,9 @@ impl SnapshotIndex {
     /// fall back to a disk scan. A warning is printed to stderr in this case.
     /// Returns `Err` only for hard I/O failures.
     pub fn load(path: &Path) -> Result<Option<Self>> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("failed to read index file: {}", path.display()))?;
+        let Some(bytes) = read_index_bytes(path, true)? else {
+            return Ok(None);
+        };
         Ok(Self::load_inner(&bytes, true))
     }
 
@@ -515,8 +550,9 @@ impl SnapshotIndex {
     /// incompatibility warning.  Used by `find_stale_indexes` which expects to
     /// silently skip files that cannot be deserialized.
     fn load_silent(path: &Path) -> Result<Option<Self>> {
-        let bytes = std::fs::read(path)
-            .with_context(|| format!("failed to read index file: {}", path.display()))?;
+        let Some(bytes) = read_index_bytes(path, false)? else {
+            return Ok(None);
+        };
         Ok(Self::load_inner(&bytes, false))
     }
 
@@ -560,6 +596,37 @@ impl SnapshotIndex {
             self.header.pid,
         )
     }
+}
+
+/// Maximum index file size accepted by [`read_index_bytes`].
+///
+/// Files larger than this are almost certainly corrupt or crafted to trigger an
+/// OOM condition during deserialization.  512 MiB is a generous upper bound for
+/// even the largest real-world knowledgebases.
+const MAX_INDEX_FILE_SIZE: u64 = 512 * 1024 * 1024;
+
+/// Read the raw bytes of an index file, enforcing the size limit.
+///
+/// Returns `Ok(Some(bytes))` when the file is within [`MAX_INDEX_FILE_SIZE`].
+/// Returns `Ok(None)` when the file exceeds the limit (a warning is printed
+/// when `warn` is `true`).
+/// Returns `Err` for hard I/O failures.
+fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat index file: {}", path.display()))?;
+    if meta.len() > MAX_INDEX_FILE_SIZE {
+        if warn {
+            eprintln!(
+                "warning: index file is too large ({} bytes, limit {}); falling back to disk scan",
+                meta.len(),
+                MAX_INDEX_FILE_SIZE
+            );
+        }
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("failed to read index file: {}", path.display()))?;
+    Ok(Some(bytes))
 }
 
 /// Shared serialization logic for saving a snapshot index to disk.
@@ -658,6 +725,13 @@ fn is_pid_alive(pid: u32) -> bool {
         // targeting a real process and blocking stale-index cleanup.  Treat
         // any out-of-range PID as "not alive" so the stale index is removed.
         if pid > i32::MAX as u32 {
+            return false;
+        }
+
+        // pid 0 means "my own process group" for kill(), not a specific process.
+        // A crafted snapshot with pid=0 would always pass the liveness check,
+        // preventing stale-index cleanup.
+        if pid == 0 {
             return false;
         }
 
@@ -1358,5 +1432,82 @@ Content.
         // Link graph is empty
         assert!(idx.link_graph().backlinks("a").is_empty());
         assert!(idx.link_graph().backlinks("b").is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Security tests
+    // -------------------------------------------------------------------------
+
+    fn make_snapshot_bytes(rel_path: &str) -> Vec<u8> {
+        let data = SnapshotData {
+            header: SnapshotHeader {
+                vault_dir: "/tmp/vault".to_owned(),
+                site_prefix: None,
+                created_at: 0,
+                pid: std::process::id(),
+            },
+            entries: vec![IndexEntry {
+                rel_path: rel_path.to_owned(),
+                modified: "2024-01-01T00:00:00Z".to_owned(),
+                properties: IndexMap::default(),
+                tags: vec![],
+                sections: vec![],
+                tasks: vec![],
+                links: vec![],
+                bm25_tokens: None,
+                bm25_language: None,
+            }],
+            graph: LinkGraph::default(),
+            bm25_index: None,
+        };
+        rmp_serde::to_vec_named(&data).unwrap()
+    }
+
+    #[test]
+    fn load_inner_rejects_parent_traversal() {
+        let bytes = make_snapshot_bytes("../../escape.md");
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with '..' path components must be rejected"
+        );
+    }
+
+    #[test]
+    fn load_inner_rejects_absolute_path() {
+        let bytes = make_snapshot_bytes("/etc/passwd");
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with absolute rel_path must be rejected"
+        );
+    }
+
+    #[test]
+    fn load_inner_rejects_null_byte() {
+        let bytes = make_snapshot_bytes("foo\0bar.md");
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with null-byte path must be rejected"
+        );
+    }
+
+    #[test]
+    fn is_pid_alive_zero_returns_false() {
+        assert!(
+            !is_pid_alive(0),
+            "pid 0 must not be treated as an alive process"
+        );
+    }
+
+    #[test]
+    fn load_rejects_oversized_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("big.hyalo-index");
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(MAX_INDEX_FILE_SIZE + 1).unwrap();
+        let result = SnapshotIndex::load(&path).unwrap();
+        assert!(
+            result.is_none(),
+            "oversized index file must return Ok(None)"
+        );
     }
 }

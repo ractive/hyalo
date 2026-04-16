@@ -231,7 +231,7 @@ pub(crate) struct FindFilters {
     #[arg(short, long, conflicts_with = "file")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glob: Vec<String>,
-    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections, tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
+    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections (alias: outline), tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
     #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
@@ -1124,6 +1124,9 @@ pub(crate) enum TaskAction {
         /// Single character to set as the task status (e.g. '?', '-', '!')
         #[arg(short, long)]
         status: String,
+        /// Preview which tasks would be changed without modifying the file
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },

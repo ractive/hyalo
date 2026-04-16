@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::cli::args::FindFilters;
-use crate::output::CommandOutcome;
+use crate::output::{CommandOutcome, Format, format_error};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
 
@@ -51,7 +51,7 @@ pub(crate) fn load_views(dir: &Path) -> HashMap<String, FindFilters> {
 }
 
 /// List all saved views.
-pub(crate) fn list_views(dir: &Path) -> Result<CommandOutcome> {
+pub(crate) fn list_views(dir: &Path, _format: Format) -> Result<CommandOutcome> {
     let views = load_views(dir);
     let mut items: Vec<serde_json::Value> = Vec::new();
     let mut sorted_keys: Vec<&String> = views.keys().collect();
@@ -71,16 +71,26 @@ pub(crate) fn list_views(dir: &Path) -> Result<CommandOutcome> {
 }
 
 /// Save a view to `.hyalo.toml` within `dir`.
-pub(crate) fn set_view(dir: &Path, name: &str, filters: &FindFilters) -> Result<CommandOutcome> {
+pub(crate) fn set_view(
+    dir: &Path,
+    name: &str,
+    filters: &FindFilters,
+    format: Format,
+) -> Result<CommandOutcome> {
     // Validate name: alphanumeric, hyphens, and underscores only (TOML bare-key safe)
     if name.is_empty()
         || !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Ok(CommandOutcome::UserError(format!(
-            "Error: invalid view name '{name}': must be non-empty and contain only \
-             alphanumeric characters, hyphens, or underscores"
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            &format!(
+                "invalid view name '{name}': must be non-empty and contain only alphanumeric characters, hyphens, or underscores"
+            ),
+            None,
+            None,
+            None,
         )));
     }
 
@@ -90,9 +100,13 @@ pub(crate) fn set_view(dir: &Path, name: &str, filters: &FindFilters) -> Result<
     let default_value = toml::Value::try_from(FindFilters::default())
         .context("failed to serialize default filters")?;
     if filters_value == default_value {
-        return Ok(CommandOutcome::UserError(
-            "Error: no filters specified — a view must contain at least one filter".to_owned(),
-        ));
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            "no filters specified — a view must contain at least one filter",
+            None,
+            None,
+            None,
+        )));
     }
 
     let toml_path = resolve_toml_path(dir);
@@ -106,9 +120,13 @@ pub(crate) fn set_view(dir: &Path, name: &str, filters: &FindFilters) -> Result<
         unreachable!()
     };
     let Some(views_table) = views_item.as_table_mut() else {
-        return Ok(CommandOutcome::UserError(
-            "Error: 'views' in .hyalo.toml is not a table — check your config file".to_owned(),
-        ));
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            "'views' in .hyalo.toml is not a table — check your config file",
+            None,
+            None,
+            None,
+        )));
     };
 
     // Convert filters to a toml_edit table via text round-trip
@@ -126,19 +144,27 @@ pub(crate) fn set_view(dir: &Path, name: &str, filters: &FindFilters) -> Result<
 }
 
 /// Remove a view from `.hyalo.toml` within `dir`.
-pub(crate) fn remove_view(dir: &Path, name: &str) -> Result<CommandOutcome> {
+pub(crate) fn remove_view(dir: &Path, name: &str, format: Format) -> Result<CommandOutcome> {
     let toml_path = resolve_toml_path(dir);
     let mut doc = read_toml_doc(&toml_path)?;
 
     let Some(views_table) = doc.get_mut("views").and_then(|v| v.as_table_mut()) else {
-        return Ok(CommandOutcome::UserError(format!(
-            "Error: view '{name}' not found\n\n  tip: run 'hyalo views list' to see available views"
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            &format!("view '{name}' not found"),
+            None,
+            Some("run 'hyalo views list' to see available views"),
+            None,
         )));
     };
 
     if views_table.remove(name).is_none() {
-        return Ok(CommandOutcome::UserError(format!(
-            "Error: view '{name}' not found\n\n  tip: run 'hyalo views list' to see available views"
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            &format!("view '{name}' not found"),
+            None,
+            Some("run 'hyalo views list' to see available views"),
+            None,
         )));
     }
 
@@ -204,7 +230,7 @@ mod tests {
         let dir = tmp.path();
         let filters = make_tag_filters("iteration");
 
-        let outcome = set_view(dir, "my-view", &filters).unwrap();
+        let outcome = set_view(dir, "my-view", &filters, Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
         // Config must be written inside the temp dir, not CWD.
@@ -223,7 +249,7 @@ mod tests {
         let dir = tmp.path();
         let filters = make_tag_filters("iteration");
 
-        set_view(dir, "iter-view", &filters).unwrap();
+        set_view(dir, "iter-view", &filters, Format::Json).unwrap();
 
         let views = load_views(dir);
         assert!(
@@ -238,8 +264,8 @@ mod tests {
         let dir = tmp.path();
         let filters = make_tag_filters("done");
 
-        set_view(dir, "done-view", &filters).unwrap();
-        let outcome = remove_view(dir, "done-view").unwrap();
+        set_view(dir, "done-view", &filters, Format::Json).unwrap();
+        let outcome = remove_view(dir, "done-view", Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
         let views = load_views(dir);
@@ -284,7 +310,7 @@ mod tests {
         std::fs::write(dir.join(".hyalo.toml"), original).unwrap();
 
         let filters = make_tag_filters("iteration");
-        set_view(dir, "iter", &filters).unwrap();
+        set_view(dir, "iter", &filters, Format::Json).unwrap();
 
         let result = std::fs::read_to_string(dir.join(".hyalo.toml")).unwrap();
         // Existing sections should still appear in order

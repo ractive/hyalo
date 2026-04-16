@@ -70,7 +70,7 @@ pub struct RenamePropertyResult {
     pub to: String,
     pub dry_run: bool,
     pub modified: Vec<String>,
-    pub skipped: Vec<String>,
+    pub skipped_count: usize,
     pub conflicts: Vec<String>,
     pub total: usize,
     pub scanned: usize,
@@ -111,7 +111,7 @@ pub fn properties_rename(
     let scanned = files.len();
 
     let mut modified = Vec::new();
-    let mut skipped = Vec::new();
+    let mut skipped_count: usize = 0;
     let mut conflicts = Vec::new();
     let mut index_dirty = false;
 
@@ -127,7 +127,7 @@ pub fn properties_rename(
 
         // Source key not present -- skip
         let Some(value) = props.shift_remove(from) else {
-            skipped.push(rel_path.clone());
+            skipped_count += 1;
             continue;
         };
 
@@ -161,13 +161,13 @@ pub fn properties_rename(
         idx.save_to(idx_path)?;
     }
 
-    let total = modified.len() + skipped.len() + conflicts.len();
+    let total = modified.len() + skipped_count + conflicts.len();
     let result = RenamePropertyResult {
         from: from.to_owned(),
         to: to.to_owned(),
         dry_run,
         modified,
-        skipped,
+        skipped_count,
         conflicts,
         total,
         scanned,
@@ -328,7 +328,7 @@ title: Note
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["skipped_count"].as_u64().unwrap(), 1);
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
     }
 

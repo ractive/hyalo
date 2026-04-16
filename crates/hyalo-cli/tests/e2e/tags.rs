@@ -610,7 +610,7 @@ fn tags_rename_basic() {
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 2);
-    assert_eq!(json["results"]["skipped"].as_array().unwrap().len(), 1);
+    assert_eq!(json["results"]["skipped_count"].as_u64().unwrap(), 1);
 
     let a = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(a.contains("filters"));

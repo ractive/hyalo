@@ -256,6 +256,9 @@ hyalo find "retry OR backoff"            # OR: either word matches
 hyalo find "retry -deprecated"           # NOT: exclude "deprecated"
 hyalo find '"retry backoff"'             # Phrase: exact consecutive match
 hyalo find "retry" --tag research        # combine with filters
+hyalo find "retry" --stemmer french      # French Snowball stemmer (full name)
+hyalo find "retry" --stemmer fr          # same, using ISO 639-1 code
+hyalo find "retry" --language de         # German stemmer (--language is an alias for --stemmer)
 
 # Regex content search (case-insensitive by default, unranked)
 hyalo find -e "retry.*backoff"
@@ -296,6 +299,7 @@ hyalo find --glob '!**/draft-*'      # exclude files matching a pattern (glob ne
 # Control returned fields (default: all except properties-typed and backlinks)
 hyalo find --fields properties,tags
 hyalo find --fields sections,tasks,links
+hyalo find --fields outline              # alias for --fields sections
 hyalo find --fields properties-typed     # [{name, type, value}] array instead of {key: value} map
 hyalo find --fields backlinks --file my-note.md    # show who links to this note
 hyalo find --fields properties,backlinks           # combine with other fields
@@ -396,6 +400,7 @@ hyalo properties summary --limit 0              # show all (default: 50)
 # Bulk rename a property key across all files
 hyalo properties rename --from old-key --to new-key
 hyalo properties rename --from old-key --to new-key --glob "notes/*.md"
+hyalo properties rename --from old-key --to new-key --dry-run  # preview without writing
 ```
 
 ### tags
@@ -411,6 +416,7 @@ hyalo tags summary --limit 0                    # show all (default: 50)
 # Bulk rename a tag across all files
 hyalo tags rename --from old-tag --to new-tag
 hyalo tags rename --from old-tag --to new-tag --glob "notes/*.md"
+hyalo tags rename --from old-tag --to new-tag --dry-run  # preview without writing
 ```
 
 ### summary
@@ -517,6 +523,9 @@ hyalo task toggle --file note.md --line 5 --dry-run
 
 # Set custom status on all tasks in a section
 hyalo task set --file note.md --section Tasks --status /
+
+# Preview set without writing
+hyalo task set --file note.md --line 5 --status '?' --dry-run
 ```
 
 Tasks are markdown checkboxes (`- [ ]`, `- [x]`, `- [/]`, etc.) in the file body. Checkboxes inside fenced code blocks and `%%comment%%` blocks are ignored. Bulk mutations use a single atomic read-modify-write pass.

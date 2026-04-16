@@ -593,6 +593,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 section,
                 all,
                 status,
+                dry_run,
                 index_flags: _, // consumed in run.rs before dispatch
             } => {
                 let file = match resolve_single_file(file_positional, file) {
@@ -624,6 +625,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     effective_format,
                     snapshot_index,
                     index_path,
+                    dry_run,
                 )
             }
         },
@@ -1072,7 +1074,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Views { action } => {
             let action = action.unwrap_or(ViewsAction::List);
             match action {
-                ViewsAction::List => crate::commands::views::list_views(ctx.config_dir),
+                ViewsAction::List => {
+                    crate::commands::views::list_views(ctx.config_dir, effective_format)
+                }
                 ViewsAction::Set {
                     name,
                     pattern,
@@ -1084,10 +1088,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         ));
                     }
                     filters.pattern = pattern;
-                    crate::commands::views::set_view(ctx.config_dir, &name, &filters)
+                    crate::commands::views::set_view(
+                        ctx.config_dir,
+                        &name,
+                        &filters,
+                        effective_format,
+                    )
                 }
                 ViewsAction::Remove { name } => {
-                    crate::commands::views::remove_view(ctx.config_dir, &name)
+                    crate::commands::views::remove_view(ctx.config_dir, &name, effective_format)
                 }
             }
         }
@@ -1095,12 +1104,16 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let action = action.unwrap_or(TypesAction::List);
             match action {
                 TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
-                TypesAction::Show { type_name } => {
-                    Ok(crate::commands::types::show_type(&type_name, ctx.schema))
-                }
-                TypesAction::Remove { type_name } => {
-                    crate::commands::types::remove_type(ctx.config_dir, &type_name)
-                }
+                TypesAction::Show { type_name } => Ok(crate::commands::types::show_type(
+                    &type_name,
+                    ctx.schema,
+                    effective_format,
+                )),
+                TypesAction::Remove { type_name } => crate::commands::types::remove_type(
+                    ctx.config_dir,
+                    &type_name,
+                    effective_format,
+                ),
                 TypesAction::Set {
                     type_name,
                     required,
@@ -1118,6 +1131,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &property_values,
                     filename_template.as_deref(),
                     dry_run,
+                    effective_format,
                 ),
             }
         }

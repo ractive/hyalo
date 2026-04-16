@@ -13,7 +13,7 @@ use hyalo_core::discovery;
 use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter};
 use hyalo_core::schema::{SchemaConfig, expand_default};
 
-use crate::output::{CommandOutcome, Format, format_success};
+use crate::output::{CommandOutcome, Format, format_error, format_success};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
 
@@ -49,10 +49,14 @@ pub(crate) fn list_types(schema: &SchemaConfig) -> CommandOutcome {
 // ---------------------------------------------------------------------------
 
 /// `hyalo types show <type>` — full merged schema for a type.
-pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig) -> CommandOutcome {
+pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig, format: Format) -> CommandOutcome {
     if !schema.types.contains_key(type_name) {
-        return CommandOutcome::UserError(format!(
-            "Error: type '{type_name}' not found\n\n  tip: run 'hyalo types list' to see available types"
+        return CommandOutcome::UserError(format_error(
+            format,
+            &format!("type '{type_name}' not found"),
+            None,
+            Some("run 'hyalo types list' to see available types"),
+            None,
         ));
     }
 
@@ -104,19 +108,27 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
 // ---------------------------------------------------------------------------
 
 /// `hyalo types remove <type>` — remove a type entry.
-pub(crate) fn remove_type(dir: &Path, type_name: &str) -> Result<CommandOutcome> {
+pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result<CommandOutcome> {
     let toml_path = resolve_toml_path(dir);
     let mut doc = read_toml_doc(&toml_path)?;
 
     if !toml_type_exists(&doc, type_name) {
-        return Ok(CommandOutcome::UserError(format!(
-            "Error: type '{type_name}' not found\n\n  tip: run 'hyalo types list' to see available types"
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            &format!("type '{type_name}' not found"),
+            None,
+            Some("run 'hyalo types list' to see available types"),
+            None,
         )));
     }
 
     {
-        let schema = doc["schema"].as_table_mut().expect("schema is a table");
-        let types = schema["types"].as_table_mut().expect("types is a table");
+        let schema = doc["schema"]
+            .as_table_mut()
+            .context("malformed .hyalo.toml: schema is not a table")?;
+        let types = schema["types"]
+            .as_table_mut()
+            .context("malformed .hyalo.toml: schema.types is not a table")?;
         types.remove(type_name);
     }
 
@@ -177,10 +189,13 @@ pub(crate) fn set_type(
     property_values_args: &[String],
     filename_template: Option<&str>,
     dry_run: bool,
+    format: Format,
 ) -> Result<CommandOutcome> {
     // Validate type name before anything else.
     if let Err(msg) = validate_type_name(type_name) {
-        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+        return Ok(CommandOutcome::UserError(format_error(
+            format, &msg, None, None, None,
+        )));
     }
 
     // Require at least one mutation flag.
@@ -190,11 +205,13 @@ pub(crate) fn set_type(
         && property_values_args.is_empty()
         && filename_template.is_none()
     {
-        return Ok(CommandOutcome::UserError(
-            "Error: no mutation flags provided — specify at least one of: \
-             --required, --default, --property-type, --property-values, --filename-template"
-                .to_owned(),
-        ));
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            "no mutation flags provided — specify at least one of:              --required, --default, --property-type, --property-values, --filename-template",
+            None,
+            None,
+            None,
+        )));
     }
 
     // Parse --required: each arg may be comma-separated.
@@ -212,7 +229,11 @@ pub(crate) fn set_type(
             Ok((k, v)) => {
                 defaults_map.insert(k.to_owned(), v.to_owned());
             }
-            Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+            Err(e) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format, &e, None, None, None,
+                )));
+            }
         }
     }
 
@@ -224,9 +245,17 @@ pub(crate) fn set_type(
                 Ok(pt) => {
                     prop_type_map.insert(k.to_owned(), pt);
                 }
-                Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+                Err(e) => {
+                    return Ok(CommandOutcome::UserError(format_error(
+                        format, &e, None, None, None,
+                    )));
+                }
             },
-            Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+            Err(e) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format, &e, None, None, None,
+                )));
+            }
         }
     }
 
@@ -240,13 +269,23 @@ pub(crate) fn set_type(
                 // `""` value, which would make lint/fix output confusing.
                 let vals: Vec<String> = v.split(',').map(|s| s.trim().to_owned()).collect();
                 if vals.iter().any(String::is_empty) {
-                    return Ok(CommandOutcome::UserError(format!(
-                        "Error: invalid --property-values argument '{arg}': enum values cannot be empty"
+                    return Ok(CommandOutcome::UserError(format_error(
+                        format,
+                        &format!(
+                            "invalid --property-values argument '{arg}': enum values cannot be empty"
+                        ),
+                        None,
+                        None,
+                        None,
                     )));
                 }
                 prop_values_map.insert(k.to_owned(), vals);
             }
-            Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+            Err(e) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format, &e, None, None, None,
+                )));
+            }
         }
     }
 
@@ -266,10 +305,18 @@ pub(crate) fn set_type(
                     toml_changes.push("enable validate_on_write (new schema)".to_owned());
                 }
             }
-            Err(msg) => return Ok(CommandOutcome::UserError(format!("Error: {msg}"))),
+            Err(msg) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format, &msg, None, None, None,
+                )));
+            }
         }
-        let schema = doc["schema"].as_table_mut().expect("schema is a table");
-        let types = schema["types"].as_table_mut().expect("types is a table");
+        let schema = doc["schema"]
+            .as_table_mut()
+            .context("malformed .hyalo.toml: schema is not a table")?;
+        let types = schema["types"]
+            .as_table_mut()
+            .context("malformed .hyalo.toml: schema.types is not a table")?;
         let mut type_table = toml_edit::Table::new();
         type_table.insert(
             "required",
@@ -290,7 +337,7 @@ pub(crate) fn set_type(
             }
         }
         if !dry_run {
-            set_required_array(&mut doc, type_name, &new_required);
+            set_required_array(&mut doc, type_name, &new_required)?;
         }
     }
 
@@ -298,7 +345,7 @@ pub(crate) fn set_type(
     if let Some(tmpl) = filename_template {
         toml_changes.push(format!("set filename-template: {tmpl}"));
         if !dry_run {
-            set_string_field(&mut doc, type_name, "filename-template", tmpl);
+            set_string_field(&mut doc, type_name, "filename-template", tmpl)?;
         }
     }
 
@@ -315,7 +362,7 @@ pub(crate) fn set_type(
     for (k, v) in &defaults_map {
         toml_changes.push(format!("set default: {k} = {v}"));
         if !dry_run {
-            set_default_field(&mut doc, type_name, k, v);
+            set_default_field(&mut doc, type_name, k, v)?;
         }
     }
 
@@ -326,7 +373,7 @@ pub(crate) fn set_type(
             vals.join(", ")
         ));
         if !dry_run {
-            set_property_enum(&mut doc, type_name, k, vals);
+            set_property_enum(&mut doc, type_name, k, vals)?;
         }
         // Remove from prop_type_map so it isn't also applied below.
         prop_type_map.remove(k.as_str());
@@ -336,7 +383,7 @@ pub(crate) fn set_type(
     for (k, pt) in &prop_type_map {
         toml_changes.push(format!("set property {k}: type={pt}"));
         if !dry_run {
-            set_property_type_field(&mut doc, type_name, k, pt);
+            set_property_type_field(&mut doc, type_name, k, pt)?;
         }
     }
 
@@ -368,7 +415,7 @@ pub(crate) fn set_type(
         if !already_has {
             toml_changes.push(format!("auto-add property {f}: type=string"));
             if !dry_run {
-                set_property_type_field(&mut doc, type_name, f, "string");
+                set_property_type_field(&mut doc, type_name, f, "string")?;
             }
         }
     }
@@ -571,24 +618,37 @@ fn ensure_schema_types_table(doc: &mut toml_edit::DocumentMut) -> Result<bool, S
 }
 
 /// Ensure `[schema.types.<name>.defaults]` table exists.
-fn ensure_defaults_table(doc: &mut toml_edit::DocumentMut, type_name: &str) {
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+fn ensure_defaults_table(doc: &mut toml_edit::DocumentMut, type_name: &str) -> Result<()> {
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     if !type_table.contains_key("defaults") {
         type_table.insert("defaults", toml_edit::Item::Table(toml_edit::Table::new()));
     }
+    Ok(())
 }
 
 /// Ensure `[schema.types.<name>.properties.<prop>]` table exists.
-fn ensure_property_table(doc: &mut toml_edit::DocumentMut, type_name: &str, prop: &str) {
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+fn ensure_property_table(
+    doc: &mut toml_edit::DocumentMut,
+    type_name: &str,
+    prop: &str,
+) -> Result<()> {
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     if !type_table.contains_key("properties") {
         type_table.insert(
             "properties",
@@ -597,10 +657,11 @@ fn ensure_property_table(doc: &mut toml_edit::DocumentMut, type_name: &str, prop
     }
     let props = type_table["properties"]
         .as_table_mut()
-        .expect("properties is a table");
+        .context("malformed .hyalo.toml: properties section is not a table")?;
     if !props.contains_key(prop) {
         props.insert(prop, toml_edit::Item::Table(toml_edit::Table::new()));
     }
+    Ok(())
 }
 
 /// Get the current `required` array for a type.
@@ -622,41 +683,70 @@ fn get_required_array(doc: &toml_edit::DocumentMut, type_name: &str) -> Vec<Stri
 }
 
 /// Set the `required` array for a type.
-fn set_required_array(doc: &mut toml_edit::DocumentMut, type_name: &str, fields: &[String]) {
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+fn set_required_array(
+    doc: &mut toml_edit::DocumentMut,
+    type_name: &str,
+    fields: &[String],
+) -> Result<()> {
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     let mut arr = toml_edit::Array::new();
     for f in fields {
         arr.push(f.as_str());
     }
     type_table["required"] = toml_edit::Item::Value(toml_edit::Value::Array(arr));
+    Ok(())
 }
 
 /// Set a string field at `[schema.types.<name>.<key>]`.
-fn set_string_field(doc: &mut toml_edit::DocumentMut, type_name: &str, key: &str, value: &str) {
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+fn set_string_field(
+    doc: &mut toml_edit::DocumentMut,
+    type_name: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     type_table[key] = toml_edit::value(value);
+    Ok(())
 }
 
 /// Set `[schema.types.<name>.defaults.<key>] = value`.
-fn set_default_field(doc: &mut toml_edit::DocumentMut, type_name: &str, key: &str, value: &str) {
-    ensure_defaults_table(doc, type_name);
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+fn set_default_field(
+    doc: &mut toml_edit::DocumentMut,
+    type_name: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    ensure_defaults_table(doc, type_name)?;
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     let defaults = type_table["defaults"]
         .as_table_mut()
-        .expect("defaults is a table");
+        .context("malformed .hyalo.toml: defaults section is not a table")?;
     defaults[key] = toml_edit::value(value);
+    Ok(())
 }
 
 /// Set a simple (non-enum) property constraint: `type = "<pt>"`.
@@ -665,20 +755,27 @@ fn set_property_type_field(
     type_name: &str,
     prop: &str,
     pt: &str,
-) {
-    ensure_property_table(doc, type_name, prop);
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+) -> Result<()> {
+    ensure_property_table(doc, type_name, prop)?;
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     let props = type_table["properties"]
         .as_table_mut()
-        .expect("properties is a table");
-    let prop_table = props[prop].as_table_mut().expect("property is a table");
+        .context("malformed .hyalo.toml: properties section is not a table")?;
+    let prop_table = props[prop]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: property entry is not a table")?;
     prop_table["type"] = toml_edit::value(pt);
     // Remove values key if switching away from enum.
     prop_table.remove("values");
+    Ok(())
 }
 
 /// Set an enum property constraint.
@@ -687,23 +784,30 @@ fn set_property_enum(
     type_name: &str,
     prop: &str,
     values: &[String],
-) {
-    ensure_property_table(doc, type_name, prop);
-    let schema = doc["schema"].as_table_mut().expect("schema is a table");
-    let types = schema["types"].as_table_mut().expect("types is a table");
+) -> Result<()> {
+    ensure_property_table(doc, type_name, prop)?;
+    let schema = doc["schema"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema is not a table")?;
+    let types = schema["types"]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: schema.types is not a table")?;
     let type_table = types[type_name]
         .as_table_mut()
-        .expect("type entry is a table");
+        .context("malformed .hyalo.toml: type entry is not a table")?;
     let props = type_table["properties"]
         .as_table_mut()
-        .expect("properties is a table");
-    let prop_table = props[prop].as_table_mut().expect("property is a table");
+        .context("malformed .hyalo.toml: properties section is not a table")?;
+    let prop_table = props[prop]
+        .as_table_mut()
+        .context("malformed .hyalo.toml: property entry is not a table")?;
     prop_table["type"] = toml_edit::value("enum");
     let mut arr = toml_edit::Array::new();
     for v in values {
         arr.push(v.as_str());
     }
     prop_table["values"] = toml_edit::Item::Value(toml_edit::Value::Array(arr));
+    Ok(())
 }
 
 /// Coerce a raw default string to the JSON type implied by the property's
@@ -861,14 +965,14 @@ mod tests {
     #[test]
     fn show_type_not_found() {
         let schema = SchemaConfig::default();
-        let outcome = show_type("nonexistent", &schema);
+        let outcome = show_type("nonexistent", &schema, Format::Json);
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
     }
 
     #[test]
     fn show_type_found() {
         let schema = make_schema_with_type("note", &["title"]);
-        let outcome = show_type("note", &schema);
+        let outcome = show_type("note", &schema, Format::Json);
         match outcome {
             CommandOutcome::Success { output, .. } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -893,7 +997,7 @@ mod tests {
                 values: vec!["draft".to_owned(), "published".to_owned()],
             },
         );
-        let outcome = show_type("note", &schema);
+        let outcome = show_type("note", &schema, Format::Json);
         match outcome {
             CommandOutcome::Success { output, .. } => {
                 let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -984,6 +1088,7 @@ mod tests {
             &[],
             None,
             false,
+            Format::Json,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
@@ -1010,11 +1115,12 @@ mod tests {
             &[],
             None,
             false,
+            Format::Json,
         )
         .unwrap();
 
         // Now remove it — should succeed and update the same file.
-        let outcome = remove_type(dir, "note").unwrap();
+        let outcome = remove_type(dir, "note", Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
         let toml_path = dir.join(".hyalo.toml");
@@ -1022,6 +1128,59 @@ mod tests {
         assert!(
             !contents.contains("[schema.types.note]"),
             "type 'note' should have been removed"
+        );
+    }
+
+    // --- malformed .hyalo.toml error handling (no panics) ---
+
+    #[test]
+    fn remove_type_malformed_toml_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        // schema is a string instead of a table — should error, not panic
+        std::fs::write(tmp.path().join(".hyalo.toml"), "schema = \"not-a-table\"\n").unwrap();
+        let result = remove_type(tmp.path(), "iteration", Format::Json);
+        // Should succeed with UserError or Err, but NOT panic
+        match result {
+            Ok(CommandOutcome::UserError(msg)) => {
+                assert!(
+                    msg.contains("not found") || msg.contains("malformed"),
+                    "unexpected error: {msg}"
+                );
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                assert!(
+                    msg.contains("malformed") || msg.contains("not a table"),
+                    "unexpected error: {msg}"
+                );
+            }
+            other => panic!("expected error for malformed TOML, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_type_malformed_schema_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".hyalo.toml"),
+            "[schema]\ntypes = \"not-a-table\"\n",
+        )
+        .unwrap();
+        let result = set_type(
+            tmp.path(),
+            "iteration",
+            &["title".to_owned()],
+            &[],
+            &[],
+            &[],
+            None,
+            false,
+            Format::Json,
+        );
+        // Should return an error about malformed TOML, not panic
+        assert!(
+            result.is_err() || matches!(result, Ok(CommandOutcome::UserError(_))),
+            "expected error for malformed TOML"
         );
     }
 }
