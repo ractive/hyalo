@@ -80,10 +80,14 @@ pub fn links_fix(
     let case_mismatch_count = case_mismatches.len();
 
     if !dry_run {
-        apply_fixes(dir, &fix_report.fixes, site_prefix)?;
-        // Apply case-mismatch fixes (link-case-mismatch rule).
-        if !case_mismatches.is_empty() {
-            apply_fixes(dir, &case_mismatches, site_prefix)?;
+        // Merge broken-link fixes and case-mismatch fixes into a single batch
+        // so `apply_fixes` reads and rewrites each source file once — two
+        // separate passes over the same file would see the first pass's
+        // rewrites and could misbehave on overlapping edits.
+        let mut all_fixes = fix_report.fixes.clone();
+        all_fixes.extend(case_mismatches.iter().cloned());
+        if !all_fixes.is_empty() {
+            apply_fixes(dir, &all_fixes, site_prefix)?;
         }
     }
 

@@ -104,39 +104,58 @@ impl CaseInsensitiveIndex {
 /// prefer strict semantics as the safe default.
 pub fn probe_case_insensitive(dir: &Path) -> Result<bool> {
     use std::io::Write as _;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Generate a pseudo-random suffix using the current time to avoid
-    // collisions across concurrent calls or processes.
-    let suffix = {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ns = SystemTime::now()
+    // Try a handful of unique probe names. Include seconds, nanoseconds, PID,
+    // and attempt counter to minimize collisions across concurrent calls and
+    // processes. On each attempt, ensure neither the lowercase nor uppercase
+    // variant preexists — a stray preexisting uppercase file on a
+    // case-sensitive filesystem would otherwise cause a false positive.
+    for attempt in 0..16u32 {
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        format!("{ns:08x}")
-    };
+            .unwrap_or_default();
+        let suffix = format!(
+            "{:x}-{:08x}-{:x}-{:x}",
+            now.as_secs(),
+            now.subsec_nanos(),
+            std::process::id(),
+            attempt
+        );
 
-    let lower_name = format!(".hyalo-case-probe-{suffix}");
-    let upper_name = lower_name.to_ascii_uppercase();
+        let lower_name = format!(".hyalo-case-probe-{suffix}");
+        let upper_name = lower_name.to_ascii_uppercase();
 
-    let lower_path = dir.join(&lower_name);
-    let upper_path = dir.join(&upper_name);
+        let lower_path = dir.join(&lower_name);
+        let upper_path = dir.join(&upper_name);
 
-    // Create the lowercase file. If we can't write here, bail gracefully.
-    let Ok(mut file) = std::fs::File::create(&lower_path) else {
-        return Ok(false);
-    };
-    // Write a marker byte so the file is non-empty.
-    let _ = file.write_all(b"x");
-    drop(file);
+        if lower_path.exists() || upper_path.exists() {
+            continue;
+        }
 
-    // Now check whether the uppercase variant resolves to the same location.
-    let result = std::fs::metadata(&upper_path).is_ok();
+        // `create_new` fails if the file already exists, protecting against
+        // races with other processes that happen to pick the same suffix.
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lower_path)
+        else {
+            continue;
+        };
 
-    // Clean up — ignore errors; the file is tiny and harmless.
-    let _ = std::fs::remove_file(&lower_path);
+        let _ = file.write_all(b"x");
+        drop(file);
 
-    Ok(result)
+        let result = std::fs::metadata(&upper_path).is_ok();
+
+        // Clean up — ignore errors; the file is tiny and harmless.
+        let _ = std::fs::remove_file(&lower_path);
+
+        return Ok(result);
+    }
+
+    // Gave up after max attempts; prefer strict semantics.
+    Ok(false)
 }
 
 /// Resolve a `CaseInsensitiveMode` to a concrete `bool` given a directory.

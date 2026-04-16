@@ -104,11 +104,63 @@ pub struct FixReport {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Returns `true` when `a` and `b` are equal under ASCII case-folding but
-/// differ when compared literally.  Used to detect casing mismatches between
-/// a written link target and the canonical on-disk path.
-fn differs_only_in_ascii_case(a: &str, b: &str) -> bool {
-    a != b && a.eq_ignore_ascii_case(b)
+/// Classify a single link's resolution against the filesystem and an optional
+/// case-insensitive index.
+///
+/// Returns:
+/// - `Resolved(None)` — link resolves exactly and its on-disk casing matches
+///   the canonical form (or no index was supplied).
+/// - `Resolved(Some(canonical))` — link resolves exactly but the on-disk
+///   casing differs from the canonical form (case-insensitive filesystem
+///   papered over a mismatch); caller should record as a case-mismatch.
+/// - `CaseMismatch(canonical)` — exact resolution failed but the case index
+///   found a unique canonical path; caller should record as a case-mismatch.
+/// - `Broken` — nothing resolves.
+enum LinkResolution {
+    Resolved(Option<String>),
+    CaseMismatch(String),
+    Broken,
+}
+
+fn classify_link(
+    canonical_dir: &Path,
+    resolved_target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> LinkResolution {
+    let exact = resolve_target(canonical_dir, resolved_target, site_prefix, None);
+
+    if let Some(exact_str) = exact {
+        // Link resolves exactly. If we have a case index, also check whether the
+        // resolved path has incorrect casing compared to the canonical on-disk
+        // path. On case-insensitive filesystems, `exact` may contain the
+        // user-written casing rather than the canonical casing.
+        if let Some(idx) = case_index
+            && let Some(canonical_path) =
+                resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
+        {
+            let canonical_fwd = canonical_path.replace('\\', "/");
+            let exact_fwd = exact_str.replace('\\', "/");
+            if exact_fwd != canonical_fwd {
+                return LinkResolution::Resolved(Some(canonical_fwd));
+            }
+        }
+        return LinkResolution::Resolved(None);
+    }
+
+    // Exact resolution failed. If we have a case index, try the
+    // case-insensitive fallback. `resolve_target` already handles the `.md`
+    // extension fallback internally, so any successful indexed resolution
+    // here means the link is a case-mismatch (possibly combined with a
+    // stem/full extension style difference).
+    if let Some(idx) = case_index
+        && let Some(canonical_path) =
+            resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
+    {
+        return LinkResolution::CaseMismatch(canonical_path.replace('\\', "/"));
+    }
+
+    LinkResolution::Broken
 }
 
 // ---------------------------------------------------------------------------
@@ -164,22 +216,10 @@ pub(crate) fn detect_broken_links(
                 }
             };
 
-            // First try exact-match resolution (no case index).
-            if resolve_target(&canonical, &resolved_target, site_prefix, None).is_some() {
-                // Link resolves exactly — not broken.
-                continue;
-            }
-
-            // Exact resolution failed. If we have a case index, try the
-            // case-insensitive fallback.
-            if let Some(idx) = case_index
-                && let Some(canonical_path) =
-                    resolve_target(&canonical, &resolved_target, site_prefix, Some(idx))
-            {
-                let canonical_str = canonical_path.replace('\\', "/");
-                // The link resolves via case-insensitive fallback. Check
-                // whether the written target differs from the canonical path.
-                if differs_only_in_ascii_case(&resolved_target, &canonical_str) {
+            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+                LinkResolution::Resolved(None) => {}
+                LinkResolution::Resolved(Some(canonical_str))
+                | LinkResolution::CaseMismatch(canonical_str) => {
                     case_mismatches.push(FixPlan {
                         source: source_str.clone(),
                         line: *line,
@@ -188,15 +228,15 @@ pub(crate) fn detect_broken_links(
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
                     });
-                    continue;
+                }
+                LinkResolution::Broken => {
+                    broken.push(BrokenLinkInfo {
+                        source: source_str.clone(),
+                        line: *line,
+                        target: link.target.clone(),
+                    });
                 }
             }
-
-            broken.push(BrokenLinkInfo {
-                source: source_str.clone(),
-                line: *line,
-                target: link.target.clone(),
-            });
         }
     }
 
@@ -253,45 +293,10 @@ pub fn detect_broken_links_from_index(
                 }
             };
 
-            // Try exact-match resolution (no case index).
-            let exact_resolved = resolve_target(&canonical, &resolved_target, site_prefix, None);
-
-            if exact_resolved.is_some() {
-                // Link resolves exactly. If we have a case index, also check whether the
-                // resolved path has incorrect casing compared to the canonical on-disk path.
-                // On case-insensitive filesystems, `exact_resolved` may contain the
-                // user-written casing (e.g. "Iteration_Protocols.md") rather than the
-                // canonical casing ("iteration_protocols.md"). The case index knows the
-                // true canonical form.
-                if let Some(idx) = case_index
-                    && let Some(canonical_path) =
-                        resolve_target(&canonical, &resolved_target, site_prefix, Some(idx))
-                {
-                    let canonical_str = canonical_path.replace('\\', "/");
-                    let resolved_str = exact_resolved.as_deref().unwrap_or("").replace('\\', "/");
-                    if resolved_str != canonical_str {
-                        case_mismatches.push(FixPlan {
-                            source: entry.rel_path.clone(),
-                            line: *line,
-                            old_target: link.target.clone(),
-                            new_target: canonical_str,
-                            strategy: FixStrategy::LinkCaseMismatch,
-                            confidence: 1.0,
-                        });
-                        continue;
-                    }
-                }
-                continue;
-            }
-
-            // Exact resolution failed. If we have a case index, try the
-            // case-insensitive fallback.
-            if let Some(idx) = case_index
-                && let Some(canonical_path) =
-                    resolve_target(&canonical, &resolved_target, site_prefix, Some(idx))
-            {
-                let canonical_str = canonical_path.replace('\\', "/");
-                if differs_only_in_ascii_case(&resolved_target, &canonical_str) {
+            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+                LinkResolution::Resolved(None) => {}
+                LinkResolution::Resolved(Some(canonical_str))
+                | LinkResolution::CaseMismatch(canonical_str) => {
                     case_mismatches.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
@@ -300,15 +305,15 @@ pub fn detect_broken_links_from_index(
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
                     });
-                    continue;
+                }
+                LinkResolution::Broken => {
+                    broken.push(BrokenLinkInfo {
+                        source: entry.rel_path.clone(),
+                        line: *line,
+                        target: link.target.clone(),
+                    });
                 }
             }
-
-            broken.push(BrokenLinkInfo {
-                source: entry.rel_path.clone(),
-                line: *line,
-                target: link.target.clone(),
-            });
         }
     }
 

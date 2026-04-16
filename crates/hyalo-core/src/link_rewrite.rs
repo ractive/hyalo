@@ -380,11 +380,14 @@ fn plan_inbound_rewrites(
                         true
                     } else if let Some(idx) = case_index {
                         // Canonicalize the written target through the case index.
-                        // Wikilinks may be written without the `.md` extension, so
-                        // try both the literal target and its `.md`-appended form.
-                        let t_lower = t.to_ascii_lowercase();
-                        let canonical = idx.lookup_unique(&t_lower).or_else(|| {
-                            let with_md = format!("{t_lower}.md");
+                        // Normalize path separators to forward slashes first so
+                        // wikilinks written with backslashes (e.g. `[[Web\\Foo]]`)
+                        // can still match. Wikilinks may be written without the
+                        // `.md` extension, so try both the literal target and
+                        // its `.md`-appended form.
+                        let t_norm = t.replace('\\', "/").to_ascii_lowercase();
+                        let canonical = idx.lookup_unique(&t_norm).or_else(|| {
+                            let with_md = format!("{t_norm}.md");
                             idx.lookup_unique(&with_md)
                         });
                         canonical == Some(old_rel) || canonical == Some(old_stem)
@@ -404,8 +407,16 @@ fn plan_inbound_rewrites(
                     if norm == old_rel || norm == old_stem {
                         true
                     } else if let Some(idx) = case_index {
-                        // Try canonicalizing the normalized target through the index.
-                        let canonical = idx.lookup_unique(&norm.to_ascii_lowercase());
+                        // Try canonicalizing the normalized target through the
+                        // index. Markdown links may also be written without the
+                        // `.md` extension (e.g. `[x](Web/Foo)`), so try both the
+                        // literal and `.md`-appended forms — mirrors the wikilink
+                        // branch above.
+                        let norm_lower = norm.to_ascii_lowercase();
+                        let canonical = idx.lookup_unique(&norm_lower).or_else(|| {
+                            let with_md = format!("{norm_lower}.md");
+                            idx.lookup_unique(&with_md)
+                        });
                         canonical == Some(old_rel) || canonical == Some(old_stem)
                     } else {
                         false

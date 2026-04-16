@@ -26,10 +26,12 @@ pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 50;
 
 /// Build a [`CaseInsensitiveIndex`] from a full vault directory scan.
 ///
-/// Discovers all `.md` files under `dir` and inserts their vault-relative paths.
-/// This is always vault-wide — not scoped to any `--file` or `--glob` argument —
-/// because case-insensitive link resolution needs to find *any* file in the vault,
-/// even files not included in the current query scope.
+/// The scan is always vault-wide — not scoped to any `--file` or `--glob`
+/// argument — because case-insensitive link resolution must find *any* file
+/// in the vault, even files not included in the current query scope. A scoped
+/// `VaultIndex` (built by `collect_files` when `--file` is used) would omit
+/// the very link targets we need to resolve, so we re-walk from disk rather
+/// than reusing the command's `VaultIndex`.
 ///
 /// Errors during discovery are silently ignored (the index will just be less
 /// complete, which degrades gracefully to no case-insensitive fallback).
@@ -45,10 +47,9 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
     idx
 }
 
-/// Resolve whether case-insensitive mode is active and, if so, build the index
-/// from a full vault directory scan.
-///
-/// Returns `Some(index)` when enabled, `None` when disabled.
+/// Resolve whether case-insensitive mode is active and, if so, build the
+/// index from a full vault directory scan. Returns `Some(index)` when
+/// enabled, `None` when disabled.
 pub(crate) fn maybe_case_index(
     mode: CaseInsensitiveMode,
     dir: &std::path::Path,
