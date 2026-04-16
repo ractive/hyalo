@@ -467,6 +467,21 @@ impl SnapshotIndex {
     fn load_inner(bytes: &[u8], warn: bool) -> Option<Self> {
         match rmp_serde::from_slice::<SnapshotData>(bytes) {
             Ok(data) => {
+                // SEC-2 (defense-in-depth): reject snapshots with an implausible
+                // number of entries — a crafted MessagePack header claiming millions
+                // of entries can trigger large allocations even with file-size caps.
+                const MAX_ENTRIES: usize = 5_000_000;
+                if data.entries.len() > MAX_ENTRIES {
+                    if warn {
+                        eprintln!(
+                            "warning: index file contains {} entries (limit {}); falling back to disk scan",
+                            data.entries.len(),
+                            MAX_ENTRIES
+                        );
+                    }
+                    return None;
+                }
+
                 // SEC-1: Validate every rel_path before trusting snapshot data.
                 // Reject the entire snapshot if any path is unsafe — a crafted
                 // snapshot with path-traversal entries could escape the vault.
@@ -490,7 +505,12 @@ impl SnapshotIndex {
                     }
                     if std::path::Path::new(rel_path.as_str())
                         .components()
-                        .any(|c| matches!(c, std::path::Component::ParentDir))
+                        .any(|c| {
+                            matches!(
+                                c,
+                                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                            )
+                        })
                     {
                         if warn {
                             eprintln!(
@@ -612,7 +632,12 @@ const MAX_INDEX_FILE_SIZE: u64 = 512 * 1024 * 1024;
 /// when `warn` is `true`).
 /// Returns `Err` for hard I/O failures.
 fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
-    let meta = std::fs::metadata(path)
+    use std::io::Read as _;
+
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open index file: {}", path.display()))?;
+    let meta = file
+        .metadata()
         .with_context(|| format!("failed to stat index file: {}", path.display()))?;
     if meta.len() > MAX_INDEX_FILE_SIZE {
         if warn {
@@ -624,7 +649,12 @@ fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
         }
         return Ok(None);
     }
-    let bytes = std::fs::read(path)
+    // Size was already checked against MAX_INDEX_FILE_SIZE (512 MiB) which
+    // fits in usize on all supported targets (32-bit and above).
+    #[allow(clippy::cast_possible_truncation)]
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(MAX_INDEX_FILE_SIZE + 1)
+        .read_to_end(&mut bytes)
         .with_context(|| format!("failed to read index file: {}", path.display()))?;
     Ok(Some(bytes))
 }

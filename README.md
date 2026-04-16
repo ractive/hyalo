@@ -258,7 +258,7 @@ hyalo find '"retry backoff"'             # Phrase: exact consecutive match
 hyalo find "retry" --tag research        # combine with filters
 hyalo find "retry" --stemmer french      # French Snowball stemmer (full name)
 hyalo find "retry" --stemmer fr          # same, using ISO 639-1 code
-hyalo find "retry" --language de         # German stemmer (--language is an alias for --stemmer)
+hyalo find "retry" --language de         # German stemmer (--stemmer is an alias for --language)
 
 # Regex content search (case-insensitive by default, unranked)
 hyalo find -e "retry.*backoff"

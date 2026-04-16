@@ -207,7 +207,7 @@ pub(crate) fn set_type(
     {
         return Ok(CommandOutcome::UserError(format_error(
             format,
-            "no mutation flags provided — specify at least one of:              --required, --default, --property-type, --property-values, --filename-template",
+            "no mutation flags provided — specify at least one of: --required, --default, --property-type, --property-values, --filename-template",
             None,
             None,
             None,
