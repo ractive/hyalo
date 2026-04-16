@@ -2,7 +2,7 @@
 title: Iteration 118 — Split --index into boolean flag + --index-file path
 type: iteration
 date: 2026-04-15
-status: in-progress
+status: completed
 branch: iter-118/split-index-flag
 tags:
   - iteration
