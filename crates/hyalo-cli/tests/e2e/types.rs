@@ -444,6 +444,55 @@ fn types_set_creates_type_when_missing() {
     assert_eq!(set_json["results"]["action"], "created_and_updated");
 }
 
+#[test]
+fn types_set_enables_validate_on_write_when_schema_is_new() {
+    let tmp = setup_empty();
+
+    // Before types set, the TOML has no [schema] section.
+    let toml_before = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        !toml_before.contains("validate_on_write"),
+        "precondition: no validate_on_write before types set"
+    );
+
+    // Create the first type.
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "article", "--required", "title"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // validate_on_write should now be true in .hyalo.toml.
+    let toml_after = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        toml_after.contains("validate_on_write = true"),
+        "expected validate_on_write = true in .hyalo.toml, got:\n{toml_after}"
+    );
+
+    // Adding a second type should NOT duplicate the key.
+    let output2 = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "note", "--required", "title"])
+        .output()
+        .unwrap();
+    assert!(
+        output2.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output2.stderr)
+    );
+    let toml_final = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert_eq!(
+        toml_final.matches("validate_on_write").count(),
+        1,
+        "validate_on_write should appear exactly once, got:\n{toml_final}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // --format text rendering
 // ---------------------------------------------------------------------------
