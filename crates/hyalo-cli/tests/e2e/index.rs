@@ -370,7 +370,7 @@ fn summary_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", "summary", "--format", "json"])
+        .args(["summary", "--index", "--format", "json"])
         .output()
         .unwrap();
     assert!(
@@ -401,7 +401,7 @@ fn summary_with_index_file_count() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", "summary", "--format", "json"])
+        .args(["summary", "--index", "--format", "json"])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -429,7 +429,7 @@ fn tags_summary_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", "tags", "summary"])
+        .args(["tags", "summary", "--index"])
         .output()
         .unwrap();
     assert!(
@@ -484,7 +484,7 @@ fn properties_summary_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", "properties", "summary"])
+        .args(["properties", "summary", "--index"])
         .output()
         .unwrap();
     assert!(
@@ -527,7 +527,7 @@ fn backlinks_with_index_finds_wikilinks() {
     // gamma.md links to alpha.md via [[alpha]]
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", "backlinks", "--file", "alpha.md"])
+        .args(["backlinks", "--file", "alpha.md", "--index"])
         .output()
         .unwrap();
     assert!(
@@ -566,7 +566,7 @@ fn backlinks_with_index_matches_disk_scan() {
 
     let index_output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["--index", "backlinks", "--file", "beta.md"])
+        .args(["backlinks", "--file", "beta.md", "--index"])
         .output()
         .unwrap();
     assert!(index_output.status.success());
@@ -593,8 +593,8 @@ fn incompatible_index_falls_back_to_disk_scan() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg(format!("--index={}", garbage_path.display()))
         .arg("find")
+        .arg(format!("--index-file={}", garbage_path.display()))
         .output()
         .unwrap();
 
@@ -630,8 +630,8 @@ fn incompatible_index_falls_back_for_summary() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .arg(format!("--index={}", garbage_path.display()))
         .args(["summary", "--format", "json"])
+        .arg(format!("--index-file={}", garbage_path.display()))
         .output()
         .unwrap();
 
@@ -649,12 +649,30 @@ fn incompatible_index_falls_back_for_summary() {
 // Mutation commands with --index (index-aware mutations)
 // ---------------------------------------------------------------------------
 
-/// Helper: run a hyalo command with --index and assert success.
+/// Helper: run a hyalo command with --index-file and assert success.
+/// `args` must start with the subcommand name (e.g. `["set", "--property", ...]`).
+/// `--index-file=PATH` is inserted after the deepest subcommand token.
+/// For nested subcommands like `["tags", "rename", ...]`, it's inserted after `rename`.
 fn run_with_index(tmp: &TempDir, index_path: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    assert!(
+        !args.is_empty(),
+        "run_with_index requires at least a subcommand name in args"
+    );
     let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
-    cmd.arg(format!("--index={}", index_path.display()));
-    cmd.args(args);
+    // Use an explicit match on known nested command groups rather than a
+    // heuristic that would miscount positional arguments as subcommand tokens.
+    let subcmd_count = match args.first().copied() {
+        Some("tags" | "properties" | "links" | "task") if matches!(args.get(1), Some(next) if !next.starts_with('-')) => {
+            2
+        }
+        Some(_) => 1,
+        None => 0,
+    };
+    let (subcmds, rest) = args.split_at(subcmd_count);
+    cmd.args(subcmds);
+    cmd.arg(format!("--index-file={}", index_path.display()));
+    cmd.args(rest);
     let output = cmd.output().unwrap();
     assert!(
         output.status.success(),
@@ -1428,15 +1446,15 @@ fn explicit_index_path_with_equals_syntax() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
-    // Use --index=path (explicit, require_equals form)
-    let arg = format!("--index={}", index_path.display());
+    // Use --index-file=path (explicit path form)
+    let arg = format!("--index-file={}", index_path.display());
     let index_json = run_find(&tmp, &[&arg]);
     let disk_json = run_find(&tmp, &[]);
 
     assert_eq!(
         sorted_files(&disk_json),
         sorted_files(&index_json),
-        "--index=path should work with explicit equals syntax"
+        "--index-file=path should work with explicit equals syntax"
     );
 }
 
@@ -1480,5 +1498,255 @@ fn bare_index_works_from_different_cwd() {
     assert!(
         !files.is_empty(),
         "bare --index from different CWD should find files via <dir>/.hyalo-index"
+    );
+}
+
+/// --index-file with a relative path resolves against CWD, not vault dir.
+#[test]
+fn index_file_relative_path_resolves_against_cwd() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Create a subdirectory to serve as a different CWD.
+    let alt_cwd = tmp.path().join("subdir");
+    std::fs::create_dir(&alt_cwd).unwrap();
+
+    // Copy the index into the subdirectory.
+    let relative_name = "copied.idx";
+    std::fs::copy(&index_path, alt_cwd.join(relative_name)).unwrap();
+
+    // Run from alt_cwd with a relative --index-file path.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", &format!("--index-file={relative_name}")])
+        .current_dir(&alt_cwd)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "relative --index-file from different CWD should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        sorted_files(&json),
+        sorted_files(&run_find(&tmp, &[])),
+        "relative --index-file should resolve against CWD and find all files"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// New flag surface tests (iter-118)
+// ---------------------------------------------------------------------------
+
+/// --index-file PATH (space form) uses the given path.
+#[test]
+fn index_file_space_form_uses_given_path() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--index-file", index_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "--index-file PATH (space) should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        sorted_files(&json),
+        sorted_files(&run_find(&tmp, &[])),
+        "--index-file PATH should return the same files as a disk scan"
+    );
+}
+
+/// --index-file=PATH (equals form) uses the given path.
+#[test]
+fn index_file_equals_form_uses_given_path() {
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    let arg = format!("--index-file={}", index_path.display());
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", &arg])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "--index-file=PATH (equals) should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        sorted_files(&json),
+        sorted_files(&run_find(&tmp, &[])),
+        "--index-file=PATH should return the same files as a disk scan"
+    );
+}
+
+/// hyalo lint FILE --index should work: FILE is the positional target, index is active.
+#[test]
+fn lint_with_index_and_positional_file() {
+    let tmp = setup_vault();
+    create_default_index(&tmp);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["lint", "alpha.md", "--index"])
+        .output()
+        .unwrap();
+    // lint may exit 1 if violations found, but must not crash with a parse error.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("error: unexpected argument"),
+        "FILE arg must be recognised as positional; got stderr: {stderr}"
+    );
+    // stdout must be valid JSON or non-empty text
+    assert!(
+        !output.stdout.is_empty(),
+        "lint should produce output; stderr: {stderr}"
+    );
+}
+
+/// hyalo find --index=garbage should error cleanly (unexpected value on bool flag).
+#[test]
+fn index_bool_flag_rejects_value() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--index=garbage"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "--index=VALUE should be rejected by clap"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error"),
+        "expected an error message on stderr; got: {stderr}"
+    );
+}
+
+/// hyalo find --index-file (no PATH) should error cleanly (missing required value).
+#[test]
+fn index_file_flag_requires_value() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--index-file"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "--index-file without PATH should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error"),
+        "expected an error message on stderr; got: {stderr}"
+    );
+}
+
+/// --index --index-file=PATH: --index-file wins.
+#[test]
+fn index_file_wins_over_bare_index() {
+    let tmp = setup_vault();
+    let default_index_path = create_default_index(&tmp);
+
+    // Add a file *after* the default index was built so the two indices diverge.
+    std::fs::write(
+        tmp.path().join("extra.md"),
+        "---\ntitle: Extra\n---\nExtra file added after default index.\n",
+    )
+    .unwrap();
+
+    // Build a custom index that includes the new file.
+    let custom_index_path = tmp.path().join("custom.idx");
+    let create_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "create-index",
+            "--output",
+            custom_index_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(create_out.status.success());
+
+    // --index --index-file=custom.idx: custom.idx should be used (both flags present).
+    let arg = format!("--index-file={}", custom_index_path.display());
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--index", &arg])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "--index --index-file should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files = sorted_files(&json);
+    // Custom index has the extra file; default index does not.
+    assert!(
+        files.contains(&"extra.md".to_string()),
+        "custom index should include extra.md, proving --index-file wins; got: {files:?}"
+    );
+    // Verify the default index still exists.
+    assert!(default_index_path.exists());
+}
+
+/// create-index --index should error: --index is not a flag on create-index.
+#[test]
+fn create_index_rejects_index_flag() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--index"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "create-index --index should fail (flag not defined on that subcommand)"
+    );
+}
+
+/// drop-index --index-file=foo should error: --index-file is not a flag on drop-index.
+#[test]
+fn drop_index_rejects_index_file_flag() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["drop-index", "--index-file=foo"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "drop-index --index-file should fail (flag not defined on that subcommand)"
+    );
+}
+
+/// init --index should error: --index is not a flag on init.
+#[test]
+fn init_rejects_index_flag() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["init", "--index"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "init --index should fail (flag not defined on that subcommand)"
     );
 }

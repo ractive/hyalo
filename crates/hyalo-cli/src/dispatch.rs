@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::cli::args::{
-    Commands, FindFilters, LinksAction, PropertiesAction, TagsAction, TaskAction, TypesAction,
-    ViewsAction, resolve_single_file,
+    Commands, FindFilters, IndexFlags, LinksAction, PropertiesAction, TagsAction, TaskAction,
+    TypesAction, ViewsAction, resolve_single_file,
 };
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
@@ -166,6 +166,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             view: _, // resolved before dispatch
             filters: mut filters_raw,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             // Merge positional files into filters (clap prevents positional+--file
             // and positional+--glob at parse time; a view may have set glob though).
@@ -354,6 +355,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             section,
             lines,
             frontmatter,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             let file = match resolve_single_file(file_positional, file) {
                 Ok(f) => f,
@@ -373,11 +375,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let action = action.unwrap_or(PropertiesAction::Summary {
                 glob: vec![],
                 limit: None,
+                index_flags: IndexFlags::default(),
             });
             match action {
                 PropertiesAction::Summary {
                     ref glob,
                     limit: cli_limit,
+                    index_flags: _, // consumed in run.rs before dispatch
                 } => match resolve_index(
                     snapshot_index.as_ref(),
                     dir,
@@ -433,7 +437,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),
                 },
-                PropertiesAction::Rename { from, to, glob } => properties::properties_rename(
+                PropertiesAction::Rename {
+                    from,
+                    to,
+                    glob,
+                    index_flags: _, // consumed in run.rs before dispatch
+                } => properties::properties_rename(
                     dir,
                     &from,
                     &to,
@@ -448,11 +457,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let action = action.unwrap_or(TagsAction::Summary {
                 glob: vec![],
                 limit: None,
+                index_flags: IndexFlags::default(),
             });
             match action {
                 TagsAction::Summary {
                     ref glob,
                     limit: cli_limit,
+                    index_flags: _, // consumed in run.rs before dispatch
                 } => match resolve_index(
                     snapshot_index.as_ref(),
                     dir,
@@ -508,7 +519,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),
                 },
-                TagsAction::Rename { from, to, glob } => tag_commands::tags_rename(
+                TagsAction::Rename {
+                    from,
+                    to,
+                    glob,
+                    index_flags: _, // consumed in run.rs before dispatch
+                } => tag_commands::tags_rename(
                     dir,
                     &from,
                     &to,
@@ -526,6 +542,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 line,
                 section,
                 all,
+                index_flags: _, // consumed in run.rs before dispatch
             } => {
                 let file = match resolve_single_file(file_positional, file) {
                     Ok(f) => f,
@@ -547,6 +564,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 section,
                 all,
                 dry_run,
+                index_flags: _, // consumed in run.rs before dispatch
             } => {
                 let file = match resolve_single_file(file_positional, file) {
                     Ok(f) => f,
@@ -571,6 +589,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 section,
                 all,
                 status,
+                index_flags: _, // consumed in run.rs before dispatch
             } => {
                 let file = match resolve_single_file(file_positional, file) {
                     Ok(f) => f,
@@ -608,6 +627,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             glob,
             recent,
             depth,
+            index_flags: _, // consumed in run.rs before dispatch
         } => match resolve_index(
             snapshot_index.as_ref(),
             dir,
@@ -649,6 +669,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             where_tags,
             dry_run,
             validate,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             if !file_positional.is_empty() {
                 file = file_positional;
@@ -685,6 +706,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             where_properties,
             where_tags,
             dry_run,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             if !file_positional.is_empty() {
                 file = file_positional;
@@ -718,6 +740,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             where_tags,
             dry_run,
             validate,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             if !file_positional.is_empty() {
                 file = file_positional;
@@ -748,6 +771,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             file,
             limit: cli_limit,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             let file = match resolve_single_file(file_positional, file) {
                 Ok(f) => f,
@@ -783,6 +807,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file,
             to,
             dry_run,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             let file = match resolve_single_file(file_positional, file) {
                 Ok(f) => f,
@@ -826,6 +851,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 threshold,
                 glob,
                 ignore_target,
+                index_flags: _, // consumed in run.rs before dispatch
             } => match resolve_index(
                 snapshot_index.as_ref(),
                 dir,
@@ -866,6 +892,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             fix,
             dry_run,
             limit: cli_limit,
+            index_flags: _, // consumed in run.rs before dispatch
         } => {
             // Resolve --type to a glob pattern from its filename_template.
             let type_glob: Option<String> = if let Some(type_name) = lint_type {

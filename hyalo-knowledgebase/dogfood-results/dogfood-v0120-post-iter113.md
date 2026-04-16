@@ -137,3 +137,5 @@ argument for other commands to *use* a pre-built index. The dogfood report used 
 | UX-4 | Working | `task toggle --dry-run` |
 
 All critical bugs from iter-113 have been addressed in iter-113b.
+
+**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

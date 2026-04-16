@@ -237,3 +237,5 @@ All issues resolved in [[iterations/iteration-115-dogfood-v0120-iter114-followup
 - **UX-4**: `hyalo properties <typo>` hints at `properties summary` / `properties rename`.
 - **UX-5**: `[lint] ignore = ["path/glob"]` in `.hyalo.toml` skips matched files from lint output
   and suppresses their parse-error warnings in read-only commands.
+
+**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

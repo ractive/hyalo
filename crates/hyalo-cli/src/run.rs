@@ -2,7 +2,7 @@ use std::process;
 
 use clap::{CommandFactory, FromArgMatches};
 
-use crate::cli::args::{Cli, Commands, FindFilters};
+use crate::cli::args::{Cli, Commands, FindFilters, IndexFlags};
 use crate::cli::help::{filter_examples, filter_long_help};
 use crate::commands::init as init_commands;
 use crate::dispatch::{CommandContext, dispatch};
@@ -11,6 +11,72 @@ use crate::hints::{CommonHintFlags, HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
 use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
 use hyalo_core::index::SnapshotIndex;
+
+/// Extract the effective index path from whichever subcommand is active.
+///
+/// Walks the command tree and retrieves `IndexFlags` from the matching arm,
+/// then delegates to `IndexFlags::effective_index_path`.
+/// Relative `--index-file` paths are resolved against the current working directory.
+/// Returns `None` for commands that do not carry `IndexFlags`.
+fn effective_index_path_for(
+    cmd: &Commands,
+    vault_dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    use crate::cli::args::{LinksAction, PropertiesAction, TagsAction, TaskAction};
+
+    let flags: Option<&IndexFlags> = match cmd {
+        Commands::Find { index_flags, .. }
+        | Commands::Summary { index_flags, .. }
+        | Commands::Backlinks { index_flags, .. }
+        | Commands::Set { index_flags, .. }
+        | Commands::Remove { index_flags, .. }
+        | Commands::Append { index_flags, .. }
+        | Commands::Mv { index_flags, .. }
+        | Commands::Read { index_flags, .. }
+        | Commands::Lint { index_flags, .. } => Some(index_flags),
+        Commands::Tags { action } => match action {
+            Some(
+                TagsAction::Summary { index_flags, .. } | TagsAction::Rename { index_flags, .. },
+            ) => Some(index_flags),
+            None => None,
+        },
+        Commands::Properties { action } => match action {
+            Some(
+                PropertiesAction::Summary { index_flags, .. }
+                | PropertiesAction::Rename { index_flags, .. },
+            ) => Some(index_flags),
+            None => None,
+        },
+        Commands::Links { action } => match action {
+            LinksAction::Fix { index_flags, .. } => Some(index_flags),
+        },
+        Commands::Task { action } => match action {
+            TaskAction::Read { index_flags, .. }
+            | TaskAction::Toggle { index_flags, .. }
+            | TaskAction::Set { index_flags, .. } => Some(index_flags),
+        },
+        Commands::CreateIndex { .. }
+        | Commands::DropIndex { .. }
+        | Commands::Init { .. }
+        | Commands::Deinit
+        | Commands::Completion { .. }
+        | Commands::Views { .. }
+        | Commands::Types { .. } => None,
+    };
+
+    let raw = flags?.effective_index_path(vault_dir)?;
+    // Relative --index-file paths are resolved against CWD.
+    // Bare --index already returns an absolute-or-relative-to-vault path from
+    // effective_index_path(), so only resolve when the path is still relative
+    // and it came from --index-file (not bare --index).
+    let resolved = if raw.is_relative() && flags.and_then(|f| f.index_file.as_ref()).is_some() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        cwd.join(&raw)
+    } else {
+        raw
+    };
+    Some(resolved)
+}
 
 /// Derive the task selector string for hint context.
 fn task_selector(line: &[usize], section: Option<&String>, all: bool) -> Option<String> {
@@ -441,7 +507,7 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Properties {
-                action: Some(crate::cli::args::PropertiesAction::Summary { glob, limit }),
+                action: Some(crate::cli::args::PropertiesAction::Summary { glob, limit, .. }),
             } => {
                 let mut ctx = HintContext::from_common(HintSource::PropertiesSummary, &common);
                 ctx.glob.clone_from(glob);
@@ -449,7 +515,7 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Tags {
-                action: Some(crate::cli::args::TagsAction::Summary { glob, limit }),
+                action: Some(crate::cli::args::TagsAction::Summary { glob, limit, .. }),
             } => {
                 let mut ctx = HintContext::from_common(HintSource::TagsSummary, &common);
                 ctx.glob.clone_from(glob);
@@ -478,6 +544,7 @@ fn run_inner() -> Result<(), AppError> {
                         sections,
                         ..
                     },
+                ..
             } => {
                 // Merge positional files for hint context (view merging happens later)
                 let file = if file_positional.is_empty() {
@@ -570,6 +637,7 @@ fn run_inner() -> Result<(), AppError> {
                 file_positional,
                 file,
                 limit,
+                ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Backlinks, &common);
                 if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
@@ -600,6 +668,7 @@ fn run_inner() -> Result<(), AppError> {
                         section,
                         all,
                         dry_run: _,
+                        ..
                     } => (
                         HintSource::TaskToggle,
                         file_positional,
@@ -625,6 +694,7 @@ fn run_inner() -> Result<(), AppError> {
                         line,
                         section,
                         all,
+                        ..
                     } => (
                         HintSource::TaskRead,
                         file_positional,
@@ -663,6 +733,7 @@ fn run_inner() -> Result<(), AppError> {
                 fix: _,
                 dry_run,
                 limit,
+                ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Lint, &common);
                 ctx.glob.clone_from(glob);
@@ -699,102 +770,36 @@ fn run_inner() -> Result<(), AppError> {
         None
     };
 
-    // Detect whether --index was given with an explicit path value.
-    // When the user writes `--index=PATH`, `require_equals = true` means only
-    // `--index=PATH` form is valid. The default_missing_value is ".hyalo-index".
-    // So if cli.index == Some(".hyalo-index") we can't easily tell apart
-    // `--index` (bare) from `--index=.hyalo-index` (explicit). To distinguish,
-    // we pre-scan argv for `--index=` prefix.
-    let index_has_explicit_path = raw_args
-        .iter()
-        .any(|a| a.starts_with("--index=") && a != "--index=");
+    // Extract the effective index path from the subcommand's IndexFlags.
+    // --index-file PATH wins; bare --index resolves to vault_dir/.hyalo-index.
+    // Relative --index-file paths are resolved against CWD (caller convention).
+    let index_path_buf: Option<std::path::PathBuf> = effective_index_path_for(&cli.command, &dir);
 
-    // Load snapshot index if --index is provided.
-    // Read-only commands use it to skip disk scans. Mutation commands use it to
-    // keep the index up-to-date after each file write (they still read/write
-    // individual files on disk, but patch the index entry in-place).
-    //
-    // Resolution rules:
-    // - Bare `--index` (no explicit path) → resolve against vault dir (so
-    //   `.hyalo-index` in the vault is found from any CWD).
-    // - `--index=PATH` (explicit path) → resolve relative paths against CWD
-    //   (POSIX convention; absolute paths are used as-is).
-    if let Some(ref p) = cli.index
-        && p.is_relative()
-    {
-        if index_has_explicit_path {
-            // Explicit path: resolve against CWD
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            cli.index = Some(cwd.join(p));
-        } else {
-            // Bare --index: resolve against vault dir
-            cli.index = Some(dir.join(p));
-        }
-    }
-
-    // Warn when `--index` (bare, valueless) is also present and the first
-    // positional argument to `find` looks like a file path or index file.
-    // This means the user probably wrote `--index PATH query` thinking PATH
-    // was consumed by --index, but it was actually the query pattern.
-    if !index_has_explicit_path
-        && cli.index.is_some()
-        && let Commands::Find {
-            ref pattern,
-            ref file_positional,
-            ..
-        } = cli.command
-    {
-        let query_candidate = pattern
-            .as_deref()
-            .or_else(|| file_positional.first().map(String::as_str));
-        if let Some(q) = query_candidate {
-            let looks_like_index = q.ends_with(".hyalo-index") || std::path::Path::new(q).exists();
-            if looks_like_index {
-                crate::warn::warn(
-                    "--index PATH (space-separated) passes PATH as the search query, \
-                     not as an index file; use --index=PATH (with =) to specify an index file",
-                );
-            }
-        }
-    }
-    let uses_index = !matches!(
-        &cli.command,
-        Commands::Init { .. }
-            | Commands::CreateIndex { .. }
-            | Commands::DropIndex { .. }
-            | Commands::Read { .. }
-            | Commands::Views { .. }
-            | Commands::Lint { .. }
-    );
-    let mut snapshot_index: Option<SnapshotIndex> = if uses_index {
-        if let Some(ref index_path) = cli.index {
-            match SnapshotIndex::load(index_path) {
-                Ok(Some(idx)) => {
-                    // Warn when the snapshot was built for a different vault or
-                    // site-prefix — the index data may not match the current run.
-                    let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-                    let vault_dir_str = canonical_dir.to_string_lossy();
-                    if idx.validate(&vault_dir_str, site_prefix) {
-                        Some(idx)
-                    } else {
-                        let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
-                        crate::warn::warn(format!(
-                            "index was built for vault '{hdr_vault}' (prefix {hdr_prefix:?}) but current \
-                             vault is '{vault_dir_str}' (prefix {site_prefix:?}); falling back to disk scan",
-                        ));
-                        None
-                    }
-                }
-                Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
-                Err(e) => {
+    let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {
+        match SnapshotIndex::load(p) {
+            Ok(Some(idx)) => {
+                // Warn when the snapshot was built for a different vault or
+                // site-prefix — the index data may not match the current run.
+                let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+                let vault_dir_str = canonical_dir.to_string_lossy();
+                if idx.validate(&vault_dir_str, site_prefix) {
+                    Some(idx)
+                } else {
+                    let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                     crate::warn::warn(format!(
-                        "failed to load index: {e}; falling back to disk scan"
+                        "index was built for vault '{hdr_vault}' (prefix {hdr_prefix:?}) but current \
+                         vault is '{vault_dir_str}' (prefix {site_prefix:?}); falling back to disk scan",
                     ));
                     None
                 }
             }
-        } else {
-            None
+            Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
+            Err(e) => {
+                crate::warn::warn(format!(
+                    "failed to load index: {e}; falling back to disk scan"
+                ));
+                None
+            }
         }
     } else {
         None
@@ -821,7 +826,7 @@ fn run_inner() -> Result<(), AppError> {
         effective_format,
         user_format: format,
         snapshot_index: &mut snapshot_index,
-        index_path: cli.index.as_deref(),
+        index_path: index_path_buf.as_deref(),
         config_language: config_language_owned.as_deref(),
         frontmatter_link_props: frontmatter_link_props_owned.as_deref(),
         schema: &schema,

@@ -165,3 +165,5 @@ silence the known case without hiding genuine new breakage.
 - [x] `hyalo lint --count` returns an integer
 - [x] All tests pass: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
 - [x] README / CLAUDE.md / skill templates updated with any new flags
+
+**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

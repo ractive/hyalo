@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::output::Format;
 
@@ -25,6 +25,56 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
         Err(format!(
             "threshold must be between 0.0 and 1.0 (inclusive), got {v}"
         ))
+    }
+}
+
+/// Index flags, flattened into subcommands that can consume a snapshot index.
+#[derive(Args, Debug, Default, Clone)]
+pub(crate) struct IndexFlags {
+    /// Use the snapshot index at `.hyalo-index` in the vault directory.
+    ///
+    /// Read-only commands (find, summary, tags summary, properties summary,
+    /// backlinks) skip the disk scan entirely when the index is present.
+    ///
+    /// Mutation commands (set, remove, append, task, mv, tags rename,
+    /// properties rename, links fix) still read/write individual files on disk
+    /// but also patch the index entry in-place after each mutation — keeping
+    /// the index current for subsequent queries.
+    ///
+    /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+    /// falls back to a full disk scan automatically.
+    #[arg(long)]
+    pub index: bool,
+
+    /// Use the snapshot index at PATH instead of the default `.hyalo-index`.
+    ///
+    /// Implies `--index`. Relative paths are resolved against the current
+    /// working directory (not the vault dir). Absolute paths are used as-is.
+    ///
+    /// Read-only commands skip the disk scan entirely. Mutation commands
+    /// patch the index in-place after each write — see `--index` for details.
+    ///
+    /// If the index file is incompatible hyalo falls back to a disk scan.
+    #[arg(long, value_name = "PATH")]
+    pub index_file: Option<PathBuf>,
+}
+
+impl IndexFlags {
+    /// Return the effective index path given the vault directory.
+    ///
+    /// - `--index-file PATH` wins; relative paths are returned as-is
+    ///   (caller resolves against CWD).
+    /// - Bare `--index` returns `vault_dir/.hyalo-index` (relative to vault,
+    ///   not CWD; caller should not CWD-resolve this).
+    /// - Neither flag → `None`.
+    pub(crate) fn effective_index_path(&self, vault_dir: &Path) -> Option<PathBuf> {
+        if let Some(ref p) = self.index_file {
+            Some(p.clone())
+        } else if self.index {
+            Some(vault_dir.join(".hyalo-index"))
+        } else {
+            None
+        }
     }
 }
 
@@ -131,30 +181,6 @@ pub(crate) struct Cli {
     /// Precedence: --site-prefix flag > .hyalo.toml > auto-derived from --dir.
     #[arg(long, global = true, value_name = "PREFIX")]
     pub site_prefix: Option<String>,
-
-    /// Use a pre-built snapshot index instead of scanning files from disk.
-    ///
-    /// Bare `--index` (no value) uses `.hyalo-index` in the vault directory.
-    /// `--index=PATH` (with `=`) resolves a relative PATH against the current
-    /// working directory, not the vault dir. Absolute paths are used as-is.
-    ///
-    /// Note: `--index PATH` (space-separated) passes PATH as the query pattern,
-    /// not the index file. Always use `--index=PATH` when specifying a file.
-    ///
-    /// Read-only commands (find, summary, tags summary, properties summary,
-    /// backlinks) use the index to skip disk scans entirely.
-    ///
-    /// Mutation commands (set, remove, append, task, mv, tags rename,
-    /// properties rename) still read and write individual files on disk,
-    /// but when --index is provided they also update the index entry
-    /// in-place after each mutation and save it back — keeping the index
-    /// current for subsequent queries. This is safe as long as no external
-    /// tool modifies files in the vault while the index is active.
-    ///
-    /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
-    /// falls back to a full disk scan automatically.
-    #[arg(long, global = true, value_name = "PATH", num_args = 0..=1, default_missing_value = ".hyalo-index", require_equals = true)]
-    pub index: Option<PathBuf>,
 
     /// Suppress all warnings printed to stderr.
     ///
@@ -367,6 +393,8 @@ pub(crate) enum Commands {
         view: Option<String>,
         #[command(flatten)]
         filters: FindFilters,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(
@@ -397,6 +425,10 @@ pub(crate) enum Commands {
         /// Include the YAML frontmatter in output
         #[arg(long)]
         frontmatter: bool,
+        // TODO: Read doesn't use the snapshot index yet; consider removing
+        // IndexFlags or wiring it in for file resolution.
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Property operations: summary or bulk rename
     #[command(long_about = "Property operations across matched files.\n\n\
@@ -452,6 +484,8 @@ pub(crate) enum Commands {
         /// Limit directory listing depth (0 = root only; stats are always full)
         #[arg(long)]
         depth: Option<usize>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// List all files that link to a given file (read-only)
     #[command(
@@ -473,6 +507,8 @@ pub(crate) enum Commands {
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Move/rename a file and update all inbound and outbound links
     #[command(
@@ -498,6 +534,8 @@ pub(crate) enum Commands {
         /// Preview changes without modifying any files
         #[arg(long)]
         dry_run: bool,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Set (create or overwrite) frontmatter properties and/or add tags across file(s)
     #[command(
@@ -553,6 +591,8 @@ Repeatable (AND).\n\
         /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Remove frontmatter properties and/or tags from file(s)
     #[command(
@@ -603,6 +643,8 @@ Repeatable (AND).\n\
         /// Preview changes without modifying any files
         #[arg(long)]
         dry_run: bool,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Initialize hyalo configuration and optional tool integrations
     #[command(
@@ -629,7 +671,7 @@ Repeatable (AND).\n\
         long_about = "Scan the vault and write a binary snapshot index to disk.\n\n\
             The index captures a point-in-time snapshot of all vault metadata.\n\
             Delete it after use via `hyalo drop-index`.\n\n\
-            The index file can be passed to any command via `--index <PATH>`.\n\
+            The index file can be passed to any supported command via `--index-file <PATH>`.\n\
             Read-only commands skip the disk scan entirely. Mutation commands\n\
             (set, remove, append, task, mv, tags rename, properties rename) still\n\
             read/write files on disk but also patch the index in-place after each\n\
@@ -715,6 +757,8 @@ Repeatable (AND).\n\
         /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Manage saved views (named find filter sets stored in .hyalo.toml)
     #[command(
@@ -812,6 +856,8 @@ Repeatable (AND).\n\
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
@@ -965,6 +1011,8 @@ pub(crate) enum LinksAction {
         /// Useful for skipping Hugo template links, external paths, etc.
         #[arg(long)]
         ignore_target: Vec<String>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
 }
 
@@ -998,6 +1046,8 @@ pub(crate) enum TaskAction {
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
         all: bool,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
     #[command(
@@ -1032,6 +1082,8 @@ pub(crate) enum TaskAction {
         /// Preview the toggle result without writing the file
         #[arg(long)]
         dry_run: bool,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Set a custom single-character status on one or more tasks
     #[command(
@@ -1068,6 +1120,8 @@ pub(crate) enum TaskAction {
         /// Single character to set as the task status (e.g. '?', '-', '!')
         #[arg(short, long)]
         status: String,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
 }
 
@@ -1089,6 +1143,8 @@ pub(crate) enum PropertiesAction {
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Rename a property key across all matched files
     #[command(
@@ -1106,6 +1162,8 @@ pub(crate) enum PropertiesAction {
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
 }
 
@@ -1125,6 +1183,8 @@ pub(crate) enum TagsAction {
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
@@ -1140,5 +1200,7 @@ pub(crate) enum TagsAction {
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
 }
