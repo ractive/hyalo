@@ -22,7 +22,9 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
 use crate::link_graph::{LinkGraph, normalize_target, relative_path_between, strip_site_prefix};
 use crate::links::{LinkKind, extract_link_spans_with_original};
-use crate::scanner::{FenceTracker, is_comment_fence, strip_inline_code, strip_inline_comments};
+use crate::scanner::{
+    FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
+};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -53,6 +55,10 @@ pub struct RewritePlan {
     pub replacements: Vec<Replacement>,
     /// Full file content with all replacements already applied.
     pub rewritten_content: String,
+    /// mtime of the file when the plan was built, used to detect concurrent
+    /// modifications before writing. `None` for the moved file's outbound plan
+    /// (which is written to a new path after `fs::rename` and needs no check).
+    pub mtime: Option<std::time::SystemTime>,
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +128,19 @@ pub fn plan_mv(
     for source_rel in by_source.keys() {
         let abs_path = dir.join(source_rel);
         let source_rel_str = source_rel.to_string_lossy().replace('\\', "/");
+        let meta = std::fs::metadata(&abs_path)
+            .with_context(|| format!("failed to stat {}", abs_path.display()))?;
+        let file_size = meta.len();
+        let file_mtime = meta.modified().ok();
+        if file_size > MAX_FILE_SIZE {
+            eprintln!(
+                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+                abs_path.display(),
+                file_size / (1024 * 1024),
+                MAX_FILE_SIZE / (1024 * 1024)
+            );
+            continue;
+        }
         let content = std::fs::read_to_string(&abs_path)
             .with_context(|| format!("reading {}", abs_path.display()))?;
 
@@ -145,6 +164,7 @@ pub fn plan_mv(
                     rel_path: source_rel_str,
                     replacements,
                     rewritten_content,
+                    mtime: file_mtime,
                 },
             );
         }
@@ -156,6 +176,18 @@ pub fn plan_mv(
     // even when its directory didn't change (NEW-BUG-2). When the directory
     // does change, relative links to other files are also rebased here.
     let old_abs = dir.join(old_rel);
+    let old_file_size = std::fs::metadata(&old_abs)
+        .with_context(|| format!("failed to stat {}", old_abs.display()))?
+        .len();
+    if old_file_size > MAX_FILE_SIZE {
+        eprintln!(
+            "warning: skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
+            old_abs.display(),
+            old_file_size / (1024 * 1024),
+            MAX_FILE_SIZE / (1024 * 1024)
+        );
+        return Ok(plans.into_values().collect());
+    }
     let content = std::fs::read_to_string(&old_abs)
         .with_context(|| format!("reading {}", old_abs.display()))?;
 
@@ -173,6 +205,9 @@ pub fn plan_mv(
             existing.rel_path = new_rel.to_string();
             existing.replacements.extend(outbound_replacements);
             existing.rewritten_content = apply_replacements(&content, &existing.replacements);
+            // This file is being moved; it will be written to a new path after
+            // fs::rename, so the previously captured inbound mtime no longer applies.
+            existing.mtime = None;
         } else {
             let rewritten_content = apply_replacements(&content, &outbound_replacements);
             plans.insert(
@@ -182,6 +217,9 @@ pub fn plan_mv(
                     rel_path: new_rel.to_string(),
                     replacements: outbound_replacements,
                     rewritten_content,
+                    // The moved file is written to a new path after fs::rename;
+                    // no prior mtime to check against.
+                    mtime: None,
                 },
             );
         }
@@ -291,6 +329,12 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
             "refusing to write outside vault: {}",
             plan.path.display()
         );
+
+        // Detect concurrent modification: if the file was changed between
+        // plan and execute, abort to avoid silently clobbering the new content.
+        if let Some(expected_mtime) = plan.mtime {
+            crate::frontmatter::check_mtime(&plan.path, expected_mtime)?;
+        }
 
         crate::fs_util::atomic_write(&plan.path, plan.rewritten_content.as_bytes())
             .with_context(|| format!("writing {}", plan.path.display()))?;
@@ -1294,6 +1338,7 @@ mod tests {
             rel_path: "escaped.md".to_string(),
             replacements: vec![],
             rewritten_content: "malicious\n".to_string(),
+            mtime: None,
         };
 
         let result = execute_plans(vault.path(), &[bad_plan]);

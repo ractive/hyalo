@@ -467,10 +467,16 @@ impl SnapshotIndex {
     fn load_inner(bytes: &[u8], warn: bool) -> Option<Self> {
         match rmp_serde::from_slice::<SnapshotData>(bytes) {
             Ok(data) => {
+                // Limits used by the SEC-2 and SEC-3 defense-in-depth checks below.
+                // All consts are hoisted to the top of the arm so they appear before
+                // any statements (clippy::items_after_statements).
+                const MAX_ENTRIES: usize = 5_000_000;
+                const MAX_GRAPH_EDGES: usize = 50_000_000;
+                const MAX_BM25_POSTINGS: usize = 50_000_000;
+
                 // SEC-2 (defense-in-depth): reject snapshots with an implausible
                 // number of entries — a crafted MessagePack header claiming millions
                 // of entries can trigger large allocations even with file-size caps.
-                const MAX_ENTRIES: usize = 5_000_000;
                 if data.entries.len() > MAX_ENTRIES {
                     if warn {
                         eprintln!(
@@ -519,6 +525,48 @@ impl SnapshotIndex {
                         }
                         return None;
                     }
+                }
+
+                // SEC-3 (defense-in-depth): reject snapshots whose link graph or
+                // BM25 index would expand to an implausibly large in-memory
+                // structure.  A crafted snapshot could claim a plausible number
+                // of top-level keys while hiding millions of per-key entries,
+                // causing allocations far exceeding the file size cap.
+                let edge_count = data.graph.total_edges();
+                if edge_count > MAX_GRAPH_EDGES {
+                    if warn {
+                        eprintln!(
+                            "warning: index file contains too many graph edges ({edge_count}); falling back to disk scan"
+                        );
+                    }
+                    return None;
+                }
+
+                if let Some(ref bm25) = data.bm25_index {
+                    let posting_count = bm25.total_postings();
+                    if posting_count > MAX_BM25_POSTINGS {
+                        if warn {
+                            eprintln!(
+                                "warning: index file contains too many BM25 postings ({posting_count}); falling back to disk scan"
+                            );
+                        }
+                        return None;
+                    }
+                }
+
+                // MED-1: Validate BM25 doc_id bounds before the index is used.
+                // A crafted snapshot can embed posting list entries whose doc_id
+                // values exceed doc_paths / doc_lengths, causing an out-of-bounds
+                // panic inside score(). Reject the entire snapshot if invalid.
+                if let Some(ref bm25) = data.bm25_index
+                    && !bm25.validate_doc_ids()
+                {
+                    if warn {
+                        eprintln!(
+                            "warning: index file contains out-of-bounds BM25 doc_id; falling back to disk scan"
+                        );
+                    }
+                    return None;
                 }
 
                 // Entries are stored in sorted order (ScannedIndex::build sorts
@@ -1518,6 +1566,109 @@ Content.
         assert!(
             SnapshotIndex::load_inner(&bytes, false).is_none(),
             "snapshot with null-byte path must be rejected"
+        );
+    }
+
+    #[test]
+    fn load_inner_rejects_bm25_out_of_bounds_doc_id() {
+        use crate::bm25::{Bm25InvertedIndex, Posting};
+        use std::collections::HashMap;
+
+        // Build a BM25 index where the posting list references doc_id 999
+        // but doc_paths only has 1 entry — this should trigger MED-1 rejection.
+        let mut postings: HashMap<String, Vec<Posting>> = HashMap::new();
+        postings.insert(
+            "rust".to_owned(),
+            vec![Posting {
+                doc_id: 999, // out-of-bounds: only 1 doc exists
+                term_freq: 1,
+                positions: vec![0],
+            }],
+        );
+        let bad_bm25 = Bm25InvertedIndex::new_for_test(
+            postings,
+            vec![5],                   // doc_lengths: 1 entry
+            vec!["doc.md".to_owned()], // doc_paths: 1 entry
+            5.0,
+        );
+
+        let data = SnapshotData {
+            header: SnapshotHeader {
+                vault_dir: "/tmp/vault".to_owned(),
+                site_prefix: None,
+                created_at: 0,
+                pid: std::process::id(),
+            },
+            entries: vec![IndexEntry {
+                rel_path: "doc.md".to_owned(),
+                modified: "2024-01-01T00:00:00Z".to_owned(),
+                properties: IndexMap::default(),
+                tags: vec![],
+                sections: vec![],
+                tasks: vec![],
+                links: vec![],
+                bm25_tokens: None,
+                bm25_language: None,
+            }],
+            graph: LinkGraph::default(),
+            bm25_index: Some(bad_bm25),
+        };
+        let bytes = rmp_serde::to_vec_named(&data).unwrap();
+
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with out-of-bounds BM25 doc_id must be rejected (MED-1)"
+        );
+    }
+
+    #[test]
+    fn load_inner_rejects_bm25_mismatched_doc_lengths() {
+        use crate::bm25::{Bm25InvertedIndex, Posting};
+        use std::collections::HashMap;
+
+        // doc_lengths.len() != doc_paths.len() — structurally invalid
+        let mut postings: HashMap<String, Vec<Posting>> = HashMap::new();
+        postings.insert(
+            "rust".to_owned(),
+            vec![Posting {
+                doc_id: 0,
+                term_freq: 1,
+                positions: vec![0],
+            }],
+        );
+        let bad_bm25 = Bm25InvertedIndex::new_for_test(
+            postings,
+            vec![5, 10],               // doc_lengths: 2 entries
+            vec!["doc.md".to_owned()], // doc_paths: 1 entry — mismatch
+            7.5,
+        );
+
+        let data = SnapshotData {
+            header: SnapshotHeader {
+                vault_dir: "/tmp/vault".to_owned(),
+                site_prefix: None,
+                created_at: 0,
+                pid: std::process::id(),
+            },
+            entries: vec![IndexEntry {
+                rel_path: "doc.md".to_owned(),
+                modified: "2024-01-01T00:00:00Z".to_owned(),
+                properties: IndexMap::default(),
+                tags: vec![],
+                sections: vec![],
+                tasks: vec![],
+                links: vec![],
+                bm25_tokens: None,
+                bm25_language: None,
+            }],
+            graph: LinkGraph::default(),
+            bm25_index: Some(bad_bm25),
+        };
+        let bytes = rmp_serde::to_vec_named(&data).unwrap();
+
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with mismatched BM25 doc_lengths/doc_paths must be rejected (MED-1)"
         );
     }
 

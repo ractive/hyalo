@@ -109,6 +109,19 @@ impl Format {
     }
 }
 
+/// Strip control characters that could inject terminal escape sequences.
+///
+/// Removes bytes 0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F, and 0x9B-0x9F
+/// (C0/C1 control codes minus `\n` (0x0A) and `\t` (0x09)).
+fn sanitize_control_chars(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            // Keep printable chars, newline, and tab
+            !c.is_control() || c == '\n' || c == '\t'
+        })
+        .collect()
+}
+
 /// Format a successful JSON value for output.
 #[must_use]
 pub fn format_success(format: Format, value: &serde_json::Value) -> String {
@@ -117,7 +130,7 @@ pub fn format_success(format: Format, value: &serde_json::Value) -> String {
             .expect("serializing serde_json::Value is infallible"),
         Format::Text => {
             let mut cache = JaqFilterCache::new();
-            format_value_as_text(value, &mut cache)
+            sanitize_control_chars(&format_value_as_text(value, &mut cache))
         }
     }
 }
@@ -185,7 +198,7 @@ pub fn format_envelope(
                     text.push_str(&hint.description);
                 }
             }
-            text
+            sanitize_control_chars(&text)
         }
     }
 }
@@ -563,6 +576,10 @@ fn compile_jq_filter(filter_code: &str) -> Result<jaq_core::compile::Filter<Nati
         })
 }
 
+/// Maximum total output size for a jq filter to prevent pathological filters
+/// from causing unbounded memory growth (e.g. exponential-expansion patterns).
+const JQ_OUTPUT_CAP: usize = 10 * 1024 * 1024; // 10 MiB
+
 /// Execute a pre-compiled jq filter against a JSON value and return the text output.
 fn execute_jq_filter(
     filter: &jaq_core::compile::Filter<Native<D>>,
@@ -573,6 +590,7 @@ fn execute_jq_filter(
     let ctx = Ctx::<D>::new(&filter.lut, Vars::new([]));
 
     let mut parts = Vec::new();
+    let mut total_len: usize = 0;
     for result in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
         match result {
             Ok(val) => {
@@ -585,6 +603,13 @@ fn execute_jq_filter(
                     // (numbers, booleans, null, arrays, objects).
                     other => other.to_string(),
                 };
+                total_len += s.len();
+                if total_len > JQ_OUTPUT_CAP {
+                    return Err(format!(
+                        "jq filter output exceeds {} MiB limit",
+                        JQ_OUTPUT_CAP / (1024 * 1024)
+                    ));
+                }
                 parts.push(s);
             }
             Err(e) => return Err(format!("jq runtime error: {e}")),
@@ -1198,6 +1223,39 @@ mod tests {
         let val = json!({"x": 1});
         let result = jq("this is not valid jq %%%", &val);
         assert!(result.is_none());
+    }
+
+    // --- jq output size cap ---
+
+    #[test]
+    fn jq_output_cap_constant_is_10_mib() {
+        assert_eq!(JQ_OUTPUT_CAP, 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn jq_output_within_cap_succeeds() {
+        // A small output must pass through without hitting the cap.
+        let val = json!({"msg": "hello"});
+        let result = apply_jq_filter_result(".msg", &val);
+        assert_eq!(result.as_deref(), Ok("hello"));
+    }
+
+    #[test]
+    fn jq_output_cap_triggers_on_large_output() {
+        // Build a JSON array large enough to exceed JQ_OUTPUT_CAP when expanded.
+        // Each element is "aaaa...a" (1000 chars). 11_000 elements = 11 MB > 10 MB cap.
+        let big_string = "a".repeat(1000);
+        let val = serde_json::Value::Array(
+            std::iter::repeat_n(serde_json::Value::String(big_string), 11_000).collect(),
+        );
+        // ".[]" emits each element as a separate output value.
+        let result = apply_jq_filter_result(".[]", &val);
+        assert!(result.is_err(), "expected cap error but got Ok output");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("exceeds") && err.contains("MiB"),
+            "unexpected error message: {err}"
+        );
     }
 
     // --- property type filters ---
@@ -1911,5 +1969,43 @@ mod tests {
         assert!(out.contains("b.md"));
         assert!(out.contains("rust"));
         assert!(out.contains("cli"));
+    }
+
+    // --- sanitize_control_chars ---
+
+    #[test]
+    fn sanitize_control_chars_strips_escape_sequences() {
+        let input = "Hello\x1b[31mRED\x1b[0m World";
+        let output = sanitize_control_chars(input);
+        assert!(
+            !output.contains('\x1b'),
+            "escape sequences should be stripped"
+        );
+        assert!(output.contains("Hello"));
+        assert!(output.contains("RED"));
+        assert!(output.contains("World"));
+    }
+
+    #[test]
+    fn sanitize_control_chars_preserves_newline_and_tab() {
+        let input = "line1\nline2\ttabbed";
+        let output = sanitize_control_chars(input);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn text_output_sanitizes_escape_sequences() {
+        let value = serde_json::json!({
+            "results": {
+                "title": "Hello\x1b[31mRED\x1b[0m World",
+                "file": "test\x1b[2J.md"
+            }
+        });
+        let output = format_success(Format::Text, &value);
+        assert!(
+            !output.contains('\x1b'),
+            "escape sequences should be stripped"
+        );
+        assert!(output.contains("Hello") && output.contains("World"));
     }
 }

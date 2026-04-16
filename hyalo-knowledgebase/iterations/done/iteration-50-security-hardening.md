@@ -23,9 +23,9 @@ Overall security posture is strong. This iteration addresses all actionable find
 
 ## PII Scrub
 
-- [x] Replace `/Users/james/...` paths with placeholders in `research/dogfooding-v0.4.1-dir-styles.md`
-- [x] Replace `/Users/james/...` paths with placeholders in `research/dogfooding-v0.4.1-backlinks-mv.md`
-- [x] Replace `/Users/james/...` paths with placeholders in `research/dogfooding-v0.4.1-consolidated.md`
+- [x] Replace `~/...` paths with placeholders in `research/dogfooding-v0.4.1-dir-styles.md`
+- [x] Replace `~/...` paths with placeholders in `research/dogfooding-v0.4.1-backlinks-mv.md`
+- [x] Replace `~/...` paths with placeholders in `research/dogfooding-v0.4.1-consolidated.md`
 - [x] Decide: rewrite git history to remove author email, or accept it — **accepted, no rewrite**
 
 ## Code Hardening

@@ -22,7 +22,7 @@ Binary: `hyalo 0.12.0` — `target/release/hyalo` built from `main` (post iter-1
 
 KBs exercised:
 - **Own KB** (241 files)
-- **MDN Web Docs** (14,245 files) via `--dir /Users/james/devel/mdn/files/en-us`
+- **MDN Web Docs** (14,245 files) via `--dir ~/devel/mdn/files/en-us`
 - GitHub Docs not available for this session.
 
 ## Bug-Fix Verification

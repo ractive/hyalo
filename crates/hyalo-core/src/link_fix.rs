@@ -589,6 +589,7 @@ pub fn apply_fixes(
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
+        let file_mtime = crate::frontmatter::read_mtime(&abs_path).ok();
         let content = std::fs::read_to_string(&abs_path)
             .with_context(|| format!("reading {}", abs_path.display()))?;
 
@@ -602,6 +603,7 @@ pub fn apply_fixes(
                 rel_path: source_rel.to_string(),
                 replacements,
                 rewritten_content,
+                mtime: file_mtime,
             });
         }
     }

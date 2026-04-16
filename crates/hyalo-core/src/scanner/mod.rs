@@ -31,6 +31,11 @@ pub enum ScanAction {
     Stop,
 }
 
+/// Maximum file size that `scan_file_multi` will read into memory (100 MiB).
+///
+/// Files larger than this are skipped with a warning written to stderr.
+pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+
 /// Scan a file with multiple visitors in a single pass.
 ///
 /// Reads the file into memory then delegates to `scan_slice_multi` for
@@ -39,7 +44,22 @@ pub enum ScanAction {
 /// **Optimization**: when no visitor needs body events, only the first 16 KiB
 /// of the file is read (enough for frontmatter within the 200-line / 8 KiB
 /// limit). This avoids loading large files that only need metadata.
+///
+/// Files exceeding [`MAX_FILE_SIZE`] are skipped with a warning to stderr.
 pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
+    let file_size = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len();
+    if file_size > MAX_FILE_SIZE {
+        eprintln!(
+            "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+            path.display(),
+            file_size / (1024 * 1024),
+            MAX_FILE_SIZE / (1024 * 1024)
+        );
+        return Ok(());
+    }
+
     let any_needs_body = visitors.iter().any(|v| v.needs_body());
     if any_needs_body {
         let data =

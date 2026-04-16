@@ -9,7 +9,7 @@ tags:
 # Hyalo Dogfood Run — MDN Docs Maintenance
 
 **Date:** 2026-03-30
-**Repo:** /Users/james/devel/mdn (files/en-us via .hyalo.toml)
+**Repo:** ~/devel/mdn (files/en-us via .hyalo.toml)
 
 ---
 
