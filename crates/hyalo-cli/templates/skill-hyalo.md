@@ -49,7 +49,8 @@ hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obs
 For literal pattern matching (not stemmed), use regex: `hyalo find -e "exact_string"`.
 
 Stemmer language: `--stemmer french` (or the older `--language french`) selects the French
-Snowball stemmer for BM25 tokenization. This is *not* markdown code-block language filtering.
+Snowball stemmer for BM25 tokenization. Accepts full names (english, german, french, …) or
+ISO 639-1 codes (en, de, fr, …). This is *not* markdown code-block language filtering.
 Per-file override via frontmatter `language: french`. Config default via
 `[search] language = "french"` in `.hyalo.toml`.
 
@@ -88,7 +89,7 @@ hyalo find --sort backlinks_count --reverse        # most-linked files first
 ```
 
 The `--fields` flag controls which data is returned. Available fields: `properties`,
-`properties-typed`, `tags`, `sections`, `tasks`, `links`, `backlinks`, `title`. Default fields are
+`properties-typed`, `tags`, `sections` (alias: `outline`), `tasks`, `links`, `backlinks`, `title`. Default fields are
 `properties`, `tags`, `sections`, `links`. Opt-in fields: `tasks`, `properties-typed`,
 `backlinks`, `title`. Use `--fields all` or `--fields tasks` to include them. `properties-typed`
 returns a `[{name, type, value}]` array instead of a `{key: value}` map; `backlinks` requires

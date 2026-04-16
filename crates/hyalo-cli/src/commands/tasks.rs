@@ -281,6 +281,7 @@ pub fn task_set_status(
     format: Format,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
+    dry_run: bool,
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
         Ok(r) => r,
@@ -300,6 +301,43 @@ pub fn task_set_status(
             )));
         }
     };
+
+    if dry_run {
+        let tasks_by_line: std::collections::HashMap<usize, hyalo_core::types::FindTaskInfo> =
+            hyalo_core::tasks::find_task_lines(&full_path)?
+                .into_iter()
+                .map(|t| (t.line, t))
+                .collect();
+        let mut results: Vec<TaskDryRunResult> = Vec::with_capacity(resolved.len());
+        for &line_num in &resolved {
+            match tasks_by_line.get(&line_num) {
+                None => {
+                    let msg = format!("line {line_num} is not a task");
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        format,
+                        &msg,
+                        Some(&rel_path),
+                        None,
+                        None,
+                    )));
+                }
+                Some(info) => {
+                    let new_done = status == 'x' || status == 'X';
+                    results.push(TaskDryRunResult {
+                        file: rel_path.clone(),
+                        line: info.line,
+                        old_status: info.status,
+                        status,
+                        text: info.text.clone(),
+                        done: new_done,
+                    });
+                }
+            }
+        }
+        return Ok(CommandOutcome::success(format_one_or_many(
+            &results, format,
+        )));
+    }
 
     match hyalo_core::tasks::set_tasks_status(&full_path, &resolved, status) {
         Ok(infos) => {
@@ -545,6 +583,7 @@ mod tests {
                 Format::Json,
                 &mut None,
                 None,
+                false,
             )
             .unwrap(),
         );
@@ -571,6 +610,7 @@ mod tests {
                 Format::Json,
                 &mut None,
                 None,
+                false,
             )
             .unwrap(),
         );
@@ -593,8 +633,35 @@ mod tests {
             Format::Json,
             &mut None,
             None,
+            false,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
+    }
+
+    #[test]
+    fn task_set_status_dry_run_does_not_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = "- [ ] My task\n";
+        fs::write(tmp.path().join("note.md"), original).unwrap();
+        let out = unwrap_success(
+            task_set_status(
+                tmp.path(),
+                "note.md",
+                &[1],
+                None,
+                false,
+                '?',
+                Format::Json,
+                &mut None,
+                None,
+                true, // dry_run
+            )
+            .unwrap(),
+        );
+        assert!(out.contains("old_status"));
+        assert!(out.contains("\"status\": \"?\"") || out.contains("\"status\":\"?\""));
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert_eq!(content, original, "file was modified during --dry-run");
     }
 }

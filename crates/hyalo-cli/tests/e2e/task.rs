@@ -1057,3 +1057,40 @@ fn task_toggle_dry_run_text_uses_arrow_format() {
         "missing arrow format for complete->incomplete:\n{stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// task set --dry-run
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_set_status_dry_run_does_not_modify_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+
+    let original = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "task",
+        "set",
+        "--file",
+        "tasks.md",
+        "--line",
+        &LINE_INCOMPLETE.to_string(),
+        "--status",
+        "?",
+        "--dry-run",
+    ]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let result = &json["results"];
+    assert_eq!(result["old_status"], " ");
+    assert_eq!(result["status"], "?");
+
+    let after = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert_eq!(original, after, "file was modified during --dry-run");
+}

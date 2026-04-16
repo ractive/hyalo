@@ -107,7 +107,7 @@ pub struct RenameTagResult {
     pub to: String,
     pub dry_run: bool,
     pub modified: Vec<String>,
-    pub skipped: Vec<String>,
+    pub skipped_count: usize,
     pub total: usize,
     pub scanned: usize,
 }
@@ -156,7 +156,7 @@ pub fn tags_rename(
     let scanned = files.len();
 
     let mut modified = Vec::new();
-    let mut skipped = Vec::new();
+    let mut skipped_count: usize = 0;
     let mut index_dirty = false;
 
     for (full_path, rel_path) in &files {
@@ -172,7 +172,7 @@ pub fn tags_rename(
         let tags = extract_tags(&props);
         let has_old = tags.iter().any(|t| t.eq_ignore_ascii_case(from));
         if !has_old {
-            skipped.push(rel_path.clone());
+            skipped_count += 1;
             continue;
         }
 
@@ -228,13 +228,13 @@ pub fn tags_rename(
         idx.save_to(idx_path)?;
     }
 
-    let total = modified.len() + skipped.len();
+    let total = modified.len() + skipped_count;
     let result = RenameTagResult {
         from: from.to_owned(),
         to: to.to_owned(),
         dry_run,
         modified,
-        skipped,
+        skipped_count,
         total,
         scanned,
     };
@@ -587,7 +587,7 @@ tags:
             panic!("expected success")
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["skipped_count"].as_u64().unwrap(), 1);
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
     }
 
