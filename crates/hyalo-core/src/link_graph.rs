@@ -235,6 +235,15 @@ impl LinkGraph {
         results
     }
 
+    /// Return the total number of backlink entries across all targets.
+    ///
+    /// Used as a defence-in-depth check during snapshot deserialization: a
+    /// crafted index could claim a plausible number of *keys* while hiding an
+    /// enormous number of per-key entries, causing large allocations.
+    pub(crate) fn total_edges(&self) -> usize {
+        self.index.values().map(Vec::len).sum()
+    }
+
     /// Update the link graph after a file move from `old_rel` to `new_rel`.
     ///
     /// Renames target keys and source paths that reference the old vault-relative

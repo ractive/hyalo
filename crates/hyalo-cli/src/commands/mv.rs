@@ -59,10 +59,14 @@ pub fn mv(
         Err(outcome) => return Ok(outcome),
     };
 
-    // 3. Plan all rewrites
+    // 3. Capture source fingerprint BEFORE planning so any concurrent edit
+    //    during plan_mv is detected before the actual fs::rename.
+    let src_mtime = hyalo_core::frontmatter::read_mtime(&dir.join(&old_rel))?;
+
+    // 4. Plan all rewrites
     let plans = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix)?;
 
-    // 4. Build result
+    // 5. Build result
     let updated_files: Vec<UpdatedFile> = plans
         .iter()
         .map(|p| UpdatedFile {
@@ -81,9 +85,9 @@ pub fn mv(
         total_links_updated: total_links,
     };
 
-    // 5. If not dry-run, execute the move and rewrites, then update the index.
+    // 6. If not dry-run, execute the move and rewrites, then update the index.
     if !dry_run {
-        execute_mv(dir, &old_rel, &new_rel, &plans)?;
+        execute_mv(dir, &old_rel, &new_rel, &plans, src_mtime)?;
 
         // Patch index: rename the entry, re-scan files with rewritten links,
         // and update the link graph so backlink queries stay accurate.
@@ -186,7 +190,13 @@ fn validate_target(
 }
 
 /// Execute the file move and apply all rewrite plans.
-fn execute_mv(dir: &Path, old_rel: &str, new_rel: &str, plans: &[RewritePlan]) -> Result<()> {
+fn execute_mv(
+    dir: &Path,
+    old_rel: &str,
+    new_rel: &str,
+    plans: &[RewritePlan],
+    src_mtime: (std::time::SystemTime, u64),
+) -> Result<()> {
     let src = dir.join(old_rel);
     let dst = dir.join(new_rel);
 
@@ -195,6 +205,9 @@ fn execute_mv(dir: &Path, old_rel: &str, new_rel: &str, plans: &[RewritePlan]) -
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
     }
+
+    // Detect concurrent modification of the source file before renaming.
+    hyalo_core::frontmatter::check_mtime(&src, src_mtime)?;
 
     // Move the file
     fs::rename(&src, &dst)

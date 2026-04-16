@@ -404,11 +404,11 @@ fn parse_boolean_query(query: &str, stemmer: &Stemmer) -> BooleanQuery {
 /// `positions` contains the token offsets (0-based) within the document at which
 /// this term appears, in ascending order. Required for phrase matching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Posting {
-    doc_id: u32,
-    term_freq: u32,
+pub(crate) struct Posting {
+    pub(crate) doc_id: u32,
+    pub(crate) term_freq: u32,
     /// Token offsets (ascending) — used for consecutive-position phrase checks.
-    positions: Vec<u32>,
+    pub(crate) positions: Vec<u32>,
 }
 
 /// Serializable BM25 inverted index built from a collection of documents.
@@ -538,6 +538,20 @@ impl Bm25InvertedIndex {
         Some(Self::build_from_tokens(docs))
     }
 
+    /// Return the total number of posting entries plus positions across all terms.
+    ///
+    /// Used as a defence-in-depth check during snapshot deserialization: a
+    /// crafted index could claim a plausible number of *terms* while hiding an
+    /// enormous number of per-term postings or per-posting positions arrays,
+    /// causing large allocations.  Counting both prevents that attack.
+    pub(crate) fn total_postings(&self) -> usize {
+        self.postings
+            .values()
+            .flat_map(|posts| posts.iter())
+            .map(|p| 1 + p.positions.len())
+            .sum()
+    }
+
     /// Returns **all** matches for `query`, ranked by BM25 score (highest first).
     ///
     /// Returns an empty vec when `query` produces no positive tokens or has no matches.
@@ -548,6 +562,47 @@ impl Bm25InvertedIndex {
     /// Returns the total number of documents in the index.
     pub fn doc_count(&self) -> usize {
         self.doc_paths.len()
+    }
+
+    /// Validate that all `doc_id` values in posting lists are within bounds.
+    ///
+    /// A crafted snapshot could contain `doc_id` values that exceed the length of
+    /// `doc_paths` or `doc_lengths`, causing an out-of-bounds panic in [`score`](Self::score).
+    /// This method must be called after deserialization before the index is used.
+    ///
+    /// Returns `true` if the index is structurally consistent, `false` otherwise.
+    pub(crate) fn validate_doc_ids(&self) -> bool {
+        let max_id = self.doc_paths.len();
+        if self.doc_lengths.len() != max_id {
+            return false;
+        }
+        self.postings
+            .values()
+            .all(|posts| posts.iter().all(|p| (p.doc_id as usize) < max_id))
+    }
+
+    // ------------------------------------------------------------------
+    // Test helpers
+    // ------------------------------------------------------------------
+
+    /// Constructs a `Bm25InvertedIndex` with explicit field values for use in tests.
+    ///
+    /// This exists so tests can create structurally invalid indices (e.g. a posting
+    /// with a `doc_id` that exceeds `doc_paths.len()`) without going through the
+    /// safe `build` / `build_from_tokens` constructors.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        postings: HashMap<String, Vec<Posting>>,
+        doc_lengths: Vec<u32>,
+        doc_paths: Vec<String>,
+        avgdl: f64,
+    ) -> Self {
+        Self {
+            postings,
+            doc_lengths,
+            doc_paths,
+            avgdl,
+        }
     }
 
     // ------------------------------------------------------------------

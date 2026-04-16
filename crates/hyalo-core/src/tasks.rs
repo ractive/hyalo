@@ -512,6 +512,7 @@ pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Errors if any line is not a task checkbox.
 pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
+    let mtime = frontmatter::read_mtime(path)?;
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let file_lines: Vec<&str> = content.split('\n').collect();
@@ -547,6 +548,7 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
     }
 
     let new_content = build_new_content(&content, &file_lines, &replacements);
+    frontmatter::check_mtime(path, mtime)?;
     crate::fs_util::atomic_write(path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
@@ -557,6 +559,7 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Lines are 1-based. Errors if any line is not a task checkbox.
 pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Vec<TaskInfo>> {
+    let mtime = frontmatter::read_mtime(path)?;
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let file_lines: Vec<&str> = content.split('\n').collect();
@@ -587,6 +590,7 @@ pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Ve
     }
 
     let new_content = build_new_content(&content, &file_lines, &replacements);
+    frontmatter::check_mtime(path, mtime)?;
     crate::fs_util::atomic_write(path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 

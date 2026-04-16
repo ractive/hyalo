@@ -39,7 +39,7 @@ markdown links use PascalCase URLs:
 - File on disk: `files/en-us/web/javascript/reference/iteration_protocols/index.md`
 - Link in `…/promise/any/index.md`: `/en-US/docs/Web/JavaScript/Reference/Iteration_protocols`
 
-`/Users/james/devel/mdn/.hyalo.toml` currently sets `dir = "files/en-us"` but
+`~/devel/mdn/.hyalo.toml` currently sets `dir = "files/en-us"` but
 does **not** set `site_prefix`. Even if it did (`site_prefix = "en-US/docs"`),
 after stripping the prefix the resolver would still be looking up
 `Web/JavaScript/Reference/Iteration_protocols.md` — which does not exist; the

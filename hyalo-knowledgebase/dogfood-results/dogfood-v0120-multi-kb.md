@@ -26,7 +26,7 @@ Exhaustive dogfood across three knowledgebases:
 ### BUG-1: `types set` writes to CWD's `.hyalo.toml`, not `--dir` target's (HIGH)
 
 `hyalo types set mdn-doc --required title,slug,page-type --dir ../mdn/files/en-us/` writes to
-`/Users/james/devel/hyalo/.hyalo.toml` (the working directory), not near the `--dir` target.
+`~/devel/hyalo/.hyalo.toml` (the working directory), not near the `--dir` target.
 Then `hyalo types show mdn-doc --dir ../mdn/files/en-us/` fails with "type not found" because it reads from a different config path.
 
 Same issue affects `views set` and `views list`. This was reported in the v0.11.0 dogfood as Bug 3 in iter-108, and the iter-108 fix only partially addressed it — types/views still use CWD config.

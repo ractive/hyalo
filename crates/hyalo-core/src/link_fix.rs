@@ -28,7 +28,9 @@ use crate::index::VaultIndex;
 use crate::link_graph::{FileLinks, normalize_target};
 use crate::link_rewrite::{Replacement, RewritePlan, apply_replacements, execute_plans};
 use crate::links::{LinkKind, extract_link_spans_with_original};
-use crate::scanner::{FenceTracker, is_comment_fence, strip_inline_code, strip_inline_comments};
+use crate::scanner::{
+    FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
+};
 // ---------------------------------------------------------------------------
 // Report types
 // ---------------------------------------------------------------------------
@@ -589,6 +591,23 @@ pub fn apply_fixes(
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
+        let meta = std::fs::metadata(&abs_path)
+            .with_context(|| format!("failed to stat {}", abs_path.display()))?;
+        let file_size = meta.len();
+        if file_size > MAX_FILE_SIZE {
+            eprintln!(
+                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+                abs_path.display(),
+                file_size / (1024 * 1024),
+                MAX_FILE_SIZE / (1024 * 1024)
+            );
+            continue;
+        }
+        let file_mtime = meta
+            .modified()
+            .with_context(|| format!("failed to read mtime for {}", abs_path.display()))
+            .map(|t| (t, file_size))
+            .ok();
         let content = std::fs::read_to_string(&abs_path)
             .with_context(|| format!("reading {}", abs_path.display()))?;
 
@@ -602,6 +621,7 @@ pub fn apply_fixes(
                 rel_path: source_rel.to_string(),
                 replacements,
                 rewritten_content,
+                mtime: file_mtime,
             });
         }
     }

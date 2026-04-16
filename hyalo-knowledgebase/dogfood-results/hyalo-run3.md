@@ -9,7 +9,7 @@ tags:
 # Hyalo Dogfood Run 3 — MDN Maintenance Use Cases
 
 **Date:** 2026-03-30
-**Repo:** /Users/james/devel/mdn (14,245 indexed files)
+**Repo:** ~/devel/mdn (14,245 indexed files)
 **Index creation:** 2.346s
 
 ---
