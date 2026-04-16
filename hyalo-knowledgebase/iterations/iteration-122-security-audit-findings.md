@@ -6,7 +6,7 @@ tags:
   - iteration
   - security
   - hardening
-status: in-progress
+status: completed
 branch: iter-122/security-audit-findings
 ---
 
