@@ -748,6 +748,14 @@ impl VaultIndex for SnapshotIndex {
 /// existence). On all other platforms we conservatively assume the PID is
 /// alive so that we never falsely claim a running process is stale.
 fn is_pid_alive(pid: u32) -> bool {
+    // pid 0 means "my own process group" for kill() on Unix, not a specific
+    // process.  A crafted snapshot with pid=0 would always pass the liveness
+    // check, preventing stale-index cleanup.  Guard before platform-specific
+    // blocks so it applies on all targets.
+    if pid == 0 {
+        return false;
+    }
+
     #[cfg(unix)]
     {
         // A tampered snapshot could carry a PID that exceeds `i32::MAX`.  On
@@ -755,13 +763,6 @@ fn is_pid_alive(pid: u32) -> bool {
         // targeting a real process and blocking stale-index cleanup.  Treat
         // any out-of-range PID as "not alive" so the stale index is removed.
         if pid > i32::MAX as u32 {
-            return false;
-        }
-
-        // pid 0 means "my own process group" for kill(), not a specific process.
-        // A crafted snapshot with pid=0 would always pass the liveness check,
-        // preventing stale-index cleanup.
-        if pid == 0 {
             return false;
         }
 

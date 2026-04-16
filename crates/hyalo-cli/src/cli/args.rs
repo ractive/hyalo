@@ -1096,14 +1096,14 @@ pub(crate) enum TaskAction {
         long_about = "Set a custom single-character status on one or more task checkboxes.\n\n\
         INPUT: FILE (positional or --file), --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
-        SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
+        SIDE EFFECTS: Modifies the file on disk unless --dry-run is passed.\n\
         USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
         EXAMPLES:\n  \
           hyalo task set note.md --line 5 --status '?'\n  \
           hyalo task set note.md --line 5,7 --status '-'\n  \
           hyalo task set note.md --section Tasks --status '-'\n  \
           hyalo task set note.md --all --status x\n  \
-          hyalo task set --file note.md --line 5 --status '?'"
+          hyalo task set note.md --line 5 --status '?' --dry-run"
     )]
     Set {
         /// File containing the task(s) (relative to --dir) — positional form
