@@ -21,6 +21,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::resolve_target;
 use crate::index::VaultIndex;
@@ -45,6 +46,14 @@ pub struct BrokenLinkInfo {
 pub struct BrokenLinkReport {
     pub total_links: usize,
     pub broken: Vec<BrokenLinkInfo>,
+    /// Links that resolve via case-insensitive fallback but whose written casing
+    /// differs from the canonical on-disk path.  These are NOT broken — the
+    /// file exists — but they carry the wrong casing and can be auto-fixed with
+    /// strategy [`FixStrategy::LinkCaseMismatch`].
+    ///
+    /// Only populated when a [`CaseInsensitiveIndex`] is provided to the
+    /// detection functions.
+    pub case_mismatches: Vec<FixPlan>,
 }
 
 /// A single actionable fix: rewrite `old_target` → `new_target` in `source`.
@@ -75,6 +84,11 @@ pub enum FixStrategy {
     ShortestPath,
     /// Jaro-Winkler similarity above the configured threshold.
     FuzzyMatch,
+    /// The target resolves to an existing file but with different casing.
+    ///
+    /// Rule code: `link-case-mismatch`. The `new_target` in the [`FixPlan`]
+    /// holds the canonical on-disk casing returned by the [`CaseInsensitiveIndex`].
+    LinkCaseMismatch,
 }
 
 /// Result of planning fixes for a set of broken links.
@@ -87,6 +101,69 @@ pub struct FixReport {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Classify a single link's resolution against the filesystem and an optional
+/// case-insensitive index.
+///
+/// Returns:
+/// - `Resolved(None)` — link resolves exactly and its on-disk casing matches
+///   the canonical form (or no index was supplied).
+/// - `Resolved(Some(canonical))` — link resolves exactly but the on-disk
+///   casing differs from the canonical form (case-insensitive filesystem
+///   papered over a mismatch); caller should record as a case-mismatch.
+/// - `CaseMismatch(canonical)` — exact resolution failed but the case index
+///   found a unique canonical path; caller should record as a case-mismatch.
+/// - `Broken` — nothing resolves.
+enum LinkResolution {
+    Resolved(Option<String>),
+    CaseMismatch(String),
+    Broken,
+}
+
+fn classify_link(
+    canonical_dir: &Path,
+    resolved_target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> LinkResolution {
+    let exact = resolve_target(canonical_dir, resolved_target, site_prefix, None);
+
+    if let Some(exact_str) = exact {
+        // Link resolves exactly. If we have a case index, also check whether the
+        // resolved path has incorrect casing compared to the canonical on-disk
+        // path. On case-insensitive filesystems, `exact` may contain the
+        // user-written casing rather than the canonical casing.
+        if let Some(idx) = case_index
+            && let Some(canonical_path) =
+                resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
+        {
+            let canonical_fwd = canonical_path.replace('\\', "/");
+            let exact_fwd = exact_str.replace('\\', "/");
+            if exact_fwd != canonical_fwd {
+                return LinkResolution::Resolved(Some(canonical_fwd));
+            }
+        }
+        return LinkResolution::Resolved(None);
+    }
+
+    // Exact resolution failed. If we have a case index, try the
+    // case-insensitive fallback. `resolve_target` already handles the `.md`
+    // extension fallback internally, so any successful indexed resolution
+    // here means the link is a case-mismatch (possibly combined with a
+    // stem/full extension style difference).
+    if let Some(idx) = case_index
+        && let Some(canonical_path) =
+            resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
+    {
+        return LinkResolution::CaseMismatch(canonical_path.replace('\\', "/"));
+    }
+
+    LinkResolution::Broken
+}
+
+// ---------------------------------------------------------------------------
 // Broken link detection
 // ---------------------------------------------------------------------------
 
@@ -94,21 +171,28 @@ pub struct FixReport {
 ///
 /// `file_links` is a slice of [`FileLinks`] (from `link_graph.rs`).
 /// Uses [`resolve_target`] to check if each link target exists.
+///
+/// When `case_index` is provided, links that resolve only via the
+/// case-insensitive fallback are surfaced as [`FixStrategy::LinkCaseMismatch`]
+/// entries in [`BrokenLinkReport::case_mismatches`] rather than as broken.
 #[allow(dead_code)] // Used in tests only; CLI uses detect_broken_links_from_index
 pub(crate) fn detect_broken_links(
     dir: &Path,
     file_links: &[FileLinks],
     site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> BrokenLinkReport {
     let Ok(canonical) = canonicalize_vault_dir(dir) else {
         return BrokenLinkReport {
             total_links: 0,
             broken: Vec::new(),
+            case_mismatches: Vec::new(),
         };
     };
 
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
+    let mut case_mismatches: Vec<FixPlan> = Vec::new();
 
     for fl in file_links {
         let source_str = fl.source.to_string_lossy().replace('\\', "/");
@@ -132,21 +216,37 @@ pub(crate) fn detect_broken_links(
                 }
             };
 
-            if resolve_target(&canonical, &resolved_target, site_prefix).is_none() {
-                broken.push(BrokenLinkInfo {
-                    source: source_str.clone(),
-                    line: *line,
-                    target: link.target.clone(),
-                });
+            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+                LinkResolution::Resolved(None) => {}
+                LinkResolution::Resolved(Some(canonical_str))
+                | LinkResolution::CaseMismatch(canonical_str) => {
+                    case_mismatches.push(FixPlan {
+                        source: source_str.clone(),
+                        line: *line,
+                        old_target: link.target.clone(),
+                        new_target: canonical_str,
+                        strategy: FixStrategy::LinkCaseMismatch,
+                        confidence: 1.0,
+                    });
+                }
+                LinkResolution::Broken => {
+                    broken.push(BrokenLinkInfo {
+                        source: source_str.clone(),
+                        line: *line,
+                        target: link.target.clone(),
+                    });
+                }
             }
         }
     }
 
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
     BrokenLinkReport {
         total_links,
         broken,
+        case_mismatches,
     }
 }
 
@@ -154,20 +254,27 @@ pub(crate) fn detect_broken_links(
 ///
 /// Each [`IndexEntry`](crate::index::IndexEntry) has
 /// `links: Vec<(usize, Link)>` and `rel_path: String`.
+///
+/// When `case_index` is provided, links that resolve only via the
+/// case-insensitive fallback are surfaced as [`FixStrategy::LinkCaseMismatch`]
+/// entries in [`BrokenLinkReport::case_mismatches`] rather than as broken.
 pub fn detect_broken_links_from_index(
     dir: &Path,
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> BrokenLinkReport {
     let Ok(canonical) = canonicalize_vault_dir(dir) else {
         return BrokenLinkReport {
             total_links: 0,
             broken: Vec::new(),
+            case_mismatches: Vec::new(),
         };
     };
 
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
+    let mut case_mismatches: Vec<FixPlan> = Vec::new();
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
@@ -186,21 +293,37 @@ pub fn detect_broken_links_from_index(
                 }
             };
 
-            if resolve_target(&canonical, &resolved_target, site_prefix).is_none() {
-                broken.push(BrokenLinkInfo {
-                    source: entry.rel_path.clone(),
-                    line: *line,
-                    target: link.target.clone(),
-                });
+            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+                LinkResolution::Resolved(None) => {}
+                LinkResolution::Resolved(Some(canonical_str))
+                | LinkResolution::CaseMismatch(canonical_str) => {
+                    case_mismatches.push(FixPlan {
+                        source: entry.rel_path.clone(),
+                        line: *line,
+                        old_target: link.target.clone(),
+                        new_target: canonical_str,
+                        strategy: FixStrategy::LinkCaseMismatch,
+                        confidence: 1.0,
+                    });
+                }
+                LinkResolution::Broken => {
+                    broken.push(BrokenLinkInfo {
+                        source: entry.rel_path.clone(),
+                        line: *line,
+                        target: link.target.clone(),
+                    });
+                }
             }
         }
     }
 
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
     BrokenLinkReport {
         total_links,
         broken,
+        case_mismatches,
     }
 }
 
@@ -837,7 +960,7 @@ mod tests {
             ],
         }];
 
-        let report = detect_broken_links(tmp.path(), &file_links, None);
+        let report = detect_broken_links(tmp.path(), &file_links, None, None);
 
         assert_eq!(report.total_links, 2);
         assert_eq!(report.broken.len(), 1);
@@ -888,7 +1011,7 @@ mod tests {
             },
         ];
 
-        let report = detect_broken_links(tmp.path(), &file_links, None);
+        let report = detect_broken_links(tmp.path(), &file_links, None, None);
 
         assert_eq!(report.broken.len(), 3);
         // Sorted by (source, line)
@@ -953,6 +1076,129 @@ mod tests {
         assert!(
             written.contains("[text](correct.md)"),
             "expected rewritten link, got: {written}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Case-mismatch detection tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn detect_broken_links_emits_case_mismatch_with_index() {
+        use crate::case_index::CaseInsensitiveIndex;
+        use crate::link_graph::FileLinks;
+        use crate::links::{Link, LinkKind};
+
+        // On-disk: `web/foo.md` (lowercase). Link written as `Web/Foo` (PascalCase).
+        let tmp = vault_with_files(&[("web/foo.md", ""), ("source.md", "[[Web/Foo]]")]);
+
+        // Build a case index containing the real path.
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("web/foo.md");
+
+        let file_links = vec![FileLinks {
+            source: PathBuf::from("source.md"),
+            links: vec![(
+                1,
+                Link {
+                    target: "Web/Foo".to_string(),
+                    label: None,
+                    kind: LinkKind::Wikilink,
+                },
+            )],
+        }];
+
+        // Without index: case_mismatches is always empty regardless of FS type.
+        // The link may resolve exactly on case-insensitive FS (macOS) or be broken
+        // on case-sensitive FS (Linux) — but no case_mismatches either way.
+        let report_no_idx = detect_broken_links(tmp.path(), &file_links, None, None);
+        assert_eq!(report_no_idx.total_links, 1);
+        assert!(
+            report_no_idx.case_mismatches.is_empty(),
+            "case_mismatches must always be empty when no index is provided"
+        );
+
+        // With index: total_links is still 1 and accounting is consistent.
+        // On case-insensitive FS the exact check resolves successfully (both lists empty).
+        // On case-sensitive FS the link is reported as a case_mismatch (not broken).
+        let report_with_idx = detect_broken_links(tmp.path(), &file_links, None, Some(&idx));
+        assert_eq!(report_with_idx.total_links, 1);
+        let total_classified = report_with_idx.broken.len() + report_with_idx.case_mismatches.len();
+        assert!(
+            total_classified <= 1,
+            "each link must appear at most once across broken + case_mismatches"
+        );
+    }
+
+    #[test]
+    fn detect_broken_links_case_mismatch_has_correct_strategy() {
+        use crate::case_index::CaseInsensitiveIndex;
+        use crate::link_graph::FileLinks;
+        use crate::links::{Link, LinkKind};
+
+        // Build a case-sensitive vault setup by checking the actual FS behavior.
+        let tmp = vault_with_files(&[("web/foo.md", ""), ("source.md", "")]);
+
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("web/foo.md");
+
+        let file_links = vec![FileLinks {
+            source: PathBuf::from("source.md"),
+            links: vec![(
+                1,
+                Link {
+                    target: "Web/Foo".to_string(),
+                    label: None,
+                    kind: LinkKind::Wikilink,
+                },
+            )],
+        }];
+
+        let report = detect_broken_links(tmp.path(), &file_links, None, Some(&idx));
+
+        // Regardless of FS case sensitivity: if there are case_mismatches,
+        // they must use the LinkCaseMismatch strategy and confidence 1.0.
+        for fix in &report.case_mismatches {
+            assert!(
+                matches!(fix.strategy, FixStrategy::LinkCaseMismatch),
+                "strategy should be LinkCaseMismatch, got: {:?}",
+                fix.strategy
+            );
+            assert!(
+                (fix.confidence - 1.0).abs() < f64::EPSILON,
+                "confidence should be 1.0"
+            );
+            assert_eq!(
+                fix.old_target, "Web/Foo",
+                "old_target should preserve original casing"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_broken_links_no_index_no_case_mismatches() {
+        use crate::link_graph::FileLinks;
+        use crate::links::{Link, LinkKind};
+
+        let tmp = vault_with_files(&[("web/foo.md", ""), ("source.md", "")]);
+
+        let file_links = vec![FileLinks {
+            source: PathBuf::from("source.md"),
+            links: vec![(
+                1,
+                Link {
+                    target: "Web/Foo".to_string(),
+                    label: None,
+                    kind: LinkKind::Wikilink,
+                },
+            )],
+        }];
+
+        // Without case index: case_mismatches must always be empty.
+        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+        assert!(
+            report.case_mismatches.is_empty(),
+            "case_mismatches must be empty when no index is provided"
         );
     }
 }

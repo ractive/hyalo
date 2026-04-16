@@ -5,6 +5,7 @@ use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
+use crate::case_index::CaseInsensitiveIndex;
 use crate::link_graph::strip_site_prefix;
 use crate::util::levenshtein;
 
@@ -501,11 +502,18 @@ impl std::error::Error for FileResolveError {}
 ///
 /// `canonical_dir` must be a pre-canonicalized vault path (see `canonicalize_vault_dir`).
 /// Callers iterating over many links should canonicalize once and reuse the result.
+///
+/// When `case_index` is provided, a case-insensitive fallback lookup is performed:
+/// - If the literal path resolves, the canonical on-disk path from the index is returned
+///   (correcting casing differences introduced on case-insensitive filesystems).
+/// - If the literal path does NOT resolve, the index is consulted for an unambiguous
+///   case-insensitive match and returned if found.
 #[must_use]
 pub fn resolve_target(
     canonical_dir: &Path,
     target: &str,
     site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
     if target.is_empty() {
         return None;
@@ -550,9 +558,29 @@ pub fn resolve_target(
     if full.is_file() {
         // Ok(true) = within vault; Ok(false) or Err = reject
         if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+            // If an index is provided, prefer the canonical on-disk casing from
+            // the index over the literal input casing. This matters on
+            // case-insensitive filesystems where `is_file()` succeeds even when
+            // the literal casing differs from what is stored on disk.
+            if let Some(idx) = case_index
+                && let Some(canonical_path) = idx.lookup_unique(&target)
+            {
+                return Some(canonical_path.to_owned());
+            }
             return Some(target.clone());
         }
         return None;
+    }
+
+    // Exact literal path does not exist. Try case-insensitive index lookup.
+    if let Some(idx) = case_index
+        && let Some(canonical_path) = idx.lookup_unique(&target)
+    {
+        // Verify the resolved path is within vault bounds.
+        let full_resolved = canonical_dir.join(canonical_path);
+        if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
+            return Some(canonical_path.to_owned());
+        }
     }
 
     if !std::path::Path::new(&target)
@@ -563,9 +591,25 @@ pub fn resolve_target(
         let full = canonical_dir.join(&with_ext);
         if full.is_file() {
             if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+                // Same canonical-casing logic for the .md-appended variant.
+                if let Some(idx) = case_index
+                    && let Some(canonical_path) = idx.lookup_unique(&with_ext)
+                {
+                    return Some(canonical_path.to_owned());
+                }
                 return Some(with_ext);
             }
             return None;
+        }
+
+        // Try .md variant via case-insensitive index.
+        if let Some(idx) = case_index
+            && let Some(canonical_path) = idx.lookup_unique(&with_ext)
+        {
+            let full_resolved = canonical_dir.join(canonical_path);
+            if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
+                return Some(canonical_path.to_owned());
+            }
         }
     }
 
@@ -982,7 +1026,7 @@ mod tests {
         make_files(tmp.path(), &["note.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "note", None),
+            resolve_target(&canonical, "note", None, None),
             Some("note.md".to_owned())
         );
     }
@@ -993,7 +1037,7 @@ mod tests {
         make_files(tmp.path(), &["note.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "note.md", None),
+            resolve_target(&canonical, "note.md", None, None),
             Some("note.md".to_owned())
         );
     }
@@ -1004,7 +1048,7 @@ mod tests {
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "sub/other", None),
+            resolve_target(&canonical, "sub/other", None, None),
             Some("sub/other.md".to_owned())
         );
     }
@@ -1015,7 +1059,7 @@ mod tests {
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "sub/other.md", None),
+            resolve_target(&canonical, "sub/other.md", None, None),
             Some("sub/other.md".to_owned())
         );
     }
@@ -1025,21 +1069,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "other", None), None);
+        assert_eq!(resolve_target(&canonical, "other", None, None), None);
     }
 
     #[test]
     fn resolve_target_nonexistent_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "nonexistent", None), None);
+        assert_eq!(resolve_target(&canonical, "nonexistent", None, None), None);
     }
 
     #[test]
     fn resolve_target_empty_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "", None), None);
+        assert_eq!(resolve_target(&canonical, "", None, None), None);
     }
 
     #[test]
@@ -1047,10 +1091,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["note.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "../note", None), None);
-        assert_eq!(resolve_target(&canonical, "sub/../../note", None), None);
+        assert_eq!(resolve_target(&canonical, "../note", None, None), None);
+        assert_eq!(
+            resolve_target(&canonical, "sub/../../note", None, None),
+            None
+        );
         // /etc/passwd normalizes to "etc/passwd" which doesn't exist in the vault
-        assert_eq!(resolve_target(&canonical, "/etc/passwd", None), None);
+        assert_eq!(resolve_target(&canonical, "/etc/passwd", None, None), None);
     }
 
     #[test]
@@ -1059,7 +1106,7 @@ mod tests {
         make_files(tmp.path(), &["image.png"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "image.png", None),
+            resolve_target(&canonical, "image.png", None, None),
             Some("image.png".to_owned())
         );
     }
@@ -1099,7 +1146,7 @@ mod tests {
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
 
         assert_eq!(
-            resolve_target(&canonical, "etc..md", None),
+            resolve_target(&canonical, "etc..md", None, None),
             Some("etc..md".to_owned())
         );
     }
@@ -1109,7 +1156,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
 
-        assert_eq!(resolve_target(&canonical, "../secret.md", None), None);
+        assert_eq!(resolve_target(&canonical, "../secret.md", None, None), None);
     }
 
     // --- symlink escape tests ---
@@ -1141,8 +1188,14 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), vault.path().join("linked")).unwrap();
 
         let canonical = canonicalize_vault_dir(vault.path()).unwrap();
-        assert_eq!(resolve_target(&canonical, "linked/secret", None), None);
-        assert_eq!(resolve_target(&canonical, "linked/secret.md", None), None);
+        assert_eq!(
+            resolve_target(&canonical, "linked/secret", None, None),
+            None
+        );
+        assert_eq!(
+            resolve_target(&canonical, "linked/secret.md", None, None),
+            None
+        );
     }
 
     // --- site_prefix resolution ---
@@ -1153,7 +1206,7 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "/docs/page.md", Some("docs")),
+            resolve_target(&canonical, "/docs/page.md", Some("docs"), None),
             Some("page.md".to_owned())
         );
     }
@@ -1164,7 +1217,7 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "/page.md", None),
+            resolve_target(&canonical, "/page.md", None, None),
             Some("page.md".to_owned())
         );
     }
@@ -1176,7 +1229,7 @@ mod tests {
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         // site_prefix "docs" doesn't match "/other/b.md", so strip just the "/"
         assert_eq!(
-            resolve_target(&canonical, "/other/b.md", Some("docs")),
+            resolve_target(&canonical, "/other/b.md", Some("docs"), None),
             Some("other/b.md".to_owned())
         );
     }
@@ -1187,7 +1240,7 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "/docs/page", Some("docs")),
+            resolve_target(&canonical, "/docs/page", Some("docs"), None),
             Some("page.md".to_owned())
         );
     }
@@ -1198,11 +1251,11 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "page.md/", None),
+            resolve_target(&canonical, "page.md/", None, None),
             Some("page.md".to_owned())
         );
         assert_eq!(
-            resolve_target(&canonical, "page/", None),
+            resolve_target(&canonical, "page/", None, None),
             Some("page.md".to_owned())
         );
     }
@@ -1213,11 +1266,11 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "page?foo=bar", None),
+            resolve_target(&canonical, "page?foo=bar", None, None),
             Some("page.md".to_owned())
         );
         assert_eq!(
-            resolve_target(&canonical, "page.md?dv=winzip", None),
+            resolve_target(&canonical, "page.md?dv=winzip", None, None),
             Some("page.md".to_owned())
         );
     }
@@ -1228,11 +1281,11 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "page#section", None),
+            resolve_target(&canonical, "page#section", None, None),
             Some("page.md".to_owned())
         );
         assert_eq!(
-            resolve_target(&canonical, "page.md#heading", None),
+            resolve_target(&canonical, "page.md#heading", None, None),
             Some("page.md".to_owned())
         );
     }
@@ -1243,12 +1296,12 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
-            resolve_target(&canonical, "page?foo=bar#section", None),
+            resolve_target(&canonical, "page?foo=bar#section", None, None),
             Some("page.md".to_owned())
         );
         // Trailing slash + query + fragment
         assert_eq!(
-            resolve_target(&canonical, "page/?q=1#top", None),
+            resolve_target(&canonical, "page/?q=1#top", None, None),
             Some("page.md".to_owned())
         );
     }
@@ -1259,7 +1312,7 @@ mod tests {
         make_files(tmp.path(), &["page.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         // "#section" → empty target after stripping → None
-        assert_eq!(resolve_target(&canonical, "#section", None), None);
+        assert_eq!(resolve_target(&canonical, "#section", None, None), None);
     }
 
     #[cfg(unix)]
@@ -1405,5 +1458,61 @@ mod tests {
 
         let err = resolve_file(tmp.path(), "/etc/passwd.md").unwrap_err();
         assert!(matches!(err, FileResolveError::OutsideVault { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 117 — case-insensitive index integration
+    // -----------------------------------------------------------------------
+
+    /// On a case-sensitive filesystem (Linux), a literal wrong-casing path
+    /// should not resolve without an index, but should resolve with an index.
+    /// On a case-insensitive filesystem (macOS), the literal path already
+    /// resolves, so we test that the index returns the canonical casing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resolve_target_uses_case_index_when_literal_misses() {
+        use crate::case_index::CaseInsensitiveIndex;
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["web/foo/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+
+        // Without index, wrong casing must not resolve on case-sensitive fs.
+        assert_eq!(
+            resolve_target(&canonical, "Web/Foo/index.md", None, None),
+            None,
+            "expected None without index on case-sensitive fs"
+        );
+
+        // Build an index with the real path.
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("web/foo/index.md");
+
+        // With index, wrong-cased input resolves to the canonical path.
+        assert_eq!(
+            resolve_target(&canonical, "Web/Foo/index.md", None, Some(&idx)),
+            Some("web/foo/index.md".to_owned()),
+            "expected canonical path from index"
+        );
+    }
+
+    /// On any platform: even when the literal path resolves (because the
+    /// filesystem is case-insensitive or the casing already matches), the
+    /// index should return the canonical on-disk casing.
+    #[test]
+    fn resolve_target_index_canonical_casing_on_match() {
+        use crate::case_index::CaseInsensitiveIndex;
+        let tmp = tempfile::tempdir().unwrap();
+        // Create the file with lowercase path.
+        make_files(tmp.path(), &["docs/guide.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("docs/guide.md");
+
+        // Exact match — index should still confirm the canonical path.
+        assert_eq!(
+            resolve_target(&canonical, "docs/guide.md", None, Some(&idx)),
+            Some("docs/guide.md".to_owned())
+        );
     }
 }

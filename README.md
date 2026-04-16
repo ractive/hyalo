@@ -118,6 +118,13 @@ default_limit = 100    # default: 50 (max results for list commands; 0 = unlimit
 [links]
 frontmatter_properties = ["related", "depends-on", "supersedes", "superseded-by"]
 
+# Case-insensitive link resolution: "auto" (default), "true", or "false".
+# "auto" probes the filesystem at startup — on case-insensitive filesystems (macOS,
+# Windows NTFS) it is enabled automatically; on case-sensitive filesystems it is off.
+# "true" forces CI resolution regardless of filesystem (useful in Docker / CI).
+# "false" disables it, treating wrong-cased links as unresolved (strict mode).
+case_insensitive = "auto"
+
 # Schema validation on write: when true, `set`/`append` behave as if `--validate`
 # were always passed — writes that would create lint errors are rejected.
 [schema]
@@ -631,6 +638,8 @@ hyalo links fix --format text
 `links fix` detects broken `[[wikilinks]]` and `[markdown](links)` across the vault and attempts auto-repair using four strategies (in priority order): case-insensitive exact match, extension mismatch (`.md` present/absent), unique stem match anywhere in the vault (shortest-path resolution), and Jaro-Winkler fuzzy match above `--threshold`.
 
 Default is `--dry-run` (preview only). Pass `--apply` to write fixes to disk. Use `--ignore-target` (repeatable) to skip links containing specific substrings — useful for template syntax, external paths, or anchors that aren't real files.
+
+**Case-mismatch detection (`link-case-mismatch`):** When case-insensitive resolution is active (controlled by `[links] case_insensitive` in `.hyalo.toml` — `"auto"`, `"true"`, or `"false"`), `links fix` also reports links whose casing differs from the on-disk filename. These appear as `case_mismatches` in the JSON output and are rewritten to the canonical casing when `--apply` is used. On macOS and Windows (case-insensitive filesystems), `"auto"` enables this automatically.
 
 ### lint
 

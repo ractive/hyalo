@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::output::{CommandOutcome, Format};
+use hyalo_core::case_index::CaseInsensitiveIndex;
 use hyalo_core::discovery;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_index, plan_fixes};
@@ -16,6 +17,9 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 ///
 /// `dry_run = true`  → preview only (default)
 /// `dry_run = false` → write fixes to disk (`--apply`)
+///
+/// Case-mismatch fixes (rule `link-case-mismatch`) are included alongside
+/// ordinary broken-link fixes when `case_index` is provided.
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -26,8 +30,9 @@ pub fn links_fix(
     threshold: f64,
     ignore_target: &[String],
     format: Format,
+    case_index: Option<&CaseInsensitiveIndex>,
 ) -> Result<CommandOutcome> {
-    let report = detect_broken_links_from_index(dir, index, site_prefix);
+    let report = detect_broken_links_from_index(dir, index, site_prefix, case_index);
 
     // Filter broken links by glob, if any were provided.
     let broken = if globs.is_empty() {
@@ -69,8 +74,21 @@ pub fn links_fix(
     let matcher = LinkMatcher::from_index(index, threshold);
     let fix_report = plan_fixes(&broken, &matcher);
 
+    // Collect all fixes: broken-link fixes + case-mismatch fixes.
+    // Case-mismatch fixes come from the detection phase (not from plan_fixes).
+    let case_mismatches = report.case_mismatches;
+    let case_mismatch_count = case_mismatches.len();
+
     if !dry_run {
-        apply_fixes(dir, &fix_report.fixes, site_prefix)?;
+        // Merge broken-link fixes and case-mismatch fixes into a single batch
+        // so `apply_fixes` reads and rewrites each source file once — two
+        // separate passes over the same file would see the first pass's
+        // rewrites and could misbehave on overlapping edits.
+        let mut all_fixes = fix_report.fixes.clone();
+        all_fixes.extend(case_mismatches.iter().cloned());
+        if !all_fixes.is_empty() {
+            apply_fixes(dir, &all_fixes, site_prefix)?;
+        }
     }
 
     let output = serde_json::json!({
@@ -81,6 +99,8 @@ pub fn links_fix(
         "fixes": fix_report.fixes,
         "unfixable_links": fix_report.unfixable,
         "applied": !dry_run,
+        "case_mismatches": case_mismatch_count,
+        "case_mismatch_fixes": case_mismatches,
     });
 
     let _ = format;

@@ -15,6 +15,7 @@ use crate::commands::{
 };
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::parse_language;
+use hyalo_core::case_index::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 use hyalo_core::filter;
 use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;
@@ -22,6 +23,43 @@ use hyalo_core::schema::SchemaConfig;
 /// Default output limit for list commands when no `--limit` is passed and no
 /// `default_limit` is set in `.hyalo.toml`.
 pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 50;
+
+/// Build a [`CaseInsensitiveIndex`] from a full vault directory scan.
+///
+/// The scan is always vault-wide — not scoped to any `--file` or `--glob`
+/// argument — because case-insensitive link resolution must find *any* file
+/// in the vault, even files not included in the current query scope. A scoped
+/// `VaultIndex` (built by `collect_files` when `--file` is used) would omit
+/// the very link targets we need to resolve, so we re-walk from disk rather
+/// than reusing the command's `VaultIndex`.
+///
+/// Errors during discovery are silently ignored (the index will just be less
+/// complete, which degrades gracefully to no case-insensitive fallback).
+pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiveIndex {
+    use hyalo_core::discovery;
+    let mut idx = CaseInsensitiveIndex::new();
+    if let Ok(files) = discovery::discover_files(dir) {
+        for file in &files {
+            let rel = discovery::relative_path(dir, file);
+            idx.insert(&rel);
+        }
+    }
+    idx
+}
+
+/// Resolve whether case-insensitive mode is active and, if so, build the
+/// index from a full vault directory scan. Returns `Some(index)` when
+/// enabled, `None` when disabled.
+pub(crate) fn maybe_case_index(
+    mode: CaseInsensitiveMode,
+    dir: &std::path::Path,
+) -> Option<CaseInsensitiveIndex> {
+    if mode_enabled(mode, dir) {
+        Some(build_case_index_from_dir(dir))
+    } else {
+        None
+    }
+}
 
 /// Shared context for command dispatch.
 pub(crate) struct CommandContext<'a> {
@@ -51,6 +89,8 @@ pub(crate) struct CommandContext<'a> {
     pub validate_on_write: bool,
     /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore` in `.hyalo.toml`.
     pub lint_ignore: &'a [String],
+    /// Case-insensitive link resolution mode from `[links] case_insensitive`.
+    pub case_insensitive_mode: CaseInsensitiveMode,
     /// Optional exit code override set by commands that need a non-0/2 exit code
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
     /// to override its own exit code calculation.
@@ -277,30 +317,34 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     frontmatter_link_props: ctx.frontmatter_link_props,
                 },
             )? {
-                IndexResolution::Resolved(resolved) => find_commands::find(
-                    resolved.as_index(),
-                    dir,
-                    site_prefix,
-                    pattern.as_deref(),
-                    regexp.as_deref(),
-                    &prop_filters,
-                    &tag,
-                    task_filter.as_ref(),
-                    &section_filters,
-                    &file,
-                    &glob,
-                    &parsed_fields,
-                    sort_field.as_ref(),
-                    reverse,
-                    resolve_limit(limit, ctx.config_default_limit, ctx.programmatic_output),
-                    broken_links,
-                    orphan,
-                    dead_end,
-                    title.as_deref(),
-                    effective_format,
-                    language.as_deref(),
-                    ctx.config_language,
-                ),
+                IndexResolution::Resolved(resolved) => {
+                    let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                    find_commands::find(
+                        resolved.as_index(),
+                        dir,
+                        site_prefix,
+                        pattern.as_deref(),
+                        regexp.as_deref(),
+                        &prop_filters,
+                        &tag,
+                        task_filter.as_ref(),
+                        &section_filters,
+                        &file,
+                        &glob,
+                        &parsed_fields,
+                        sort_field.as_ref(),
+                        reverse,
+                        resolve_limit(limit, ctx.config_default_limit, ctx.programmatic_output),
+                        broken_links,
+                        orphan,
+                        dead_end,
+                        title.as_deref(),
+                        effective_format,
+                        language.as_deref(),
+                        ctx.config_language,
+                        ci.as_ref(),
+                    )
+                }
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }
         }
@@ -579,16 +623,20 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 frontmatter_link_props: ctx.frontmatter_link_props,
             },
         )? {
-            IndexResolution::Resolved(resolved) => summary_commands::summary(
-                dir,
-                resolved.as_index(),
-                &glob,
-                recent,
-                depth,
-                site_prefix,
-                effective_format,
-                ctx.schema,
-            ),
+            IndexResolution::Resolved(resolved) => {
+                let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                summary_commands::summary(
+                    dir,
+                    resolved.as_index(),
+                    &glob,
+                    recent,
+                    depth,
+                    site_prefix,
+                    effective_format,
+                    ctx.schema,
+                    ci.as_ref(),
+                )
+            }
             IndexResolution::Outcome(outcome) => Ok(outcome),
         },
         Commands::Set {
@@ -793,16 +841,20 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     frontmatter_link_props: ctx.frontmatter_link_props,
                 },
             )? {
-                IndexResolution::Resolved(resolved) => links_commands::links_fix(
-                    resolved.as_index(),
-                    dir,
-                    site_prefix,
-                    &glob,
-                    !apply,
-                    threshold,
-                    &ignore_target,
-                    effective_format,
-                ),
+                IndexResolution::Resolved(resolved) => {
+                    let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                    links_commands::links_fix(
+                        resolved.as_index(),
+                        dir,
+                        site_prefix,
+                        &glob,
+                        !apply,
+                        threshold,
+                        &ignore_target,
+                        effective_format,
+                        ci.as_ref(),
+                    )
+                }
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             },
         },

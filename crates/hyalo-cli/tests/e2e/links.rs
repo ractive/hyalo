@@ -1,3 +1,5 @@
+use std::fs;
+
 use super::common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
@@ -888,5 +890,319 @@ fn links_fix_ignore_target_absent() {
             .expect("'ignored' should be a number"),
         0,
         "expected 0 ignored links when pattern doesn't match: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Case-insensitive link resolution (iter-117)
+// ---------------------------------------------------------------------------
+
+/// Build a fixture vault with case_insensitive = "true".
+///
+///   iteration_protocols.md  (the file, all lowercase)
+///   promise_any.md          (links to it with wrong casing via wikilink)
+///   .hyalo.toml             with case_insensitive = "true"
+fn setup_mdn_vault() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir");
+
+    // Target file — all lowercase
+    write_md(
+        tmp.path(),
+        "iteration_protocols.md",
+        md!(r"
+---
+title: Iteration protocols
+---
+Content here.
+"),
+    );
+
+    // Source file — wikilink with different casing from on-disk name
+    write_md(
+        tmp.path(),
+        "promise_any.md",
+        md!(r"
+---
+title: Promise.any
+---
+See [[Iteration_Protocols]] for details.
+"),
+    );
+
+    // Config: case_insensitive = "true" forces the fallback regardless of filesystem
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"true\"\n",
+    )
+    .expect("write .hyalo.toml");
+
+    tmp
+}
+
+#[test]
+fn case_insensitive_find_links_resolves_to_canonical_path() {
+    let tmp = setup_mdn_vault();
+
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--file",
+            "promise_any.md",
+            "--fields",
+            "links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = json["results"]
+        .as_array()
+        .expect("results should be an array");
+    assert!(!results.is_empty(), "results should not be empty");
+    let links = results[0]["links"]
+        .as_array()
+        .expect("links should be an array");
+
+    // At least one link should resolve to the canonical lowercase path
+    let canonical = "iteration_protocols.md";
+    let has_resolved = links.iter().any(|l| l["path"].as_str() == Some(canonical));
+    assert!(
+        has_resolved,
+        "expected link to resolve to canonical path {canonical:?}, got: {links:?}"
+    );
+}
+
+#[test]
+fn case_insensitive_links_fix_dry_run_reports_case_mismatches() {
+    let tmp = setup_mdn_vault();
+
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix should run");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mismatches = json["results"]["case_mismatches"]
+        .as_u64()
+        .expect("case_mismatches should be a number");
+    assert!(
+        mismatches >= 1,
+        "expected at least 1 case-mismatch fix, got: {json}"
+    );
+
+    let mismatch_fixes = json["results"]["case_mismatch_fixes"]
+        .as_array()
+        .expect("case_mismatch_fixes should be an array");
+    assert!(
+        !mismatch_fixes.is_empty(),
+        "case_mismatch_fixes should list the mismatch entries"
+    );
+
+    // The fix should have strategy = "LinkCaseMismatch"
+    let strategy = mismatch_fixes[0]["strategy"].as_str().unwrap_or("");
+    assert_eq!(
+        strategy, "LinkCaseMismatch",
+        "strategy should be LinkCaseMismatch"
+    );
+}
+
+#[test]
+fn case_insensitive_links_fix_apply_rewrites_casing() {
+    let tmp = setup_mdn_vault();
+
+    // Apply fixes
+    let apply = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix --apply should run");
+    assert!(
+        apply.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+
+    let apply_json: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    let applied = apply_json["results"]["applied"].as_bool().unwrap_or(false);
+    assert!(applied, "applied should be true");
+
+    // After applying, re-run links fix — case_mismatches should drop to 0
+    let after = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix dry-run after apply should run");
+    assert!(after.status.success());
+
+    let after_json: serde_json::Value = serde_json::from_slice(&after.stdout).unwrap();
+    let remaining = after_json["results"]["case_mismatches"]
+        .as_u64()
+        .unwrap_or(1);
+    assert_eq!(
+        remaining, 0,
+        "after apply, case_mismatches should be 0, got: {after_json}"
+    );
+}
+
+// On macOS (case-insensitive FS) a wrong-cased path resolves via the OS even with CI mode
+// disabled, so this test is only meaningful on case-sensitive filesystems.
+#[cfg(target_os = "linux")]
+#[test]
+fn case_insensitive_off_treats_wrong_casing_as_unresolved() {
+    let tmp = TempDir::new().expect("tempdir");
+
+    // Target file — all lowercase
+    write_md(
+        tmp.path(),
+        "iteration_protocols.md",
+        md!(r"
+---
+title: Iteration protocols
+---
+Content.
+"),
+    );
+
+    // Source — wikilink with different casing from on-disk name
+    write_md(
+        tmp.path(),
+        "promise_any.md",
+        md!(r"
+---
+title: Promise.any
+---
+See [[Iteration_Protocols]] for details.
+"),
+    );
+
+    // case_insensitive = "false" — strict mode, no fallback
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"false\"\n",
+    )
+    .expect("write .hyalo.toml");
+
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--file",
+            "promise_any.md",
+            "--fields",
+            "links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert!(out.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = json["results"]
+        .as_array()
+        .expect("results should be an array");
+    assert!(!results.is_empty(), "results should not be empty");
+    let links = results[0]["links"]
+        .as_array()
+        .expect("links should be an array");
+
+    // In strict mode the PascalCase link should NOT resolve (null path)
+    let has_null_path = links
+        .iter()
+        .any(|l| l["path"].is_null() || l["path"] == serde_json::Value::Null);
+    assert!(
+        has_null_path,
+        "strict mode: PascalCase link should be unresolved (null path), got: {links:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn case_insensitive_ambiguous_returns_unresolved_on_case_sensitive_fs() {
+    // On a case-sensitive filesystem, Foo.md and foo.md are two distinct files.
+    // A link to FOO should be ambiguous and resolve to None.
+    let tmp = TempDir::new().expect("tempdir");
+
+    write_md(tmp.path(), "Foo.md", "---\ntitle: Foo\n---\n");
+    write_md(tmp.path(), "foo.md", "---\ntitle: foo\n---\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "---\ntitle: Source\n---\nSee [[FOO]] here.\n",
+    );
+
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"true\"\n",
+    )
+    .expect("write .hyalo.toml");
+
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--file",
+            "source.md",
+            "--fields",
+            "links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert!(out.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = json["results"]
+        .as_array()
+        .expect("results should be an array");
+    assert!(!results.is_empty(), "results should not be empty");
+    let links = results[0]["links"]
+        .as_array()
+        .expect("links should be an array");
+
+    // Ambiguous: both Foo.md and foo.md exist — should be unresolved (null path)
+    let all_unresolved = links
+        .iter()
+        .all(|l| l["path"].is_null() || l["path"] == serde_json::Value::Null);
+    assert!(
+        all_unresolved,
+        "ambiguous case-insensitive match should be unresolved, got: {links:?}"
     );
 }
