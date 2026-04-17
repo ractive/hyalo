@@ -514,7 +514,9 @@ impl SnapshotIndex {
                         .any(|c| {
                             matches!(
                                 c,
-                                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                                std::path::Component::ParentDir
+                                    | std::path::Component::RootDir
+                                    | std::path::Component::Prefix(_)
                             )
                         })
                     {
@@ -1553,11 +1555,24 @@ Content.
 
     #[test]
     fn load_inner_rejects_absolute_path() {
+        // Unix-style absolute path (on Windows this has a RootDir component
+        // but is_absolute() returns false, so the component check must catch it)
         let bytes = make_snapshot_bytes("/etc/passwd");
         assert!(
             SnapshotIndex::load_inner(&bytes, false).is_none(),
             "snapshot with absolute rel_path must be rejected"
         );
+
+        // Windows-style absolute path (only testable on Windows where the
+        // Prefix component is recognized by std::path)
+        #[cfg(windows)]
+        {
+            let bytes = make_snapshot_bytes("C:\\Windows\\System32\\config\\sam");
+            assert!(
+                SnapshotIndex::load_inner(&bytes, false).is_none(),
+                "snapshot with Windows absolute rel_path must be rejected"
+            );
+        }
     }
 
     #[test]
