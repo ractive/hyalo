@@ -73,10 +73,14 @@ impl CaseInsensitiveIndex {
 
         // Also index by filename stem for Obsidian-style bare wikilink resolution.
         let fname = rel_path.rsplit('/').next().unwrap_or(rel_path);
-        let stem = fname
-            .strip_suffix(".md")
-            .or_else(|| fname.strip_suffix(".MD"))
-            .unwrap_or(fname);
+        let stem = if Path::new(fname)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
+            &fname[..fname.len() - 3]
+        } else {
+            fname
+        };
         let stem_key = stem.to_ascii_lowercase();
         let stem_candidates = self.stem_map.entry(stem_key).or_default();
         if !stem_candidates.iter().any(|c| c == rel_path) {

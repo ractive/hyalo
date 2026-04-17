@@ -620,10 +620,14 @@ pub fn resolve_target(
         && let Some(idx) = case_index
     {
         // Try the target as-is (could already be a stem or have .md).
-        let stem = target
-            .strip_suffix(".md")
-            .or_else(|| target.strip_suffix(".MD"))
-            .unwrap_or(&target);
+        let stem = if Path::new(target.as_str())
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
+            &target[..target.len() - 3]
+        } else {
+            &target
+        };
         if let Some(canonical_path) = idx.lookup_stem(stem) {
             let full_resolved = canonical_dir.join(canonical_path);
             if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
