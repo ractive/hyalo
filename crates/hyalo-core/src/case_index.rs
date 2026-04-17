@@ -43,10 +43,17 @@ impl CaseInsensitiveMode {
 ///
 /// Used for case-insensitive link resolution: insert all known paths at
 /// index build time, then look up by lowercased target at resolution time.
+///
+/// Also indexes by lowercased filename stem (without `.md` extension and
+/// directory path) for Obsidian-style bare wikilink resolution — e.g.
+/// `[[note]]` resolving to `sub/note.md` when that stem is unique.
 #[derive(Debug, Default, Clone)]
 pub struct CaseInsensitiveIndex {
     /// Map from lowercased path → list of real (original-casing) paths.
     map: HashMap<String, Vec<String>>,
+    /// Map from lowercased filename stem → list of real (original-casing) paths.
+    /// Used for Obsidian-style bare wikilink resolution.
+    stem_map: HashMap<String, Vec<String>>,
 }
 
 impl CaseInsensitiveIndex {
@@ -63,6 +70,22 @@ impl CaseInsensitiveIndex {
         if !candidates.iter().any(|c| c == rel_path) {
             candidates.push(rel_path.to_owned());
         }
+
+        // Also index by filename stem for Obsidian-style bare wikilink resolution.
+        let fname = rel_path.rsplit('/').next().unwrap_or(rel_path);
+        let stem = if Path::new(fname)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        {
+            &fname[..fname.len() - 3]
+        } else {
+            fname
+        };
+        let stem_key = stem.to_ascii_lowercase();
+        let stem_candidates = self.stem_map.entry(stem_key).or_default();
+        if !stem_candidates.iter().any(|c| c == rel_path) {
+            stem_candidates.push(rel_path.to_owned());
+        }
     }
 
     /// Look up a relative path (any casing). Returns the canonical real path
@@ -70,6 +93,22 @@ impl CaseInsensitiveIndex {
     pub fn lookup_unique(&self, rel_path: &str) -> Option<&str> {
         let key = rel_path.to_ascii_lowercase();
         let candidates = self.map.get(&key)?;
+        if candidates.len() == 1 {
+            Some(&candidates[0])
+        } else {
+            None
+        }
+    }
+
+    /// Look up a bare filename stem (no directory, no `.md` extension).
+    /// Returns the canonical real path only when exactly one file has that
+    /// stem (unambiguous Obsidian-style resolution).
+    ///
+    /// Example: `lookup_stem("note")` matches `sub/note.md` if it's the only
+    /// file named `note.md` in the vault.
+    pub fn lookup_stem(&self, stem: &str) -> Option<&str> {
+        let key = stem.to_ascii_lowercase();
+        let candidates = self.stem_map.get(&key)?;
         if candidates.len() == 1 {
             Some(&candidates[0])
         } else {
@@ -208,6 +247,34 @@ mod tests {
         assert!(idx.lookup_all("anything.md").is_empty());
         assert!(idx.is_empty());
         assert_eq!(idx.len(), 0);
+    }
+
+    // ---- Stem lookup (Obsidian-style bare wikilink resolution) ----
+
+    #[test]
+    fn lookup_stem_unique() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("sub/note.md");
+        idx.insert("other/readme.md");
+        // "note" stem is unique → resolves
+        assert_eq!(idx.lookup_stem("note"), Some("sub/note.md"));
+        // Case-insensitive stem lookup
+        assert_eq!(idx.lookup_stem("NOTE"), Some("sub/note.md"));
+    }
+
+    #[test]
+    fn lookup_stem_ambiguous() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("a/note.md");
+        idx.insert("b/note.md");
+        // Two files with same stem → ambiguous → None
+        assert!(idx.lookup_stem("note").is_none());
+    }
+
+    #[test]
+    fn lookup_stem_empty_index() {
+        let idx = CaseInsensitiveIndex::new();
+        assert!(idx.lookup_stem("anything").is_none());
     }
 
     #[test]
