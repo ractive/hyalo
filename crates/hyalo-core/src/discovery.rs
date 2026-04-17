@@ -613,6 +613,25 @@ pub fn resolve_target(
         }
     }
 
+    // Obsidian-style bare stem resolution: if the target has no path separator,
+    // look it up by filename stem. Resolves `[[note]]` to `sub/note.md` when
+    // exactly one file in the vault has that stem.
+    if !target.contains('/')
+        && let Some(idx) = case_index
+    {
+        // Try the target as-is (could already be a stem or have .md).
+        let stem = target
+            .strip_suffix(".md")
+            .or_else(|| target.strip_suffix(".MD"))
+            .unwrap_or(&target);
+        if let Some(canonical_path) = idx.lookup_stem(stem) {
+            let full_resolved = canonical_dir.join(canonical_path);
+            if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
+                return Some(canonical_path.to_owned());
+            }
+        }
+    }
+
     None
 }
 
@@ -1065,11 +1084,39 @@ mod tests {
     }
 
     #[test]
-    fn resolve_target_bare_stem_does_not_match_subdirectory() {
+    fn resolve_target_bare_stem_without_index_returns_none() {
+        // Without a case/stem index, bare stems can't resolve to subdirectories
+        // (no filesystem scan is performed for stem matching).
         let tmp = tempfile::tempdir().unwrap();
         make_files(tmp.path(), &["sub/other.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(resolve_target(&canonical, "other", None, None), None);
+    }
+
+    #[test]
+    fn resolve_target_bare_stem_with_index_resolves_unique() {
+        // Obsidian-style: [[other]] resolves to sub/other.md when the stem is unique.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/other.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("sub/other.md");
+        assert_eq!(
+            resolve_target(&canonical, "other", None, Some(&idx)),
+            Some("sub/other.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_bare_stem_ambiguous_returns_none() {
+        // Two files with the same stem → ambiguous → None.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a/note.md", "b/note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("a/note.md");
+        idx.insert("b/note.md");
+        assert_eq!(resolve_target(&canonical, "note", None, Some(&idx)), None);
     }
 
     #[test]
