@@ -2,7 +2,7 @@
 title: Iteration 123 — Auto-link unlinked mentions
 type: iteration
 date: 2026-04-17
-status: in-progress
+status: completed
 tags:
   - iteration
   - links
