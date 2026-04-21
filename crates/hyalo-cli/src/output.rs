@@ -386,6 +386,10 @@ const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No 
 /// Format: summary line with fix status. Includes case-mismatch count when non-zero.
 const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)""#;
 
+/// `LinksAuto result`: `{ambiguous_titles, applied, matches, scanned, total}`
+/// Format: summary line + per-match details.
+const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.scanned) file\(if .scanned == 1 then "" else "s" end)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
+
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
 const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.from) → \(.to)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)""#;
@@ -462,6 +466,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "applied,broken,case_mismatch_fixes,case_mismatches,fixable,fixes,ignored,unfixable,unfixable_links" => {
             Some(LINKS_FIX_FILTER)
         }
+        // LinksAuto result
+        "ambiguous_titles,applied,matches,scanned,total" => Some(LINKS_AUTO_FILTER),
         // MvResult
         "dry_run,from,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)

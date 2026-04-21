@@ -58,6 +58,9 @@ hyalo mv --file old/path.md --to archive/path.md
 # Detect and fix broken links
 hyalo links fix --apply
 
+# Auto-link unlinked mentions of known page titles
+hyalo links auto --apply
+
 # Lint against your schema
 hyalo lint --fix
 ```

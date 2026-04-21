@@ -13,6 +13,7 @@ categories = ["parser-implementations"]
 workspace = true
 
 [dependencies]
+aho-corasick = { workspace = true }
 anyhow = { workspace = true }
 dunce = { workspace = true }
 globset = { workspace = true }

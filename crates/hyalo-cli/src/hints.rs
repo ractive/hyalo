@@ -43,6 +43,7 @@ pub enum HintSource {
     TaskToggle,
     TaskSetStatus,
     LinksFix,
+    LinksAuto,
     CreateIndex,
     DropIndex,
     Lint,
@@ -168,6 +169,7 @@ pub fn generate_hints(
         HintSource::TaskRead => hints_for_task_read(ctx, data),
         HintSource::TaskToggle | HintSource::TaskSetStatus => hints_for_task_mutation(ctx, data),
         HintSource::LinksFix => hints_for_links_fix(ctx, data),
+        HintSource::LinksAuto => hints_for_links_auto(ctx, data),
         HintSource::CreateIndex => hints_for_create_index(ctx, data),
         HintSource::DropIndex => hints_for_drop_index(ctx, data),
         HintSource::Lint => hints_for_lint(ctx, data, total),
@@ -1311,6 +1313,28 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         hints.push(Hint::new(
             "List files with remaining broken links",
             build_command_with_glob(ctx, &["find", "--broken-links"]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let is_dry_run = !data
+        .get("applied")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let total = data
+        .get("total")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    if is_dry_run && total > 0 {
+        hints.push(Hint::new(
+            format!("Apply {total} auto-links"),
+            build_command_with_glob(ctx, &["links", "auto", "--apply"]),
         ));
     }
 

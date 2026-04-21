@@ -1018,6 +1018,39 @@ pub(crate) enum LinksAction {
         #[command(flatten)]
         index_flags: IndexFlags,
     },
+    /// Auto-link unlinked mentions of known page titles
+    #[command(
+        long_about = "Scan body text for unlinked mentions of known page titles and convert them to [[wikilinks]].\n\n\
+            Title sources (in priority order):\n\
+            1. Filename stems (without .md)\n\
+            2. Frontmatter `title` property\n\
+            3. Frontmatter `aliases` property (list of alternate names)\n\n\
+            Exclusion zones: frontmatter, fenced code blocks, inline code,\n\
+            existing [[wikilinks]] and [markdown](links), headings, self-links.\n\n\
+            Without --apply, prints a dry-run report. Pass --apply to write changes."
+    )]
+    Auto {
+        /// Preview changes without modifying files (default when --apply is omitted)
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply changes to files on disk
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Minimum title length to consider (skip short common words)
+        #[arg(long, default_value = "3")]
+        min_length: usize,
+        /// Titles to exclude from matching (repeatable, case-insensitive)
+        #[arg(long)]
+        exclude_title: Vec<String>,
+        /// Restrict to a single file
+        #[arg(long)]
+        file: Option<String>,
+        /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
+        #[arg(short, long)]
+        glob: Vec<String>,
+        #[command(flatten)]
+        index_flags: IndexFlags,
+    },
 }
 
 #[derive(Subcommand)]

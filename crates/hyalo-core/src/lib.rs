@@ -1,3 +1,4 @@
+pub mod auto_link;
 pub mod bm25;
 pub mod case_index;
 pub mod content_search;

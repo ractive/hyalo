@@ -1206,3 +1206,680 @@ fn case_insensitive_ambiguous_returns_unresolved_on_case_sensitive_fs() {
         "ambiguous case-insensitive match should be unresolved, got: {links:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// links auto
+// ---------------------------------------------------------------------------
+
+/// Run `hyalo links auto` against `dir` with the given extra args, parse the
+/// JSON envelope and return the `results` object.
+fn run_links_auto(dir: &std::path::Path, extra_args: &[&str]) -> serde_json::Value {
+    let mut cmd = hyalo_no_hints();
+    cmd.args([
+        "--dir",
+        dir.to_str().expect("temp path should be valid UTF-8"),
+    ])
+    .args(["links", "auto"])
+    .args(extra_args);
+    let output = cmd.output().expect("hyalo links auto should run");
+    assert!(
+        output.status.success(),
+        "links auto exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    json["results"].clone()
+}
+
+#[test]
+fn links_auto_dry_run_finds_mentions() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Sprint review process description.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "meetings.md",
+        md!(r"
+---
+title: Meetings
+---
+We held a Sprint Review last week.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let total = results["total"]
+        .as_u64()
+        .expect("results.total should be a number");
+    assert!(
+        total >= 1,
+        "expected at least 1 unlinked mention, got {total}"
+    );
+
+    let applied = results["applied"]
+        .as_bool()
+        .expect("results.applied should be a bool");
+    assert!(!applied, "dry-run should report applied=false");
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let has_meetings_match = matches.iter().any(|m| {
+        m["file"].as_str() == Some("meetings.md")
+            && m["link_target"].as_str() == Some("sprint-review")
+    });
+    assert!(
+        has_meetings_match,
+        "expected a match in meetings.md with link_target=sprint-review, matches: {matches:?}"
+    );
+}
+
+#[test]
+fn links_auto_apply_writes_wikilinks() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Sprint review process description.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "meetings.md",
+        md!(r"
+---
+title: Meetings
+---
+We held a Sprint Review last week.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+
+    let applied = results["applied"]
+        .as_bool()
+        .expect("results.applied should be a bool");
+    assert!(applied, "links auto --apply should report applied=true");
+
+    let total = results["total"]
+        .as_u64()
+        .expect("results.total should be a number");
+    assert!(total >= 1, "expected at least 1 applied replacement");
+
+    let meetings_content = fs::read_to_string(tmp.path().join("meetings.md"))
+        .expect("meetings.md should be readable after apply");
+    assert!(
+        meetings_content.contains("[[sprint-review]]"),
+        "meetings.md should contain [[sprint-review]] after apply, got:\n{meetings_content}"
+    );
+    // The bare mention on that line should have been replaced — it must not
+    // appear as plain text followed by a non-bracket character.
+    let bare_mention_still_present = meetings_content
+        .lines()
+        .any(|l| l.contains("Sprint Review") && !l.contains("[[sprint-review]]"));
+    assert!(
+        !bare_mention_still_present,
+        "bare 'Sprint Review' (outside brackets) should be gone after apply, got:\n{meetings_content}"
+    );
+}
+
+#[test]
+fn links_auto_skips_existing_links() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Sprint review process description.
+"),
+    );
+    // One already-linked mention and one bare mention on a different line.
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+See [[sprint-review]] here.
+Sprint Review on Friday.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let notes_matches: Vec<_> = matches
+        .iter()
+        .filter(|m| m["file"].as_str() == Some("notes.md"))
+        .collect();
+    assert_eq!(
+        notes_matches.len(),
+        1,
+        "only the unlinked mention on the second line should match, got: {notes_matches:?}"
+    );
+}
+
+#[test]
+fn links_auto_skips_code_blocks() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "config.md",
+        md!(r"
+---
+title: Config
+---
+Configuration reference.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "docs.md",
+        md!(r"
+---
+title: Docs
+---
+```
+Config details go here
+```
+See Config for more information.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+
+    // Only the mention outside the code block should match.
+    let docs_matches: Vec<_> = matches
+        .iter()
+        .filter(|m| m["file"].as_str() == Some("docs.md"))
+        .collect();
+
+    // Line numbers inside the fenced block should not appear.
+    let has_code_block_match = docs_matches.iter().any(|m| {
+        // Lines 4 and 5 (1-based) are inside the fence; line 7 is outside.
+        m["line"].as_u64().is_some_and(|l| (4..=5).contains(&l))
+    });
+    assert!(
+        !has_code_block_match,
+        "matches inside code block should be skipped, docs matches: {docs_matches:?}"
+    );
+
+    // There should be exactly one match: the outside mention.
+    assert_eq!(
+        docs_matches.len(),
+        1,
+        "only the mention outside the code block should match, got: {docs_matches:?}"
+    );
+}
+
+#[test]
+fn links_auto_skips_headings() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "alpha.md",
+        md!(r"
+---
+title: Alpha
+---
+Alpha documentation.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+# Alpha Section
+Alpha is great.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+
+    let page_matches: Vec<_> = matches
+        .iter()
+        .filter(|m| m["file"].as_str() == Some("page.md"))
+        .collect();
+
+    // The heading line (# Alpha Section) should be skipped; only the body
+    // line "Alpha is great." should produce a match.
+    assert_eq!(
+        page_matches.len(),
+        1,
+        "only the body-text mention should match (not the heading), got: {page_matches:?}"
+    );
+    // The match must be on the body line (line 5, "Alpha is great.") and NOT
+    // on the heading line (line 4, "# Alpha Section").
+    let match_line = page_matches[0]["line"]
+        .as_u64()
+        .expect("match.line should be a number");
+    assert!(
+        match_line > 4,
+        "match should be on the body line after the heading, got line {match_line}"
+    );
+}
+
+#[test]
+fn links_auto_skips_self_links() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+This Sprint Review process is important.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let total = results["total"]
+        .as_u64()
+        .expect("results.total should be a number");
+    assert_eq!(
+        total, 0,
+        "a file should not generate a self-link, got total={total}"
+    );
+}
+
+#[test]
+fn links_auto_min_length_filter() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+Single character title.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "beta.md",
+        md!(r"
+---
+title: Beta
+---
+Beta documentation.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+A and Beta are both mentioned here.
+"),
+    );
+
+    // With default --min-length 3, only "Beta" (len 4) should match.
+    let results_default = run_links_auto(tmp.path(), &["--format", "json"]);
+    let matches_default = results_default["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let page_default: Vec<_> = matches_default
+        .iter()
+        .filter(|m| m["file"].as_str() == Some("page.md"))
+        .collect();
+    let has_beta_default = page_default
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("beta"));
+    let has_a_default = page_default
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("a"));
+    assert!(
+        has_beta_default,
+        "Beta should match with default min-length, matches: {page_default:?}"
+    );
+    assert!(
+        !has_a_default,
+        "single-char title 'A' should be filtered by default min-length=3, matches: {page_default:?}"
+    );
+
+    // With --min-length 1, "A" should also match.
+    let results_min1 = run_links_auto(tmp.path(), &["--min-length", "1", "--format", "json"]);
+    let matches_min1 = results_min1["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let page_min1: Vec<_> = matches_min1
+        .iter()
+        .filter(|m| m["file"].as_str() == Some("page.md"))
+        .collect();
+    let has_a_min1 = page_min1
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("a"));
+    assert!(
+        has_a_min1,
+        "single-char title 'A' should match with --min-length 1, matches: {page_min1:?}"
+    );
+}
+
+#[test]
+fn links_auto_exclude_title() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Sprint review process.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "daily.md",
+        md!(r"
+---
+title: Daily
+---
+Daily standup notes.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+Sprint Review and Daily are both mentioned.
+"),
+    );
+
+    let results = run_links_auto(
+        tmp.path(),
+        &["--exclude-title", "Sprint Review", "--format", "json"],
+    );
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let has_sprint_review = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("sprint-review"));
+    let has_daily = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("daily"));
+
+    assert!(
+        !has_sprint_review,
+        "Sprint Review should be excluded via --exclude-title, matches: {matches:?}"
+    );
+    assert!(
+        has_daily,
+        "Daily should still match (not excluded), matches: {matches:?}"
+    );
+}
+
+#[test]
+fn links_auto_text_format() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Sprint review process.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+Sprint Review happened last week.
+"),
+    );
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args([
+        "--dir",
+        tmp.path()
+            .to_str()
+            .expect("temp path should be valid UTF-8"),
+        "links",
+        "auto",
+        "--format",
+        "text",
+    ]);
+    let output = cmd
+        .output()
+        .expect("hyalo links auto --format text should run");
+    assert!(
+        output.status.success(),
+        "links auto --format text exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let text = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+
+    assert!(
+        text.to_lowercase().contains("unlinked mention"),
+        "text output should contain 'unlinked mention', got:\n{text}"
+    );
+    assert!(
+        text.contains("Applied: no"),
+        "dry-run text output should contain 'Applied: no', got:\n{text}"
+    );
+    assert!(
+        text.contains('\u{2192}'),
+        "text output should contain the → arrow in match lines, got:\n{text}"
+    );
+}
+
+#[test]
+fn links_auto_ambiguous_titles_skipped() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    // Two files with the same title — the title is ambiguous.
+    write_md(
+        tmp.path(),
+        "alpha.md",
+        md!(r"
+---
+title: Common Title
+---
+First file.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "beta.md",
+        md!(r"
+---
+title: Common Title
+---
+Second file.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+See Common Title here.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let total = results["total"]
+        .as_u64()
+        .expect("results.total should be a number");
+    assert_eq!(
+        total, 0,
+        "ambiguous title should produce no matches, got total={total}"
+    );
+
+    let ambiguous = results["ambiguous_titles"]
+        .as_array()
+        .expect("results.ambiguous_titles should be an array");
+    assert!(
+        !ambiguous.is_empty(),
+        "ambiguous_titles should be non-empty when two files share the same title"
+    );
+}
+
+#[test]
+fn links_auto_word_boundaries() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint.md",
+        md!(r"
+---
+title: Sprint
+---
+Sprint documentation.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+---
+title: Page
+---
+Sprinting fast. Sprint starts Monday.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let page_matches: Vec<_> = matches
+        .iter()
+        .filter(|m| m["file"].as_str() == Some("page.md"))
+        .collect();
+
+    // Only the standalone "Sprint" word should match, not "Sprint" inside "Sprinting".
+    assert_eq!(
+        page_matches.len(),
+        1,
+        "only standalone 'Sprint' should match (not inside 'Sprinting'), got: {page_matches:?}"
+    );
+    let matched_text = page_matches[0]["matched_text"]
+        .as_str()
+        .expect("match.matched_text should be a string");
+    assert_eq!(
+        matched_text.to_ascii_lowercase(),
+        "sprint",
+        "matched text should be 'sprint', got: {matched_text}"
+    );
+}
+
+#[test]
+fn links_auto_glob_filter() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Sprint review process.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "meetings/weekly.md",
+        md!(r"
+---
+title: Weekly Meeting
+---
+We covered Sprint Review in this session.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "other.md",
+        md!(r"
+---
+title: Other
+---
+Sprint Review was also mentioned here.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--glob", "meetings/*", "--format", "json"]);
+
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+
+    // Only meetings/weekly.md should appear in the matches.
+    let has_weekly = matches
+        .iter()
+        .any(|m| m["file"].as_str() == Some("meetings/weekly.md"));
+    let has_other = matches
+        .iter()
+        .any(|m| m["file"].as_str() == Some("other.md"));
+
+    assert!(
+        has_weekly,
+        "meetings/weekly.md should have matches when glob=meetings/*, matches: {matches:?}"
+    );
+    assert!(
+        !has_other,
+        "other.md should be excluded by the glob filter, matches: {matches:?}"
+    );
+}
