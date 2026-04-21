@@ -43,6 +43,7 @@ pub enum HintSource {
     TaskToggle,
     TaskSetStatus,
     LinksFix,
+    LinksAuto,
     CreateIndex,
     DropIndex,
     Lint,
@@ -87,6 +88,10 @@ pub struct HintContext {
     pub dry_run: bool,
     // Index context
     pub index_path: Option<String>,
+    // Links-auto context (for replaying the exact preview scope in hints)
+    pub auto_link_file: Option<String>,
+    pub auto_link_min_length: Option<usize>,
+    pub auto_link_exclude_titles: Vec<String>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -125,6 +130,9 @@ impl HintContext {
             task_selector: None,
             dry_run: false,
             index_path: None,
+            auto_link_file: None,
+            auto_link_min_length: None,
+            auto_link_exclude_titles: vec![],
         }
     }
 
@@ -168,6 +176,7 @@ pub fn generate_hints(
         HintSource::TaskRead => hints_for_task_read(ctx, data),
         HintSource::TaskToggle | HintSource::TaskSetStatus => hints_for_task_mutation(ctx, data),
         HintSource::LinksFix => hints_for_links_fix(ctx, data),
+        HintSource::LinksAuto => hints_for_links_auto(ctx, data),
         HintSource::CreateIndex => hints_for_create_index(ctx, data),
         HintSource::DropIndex => hints_for_drop_index(ctx, data),
         HintSource::Lint => hints_for_lint(ctx, data, total),
@@ -1311,6 +1320,49 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         hints.push(Hint::new(
             "List files with remaining broken links",
             build_command_with_glob(ctx, &["find", "--broken-links"]),
+        ));
+    }
+
+    hints
+}
+
+fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let is_dry_run = !data
+        .get("applied")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let total = data
+        .get("total")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    if is_dry_run && total > 0 {
+        // Rebuild the exact command from the preview, preserving all
+        // scope-narrowing flags so the apply doesn't widen the mutation set.
+        let mut args: Vec<&str> = vec!["links", "auto", "--apply"];
+        let min_str;
+        if let Some(ml) = ctx.auto_link_min_length
+            && ml != 3
+        {
+            args.push("--min-length");
+            min_str = ml.to_string();
+            args.push(&min_str);
+        }
+        let cmd = build_command_with_glob(ctx, &args);
+        // Append --file and --exclude-title after the builder (they are not
+        // glob-related and aren't handled by build_command_with_glob).
+        let mut parts = vec![cmd];
+        if let Some(ref f) = ctx.auto_link_file {
+            parts.push(format!("--file {}", shell_quote(f)));
+        }
+        for et in &ctx.auto_link_exclude_titles {
+            parts.push(format!("--exclude-title {}", shell_quote(et)));
+        }
+        hints.push(Hint::new(
+            format!("Apply {total} auto-links"),
+            parts.join(" "),
         ));
     }
 

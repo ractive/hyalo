@@ -889,6 +889,41 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             },
+            LinksAction::Auto {
+                dry_run: _,
+                apply,
+                min_length,
+                exclude_title,
+                file,
+                glob,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => match resolve_index(
+                snapshot_index.as_ref(),
+                dir,
+                &[],
+                &[],
+                effective_format,
+                site_prefix,
+                true,
+                &ScanOptions {
+                    scan_body: false,
+                    bm25_tokenize: false,
+                    default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
+                },
+            )? {
+                IndexResolution::Resolved(resolved) => links_commands::links_auto(
+                    resolved.as_index(),
+                    dir,
+                    apply,
+                    min_length,
+                    &exclude_title,
+                    file.as_deref(),
+                    &glob,
+                    effective_format,
+                ),
+                IndexResolution::Outcome(outcome) => Ok(outcome),
+            },
         },
         Commands::Lint {
             file_positional,

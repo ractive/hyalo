@@ -109,4 +109,43 @@ pub fn links_fix(
     ))
 }
 
+/// Run `hyalo links auto` using a pre-built index.
+///
+/// `apply = false` → preview only (default)
+/// `apply = true`  → write `[[wikilinks]]` to disk
+#[allow(clippy::too_many_arguments)]
+pub fn links_auto(
+    index: &dyn VaultIndex,
+    dir: &Path,
+    apply: bool,
+    min_length: usize,
+    exclude_titles: &[String],
+    file_filter: Option<&str>,
+    glob_filter: &[String],
+    format: Format,
+) -> Result<CommandOutcome> {
+    let report = hyalo_core::auto_link::auto_link(
+        index,
+        dir,
+        apply,
+        min_length,
+        exclude_titles,
+        file_filter,
+        glob_filter,
+    )?;
+
+    let output = serde_json::json!({
+        "scanned": report.scanned,
+        "total": report.total,
+        "matches": report.matches,
+        "ambiguous_titles": report.ambiguous_titles,
+        "applied": report.applied,
+    });
+
+    let _ = format;
+    Ok(CommandOutcome::success(
+        serde_json::to_string_pretty(&output).context("failed to serialize")?,
+    ))
+}
+
 // ---------------------------------------------------------------------------
