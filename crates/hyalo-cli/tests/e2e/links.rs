@@ -1883,3 +1883,314 @@ Sprint Review was also mentioned here.
         "other.md should be excluded by the glob filter, matches: {matches:?}"
     );
 }
+
+#[test]
+fn links_auto_first_only() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "alice.md",
+        md!(r"
+---
+title: Alice
+---
+Alice bio.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+Alice went to the park. Later Alice came back. Then Alice left again.
+"),
+    );
+
+    // Without --first-only: multiple Alice matches in notes.md
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let alice_count = matches
+        .iter()
+        .filter(|m| {
+            m["file"].as_str() == Some("notes.md") && m["link_target"].as_str() == Some("alice")
+        })
+        .count();
+    assert!(
+        alice_count >= 2,
+        "without --first-only, expected multiple Alice matches, got {alice_count}"
+    );
+
+    // With --first-only: at most 1 Alice match per file
+    let results = run_links_auto(tmp.path(), &["--first-only", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let alice_count = matches
+        .iter()
+        .filter(|m| {
+            m["file"].as_str() == Some("notes.md") && m["link_target"].as_str() == Some("alice")
+        })
+        .count();
+    assert_eq!(
+        alice_count, 1,
+        "with --first-only, expected exactly 1 Alice match, got {alice_count}"
+    );
+}
+
+#[test]
+fn links_auto_first_only_with_apply() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "alice.md",
+        md!(r"
+---
+title: Alice
+---
+Alice bio.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+Alice went to the park. Later Alice came back.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--first-only", "--apply", "--format", "json"]);
+    assert_eq!(
+        results["applied"].as_bool(),
+        Some(true),
+        "should report applied=true"
+    );
+
+    let content = std::fs::read_to_string(tmp.path().join("notes.md")).unwrap();
+    let link_count = content.matches("[[alice").count();
+    assert_eq!(
+        link_count, 1,
+        "with --first-only --apply, only first mention should be linked, content: {content}"
+    );
+}
+
+#[test]
+fn links_auto_exclude_target_glob() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "templates/start.md",
+        md!(r"
+---
+title: Start
+---
+Start template.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "people/alice.md",
+        md!(r"
+---
+title: Alice
+---
+Alice bio.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+We Start with Alice today.
+"),
+    );
+
+    // Without exclusion: both match
+    let results = run_links_auto(tmp.path(), &["--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let has_start = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("start"));
+    let has_alice = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("alice"));
+    assert!(has_start, "without exclusion, Start should match");
+    assert!(has_alice, "without exclusion, Alice should match");
+
+    // With --exclude-target-glob: Start should be excluded
+    let results = run_links_auto(
+        tmp.path(),
+        &["--exclude-target-glob", "templates/*", "--format", "json"],
+    );
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let has_start = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("start"));
+    let has_alice = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("alice"));
+    assert!(
+        !has_start,
+        "Start should be excluded by --exclude-target-glob, matches: {matches:?}"
+    );
+    assert!(has_alice, "Alice should still match, matches: {matches:?}");
+}
+
+#[test]
+fn links_auto_exclude_target_glob_multiple() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "templates/start.md",
+        md!(r"
+---
+title: Start
+---
+Start template.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "archive/old-note.md",
+        md!(r"
+---
+title: Old Note
+---
+Old note content.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "people/alice.md",
+        md!(r"
+---
+title: Alice
+---
+Alice bio.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+We Start with Alice and review the Old Note.
+"),
+    );
+
+    let results = run_links_auto(
+        tmp.path(),
+        &[
+            "--exclude-target-glob",
+            "templates/*",
+            "--exclude-target-glob",
+            "archive/*",
+            "--format",
+            "json",
+        ],
+    );
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let targets: Vec<&str> = matches
+        .iter()
+        .filter_map(|m| m["link_target"].as_str())
+        .collect();
+    assert!(
+        !targets.contains(&"start"),
+        "templates/* should be excluded, targets: {targets:?}"
+    );
+    assert!(
+        !targets.contains(&"old-note"),
+        "archive/* should be excluded, targets: {targets:?}"
+    );
+    assert!(
+        targets.contains(&"alice"),
+        "Alice should NOT be excluded, targets: {targets:?}"
+    );
+}
+
+#[test]
+fn links_auto_first_only_and_exclude_target_glob_combined() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "templates/start.md",
+        md!(r"
+---
+title: Start
+---
+Start template.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "alice.md",
+        md!(r"
+---
+title: Alice
+---
+Alice bio.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+Alice went to Start the project. Then Alice returned. We Start again.
+"),
+    );
+
+    let results = run_links_auto(
+        tmp.path(),
+        &[
+            "--first-only",
+            "--exclude-target-glob",
+            "templates/*",
+            "--format",
+            "json",
+        ],
+    );
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+
+    // Start should be fully excluded (--exclude-target-glob)
+    let has_start = matches
+        .iter()
+        .any(|m| m["link_target"].as_str() == Some("start"));
+    assert!(!has_start, "Start should be excluded by glob");
+
+    // Alice should appear exactly once (--first-only)
+    let alice_count = matches
+        .iter()
+        .filter(|m| m["link_target"].as_str() == Some("alice"))
+        .count();
+    assert_eq!(
+        alice_count, 1,
+        "Alice should appear exactly once with --first-only"
+    );
+}

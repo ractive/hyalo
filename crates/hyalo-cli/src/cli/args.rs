@@ -1027,6 +1027,10 @@ pub(crate) enum LinksAction {
             3. Frontmatter `aliases` property (list of alternate names)\n\n\
             Exclusion zones: frontmatter, fenced code blocks, inline code,\n\
             existing [[wikilinks]] and [markdown](links), headings, comment fences (%%), self-links.\n\n\
+            Filtering options:\n\
+            --first-only          Only emit the first mention of each target per source file\n\
+            --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
+            --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes."
     )]
     Auto {
@@ -1042,6 +1046,12 @@ pub(crate) enum LinksAction {
         /// Titles to exclude from matching (repeatable, case-insensitive)
         #[arg(long)]
         exclude_title: Vec<String>,
+        /// Only emit the first match of each target title per source file
+        #[arg(long)]
+        first_only: bool,
+        /// Exclude target pages whose vault-relative path matches a glob pattern (repeatable)
+        #[arg(long)]
+        exclude_target_glob: Vec<String>,
         /// Restrict to a single file (vault-relative path)
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,

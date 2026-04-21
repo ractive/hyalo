@@ -894,6 +894,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 min_length,
                 exclude_title,
+                first_only,
+                exclude_target_glob,
                 file,
                 glob,
                 index_flags: _, // consumed in run.rs before dispatch
@@ -918,6 +920,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     apply,
                     min_length,
                     &exclude_title,
+                    first_only,
+                    &exclude_target_glob,
                     file.as_deref(),
                     &glob,
                     effective_format,
