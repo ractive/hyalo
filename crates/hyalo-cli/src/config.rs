@@ -231,18 +231,20 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     // so `--no-hints` intentionally does *not* gate it.
     if let Some(ref sub) = cfg.dir {
         let nested = dir.join(sub).join(".hyalo.toml");
-        // Skip warning when dir points back at itself (e.g. dir = ".") —
-        // the nested path resolves to the same file as the root config.
-        let is_self = nested
-            .canonicalize()
-            .and_then(|n| dir.join(".hyalo.toml").canonicalize().map(|r| n == r))
-            .unwrap_or(false);
-        if !is_self && nested.is_file() {
-            crate::warn::warn(format!(
-                "ignoring nested config {}/.hyalo.toml (shadowed by {}/.hyalo.toml)",
-                sub.trim_end_matches('/'),
-                dir.display()
-            ));
+        if nested.is_file() {
+            // Skip warning when dir points back at itself (e.g. dir = ".") —
+            // the nested path resolves to the same file as the root config.
+            let is_self = nested
+                .canonicalize()
+                .and_then(|n| dir.join(".hyalo.toml").canonicalize().map(|r| n == r))
+                .unwrap_or(false);
+            if !is_self {
+                crate::warn::warn(format!(
+                    "ignoring nested config {}/.hyalo.toml (shadowed by {}/.hyalo.toml)",
+                    sub.trim_end_matches('/'),
+                    dir.display()
+                ));
+            }
         }
     }
 
@@ -474,7 +476,10 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
         let _ = load_config_from(dir.path());
         let tracked = crate::warn::any_tracked_starts_with("ignoring nested config");
-        assert!(!tracked, "dir = '.' should not trigger nested-config warning");
+        assert!(
+            !tracked,
+            "dir = '.' should not trigger nested-config warning"
+        );
     }
 
     #[test]
