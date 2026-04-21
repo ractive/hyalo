@@ -42,8 +42,9 @@ hyalo init --dir docs
 # Get a bird's-eye view
 hyalo summary --format text
 
-# Full-text search (BM25 ranked)
+# Full-text search (BM25 ranked, with boolean operators)
 hyalo find "retry backoff"
+hyalo find "retry OR timeout -deprecated"
 
 # Filter by frontmatter
 hyalo find --property status=draft --tag research
