@@ -60,6 +60,7 @@ hyalo links fix --apply
 
 # Auto-link unlinked mentions of known page titles
 hyalo links auto --apply
+hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply
 
 # Lint against your schema
 hyalo lint --fix

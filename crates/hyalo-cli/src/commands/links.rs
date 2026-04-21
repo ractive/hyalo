@@ -120,6 +120,8 @@ pub fn links_auto(
     apply: bool,
     min_length: usize,
     exclude_titles: &[String],
+    first_only: bool,
+    exclude_target_globs: &[String],
     file_filter: Option<&str>,
     glob_filter: &[String],
     format: Format,
@@ -130,6 +132,8 @@ pub fn links_auto(
         apply,
         min_length,
         exclude_titles,
+        first_only,
+        exclude_target_globs,
         file_filter,
         glob_filter,
     )?;

@@ -10,6 +10,8 @@ use aho_corasick::{AhoCorasick, MatchKind};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use globset::{GlobBuilder, GlobSetBuilder};
+
 use crate::discovery::match_globs;
 use crate::fs_util::atomic_write;
 use crate::index::{IndexEntry, VaultIndex};
@@ -81,7 +83,8 @@ fn build_title_inventory(
     entries: &[IndexEntry],
     min_length: usize,
     exclude_titles: &[String],
-) -> (HashMap<String, TitleEntry>, Vec<String>) {
+    exclude_target_globs: &[String],
+) -> Result<(HashMap<String, TitleEntry>, Vec<String>)> {
     let exclude_lower: Vec<String> = exclude_titles
         .iter()
         .map(|s| s.to_ascii_lowercase())
@@ -203,7 +206,24 @@ fn build_title_inventory(
         }
     }
 
-    (title_map, ambiguous)
+    // Apply --exclude-target-glob: remove targets whose source_rel matches any pattern.
+    if !exclude_target_globs.is_empty() {
+        let mut builder = GlobSetBuilder::new();
+        for pat in exclude_target_globs {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .context("invalid --exclude-target-glob pattern")?,
+            );
+        }
+        let glob_set = builder
+            .build()
+            .context("failed to build --exclude-target-glob globset")?;
+        title_map.retain(|_, entry| !glob_set.is_match(&entry.source_rel));
+    }
+
+    Ok((title_map, ambiguous))
 }
 
 /// Extract the filename stem from a vault-relative path.
@@ -275,19 +295,23 @@ fn overlaps_any_link(
 ///
 /// When `apply` is true, write the `[[wikilinks]]` into the files.
 /// When false (dry-run), just report what would change.
+#[allow(clippy::too_many_arguments)]
 pub fn auto_link(
     index: &dyn VaultIndex,
     dir: &Path,
     apply: bool,
     min_length: usize,
     exclude_titles: &[String],
+    first_only: bool,
+    exclude_target_globs: &[String],
     file_filter: Option<&str>,
     glob_filter: &[String],
 ) -> Result<AutoLinkReport> {
     let entries = index.entries();
 
     // 1. Build the title inventory.
-    let (title_map, ambiguous_titles) = build_title_inventory(entries, min_length, exclude_titles);
+    let (title_map, ambiguous_titles) =
+        build_title_inventory(entries, min_length, exclude_titles, exclude_target_globs)?;
 
     if title_map.is_empty() {
         return Ok(AutoLinkReport {
@@ -356,6 +380,13 @@ pub fn auto_link(
         let file_matches = scan_file_for_matches(&content, rel_path, &ac, &patterns_sorted);
 
         all_matches.extend(file_matches);
+    }
+
+    // 4b. Apply --first-only: keep only the lowest-offset match per (source_file, target_title).
+    if first_only {
+        use std::collections::HashSet;
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        all_matches.retain(|m| seen.insert((m.file.clone(), m.link_target.clone())));
     }
 
     // 5. Apply changes if requested.
@@ -631,7 +662,7 @@ mod tests {
                 ),
             ],
         )];
-        let (map, ambiguous) = build_title_inventory(&entries, 2, &[]);
+        let (map, ambiguous) = build_title_inventory(&entries, 2, &[], &[]).unwrap();
         assert!(ambiguous.is_empty());
         // Stem
         assert!(map.contains_key("sprint-planning"), "stem missing");
@@ -657,7 +688,7 @@ mod tests {
                 vec![("title", Value::String("Sprint".to_owned()))],
             ),
         ];
-        let (map, ambiguous) = build_title_inventory(&entries, 3, &[]);
+        let (map, ambiguous) = build_title_inventory(&entries, 3, &[], &[]).unwrap();
         // Both "sprint.md" produce the same stem "sprint" and same title "sprint"
         assert!(
             !map.contains_key("sprint"),
@@ -673,7 +704,7 @@ mod tests {
             vec![("title", Value::String("Go".to_owned()))],
         )];
         // min_length = 3: "go" (len 2) should be filtered
-        let (map, _) = build_title_inventory(&entries, 3, &[]);
+        let (map, _) = build_title_inventory(&entries, 3, &[], &[]).unwrap();
         assert!(!map.contains_key("go"), "short title should be filtered");
     }
 
@@ -683,7 +714,8 @@ mod tests {
             "the.md",
             vec![("title", Value::String("The".to_owned()))],
         )];
-        let (map, _) = build_title_inventory(&entries, 2, &["the".to_owned(), "The".to_owned()]);
+        let (map, _) =
+            build_title_inventory(&entries, 2, &["the".to_owned(), "The".to_owned()], &[]).unwrap();
         assert!(!map.contains_key("the"), "excluded title should not appear");
     }
 
@@ -700,7 +732,18 @@ mod tests {
         write_file(&tmp, "other.md", "Sprinting is fun but Sprint is better.\n");
 
         let index = MockIndex::new(vec![entry, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("other.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("other.md"),
+            &[],
+        )
+        .unwrap();
 
         let matches: Vec<_> = report
             .matches
@@ -729,7 +772,18 @@ mod tests {
         );
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         // Heading line should be skipped; body line should match.
         assert_eq!(
@@ -753,7 +807,18 @@ mod tests {
         );
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         // Matches inside fenced code block should be skipped.
         assert!(
@@ -771,7 +836,18 @@ mod tests {
         write_file(&tmp, "notes.md", "Use `target` sparingly.\n");
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         assert!(
             report.matches.is_empty(),
@@ -792,7 +868,18 @@ mod tests {
         );
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         assert!(
             report.matches.is_empty(),
@@ -814,7 +901,18 @@ mod tests {
         );
 
         let index = MockIndex::new(vec![page]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("sprint.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("sprint.md"),
+            &[],
+        )
+        .unwrap();
 
         assert!(
             report.matches.is_empty(),
@@ -831,7 +929,18 @@ mod tests {
         write_file(&tmp, "notes.md", "See Target or TARGET or target here.\n");
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         assert_eq!(report.matches.len(), 3, "all case variants should match");
     }
@@ -854,7 +963,18 @@ mod tests {
         write_file(&tmp, "notes.md", "Sprint Planning kicks off tomorrow.\n");
 
         let index = MockIndex::new(vec![sprint, sp, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         // Should produce exactly one match: "Sprint Planning"
         assert_eq!(report.matches.len(), 1);
@@ -875,7 +995,18 @@ mod tests {
         );
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         // Frontmatter content should be skipped.
         assert!(
@@ -897,7 +1028,18 @@ mod tests {
         );
 
         let index = MockIndex::new(vec![page, other]);
-        let report = auto_link(&index, tmp.path(), false, 3, &[], Some("notes.md"), &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &[],
+            Some("notes.md"),
+            &[],
+        )
+        .unwrap();
 
         assert!(
             report.matches.is_empty(),
@@ -920,6 +1062,8 @@ mod tests {
             true, // apply
             3,
             &[],
+            false,
+            &[],
             Some("notes.md"),
             &[],
         )
@@ -932,6 +1076,165 @@ mod tests {
         assert!(
             written.contains("[[target]]"),
             "written content should contain wikilink: {written}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_dedup() {
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nAlice went to the park. Later Alice came back.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        // Without first_only: should get 2 matches for "Alice" in notes.md
+        let report = auto_link(&index, tmp.path(), false, 3, &[], false, &[], None, &[]).unwrap();
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert_eq!(
+            alice_matches.len(),
+            2,
+            "without first_only, expected 2 Alice matches"
+        );
+
+        // With first_only: should get only 1 match for "Alice" in notes.md
+        let report = auto_link(&index, tmp.path(), false, 3, &[], true, &[], None, &[]).unwrap();
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert_eq!(
+            alice_matches.len(),
+            1,
+            "with first_only, expected 1 Alice match"
+        );
+    }
+
+    #[test]
+    fn test_exclude_target_glob() {
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry(
+                "templates/start.md",
+                vec![("title", Value::String("Start".into()))],
+            ),
+            make_entry(
+                "people/alice.md",
+                vec![("title", Value::String("Alice".into()))],
+            ),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(
+            &tmp,
+            "templates/start.md",
+            "---\ntitle: Start\n---\nStart template.\n",
+        );
+        write_file(
+            &tmp,
+            "people/alice.md",
+            "---\ntitle: Alice\n---\nAlice bio.\n",
+        );
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nWe Start with Alice today.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        // Without exclusion: both "Start" and "Alice" match in notes.md
+        let report = auto_link(&index, tmp.path(), false, 3, &[], false, &[], None, &[]).unwrap();
+        let has_start = report.matches.iter().any(|m| m.link_target == "start");
+        let has_alice = report.matches.iter().any(|m| m.link_target == "alice");
+        assert!(has_start, "without exclusion, Start should match");
+        assert!(has_alice, "without exclusion, Alice should match");
+
+        // With --exclude-target-glob 'templates/*': "Start" should be excluded
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &["templates/*".to_owned()],
+            None,
+            &[],
+        )
+        .unwrap();
+        let has_start = report.matches.iter().any(|m| m.link_target == "start");
+        let has_alice = report.matches.iter().any(|m| m.link_target == "alice");
+        assert!(!has_start, "with exclusion, Start should NOT match");
+        assert!(has_alice, "with exclusion, Alice should still match");
+    }
+
+    #[test]
+    fn test_exclude_target_glob_multiple() {
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry(
+                "templates/start.md",
+                vec![("title", Value::String("Start".into()))],
+            ),
+            make_entry(
+                "archive/old.md",
+                vec![("title", Value::String("Old".into()))],
+            ),
+            make_entry(
+                "people/alice.md",
+                vec![("title", Value::String("Alice".into()))],
+            ),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(
+            &tmp,
+            "templates/start.md",
+            "---\ntitle: Start\n---\nStart.\n",
+        );
+        write_file(&tmp, "archive/old.md", "---\ntitle: Old\n---\nOld.\n");
+        write_file(&tmp, "people/alice.md", "---\ntitle: Alice\n---\nAlice.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nStart and Old and Alice today.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            false,
+            3,
+            &[],
+            false,
+            &["templates/*".to_owned(), "archive/*".to_owned()],
+            None,
+            &[],
+        )
+        .unwrap();
+        let targets: Vec<&str> = report
+            .matches
+            .iter()
+            .map(|m| m.link_target.as_str())
+            .collect();
+        assert!(
+            !targets.contains(&"start"),
+            "templates/* should be excluded"
+        );
+        assert!(!targets.contains(&"old"), "archive/* should be excluded");
+        assert!(
+            targets.contains(&"alice"),
+            "people/alice should NOT be excluded"
         );
     }
 }
