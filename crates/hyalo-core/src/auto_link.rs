@@ -3,7 +3,7 @@
 //!
 //! The public entry point is [`auto_link`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use aho_corasick::{AhoCorasick, MatchKind};
@@ -85,6 +85,28 @@ fn build_title_inventory(
     exclude_titles: &[String],
     exclude_target_globs: &[String],
 ) -> Result<(HashMap<String, TitleEntry>, Vec<String>)> {
+    // Build --exclude-target-glob filter up front so excluded entries never
+    // participate in ambiguity detection (fixes false ambiguities when one of
+    // two conflicting pages is glob-excluded).
+    let glob_set = if exclude_target_globs.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        for pat in exclude_target_globs {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .context("invalid --exclude-target-glob pattern")?,
+            );
+        }
+        Some(
+            builder
+                .build()
+                .context("failed to build --exclude-target-glob globset")?,
+        )
+    };
+
     let exclude_lower: Vec<String> = exclude_titles
         .iter()
         .map(|s| s.to_ascii_lowercase())
@@ -120,6 +142,13 @@ fn build_title_inventory(
 
     for entry in entries {
         let rel = &entry.rel_path;
+
+        // Skip entries whose path matches an --exclude-target-glob pattern.
+        if let Some(ref gs) = glob_set
+            && gs.is_match(rel)
+        {
+            continue;
+        }
 
         // 1. Filename stem.
         let stem = stem_from_rel(rel);
@@ -184,14 +213,14 @@ fn build_title_inventory(
     // example, `projects/apple.md` (title "Apple Inc") and
     // `companies/apple.md` (title "Apple Company") both generate
     // `link_target = "apple"` — emitting `[[apple]]` would be wrong.
-    let mut target_sources: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    let mut target_sources: HashMap<String, HashSet<String>> = HashMap::new();
     for entry in title_map.values() {
         target_sources
             .entry(entry.link_target.clone())
             .or_default()
             .insert(entry.source_rel.clone());
     }
-    let ambiguous_targets: std::collections::HashSet<String> = target_sources
+    let ambiguous_targets: HashSet<String> = target_sources
         .into_iter()
         .filter(|(_, sources)| sources.len() > 1)
         .map(|(target, _)| target)
@@ -204,23 +233,6 @@ fn build_title_inventory(
                 ambiguous.push(target.clone());
             }
         }
-    }
-
-    // Apply --exclude-target-glob: remove targets whose source_rel matches any pattern.
-    if !exclude_target_globs.is_empty() {
-        let mut builder = GlobSetBuilder::new();
-        for pat in exclude_target_globs {
-            builder.add(
-                GlobBuilder::new(pat)
-                    .literal_separator(true)
-                    .build()
-                    .context("invalid --exclude-target-glob pattern")?,
-            );
-        }
-        let glob_set = builder
-            .build()
-            .context("failed to build --exclude-target-glob globset")?;
-        title_map.retain(|_, entry| !glob_set.is_match(&entry.source_rel));
     }
 
     Ok((title_map, ambiguous))
@@ -383,10 +395,26 @@ pub fn auto_link(
     }
 
     // 4b. Apply --first-only: keep only the lowest-offset match per (source_file, target_title).
+    //     Two-pass approach: intern strings as integer IDs to avoid cloning per match,
+    //     then filter using the precomputed keep-mask.
     if first_only {
-        use std::collections::HashSet;
-        let mut seen: HashSet<(String, String)> = HashSet::new();
-        all_matches.retain(|m| seen.insert((m.file.clone(), m.link_target.clone())));
+        let mut file_ids: HashMap<&str, usize> = HashMap::new();
+        let mut target_ids: HashMap<&str, usize> = HashMap::new();
+        let mut seen: HashSet<(usize, usize)> = HashSet::new();
+
+        let keep: Vec<bool> = all_matches
+            .iter()
+            .map(|m| {
+                let n = file_ids.len();
+                let fid = *file_ids.entry(&m.file).or_insert(n);
+                let n = target_ids.len();
+                let tid = *target_ids.entry(&m.link_target).or_insert(n);
+                seen.insert((fid, tid))
+            })
+            .collect();
+
+        let mut keep_iter = keep.into_iter();
+        all_matches.retain(|_| keep_iter.next().unwrap_or(false));
     }
 
     // 5. Apply changes if requested.
@@ -1235,6 +1263,45 @@ mod tests {
         assert!(
             targets.contains(&"alice"),
             "people/alice should NOT be excluded"
+        );
+    }
+
+    #[test]
+    fn test_exclude_target_glob_resolves_ambiguity() {
+        // Two pages share the same title "Sprint" — normally ambiguous.
+        // Excluding one via --exclude-target-glob should resolve the ambiguity.
+        let entries = vec![
+            make_entry(
+                "templates/sprint.md",
+                vec![("title", Value::String("Sprint".into()))],
+            ),
+            make_entry(
+                "planning/sprint.md",
+                vec![("title", Value::String("Sprint".into()))],
+            ),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+
+        // Without exclusion: "sprint" is ambiguous.
+        let (map, ambiguous) = build_title_inventory(&entries, 3, &[], &[]).unwrap();
+        assert!(
+            !map.contains_key("sprint"),
+            "without exclusion, sprint should be ambiguous"
+        );
+        assert!(!ambiguous.is_empty());
+
+        // With exclusion: templates/* removed, only planning/sprint.md remains — no ambiguity.
+        let (map, ambiguous) =
+            build_title_inventory(&entries, 3, &[], &["templates/*".to_owned()]).unwrap();
+        assert!(
+            map.contains_key("sprint"),
+            "with templates/* excluded, sprint should be unambiguous and present"
+        );
+        let entry = map.get("sprint").unwrap();
+        assert_eq!(entry.source_rel, "planning/sprint.md");
+        assert!(
+            !ambiguous.iter().any(|a| a.eq_ignore_ascii_case("sprint")),
+            "sprint should not be in the ambiguous list"
         );
     }
 }

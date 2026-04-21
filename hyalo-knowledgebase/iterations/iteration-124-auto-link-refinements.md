@@ -7,7 +7,7 @@ tags:
   - links
   - ux
   - feature
-status: in-progress
+status: completed
 branch: iter-124/auto-link-refinements
 ---
 
