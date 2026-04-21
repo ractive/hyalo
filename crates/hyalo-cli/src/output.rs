@@ -388,7 +388,7 @@ const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable
 
 /// `LinksAuto result`: `{ambiguous_titles, applied, matches, scanned, total}`
 /// Format: summary line + per-match details.
-const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.scanned) file\(if .scanned == 1 then "" else "s" end)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
+const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.

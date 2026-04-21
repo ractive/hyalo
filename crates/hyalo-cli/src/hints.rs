@@ -88,6 +88,10 @@ pub struct HintContext {
     pub dry_run: bool,
     // Index context
     pub index_path: Option<String>,
+    // Links-auto context (for replaying the exact preview scope in hints)
+    pub auto_link_file: Option<String>,
+    pub auto_link_min_length: Option<usize>,
+    pub auto_link_exclude_titles: Vec<String>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -126,6 +130,9 @@ impl HintContext {
             task_selector: None,
             dry_run: false,
             index_path: None,
+            auto_link_file: None,
+            auto_link_min_length: None,
+            auto_link_exclude_titles: vec![],
         }
     }
 
@@ -1332,9 +1339,30 @@ fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint
         .unwrap_or(0);
 
     if is_dry_run && total > 0 {
+        // Rebuild the exact command from the preview, preserving all
+        // scope-narrowing flags so the apply doesn't widen the mutation set.
+        let mut args: Vec<&str> = vec!["links", "auto", "--apply"];
+        let min_str;
+        if let Some(ml) = ctx.auto_link_min_length
+            && ml != 3
+        {
+            args.push("--min-length");
+            min_str = ml.to_string();
+            args.push(&min_str);
+        }
+        let cmd = build_command_with_glob(ctx, &args);
+        // Append --file and --exclude-title after the builder (they are not
+        // glob-related and aren't handled by build_command_with_glob).
+        let mut parts = vec![cmd];
+        if let Some(ref f) = ctx.auto_link_file {
+            parts.push(format!("--file {}", shell_quote(f)));
+        }
+        for et in &ctx.auto_link_exclude_titles {
+            parts.push(format!("--exclude-title {}", shell_quote(et)));
+        }
         hints.push(Hint::new(
             format!("Apply {total} auto-links"),
-            build_command_with_glob(ctx, &["links", "auto", "--apply"]),
+            parts.join(" "),
         ));
     }
 

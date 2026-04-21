@@ -79,7 +79,7 @@ hyalo links auto --apply            # write changes
 hyalo links auto --file note.md     # single file
 hyalo links auto --glob 'Common/*'  # scope to specific files
 hyalo links auto --min-length 4     # skip short titles (default: 3)
-hyalo links auto --exclude-title "Common,Mail"  # manually exclude noisy titles
+hyalo links auto --exclude-title Common --exclude-title Mail  # manually exclude noisy titles
 hyalo links auto --format text      # human-readable output
 ```
 
@@ -107,7 +107,7 @@ BM25/FTS index: tokenizes and stems, so "running" matches "run". Wrong for auto-
 - [x] Implement ambiguity detection (skip titles shared by multiple files)
 - [x] Implement dry-run output (JSON envelope + text format)
 - [x] Implement `--apply` mode with atomic read-modify-write
-- [x] Add `--min-length`, `--exclude-title`, `--glob`, `--case-sensitive` flags
+- [x] Add `--min-length`, `--exclude-title`, `--glob` flags
 - [x] Wire up as `hyalo links auto` subcommand
 - [x] Add unit tests for matching edge cases (word boundaries, overlaps, self-links, ambiguity)
 - [x] Add e2e tests

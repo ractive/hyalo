@@ -14,7 +14,9 @@ use crate::discovery::match_globs;
 use crate::fs_util::atomic_write;
 use crate::index::{IndexEntry, VaultIndex};
 use crate::links::extract_link_spans_with_original;
-use crate::scanner::{FenceTracker, is_comment_fence, strip_inline_code, strip_inline_comments};
+use crate::scanner::{
+    FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
+};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -169,10 +171,37 @@ fn build_title_inventory(
     }
 
     // Flatten: keep only unambiguous entries.
-    let title_map: HashMap<String, TitleEntry> = map
+    let mut title_map: HashMap<String, TitleEntry> = map
         .into_iter()
         .filter_map(|(k, v)| v.map(|entry| (k, entry)))
         .collect();
+
+    // Second pass: a `link_target` (stem) that maps to 2+ different source
+    // files is ambiguous even when the *title keys* are distinct.  For
+    // example, `projects/apple.md` (title "Apple Inc") and
+    // `companies/apple.md` (title "Apple Company") both generate
+    // `link_target = "apple"` — emitting `[[apple]]` would be wrong.
+    let mut target_sources: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for entry in title_map.values() {
+        target_sources
+            .entry(entry.link_target.clone())
+            .or_default()
+            .insert(entry.source_rel.clone());
+    }
+    let ambiguous_targets: std::collections::HashSet<String> = target_sources
+        .into_iter()
+        .filter(|(_, sources)| sources.len() > 1)
+        .map(|(target, _)| target)
+        .collect();
+
+    if !ambiguous_targets.is_empty() {
+        title_map.retain(|_, entry| !ambiguous_targets.contains(&entry.link_target));
+        for target in &ambiguous_targets {
+            if !ambiguous.iter().any(|a| a.eq_ignore_ascii_case(target)) {
+                ambiguous.push(target.clone());
+            }
+        }
+    }
 
     (title_map, ambiguous)
 }
@@ -289,10 +318,11 @@ pub fn auto_link(
     let paths_to_scan: Vec<(PathBuf, String)> = if !glob_filter.is_empty() {
         match_globs(dir, &all_paths, glob_filter)?
     } else if let Some(filter) = file_filter {
-        let filter_lower = filter.to_ascii_lowercase();
+        // Exact vault-relative path match (normalise separators for Windows).
+        let normalised = filter.replace('\\', "/");
         entries
             .iter()
-            .filter(|e| e.rel_path.to_ascii_lowercase().contains(&filter_lower))
+            .filter(|e| e.rel_path == normalised)
             .map(|e| (dir.join(&e.rel_path), e.rel_path.clone()))
             .collect()
     } else {
@@ -307,6 +337,19 @@ pub fn auto_link(
     let scanned = paths_to_scan.len();
 
     for (abs_path, rel_path) in &paths_to_scan {
+        // Enforce the same size cap used elsewhere (scanner, link_fix, etc.).
+        if let Ok(meta) = std::fs::metadata(abs_path)
+            && meta.len() > MAX_FILE_SIZE
+        {
+            eprintln!(
+                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+                abs_path.display(),
+                meta.len() / (1024 * 1024),
+                MAX_FILE_SIZE / (1024 * 1024),
+            );
+            continue;
+        }
+
         let content = std::fs::read_to_string(abs_path)
             .with_context(|| format!("failed to read {}", abs_path.display()))?;
 
@@ -366,17 +409,19 @@ fn scan_file_for_matches(
             frontmatter_done = true;
         }
 
+        // ---- Fenced code block ----
+        if fence.process_line(line) {
+            continue;
+        }
+
         // ---- Comment fence (Obsidian %% blocks) ----
-        if is_comment_fence(line) {
+        // Must come after code-fence check: a `%%` inside a fenced code block
+        // is literal text, not an Obsidian comment delimiter.
+        if !fence.in_fence() && is_comment_fence(line) {
             in_comment_fence = !in_comment_fence;
             continue;
         }
         if in_comment_fence {
-            continue;
-        }
-
-        // ---- Fenced code block ----
-        if fence.process_line(line) {
             continue;
         }
 

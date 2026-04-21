@@ -1026,7 +1026,7 @@ pub(crate) enum LinksAction {
             2. Frontmatter `title` property\n\
             3. Frontmatter `aliases` property (list of alternate names)\n\n\
             Exclusion zones: frontmatter, fenced code blocks, inline code,\n\
-            existing [[wikilinks]] and [markdown](links), headings, self-links.\n\n\
+            existing [[wikilinks]] and [markdown](links), headings, comment fences (%%), self-links.\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes."
     )]
     Auto {
@@ -1042,11 +1042,11 @@ pub(crate) enum LinksAction {
         /// Titles to exclude from matching (repeatable, case-insensitive)
         #[arg(long)]
         exclude_title: Vec<String>,
-        /// Restrict to a single file
-        #[arg(long)]
+        /// Restrict to a single file (vault-relative path)
+        #[arg(long, conflicts_with = "glob")]
         file: Option<String>,
         /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "file")]
         glob: Vec<String>,
         #[command(flatten)]
         index_flags: IndexFlags,

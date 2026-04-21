@@ -718,10 +718,20 @@ fn run_inner() -> Result<(), AppError> {
                     ctx.dry_run = !apply;
                     Some(ctx)
                 }
-                crate::cli::args::LinksAction::Auto { apply, glob, .. } => {
+                crate::cli::args::LinksAction::Auto {
+                    apply,
+                    glob,
+                    file,
+                    min_length,
+                    exclude_title,
+                    ..
+                } => {
                     let mut ctx = HintContext::from_common(HintSource::LinksAuto, &common);
                     ctx.glob.clone_from(glob);
                     ctx.dry_run = !apply;
+                    ctx.auto_link_file.clone_from(file);
+                    ctx.auto_link_min_length = Some(*min_length);
+                    ctx.auto_link_exclude_titles.clone_from(exclude_title);
                     Some(ctx)
                 }
             },
