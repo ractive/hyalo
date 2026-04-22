@@ -20,6 +20,10 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 ///
 /// Case-mismatch fixes (rule `link-case-mismatch`) are included alongside
 /// ordinary broken-link fixes when `case_index` is provided.
+///
+/// Returns `(CommandOutcome, modified_files)` where `modified_files` contains
+/// vault-relative paths of files that were rewritten on disk.  The caller is
+/// responsible for patching the snapshot index with these paths.
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -31,7 +35,7 @@ pub fn links_fix(
     ignore_target: &[String],
     format: Format,
     case_index: Option<&CaseInsensitiveIndex>,
-) -> Result<CommandOutcome> {
+) -> Result<(CommandOutcome, Vec<String>)> {
     let report = detect_broken_links_from_index(dir, index, site_prefix, case_index);
 
     // Filter broken links by glob, if any were provided.
@@ -79,6 +83,8 @@ pub fn links_fix(
     let case_mismatches = report.case_mismatches;
     let case_mismatch_count = case_mismatches.len();
 
+    let mut modified_files = Vec::new();
+
     if !dry_run {
         // Merge broken-link fixes and case-mismatch fixes into a single batch
         // so `apply_fixes` reads and rewrites each source file once — two
@@ -88,6 +94,11 @@ pub fn links_fix(
         all_fixes.extend(case_mismatches.iter().cloned());
         if !all_fixes.is_empty() {
             apply_fixes(dir, &all_fixes, site_prefix)?;
+
+            // Collect unique modified files for the caller to patch the index.
+            let deduped: std::collections::HashSet<&str> =
+                all_fixes.iter().map(|f| f.source.as_str()).collect();
+            modified_files = deduped.into_iter().map(str::to_owned).collect();
         }
     }
 
@@ -104,8 +115,11 @@ pub fn links_fix(
     });
 
     let _ = format;
-    Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&output).context("failed to serialize")?,
+    Ok((
+        CommandOutcome::success(
+            serde_json::to_string_pretty(&output).context("failed to serialize")?,
+        ),
+        modified_files,
     ))
 }
 
@@ -113,6 +127,10 @@ pub fn links_fix(
 ///
 /// `apply = false` → preview only (default)
 /// `apply = true`  → write `[[wikilinks]]` to disk
+///
+/// Returns `(CommandOutcome, modified_files)` where `modified_files` contains
+/// vault-relative paths of files that were rewritten on disk.  The caller is
+/// responsible for patching the snapshot index with these paths.
 #[allow(clippy::too_many_arguments)]
 pub fn links_auto(
     index: &dyn VaultIndex,
@@ -125,10 +143,8 @@ pub fn links_auto(
     file_filter: Option<&str>,
     glob_filter: &[String],
     format: Format,
-) -> Result<CommandOutcome> {
-    let report = hyalo_core::auto_link::auto_link(
-        index,
-        dir,
+) -> Result<(CommandOutcome, Vec<String>)> {
+    let opts = hyalo_core::auto_link::AutoLinkOptions {
         apply,
         min_length,
         exclude_titles,
@@ -136,7 +152,17 @@ pub fn links_auto(
         exclude_target_globs,
         file_filter,
         glob_filter,
-    )?;
+    };
+    let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
+
+    // Collect unique modified files for the caller to patch the index.
+    let modified_files: Vec<String> = if report.applied {
+        let deduped: std::collections::HashSet<&str> =
+            report.matches.iter().map(|m| m.file.as_str()).collect();
+        deduped.into_iter().map(str::to_owned).collect()
+    } else {
+        Vec::new()
+    };
 
     let output = serde_json::json!({
         "scanned": report.scanned,
@@ -147,8 +173,11 @@ pub fn links_auto(
     });
 
     let _ = format;
-    Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&output).context("failed to serialize")?,
+    Ok((
+        CommandOutcome::success(
+            serde_json::to_string_pretty(&output).context("failed to serialize")?,
+        ),
+        modified_files,
     ))
 }
 

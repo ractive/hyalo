@@ -78,6 +78,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
 
   Links (link operations):
     hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
+    hyalo links auto [--apply] [--first-only] [--min-length N] [--exclude-title T ...] [--exclude-target-glob G ...] [--file F | -g/--glob G ...]   Auto-link unlinked title mentions (default: dry-run)
 
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
@@ -254,6 +255,18 @@ COOKBOOK:
 
   # Fix broken links, skip Hugo template paths
   hyalo links fix --ignore-target '{{ ref' --apply
+
+  # Auto-link: preview which unlinked mentions would become [[wikilinks]]
+  hyalo links auto
+
+  # Auto-link: write changes, keep only first mention per target
+  hyalo links auto --first-only --apply
+
+  # Auto-link: exclude short words and template pages
+  hyalo links auto --min-length 5 --exclude-target-glob 'templates/*' --apply
+
+  # Auto-link: restrict to a single file
+  hyalo links auto --file notes/todo.md --apply
 
   # Build a snapshot index for faster repeated queries
   hyalo create-index

@@ -136,6 +136,34 @@ fn resolve_limit(
     }
 }
 
+/// Patch the snapshot index for a list of vault-relative paths that were
+/// modified on disk.  Re-reads each file's frontmatter and writes the
+/// updated properties into the in-memory index, then flushes to disk once.
+fn patch_index_for_modified_files(
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
+    dir: &Path,
+    modified_files: &[String],
+) -> Result<()> {
+    if modified_files.is_empty() {
+        return Ok(());
+    }
+    let mut index_dirty = false;
+    for rel in modified_files {
+        let full = dir.join(rel);
+        if let Ok(props) = hyalo_core::frontmatter::read_frontmatter(&full) {
+            crate::commands::mutation::update_index_entry(
+                snapshot_index,
+                rel,
+                props,
+                &full,
+                &mut index_dirty,
+            )?;
+        }
+    }
+    crate::commands::mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)
+}
+
 /// Parse `--where-property` filters and validate `--where-tag` names.
 /// Returns an error string on invalid input.
 fn parse_where_filters(
@@ -858,37 +886,44 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 glob,
                 ignore_target,
                 index_flags: _, // consumed in run.rs before dispatch
-            } => match resolve_index(
-                snapshot_index.as_ref(),
-                dir,
-                &[],
-                &[],
-                effective_format,
-                site_prefix,
-                true,
-                &ScanOptions {
-                    scan_body: true,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
-            )? {
-                IndexResolution::Resolved(resolved) => {
-                    let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
-                    links_commands::links_fix(
-                        resolved.as_index(),
-                        dir,
-                        site_prefix,
-                        &glob,
-                        !apply,
-                        threshold,
-                        &ignore_target,
-                        effective_format,
-                        ci.as_ref(),
-                    )
-                }
-                IndexResolution::Outcome(outcome) => Ok(outcome),
-            },
+            } => {
+                // Scope the immutable borrow of snapshot_index (via resolve_index)
+                // so we can borrow it mutably for index updates afterwards.
+                let (outcome, modified_files) = match resolve_index(
+                    snapshot_index.as_ref(),
+                    dir,
+                    &[],
+                    &[],
+                    effective_format,
+                    site_prefix,
+                    true,
+                    &ScanOptions {
+                        scan_body: true,
+                        bm25_tokenize: false,
+                        default_language: None,
+                        frontmatter_link_props: ctx.frontmatter_link_props,
+                    },
+                )? {
+                    IndexResolution::Resolved(resolved) => {
+                        let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                        links_commands::links_fix(
+                            resolved.as_index(),
+                            dir,
+                            site_prefix,
+                            &glob,
+                            !apply,
+                            threshold,
+                            &ignore_target,
+                            effective_format,
+                            ci.as_ref(),
+                        )?
+                    }
+                    IndexResolution::Outcome(outcome) => (outcome, Vec::new()),
+                };
+                // resolved is dropped — safe to borrow snapshot_index mutably.
+                patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
+                Ok(outcome)
+            }
             LinksAction::Auto {
                 dry_run: _,
                 apply,
@@ -899,35 +934,39 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 file,
                 glob,
                 index_flags: _, // consumed in run.rs before dispatch
-            } => match resolve_index(
-                snapshot_index.as_ref(),
-                dir,
-                &[],
-                &[],
-                effective_format,
-                site_prefix,
-                true,
-                &ScanOptions {
-                    scan_body: false,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
-            )? {
-                IndexResolution::Resolved(resolved) => links_commands::links_auto(
-                    resolved.as_index(),
+            } => {
+                let (outcome, modified_files) = match resolve_index(
+                    snapshot_index.as_ref(),
                     dir,
-                    apply,
-                    min_length,
-                    &exclude_title,
-                    first_only,
-                    &exclude_target_glob,
-                    file.as_deref(),
-                    &glob,
+                    &[],
+                    &[],
                     effective_format,
-                ),
-                IndexResolution::Outcome(outcome) => Ok(outcome),
-            },
+                    site_prefix,
+                    true,
+                    &ScanOptions {
+                        scan_body: false,
+                        bm25_tokenize: false,
+                        default_language: None,
+                        frontmatter_link_props: ctx.frontmatter_link_props,
+                    },
+                )? {
+                    IndexResolution::Resolved(resolved) => links_commands::links_auto(
+                        resolved.as_index(),
+                        dir,
+                        apply,
+                        min_length,
+                        &exclude_title,
+                        first_only,
+                        &exclude_target_glob,
+                        file.as_deref(),
+                        &glob,
+                        effective_format,
+                    )?,
+                    IndexResolution::Outcome(outcome) => (outcome, Vec::new()),
+                };
+                patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
+                Ok(outcome)
+            }
         },
         Commands::Lint {
             file_positional,
@@ -1076,6 +1115,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ctx.schema,
                 fix_mode,
                 resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
+                snapshot_index,
+                index_path,
             )?;
 
             // Additional config-level lint: check view definitions.
