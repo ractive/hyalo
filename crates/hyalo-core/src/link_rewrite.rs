@@ -403,16 +403,24 @@ fn plan_inbound_rewrites(
         }
 
         // ---- Comment fence (Obsidian %% blocks) ----
-        if is_comment_fence(line) {
-            in_comment_fence = !in_comment_fence;
-            continue;
-        }
+        // When already inside a comment, only look for the closing `%%`.
+        // Code fences are literal text inside comments, so don't process them.
         if in_comment_fence {
+            if is_comment_fence(line) {
+                in_comment_fence = false;
+            }
             continue;
         }
 
         // ---- Fenced code block ----
         if fence.process_line(line) {
+            continue;
+        }
+
+        // ---- Comment fence opening (only outside code blocks) ----
+        // A `%%` inside a fenced code block is literal text, not a delimiter.
+        if is_comment_fence(line) {
+            in_comment_fence = true;
             continue;
         }
 
@@ -577,17 +585,25 @@ fn plan_outbound_rewrites(
             frontmatter_done = true;
         }
 
-        // ---- Comment fence ----
-        if is_comment_fence(line) {
-            in_comment_fence = !in_comment_fence;
-            continue;
-        }
+        // ---- Comment fence (Obsidian %% blocks) ----
+        // When already inside a comment, only look for the closing `%%`.
+        // Code fences are literal text inside comments, so don't process them.
         if in_comment_fence {
+            if is_comment_fence(line) {
+                in_comment_fence = false;
+            }
             continue;
         }
 
         // ---- Fenced code block ----
         if fence.process_line(line) {
+            continue;
+        }
+
+        // ---- Comment fence opening (only outside code blocks) ----
+        // A `%%` inside a fenced code block is literal text, not a delimiter.
+        if is_comment_fence(line) {
+            in_comment_fence = true;
             continue;
         }
 
@@ -1410,5 +1426,108 @@ mod tests {
             other_plan.is_some(),
             "case-insensitive inbound markdown link should produce a rewrite plan; got: {plans:?}"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Fence-ordering bug: %% inside a fenced code block must not toggle comment mode
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn plan_mv_percent_percent_inside_code_fence_does_not_toggle_comment_mode() {
+        // A `%%` line that appears inside a fenced code block is literal text.
+        // It must NOT be treated as an Obsidian comment-fence delimiter, which
+        // would put the parser into comment mode and cause it to skip the real
+        // [[sub/target]] wikilink that follows the code block.
+        let vault = create_vault(&[
+            (
+                "a.md",
+                "---\ntitle: test\n---\n# Test\n\n```markdown\n%%\nThis is inside a code fence\n```\n\nSee [[sub/target]] for more.\n",
+            ),
+            ("sub/target.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/target.md", "archive/target.md", None).unwrap();
+        // The [[sub/target]] link after the code block must be detected as inbound.
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_some(),
+            "[[sub/target]] after a code fence containing %% should be found; got plans: {plans:?}"
+        );
+        let a_plan = a_plan.unwrap();
+        assert_eq!(
+            a_plan.replacements.len(),
+            1,
+            "exactly one replacement expected; got: {:?}",
+            a_plan.replacements
+        );
+        assert_eq!(a_plan.replacements[0].old_text, "[[sub/target]]");
+        assert_eq!(a_plan.replacements[0].new_text, "[[archive/target]]");
+    }
+
+    #[test]
+    fn plan_mv_outbound_percent_percent_inside_code_fence_does_not_toggle_comment_mode() {
+        // Same ordering bug in plan_outbound_rewrites: a `%%` inside a code
+        // fence must not suppress the markdown link that follows the fence.
+        let vault = create_vault(&[
+            ("sub/a.md", "```markdown\n%%\n```\n\nSee [peer](peer.md).\n"),
+            ("sub/peer.md", "peer\n"),
+        ]);
+        // Moving sub/a.md to root triggers outbound rewrite of [peer](peer.md).
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let moved_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a.md")
+            .expect("outbound link after %%-in-code-fence should be detected");
+        assert_eq!(moved_plan.replacements.len(), 1);
+        assert_eq!(moved_plan.replacements[0].old_text, "[peer](peer.md)");
+        assert_eq!(moved_plan.replacements[0].new_text, "[peer](sub/peer.md)");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Code fence inside a %% comment must not leave comment mode stuck open
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn plan_mv_code_fence_inside_comment_does_not_break_parsing() {
+        // A fenced code block that appears inside a `%%` comment block must be
+        // treated as literal text.  In particular, the ```` ``` ```` must not
+        // flip the code-fence state, which would prevent the closing `%%` from
+        // being recognised, leaving the parser stuck in comment mode.
+        let vault = create_vault(&[
+            (
+                "a.md",
+                "---\ntitle: test\n---\n# Intro\n\n%%\n```\ncode in comment\n```\n%%\n\nSee [[sub/target]] for more.\n",
+            ),
+            ("sub/target.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/target.md", "archive/target.md", None).unwrap();
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_some(),
+            "[[sub/target]] after a comment containing a code fence should be found; got: {plans:?}"
+        );
+        let a_plan = a_plan.unwrap();
+        assert_eq!(a_plan.replacements.len(), 1);
+        assert_eq!(a_plan.replacements[0].old_text, "[[sub/target]]");
+        assert_eq!(a_plan.replacements[0].new_text, "[[archive/target]]");
+    }
+
+    #[test]
+    fn plan_mv_outbound_code_fence_inside_comment_does_not_break_parsing() {
+        // Same as above but for the outbound rewrite path.
+        let vault = create_vault(&[
+            (
+                "sub/a.md",
+                "%%\n```\ncode\n```\n%%\n\nSee [peer](peer.md).\n",
+            ),
+            ("sub/peer.md", "peer\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let moved_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a.md")
+            .expect("outbound link after comment-with-code-fence should be detected");
+        assert_eq!(moved_plan.replacements.len(), 1);
+        assert_eq!(moved_plan.replacements[0].old_text, "[peer](peer.md)");
+        assert_eq!(moved_plan.replacements[0].new_text, "[peer](sub/peer.md)");
     }
 }

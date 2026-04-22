@@ -213,7 +213,7 @@ fn fuzzy_match_sibling(full: &Path) -> Option<String> {
 /// This is the correct way to detect path traversal — checking for the `..`
 /// component directly rather than a substring match, which incorrectly rejects
 /// legitimate filenames like `etc..md`.
-fn has_parent_traversal(path: &str) -> bool {
+pub fn has_parent_traversal(path: &str) -> bool {
     Path::new(path)
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))

@@ -58,9 +58,15 @@ hyalo mv --file old/path.md --to archive/path.md
 # Detect and fix broken links
 hyalo links fix --apply
 
-# Auto-link unlinked mentions of known page titles
-hyalo links auto --apply
-hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply
+# Auto-link: scan body text for unlinked mentions of known page titles
+# and convert them to [[wikilinks]]. Detects titles from filenames,
+# frontmatter `title`, and `aliases`. Skips code blocks, existing links,
+# headings, and comment fences.
+hyalo links auto                     # dry-run preview
+hyalo links auto --apply             # write changes
+hyalo links auto --first-only --apply  # only first mention per target
+hyalo links auto --exclude-title API --exclude-target-glob 'templates/*' --apply
+hyalo links auto --file notes/todo.md --apply   # single-file mode
 
 # Lint against your schema
 hyalo lint --fix

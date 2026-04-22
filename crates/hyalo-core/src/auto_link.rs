@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use globset::{GlobBuilder, GlobSetBuilder};
 
-use crate::discovery::match_globs;
+use crate::discovery::{canonicalize_vault_dir, ensure_within_vault, match_globs};
 use crate::fs_util::atomic_write;
 use crate::index::{IndexEntry, VaultIndex};
 use crate::links::extract_link_spans_with_original;
@@ -23,6 +23,17 @@ use crate::scanner::{
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/// Options for the [`auto_link`] function.
+pub struct AutoLinkOptions<'a> {
+    pub apply: bool,
+    pub min_length: usize,
+    pub exclude_titles: &'a [String],
+    pub first_only: bool,
+    pub exclude_target_globs: &'a [String],
+    pub file_filter: Option<&'a str>,
+    pub glob_filter: &'a [String],
+}
 
 /// A single proposed auto-link replacement.
 #[derive(Debug, Clone, Serialize)]
@@ -107,7 +118,7 @@ fn build_title_inventory(
         )
     };
 
-    let exclude_lower: Vec<String> = exclude_titles
+    let exclude_lower: HashSet<String> = exclude_titles
         .iter()
         .map(|s| s.to_ascii_lowercase())
         .collect();
@@ -305,25 +316,37 @@ fn overlaps_any_link(
 
 /// Scan the vault for unlinked mentions of known page titles.
 ///
-/// When `apply` is true, write the `[[wikilinks]]` into the files.
+/// When `opts.apply` is true, write the `[[wikilinks]]` into the files.
 /// When false (dry-run), just report what would change.
-#[allow(clippy::too_many_arguments)]
 pub fn auto_link(
     index: &dyn VaultIndex,
     dir: &Path,
-    apply: bool,
-    min_length: usize,
-    exclude_titles: &[String],
-    first_only: bool,
-    exclude_target_globs: &[String],
-    file_filter: Option<&str>,
-    glob_filter: &[String],
+    opts: &AutoLinkOptions<'_>,
 ) -> Result<AutoLinkReport> {
     let entries = index.entries();
 
+    // Validate --file for path traversal or absolute paths.
+    if let Some(filter) = opts.file_filter {
+        anyhow::ensure!(
+            !crate::discovery::has_parent_traversal(filter),
+            "--file path must not contain '..' components: {filter}"
+        );
+        // `Path::is_absolute()` on Windows requires a drive prefix, so `/foo`
+        // and `\foo` (root-relative paths) slip through.  `has_root()` catches
+        // all non-relative paths on every platform.
+        anyhow::ensure!(
+            !std::path::Path::new(filter).has_root(),
+            "--file path must be vault-relative, not absolute: {filter}"
+        );
+    }
+
     // 1. Build the title inventory.
-    let (title_map, ambiguous_titles) =
-        build_title_inventory(entries, min_length, exclude_titles, exclude_target_globs)?;
+    let (title_map, ambiguous_titles) = build_title_inventory(
+        entries,
+        opts.min_length,
+        opts.exclude_titles,
+        opts.exclude_target_globs,
+    )?;
 
     if title_map.is_empty() {
         return Ok(AutoLinkReport {
@@ -351,9 +374,9 @@ pub fn auto_link(
     // 3. Determine which files to scan (respecting file_filter and glob_filter).
     let all_paths: Vec<PathBuf> = entries.iter().map(|e| dir.join(&e.rel_path)).collect();
 
-    let paths_to_scan: Vec<(PathBuf, String)> = if !glob_filter.is_empty() {
-        match_globs(dir, &all_paths, glob_filter)?
-    } else if let Some(filter) = file_filter {
+    let paths_to_scan: Vec<(PathBuf, String)> = if !opts.glob_filter.is_empty() {
+        match_globs(dir, &all_paths, opts.glob_filter)?
+    } else if let Some(filter) = opts.file_filter {
         // Exact vault-relative path match (normalise separators for Windows).
         let normalised = filter.replace('\\', "/");
         entries
@@ -370,6 +393,7 @@ pub fn auto_link(
 
     // 4. Scan each file.
     let mut all_matches: Vec<AutoLinkMatch> = Vec::new();
+    let mut scanned_content: HashMap<String, String> = HashMap::new();
     let scanned = paths_to_scan.len();
 
     for (abs_path, rel_path) in &paths_to_scan {
@@ -391,13 +415,18 @@ pub fn auto_link(
 
         let file_matches = scan_file_for_matches(&content, rel_path, &ac, &patterns_sorted);
 
+        // Only retain file content when we'll actually need it for writing.
+        let has_matches = !file_matches.is_empty();
         all_matches.extend(file_matches);
+        if opts.apply && has_matches {
+            scanned_content.insert(rel_path.clone(), content);
+        }
     }
 
     // 4b. Apply --first-only: keep only the lowest-offset match per (source_file, target_title).
     //     Two-pass approach: intern strings as integer IDs to avoid cloning per match,
     //     then filter using the precomputed keep-mask.
-    if first_only {
+    if opts.first_only {
         let mut file_ids: HashMap<&str, usize> = HashMap::new();
         let mut target_ids: HashMap<&str, usize> = HashMap::new();
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
@@ -418,8 +447,8 @@ pub fn auto_link(
     }
 
     // 5. Apply changes if requested.
-    if apply {
-        apply_matches(dir, &all_matches)?;
+    if opts.apply {
+        apply_matches(dir, &all_matches, &scanned_content)?;
     }
 
     let total = all_matches.len();
@@ -428,7 +457,7 @@ pub fn auto_link(
         total,
         matches: all_matches,
         ambiguous_titles,
-        applied: apply,
+        applied: opts.apply,
     })
 }
 
@@ -541,9 +570,23 @@ fn scan_file_for_matches(
 
 /// Apply a batch of matches to the vault by rewriting files atomically.
 ///
-/// For each file with matches, reads the content, applies all replacements
-/// from end to start (to preserve byte offsets), then writes back.
-fn apply_matches(dir: &Path, matches: &[AutoLinkMatch]) -> Result<()> {
+/// Replacements are applied to the content collected during the scan phase
+/// (not re-read from disk), so byte offsets stay consistent.  A single
+/// verification re-read is still performed per file to detect concurrent
+/// modifications; if the on-disk content differs from the scanned snapshot
+/// the file is skipped with a warning.
+///
+/// Every write path is guarded by a vault-boundary check so that no path
+/// constructed from user-controlled data can escape the vault root.
+fn apply_matches(
+    dir: &Path,
+    matches: &[AutoLinkMatch],
+    scanned_content: &HashMap<String, String>,
+) -> Result<()> {
+    // Canonicalize the vault root once so every write can be checked cheaply.
+    let canonical_vault = canonicalize_vault_dir(dir)
+        .context("failed to canonicalize vault directory for write safety check")?;
+
     // Group matches by file.
     let mut by_file: HashMap<&str, Vec<&AutoLinkMatch>> = HashMap::new();
     for m in matches {
@@ -552,8 +595,40 @@ fn apply_matches(dir: &Path, matches: &[AutoLinkMatch]) -> Result<()> {
 
     for (rel_path, file_matches) in by_file {
         let abs_path = dir.join(rel_path);
-        let content = std::fs::read_to_string(&abs_path)
-            .with_context(|| format!("failed to read {} for apply", abs_path.display()))?;
+
+        // Vault-boundary safety check: refuse to write outside the vault root.
+        let within = ensure_within_vault(&canonical_vault, &abs_path)
+            .with_context(|| format!("could not verify {} is within vault", abs_path.display()))?;
+        anyhow::ensure!(
+            within,
+            "refusing to write outside vault: {}",
+            abs_path.display()
+        );
+
+        // Use content from the scan phase.  If the entry is missing, the
+        // concurrent-modification check below would compare disk-to-disk and
+        // always pass, so skip the file with a warning instead.
+        let Some(content) = scanned_content.get(rel_path).map(String::as_str) else {
+            eprintln!(
+                "warning: {rel_path} not in scan cache, skipping (possible internal bug)"
+            );
+            continue;
+        };
+
+        // Detect concurrent modification: skip the file if it changed after scan.
+        // A read failure (deleted, permissions, non-UTF-8) is treated as
+        // "changed" — we must not overwrite what we cannot verify.
+        let disk_content = match std::fs::read_to_string(&abs_path) {
+            Ok(c) => c,
+            Err(err) => {
+                eprintln!("warning: could not verify {rel_path} after scan ({err}), skipping");
+                continue;
+            }
+        };
+        if disk_content != content {
+            eprintln!("warning: {rel_path} was modified after scan, skipping");
+            continue;
+        }
 
         // Build per-line replacements: (line_idx (0-based), col, matched_text, link_target).
         // We need to apply them from last to first within each line (and last to first line).
@@ -563,7 +638,7 @@ fn apply_matches(dir: &Path, matches: &[AutoLinkMatch]) -> Result<()> {
 
         // Work on a per-line basis. We need to reconstruct the full content after edits.
         // Split lines while preserving line endings.
-        let mut lines: Vec<String> = split_lines_preserving_endings(&content);
+        let mut lines: Vec<String> = split_lines_preserving_endings(content);
 
         for m in sorted_matches {
             let line_idx = m.line.saturating_sub(1);
@@ -763,13 +838,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("other.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("other.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -803,13 +880,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -838,13 +917,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -867,13 +948,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -899,13 +982,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -932,13 +1017,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("sprint.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("sprint.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -960,13 +1047,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -994,13 +1083,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -1026,13 +1117,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -1059,13 +1152,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -1087,13 +1182,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            true, // apply
-            3,
-            &[],
-            false,
-            &[],
-            Some("notes.md"),
-            &[],
+            &AutoLinkOptions {
+                apply: true,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
         )
         .unwrap();
 
@@ -1123,7 +1220,20 @@ mod tests {
         let index = MockIndex::new(entries);
 
         // Without first_only: should get 2 matches for "Alice" in notes.md
-        let report = auto_link(&index, tmp.path(), false, 3, &[], false, &[], None, &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
         let alice_matches: Vec<_> = report
             .matches
             .iter()
@@ -1136,7 +1246,20 @@ mod tests {
         );
 
         // With first_only: should get only 1 match for "Alice" in notes.md
-        let report = auto_link(&index, tmp.path(), false, 3, &[], true, &[], None, &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
         let alice_matches: Vec<_> = report
             .matches
             .iter()
@@ -1181,7 +1304,20 @@ mod tests {
         let index = MockIndex::new(entries);
 
         // Without exclusion: both "Start" and "Alice" match in notes.md
-        let report = auto_link(&index, tmp.path(), false, 3, &[], false, &[], None, &[]).unwrap();
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
         let has_start = report.matches.iter().any(|m| m.link_target == "start");
         let has_alice = report.matches.iter().any(|m| m.link_target == "alice");
         assert!(has_start, "without exclusion, Start should match");
@@ -1191,13 +1327,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &["templates/*".to_owned()],
-            None,
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &["templates/*".to_owned()],
+                file_filter: None,
+                glob_filter: &[],
+            },
         )
         .unwrap();
         let has_start = report.matches.iter().any(|m| m.link_target == "start");
@@ -1241,13 +1379,15 @@ mod tests {
         let report = auto_link(
             &index,
             tmp.path(),
-            false,
-            3,
-            &[],
-            false,
-            &["templates/*".to_owned(), "archive/*".to_owned()],
-            None,
-            &[],
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &["templates/*".to_owned(), "archive/*".to_owned()],
+                file_filter: None,
+                glob_filter: &[],
+            },
         )
         .unwrap();
         let targets: Vec<&str> = report
@@ -1302,6 +1442,58 @@ mod tests {
         assert!(
             !ambiguous.iter().any(|a| a.eq_ignore_ascii_case("sprint")),
             "sprint should not be in the ambiguous list"
+        );
+    }
+
+    #[test]
+    fn file_filter_rejects_parent_traversal() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "a.md", "---\ntitle: A\n---\n");
+        let index = MockIndex::new(vec![make_entry("a.md", vec![])]);
+
+        let err = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("../etc/passwd"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:?}").contains(".."),
+            "error should mention '..' component: {err:?}"
+        );
+    }
+
+    #[test]
+    fn file_filter_rejects_absolute_path() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "a.md", "---\ntitle: A\n---\n");
+        let index = MockIndex::new(vec![make_entry("a.md", vec![])]);
+
+        let err = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("/etc/passwd"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("absolute"),
+            "error should mention 'absolute': {err:?}"
         );
     }
 }

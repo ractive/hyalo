@@ -132,7 +132,7 @@ pub fn lint_files(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
 ) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_with_options(files, schema, FixMode::Off, None)
+    lint_files_with_options(files, schema, FixMode::Off, None, &mut None, None)
 }
 
 /// Prepend an additional `FileLintResult` (e.g. `.hyalo.toml` view violations)
@@ -312,10 +312,13 @@ pub fn lint_files_with_options(
     schema: &SchemaConfig,
     fix: FixMode,
     limit: Option<usize>,
+    snapshot_index: &mut Option<hyalo_core::index::SnapshotIndex>,
+    index_path: Option<&Path>,
 ) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
     let mut counts = LintCounts::default();
     let mut fix_results: Vec<FileFixResult> = Vec::new();
+    let mut index_dirty = false;
 
     for (full_path, rel_path) in files {
         let (file_result, file_fixes) = lint_file_with_fix(full_path, rel_path, schema, fix)?;
@@ -329,12 +332,26 @@ pub fn lint_files_with_options(
             counts.files_with_issues += 1;
         }
         if !file_fixes.actions.is_empty() {
+            // If fixes were actually applied, update the snapshot index entry.
+            if matches!(fix, FixMode::Apply) {
+                let props = read_frontmatter(full_path)
+                    .with_context(|| format!("reading fixed frontmatter from {rel_path}"))?;
+                super::mutation::update_index_entry(
+                    snapshot_index,
+                    rel_path,
+                    props,
+                    full_path,
+                    &mut index_dirty,
+                )?;
+            }
             fix_results.push(file_fixes);
         }
         if !file_result.violations.is_empty() {
             results.push(file_result);
         }
     }
+
+    super::mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
 
     let files_checked = files.len();
     let total = counts.errors + counts.warnings;
@@ -1308,7 +1325,9 @@ mod tests {
 
         let schema = SchemaConfig::default();
         let files = vec![(path.clone(), "note.md".to_owned())];
-        let (_, counts) = lint_files_with_options(&files, &schema, FixMode::Apply, None).unwrap();
+        let (_, counts) =
+            lint_files_with_options(&files, &schema, FixMode::Apply, None, &mut None, None)
+                .unwrap();
 
         // After fix, the comma-joined tag warning should be gone.
         assert_eq!(counts.warnings, 0, "comma-tag warning should be fixed");

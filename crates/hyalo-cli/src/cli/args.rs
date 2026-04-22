@@ -1031,7 +1031,14 @@ pub(crate) enum LinksAction {
             --first-only          Only emit the first mention of each target per source file\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
-            Without --apply, prints a dry-run report. Pass --apply to write changes."
+            Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
+            COMMON MISTAKES:\n\
+            - --exclude-target-glob filters by file path, --exclude-title filters by title text. \
+            Use --exclude-target-glob for directories (e.g. 'templates/*'), --exclude-title for words.\n\
+            - Ambiguous titles (same title from 2+ files) are automatically skipped. Use --exclude-title \
+            to suppress specific titles, or rename one of the source files.\n\
+            - Short titles match too aggressively. Use --min-length (default 3) to skip common short words.\n\
+            - Without --first-only, every mention is linked. This can over-link — use --first-only for prose."
     )]
     Auto {
         /// Preview changes without modifying files (default when --apply is omitted)
