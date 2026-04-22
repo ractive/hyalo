@@ -333,9 +333,9 @@ pub fn lint_files_with_options(
         }
         if !file_fixes.actions.is_empty() {
             // If fixes were actually applied, update the snapshot index entry.
-            if matches!(fix, FixMode::Apply)
-                && let Ok(props) = read_frontmatter(full_path)
-            {
+            if matches!(fix, FixMode::Apply) {
+                let props = read_frontmatter(full_path)
+                    .with_context(|| format!("reading fixed frontmatter from {rel_path}"))?;
                 super::mutation::update_index_entry(
                     snapshot_index,
                     rel_path,

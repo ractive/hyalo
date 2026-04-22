@@ -331,8 +331,11 @@ pub fn auto_link(
             !crate::discovery::has_parent_traversal(filter),
             "--file path must not contain '..' components: {filter}"
         );
+        // `Path::is_absolute()` on Windows requires a drive prefix, so `/foo`
+        // and `\foo` (root-relative paths) slip through.  `has_root()` catches
+        // all non-relative paths on every platform.
         anyhow::ensure!(
-            !std::path::Path::new(filter).is_absolute(),
+            !std::path::Path::new(filter).has_root(),
             "--file path must be vault-relative, not absolute: {filter}"
         );
     }
@@ -412,8 +415,12 @@ pub fn auto_link(
 
         let file_matches = scan_file_for_matches(&content, rel_path, &ac, &patterns_sorted);
 
+        // Only retain file content when we'll actually need it for writing.
+        let has_matches = !file_matches.is_empty();
         all_matches.extend(file_matches);
-        scanned_content.insert(rel_path.clone(), content);
+        if opts.apply && has_matches {
+            scanned_content.insert(rel_path.clone(), content);
+        }
     }
 
     // 4b. Apply --first-only: keep only the lowest-offset match per (source_file, target_title).
@@ -563,10 +570,11 @@ fn scan_file_for_matches(
 
 /// Apply a batch of matches to the vault by rewriting files atomically.
 ///
-/// For each file with matches, uses content collected during the scan phase to
-/// avoid re-reading files (eliminates double-read and the associated TOCTOU
-/// window). Before writing, verifies the on-disk content still matches what was
-/// scanned; if it has changed, the file is skipped with a warning.
+/// Replacements are applied to the content collected during the scan phase
+/// (not re-read from disk), so byte offsets stay consistent.  A single
+/// verification re-read is still performed per file to detect concurrent
+/// modifications; if the on-disk content differs from the scanned snapshot
+/// the file is skipped with a warning.
 ///
 /// Every write path is guarded by a vault-boundary check so that no path
 /// constructed from user-controlled data can escape the vault root.
@@ -597,19 +605,27 @@ fn apply_matches(
             abs_path.display()
         );
 
-        // Use content from the scan phase; fall back to disk if somehow absent.
-        let content: std::borrow::Cow<str> = match scanned_content.get(rel_path) {
-            Some(c) => std::borrow::Cow::Borrowed(c),
-            None => std::borrow::Cow::Owned(
-                std::fs::read_to_string(&abs_path)
-                    .with_context(|| format!("failed to read {} for apply", abs_path.display()))?,
-            ),
+        // Use content from the scan phase.  If the entry is missing, the
+        // concurrent-modification check below would compare disk-to-disk and
+        // always pass, so skip the file with a warning instead.
+        let Some(content) = scanned_content.get(rel_path).map(String::as_str) else {
+            eprintln!(
+                "warning: {rel_path} not in scan cache, skipping (possible internal bug)"
+            );
+            continue;
         };
 
-        // Detect concurrent modification: skip the file if it changed after the scan.
-        if let Ok(disk_content) = std::fs::read_to_string(&abs_path)
-            && disk_content != *content
-        {
+        // Detect concurrent modification: skip the file if it changed after scan.
+        // A read failure (deleted, permissions, non-UTF-8) is treated as
+        // "changed" — we must not overwrite what we cannot verify.
+        let disk_content = match std::fs::read_to_string(&abs_path) {
+            Ok(c) => c,
+            Err(err) => {
+                eprintln!("warning: could not verify {rel_path} after scan ({err}), skipping");
+                continue;
+            }
+        };
+        if disk_content != content {
             eprintln!("warning: {rel_path} was modified after scan, skipping");
             continue;
         }
@@ -622,7 +638,7 @@ fn apply_matches(
 
         // Work on a per-line basis. We need to reconstruct the full content after edits.
         // Split lines while preserving line endings.
-        let mut lines: Vec<String> = split_lines_preserving_endings(&content);
+        let mut lines: Vec<String> = split_lines_preserving_endings(content);
 
         for m in sorted_matches {
             let line_idx = m.line.saturating_sub(1);

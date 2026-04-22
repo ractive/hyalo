@@ -137,8 +137,8 @@ fn resolve_limit(
 }
 
 /// Patch the snapshot index for a list of vault-relative paths that were
-/// modified on disk.  Re-reads each file's frontmatter and writes the
-/// updated properties into the in-memory index, then flushes to disk once.
+/// modified on disk.  Uses `refresh_entry` to fully re-scan each file
+/// (properties, tags, links, sections, tasks), then flushes to disk once.
 fn patch_index_for_modified_files(
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
@@ -148,20 +148,20 @@ fn patch_index_for_modified_files(
     if modified_files.is_empty() {
         return Ok(());
     }
-    let mut index_dirty = false;
+    let Some(idx) = snapshot_index.as_mut() else {
+        return Ok(());
+    };
+    let mut dirty = false;
     for rel in modified_files {
-        let full = dir.join(rel);
-        if let Ok(props) = hyalo_core::frontmatter::read_frontmatter(&full) {
-            crate::commands::mutation::update_index_entry(
-                snapshot_index,
-                rel,
-                props,
-                &full,
-                &mut index_dirty,
-            )?;
+        match idx.refresh_entry(dir, rel) {
+            Ok(true) => dirty = true,
+            Ok(false) => {} // not in index, nothing to update
+            Err(e) => {
+                eprintln!("warning: could not refresh index entry for {rel}: {e:#}");
+            }
         }
     }
-    crate::commands::mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)
+    crate::commands::mutation::save_index_if_dirty(snapshot_index, index_path, dirty)
 }
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
