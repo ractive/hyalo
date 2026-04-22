@@ -298,9 +298,7 @@ pub fn remove(
     let mut results: Vec<serde_json::Value> = Vec::new();
 
     // Build property results
-    for ((name, opt_value), (modified, skipped)) in
-        parsed_props.iter().zip(prop_results.into_iter())
-    {
+    for ((name, opt_value), (modified, skipped)) in parsed_props.iter().zip(prop_results) {
         let total = modified.len() + skipped.len();
         let result = RemovePropertyResult {
             property: (*name).to_owned(),
@@ -316,7 +314,7 @@ pub fn remove(
     }
 
     // Build tag results
-    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results.into_iter()) {
+    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results) {
         let total = modified.len() + skipped.len();
         let result = RemoveTagResult {
             tag: tag.clone(),

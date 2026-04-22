@@ -588,7 +588,7 @@ fn hints_for_properties_summary(
             Some((name, count))
         })
         .collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
 
     for (name, count) in entries.into_iter().take(3) {
         if hints.len() >= MAX_HINTS {
@@ -1027,7 +1027,7 @@ fn hints_for_tags_summary(
             Some((name, count))
         })
         .collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
 
     for (name, count) in entries.into_iter().take(3) {
         if hints.len() >= MAX_HINTS {

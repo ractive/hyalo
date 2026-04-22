@@ -310,9 +310,7 @@ pub fn append(
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
-    for ((name, raw_value, _), (modified, skipped)) in
-        parsed_args.iter().zip(prop_results.into_iter())
-    {
+    for ((name, raw_value, _), (modified, skipped)) in parsed_args.iter().zip(prop_results) {
         let total = modified.len() + skipped.len();
         let result = AppendPropertyResult {
             property: (*name).to_owned(),

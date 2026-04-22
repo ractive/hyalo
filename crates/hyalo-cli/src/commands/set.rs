@@ -365,9 +365,7 @@ pub fn set(
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
-    for ((name, raw_value, _), (modified, skipped)) in
-        parsed_props.iter().zip(prop_results.into_iter())
-    {
+    for ((name, raw_value, _), (modified, skipped)) in parsed_props.iter().zip(prop_results) {
         let total = modified.len() + skipped.len();
         let result = SetPropertyResult {
             property: (*name).to_owned(),
@@ -382,7 +380,7 @@ pub fn set(
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));
     }
 
-    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results.into_iter()) {
+    for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results) {
         let total = modified.len() + skipped.len();
         let result = SetTagResult {
             tag: tag.clone(),
