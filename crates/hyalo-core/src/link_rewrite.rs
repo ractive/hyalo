@@ -697,7 +697,7 @@ pub(crate) fn apply_replacements(content: &str, replacements: &[Replacement]) ->
             // Sort right-to-left by byte offset so that applying one
             // substitution doesn't shift offsets for subsequent ones.
             let mut sorted: Vec<&&Replacement> = repls.iter().collect();
-            sorted.sort_by(|a, b| b.byte_offset.cmp(&a.byte_offset));
+            sorted.sort_by_key(|r| std::cmp::Reverse(r.byte_offset));
 
             for r in sorted {
                 let pos = r.byte_offset;

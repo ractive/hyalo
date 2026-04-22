@@ -724,8 +724,7 @@ fn write_snapshot(
         site_prefix: site_prefix.map(str::to_owned),
         created_at: SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+            .map_or(0, |d| d.as_secs()),
         pid: std::process::id(),
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to

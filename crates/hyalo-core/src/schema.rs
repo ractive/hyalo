@@ -136,8 +136,7 @@ pub fn expand_default(raw: &str) -> String {
 pub fn today_iso8601() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     // Safety: secs / 86_400 fits well within i64 for any date in the next few million years.
     #[allow(clippy::cast_possible_wrap)]
     let (y, m, d) = days_to_ymd((secs / 86_400) as i64);

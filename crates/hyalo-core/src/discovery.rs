@@ -51,8 +51,7 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
     files.retain(|path| {
         let is_symlink = path
             .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
+            .is_ok_and(|m| m.file_type().is_symlink());
         if !is_symlink {
             return true;
         }
