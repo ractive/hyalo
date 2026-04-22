@@ -1428,4 +1428,56 @@ mod tests {
             "sprint should not be in the ambiguous list"
         );
     }
+
+    #[test]
+    fn file_filter_rejects_parent_traversal() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "a.md", "---\ntitle: A\n---\n");
+        let index = MockIndex::new(vec![make_entry("a.md", vec![])]);
+
+        let err = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("../etc/passwd"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:?}").contains(".."),
+            "error should mention '..' component: {err:?}"
+        );
+    }
+
+    #[test]
+    fn file_filter_rejects_absolute_path() {
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "a.md", "---\ntitle: A\n---\n");
+        let index = MockIndex::new(vec![make_entry("a.md", vec![])]);
+
+        let err = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("/etc/passwd"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("absolute"),
+            "error should mention 'absolute': {err:?}"
+        );
+    }
 }
