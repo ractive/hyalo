@@ -609,9 +609,7 @@ fn apply_matches(
         // concurrent-modification check below would compare disk-to-disk and
         // always pass, so skip the file with a warning instead.
         let Some(content) = scanned_content.get(rel_path).map(String::as_str) else {
-            eprintln!(
-                "warning: {rel_path} not in scan cache, skipping (possible internal bug)"
-            );
+            eprintln!("warning: {rel_path} not in scan cache, skipping (possible internal bug)");
             continue;
         };
 
