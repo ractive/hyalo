@@ -503,7 +503,7 @@ checksum = "242402749acf71e6f32f5857598b7002c4058a4e3c3b22b4c7d51cab9aea754e"
 
 [[package]]
 name = "hyalo-cli"
-version = "0.13.2"
+version = "0.14.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "hyalo-core"
-version = "0.13.2"
+version = "0.14.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
