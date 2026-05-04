@@ -14,9 +14,9 @@ use mdbook_lint_core::{
 pub struct Hyalo003 {
     /// Whether the schema declares `status` with `completed` in its enum.
     /// If `false`, the rule is a no-op.
-    pub schema_has_completed: bool,
+    schema_has_completed: bool,
     /// Frontmatter `status` value for the current file.
-    pub frontmatter_status: Option<String>,
+    frontmatter_status: Option<String>,
 }
 
 impl Hyalo003 {

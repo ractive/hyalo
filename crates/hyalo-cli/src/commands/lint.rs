@@ -1464,31 +1464,26 @@ fn lint_one_file_extended(
 }
 
 /// Apply body fixes greedily. Returns (fixed_content, conflict_count).
+///
+/// Fixes are applied in descending start-offset order so that earlier ranges
+/// (lower offsets) remain valid against the partially mutated buffer.
 fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String, usize) {
-    // Collect all (start, end, replacement) sorted by start ascending.
-    let mut ranges: Vec<(usize, usize, &str, &str)> = fixes
+    let mut ranges: Vec<(usize, usize, &str)> = fixes
         .iter()
         .filter_map(|d| {
             d.fix
                 .as_ref()
-                .map(|f| (f.start, f.end, f.replacement.as_str(), d.rule_id.as_str()))
+                .map(|f| (f.start, f.end, f.replacement.as_str()))
         })
         .collect();
-    ranges.sort_by_key(|(start, end, _, _)| (*start, *end));
+    ranges.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
 
     let mut result = body.to_owned();
     let mut conflicts = 0usize;
-    let last_applied_end = 0usize;
-    // Apply in reverse order to avoid offset drift.
-    // First sort descending.
-    ranges.sort_by_key(|r| std::cmp::Reverse(r.0));
-
-    // Re-implement with reverse iteration (high offsets first = safe).
     let mut applied: Vec<std::ops::Range<usize>> = Vec::new();
-    for (start, end, replacement, _rule_id) in &ranges {
+    for (start, end, replacement) in &ranges {
         let start = *start;
         let end = *end;
-        // Check for overlap with previously applied ranges.
         if applied.iter().any(|r| start < r.end && end > r.start) {
             conflicts += 1;
             continue;
@@ -1498,11 +1493,8 @@ fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String,
             continue;
         }
         result.replace_range(start..end, replacement);
-        // Adjust previously recorded ranges? No — since we work descending, earlier
-        // ranges (lower offsets) are applied later and don't need adjustment.
         applied.push(start..end);
     }
-    let _ = last_applied_end;
 
     (result, conflicts)
 }

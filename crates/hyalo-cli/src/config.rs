@@ -333,7 +333,9 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
 
 /// Parse `[lint]` into a `hyalo_mdlint::LintConfig` for markdown body linting.
 ///
-/// Unknown rule IDs emit a warning (not an error) for forward-compat.
+/// Rule IDs are not validated against the catalog here — any string is
+/// accepted as a key, so forward-compat with newer rule IDs is preserved.
+/// Only unexpected value types (neither bool nor table) emit a warning.
 fn parse_md_lint_config(raw: Option<&LintConfig>) -> hyalo_mdlint::LintConfig {
     let Some(lc) = raw else {
         return hyalo_mdlint::LintConfig::default();

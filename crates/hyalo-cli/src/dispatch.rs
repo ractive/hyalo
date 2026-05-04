@@ -220,9 +220,10 @@ fn inject_ext_file_result(
                 serde_json::Value::from(n + extra_violations as u64),
             );
         }
-        if let Some(n) = obj
-            .get_mut("files_with_violations")
-            .and_then(|v| v.as_u64())
+        if extra_violations > 0
+            && let Some(n) = obj
+                .get_mut("files_with_violations")
+                .and_then(|v| v.as_u64())
         {
             obj.insert(
                 "files_with_violations".to_string(),
@@ -231,9 +232,13 @@ fn inject_ext_file_result(
         }
     }
 
+    let extra_violations: usize = extra.rule_groups.iter().map(|g| g.count).sum();
+    let bump_total = extra_violations > 0;
     let new_payload = crate::output::format_success(crate::output::Format::Json, &value);
     Ok(match total_count {
-        Some(t) => CommandOutcome::success_with_total(new_payload, t + 1),
+        Some(t) => {
+            CommandOutcome::success_with_total(new_payload, if bump_total { t + 1 } else { t })
+        }
         None => CommandOutcome::success(new_payload),
     })
 }

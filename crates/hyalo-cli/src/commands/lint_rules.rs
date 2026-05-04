@@ -183,10 +183,11 @@ pub(crate) fn set_rule(
         doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
 
+    let lint_rules =
+        doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+
     if use_table {
-        // Promote to table form: [lint.rules.RULE_ID]
-        let lint_rules =
-            doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        // Table form: [lint.rules.RULE_ID]
         let rule_entry =
             lint_rules[rule_id].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
 
@@ -196,11 +197,15 @@ pub(crate) fn set_rule(
         if let Some(sev) = severity {
             rule_entry["severity"] = toml_edit::value(sev);
         }
-    } else {
-        // Scalar form: lint.rules.RULE_ID = bool
-        let lint_rules =
-            doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        if let Some(b) = enabled {
+    } else if let Some(b) = enabled {
+        // Only `--enabled` provided. If a table-form override already exists,
+        // update its `enabled` field in place (preserving severity/mode).
+        // Otherwise write the scalar form: lint.rules.RULE_ID = bool.
+        if let Some(existing) = lint_rules.get_mut(rule_id)
+            && existing.is_table()
+        {
+            existing["enabled"] = toml_edit::value(b);
+        } else {
             lint_rules[rule_id] = toml_edit::value(b);
         }
     }

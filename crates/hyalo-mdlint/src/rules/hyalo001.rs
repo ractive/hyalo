@@ -83,7 +83,9 @@ impl Rule for Hyalo001 {
 }
 
 /// Returns `true` when `trimmed` starts with a bare `[]` or `[ ]` that is
-/// NOT already a proper task-list marker (e.g. `- [ ]` or `* [ ]`).
+/// NOT already a proper task-list marker (e.g. `- [ ]` or `* [ ]`) and is
+/// NOT a markdown link / reference-link definition (e.g. `[ref]: url`,
+/// `[label](url)`).
 fn is_bare_checkbox(trimmed: &str) -> bool {
     // Already a proper task-list item: starts with `- [ ]`, `- [x]`, `* [ ]`, etc.
     if trimmed.starts_with("- [ ]")
@@ -99,11 +101,25 @@ fn is_bare_checkbox(trimmed: &str) -> bool {
         return false;
     }
 
-    // Bare `[]` at start of trimmed line.
-    trimmed.starts_with("[]")
-        || trimmed.starts_with("[ ]")
-        || trimmed.starts_with("[x]")
-        || trimmed.starts_with("[X]")
+    // Candidate prefix length (the closing `]` position).
+    let prefix_len = if trimmed.starts_with("[ ]") {
+        3
+    } else if trimmed.starts_with("[]") || trimmed.starts_with("[x]") || trimmed.starts_with("[X]")
+    {
+        // `[]`, `[x]`, `[X]` — `]` is at index 1 or 2.
+        if trimmed.starts_with("[]") { 2 } else { 3 }
+    } else {
+        return false;
+    };
+
+    // Reject markdown link forms: the next non-space character after `]` is
+    // `:` (reference-link definition: `[x]: url`) or `(` (inline link: `[x](url)`).
+    let after = trimmed[prefix_len..].trim_start_matches(' ');
+    if after.starts_with(':') || after.starts_with('(') {
+        return false;
+    }
+
+    true
 }
 
 /// Build the replacement string: strip the bare checkbox prefix and prepend `- [ ]`.
@@ -180,5 +196,25 @@ mod tests {
         let content = "[] Task A\n- [ ] OK\n[] Task B\n";
         let violations = check(content);
         assert_eq!(violations.len(), 2, "should fire for Task A and Task B");
+    }
+
+    #[test]
+    fn no_violation_for_reference_link_definition() {
+        // `[ref]: url` is a markdown reference-link definition, not a checkbox.
+        let violations = check("[x]: https://example.com\n[label]: ./other.md\n");
+        assert!(
+            violations.is_empty(),
+            "reference-link definitions should not trigger HYALO001"
+        );
+    }
+
+    #[test]
+    fn no_violation_for_inline_link() {
+        // `[x](url)` is an inline link.
+        let violations = check("[x](https://example.com) inline link\n");
+        assert!(
+            violations.is_empty(),
+            "inline links should not trigger HYALO001"
+        );
     }
 }

@@ -34,9 +34,9 @@ impl TitleMode {
 
 /// HYALO002: frontmatter `title` ↔ first H1 agreement.
 pub struct Hyalo002 {
-    pub mode: TitleMode,
+    mode: TitleMode,
     /// Frontmatter title to compare against (extracted before linting).
-    pub frontmatter_title: Option<String>,
+    frontmatter_title: Option<String>,
 }
 
 impl Hyalo002 {
