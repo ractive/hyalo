@@ -1827,15 +1827,16 @@ status = "draft"
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
 
-    // The results must show dry_run=true and fixes
+    // The results must show dry_run=true and have fixes (new fix-mode shape uses total_fixed).
     let results = &parsed["results"];
     assert_eq!(
         results["dry_run"], true,
         "expected dry_run=true in results: {results}"
     );
+    let total_fixed = results["total_fixed"].as_u64().unwrap_or(0);
     assert!(
-        results["fixes"].as_array().is_some_and(|a| !a.is_empty()),
-        "expected non-empty fixes in dry-run output: {results}"
+        total_fixed > 0,
+        "expected total_fixed > 0 in dry-run output: {results}"
     );
 
     // Hints must include `lint --fix` without `--dry-run`

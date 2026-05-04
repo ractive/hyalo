@@ -92,6 +92,15 @@ pub struct HintContext {
     pub auto_link_file: Option<String>,
     pub auto_link_min_length: Option<usize>,
     pub auto_link_exclude_titles: Vec<String>,
+    // Lint-specific context (for smarter hint generation)
+    /// Whether `--fix` was passed (not just `--fix --dry-run`).
+    pub lint_is_fix: bool,
+    /// Single rule filter (`--rule`).
+    pub lint_rule: Option<String>,
+    /// Rule prefix filter (`--rule-prefix`).
+    pub lint_rule_prefix: Option<String>,
+    /// Rules to fix (`--fix-rule`, repeatable).
+    pub lint_fix_rules: Vec<String>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -133,6 +142,10 @@ impl HintContext {
             auto_link_file: None,
             auto_link_min_length: None,
             auto_link_exclude_titles: vec![],
+            lint_is_fix: false,
+            lint_rule: None,
+            lint_rule_prefix: None,
+            lint_fix_rules: vec![],
         }
     }
 
@@ -1408,11 +1421,110 @@ fn hints_for_drop_index(ctx: &HintContext, _data: &serde_json::Value) -> Vec<Hin
     )]
 }
 
-fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u64>) -> Vec<Hint> {
-    let mut hints = Vec::new();
+/// Ratio threshold for rule dominance (UX-2).
+const RULE_DOMINANCE_RATIO: f64 = 0.5;
+/// Absolute minimum violations for rule dominance (UX-2).
+const RULE_DOMINANCE_MIN: usize = 50;
 
-    // When output was truncated by the default limit, suggest showing all.
-    // Support both old `limited` and new `files_truncated` field names.
+/// Return a per-rule hint entry for HYALO001 or HYALO002, or `None` for other rules.
+fn per_rule_hint(ctx: &HintContext, rule_id: &str, worst_file: Option<&str>) -> Option<Hint> {
+    match rule_id {
+        "HYALO001" => Some(Hint::new(
+            "Auto-fix HYALO001 violations",
+            build_lint_with_filter_flags(ctx, &["lint", "--rule", "HYALO001", "--fix"]),
+        )),
+        "HYALO002" => worst_file.map(|file| {
+            Hint::new(
+                format!("See open tasks in {file}"),
+                build_command_with_file(ctx, &["find", "--task", "todo"], file, &[]),
+            )
+        }),
+        _ => None,
+    }
+}
+
+/// Build a lint command that preserves `--rule`, `--rule-prefix`, `--fix-rule`, glob, and
+/// file targets from the current context, then appends `args`.
+fn build_lint_with_filter_flags(ctx: &HintContext, args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    for arg in args {
+        parts.push(shell_quote(arg));
+    }
+    // Preserve rule/prefix/fix-rule filters from the original invocation.
+    if let Some(rule) = &ctx.lint_rule
+        && !args.contains(&"--rule")
+    {
+        parts.push("--rule".to_owned());
+        parts.push(shell_quote(rule));
+    }
+    if let Some(prefix) = &ctx.lint_rule_prefix {
+        parts.push("--rule-prefix".to_owned());
+        parts.push(shell_quote(prefix));
+    }
+    for fr in &ctx.lint_fix_rules {
+        parts.push("--fix-rule".to_owned());
+        parts.push(shell_quote(fr));
+    }
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    for ft in &ctx.file_targets {
+        parts.push(shell_quote(ft));
+    }
+    parts.join(" ")
+}
+
+/// Accumulate rule violation counts from a named array field in a file JSON object.
+fn accumulate_rule_groups(
+    file: &serde_json::Value,
+    key: &str,
+    totals: &mut std::collections::HashMap<String, usize>,
+) {
+    if let Some(groups) = file.get(key).and_then(|rg| rg.as_array()) {
+        for group in groups {
+            if let (Some(rule), Some(count)) = (
+                group.get("rule").and_then(serde_json::Value::as_str),
+                group.get("count").and_then(serde_json::Value::as_u64),
+            ) {
+                *totals.entry(rule.to_owned()).or_default() +=
+                    usize::try_from(count).unwrap_or(usize::MAX);
+            }
+        }
+    }
+}
+
+/// Collect per-rule violation counts across all files, scanning both `rule_groups` (read-only)
+/// and `fixed_groups` + `remaining_groups` (fix-mode).
+fn collect_rule_totals(data: &serde_json::Value) -> std::collections::HashMap<String, usize> {
+    let mut totals: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let Some(files) = data.get("files").and_then(|f| f.as_array()) else {
+        return totals;
+    };
+    for file in files {
+        // Read-only shape.
+        accumulate_rule_groups(file, "rule_groups", &mut totals);
+        // Fix-mode shapes (count all including fixed for dominance analysis).
+        accumulate_rule_groups(file, "remaining_groups", &mut totals);
+        accumulate_rule_groups(file, "fixed_groups", &mut totals);
+    }
+    totals
+}
+
+fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u64>) -> Vec<Hint> {
+    let mut hints: Vec<Hint> = Vec::new();
+
+    let is_fix_mode = ctx.lint_is_fix;
+    let is_dry_run = ctx.dry_run
+        || data
+            .get("dry_run")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+    // -----------------------------------------------------------------------
+    // Show-all hint when output is truncated.
+    // -----------------------------------------------------------------------
     let is_limited = data
         .get("files_truncated")
         .or_else(|| data.get("limited"))
@@ -1430,67 +1542,139 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
         ));
     }
 
-    // When in dry-run mode and there are pending fixes, suggest applying them.
-    let is_dry_run = data
-        .get("dry_run")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let has_fixes = data
-        .get("fixes")
-        .and_then(|f| f.as_array())
-        .is_some_and(|a| !a.is_empty());
-
-    if is_dry_run && has_fixes && hints.len() < MAX_HINTS {
-        hints.push(Hint::new(
-            "Apply fixes (remove --dry-run)",
-            build_command_with_glob_and_files(ctx, &["lint", "--fix"]),
-        ));
-    }
-
-    // When there are violations and we're not already in fix mode, suggest fixing.
-    // Check both new `rule_groups` shape and legacy `violations` shape.
-    let has_violations = data
-        .get("files")
-        .and_then(|f| f.as_array())
-        .is_some_and(|files| {
-            files.iter().any(|file| {
-                // New shape: rule_groups with autofixable groups
-                file.get("rule_groups")
-                    .and_then(|rg| rg.as_array())
-                    .is_some_and(|groups| {
-                        groups.iter().any(|g| {
-                            g.get("autofixable")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false)
+    // -----------------------------------------------------------------------
+    // UX-7: Smart fix/dry-run hints.
+    // -----------------------------------------------------------------------
+    if !is_fix_mode {
+        // Not in fix mode: suggest preview (don't suggest apply directly).
+        let has_violations = data
+            .get("files")
+            .and_then(|f| f.as_array())
+            .is_some_and(|files| {
+                files.iter().any(|file| {
+                    file.get("rule_groups")
+                        .and_then(|rg| rg.as_array())
+                        .is_some_and(|groups| {
+                            groups.iter().any(|g| {
+                                g.get("autofixable")
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(false)
+                            })
                         })
-                    })
-                    // Legacy shape
-                    || file
-                        .get("violations")
-                        .and_then(|v| v.as_array())
-                        .is_some_and(|v| !v.is_empty())
-            })
-        });
-    if has_violations && !is_dry_run && hints.len() < MAX_HINTS {
-        hints.push(Hint::new(
-            "Preview auto-fixes",
-            build_command_with_glob_and_files(ctx, &["lint", "--fix", "--dry-run"]),
-        ));
-        if hints.len() < MAX_HINTS {
+                        || file
+                            .get("violations")
+                            .and_then(|v| v.as_array())
+                            .is_some_and(|v| !v.is_empty())
+                })
+            });
+        if has_violations && hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                "Preview auto-fixes",
+                build_command_with_glob_and_files(ctx, &["lint", "--fix", "--dry-run"]),
+            ));
+        }
+    } else if is_dry_run {
+        // Dry-run: if there are fixes that would be applied, suggest actually applying.
+        let total_fixed = data
+            .get("total_fixed")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        // Also check old-shape `fixes` for backward compat.
+        let has_fixes = total_fixed > 0
+            || data
+                .get("fixes")
+                .and_then(|f| f.as_array())
+                .is_some_and(|a| !a.is_empty());
+        if has_fixes && hints.len() < MAX_HINTS {
+            // Build the apply hint, mirroring current filter flags.
+            let mut apply_args = vec!["lint", "--fix"];
+            let rule_str;
+            let prefix_str;
+            let mut extra_args: Vec<&str> = Vec::new();
+            if let Some(rule) = &ctx.lint_rule {
+                rule_str = rule.clone();
+                extra_args.push("--rule");
+                extra_args.push(&rule_str);
+            }
+            if let Some(prefix) = &ctx.lint_rule_prefix {
+                prefix_str = prefix.clone();
+                extra_args.push("--rule-prefix");
+                extra_args.push(&prefix_str);
+            }
+            apply_args.extend_from_slice(&extra_args);
             hints.push(Hint::new(
                 "Apply auto-fixes",
-                build_command_with_glob_and_files(ctx, &["lint", "--fix"]),
+                build_command_with_glob_and_files(ctx, &apply_args),
             ));
         }
     }
+    // If is_fix_mode && !is_dry_run: don't suggest fix hints (already applied).
 
-    // When there are unfixable parse errors, suggest listing all violations.
+    // -----------------------------------------------------------------------
+    // UX-1: per-rule hints for HYALO001 and HYALO002.
+    // -----------------------------------------------------------------------
+    // Find the "worst-offender" file (first in files array — already sorted by total desc).
+    let worst_file = data
+        .get("files")
+        .and_then(|f| f.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|f| f.get("file"))
+        .and_then(serde_json::Value::as_str);
+
+    let rule_totals = collect_rule_totals(data);
+    let mut per_rule_hint_rules: Vec<String> = Vec::new();
+    for rule_id in &["HYALO001", "HYALO002"] {
+        if rule_totals.get(*rule_id).is_some_and(|&c| c > 0) {
+            per_rule_hint_rules.push(rule_id.to_string());
+        }
+    }
+    for rule_id in &per_rule_hint_rules {
+        if hints.len() >= MAX_HINTS {
+            break;
+        }
+        // De-dupe: don't add if we already have a hint with this rule.
+        let already = hints.iter().any(|h| h.cmd.contains(rule_id.as_str()));
+        if already {
+            continue;
+        }
+        if let Some(hint) = per_rule_hint(ctx, rule_id, worst_file) {
+            hints.push(hint);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // UX-2: rule dominance hint.
+    // -----------------------------------------------------------------------
+    let grand_total: usize = rule_totals.values().sum();
+    if grand_total > 0
+        && hints.len() < MAX_HINTS
+        && let Some((dominant_rule, dominant_count_ref)) =
+            rule_totals.iter().max_by_key(|(_, c)| *c)
+    {
+        let dominant_count = *dominant_count_ref;
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = dominant_count as f64 / grand_total as f64;
+        if ratio >= RULE_DOMINANCE_RATIO && dominant_count >= RULE_DOMINANCE_MIN {
+            let already = hints.iter().any(|h| {
+                h.cmd.contains("lint-rules show") && h.cmd.contains(dominant_rule.as_str())
+            });
+            if !already {
+                hints.push(Hint::new(
+                    format!("Tune {dominant_rule} if too noisy on this KB"),
+                    build_command_no_glob(ctx, &["lint-rules", "show", dominant_rule]),
+                ));
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Parse-error hint.
+    // -----------------------------------------------------------------------
     let has_parse_errors = data
         .get("files")
         .and_then(|f| f.as_array())
         .is_some_and(|files| {
             files.iter().any(|file| {
-                // New shape: check messages inside rule_groups
                 file.get("rule_groups")
                     .and_then(|rg| rg.as_array())
                     .is_some_and(|groups| {
@@ -1506,7 +1690,6 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
                                 })
                         })
                     })
-                    // Legacy shape: flat violations
                     || file
                         .get("violations")
                         .and_then(|v| v.as_array())
@@ -1527,7 +1710,9 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
         ));
     }
 
+    // -----------------------------------------------------------------------
     // Always suggest listing defined types.
+    // -----------------------------------------------------------------------
     if hints.len() < MAX_HINTS {
         hints.push(Hint::new(
             "See defined type schemas",
@@ -2401,9 +2586,12 @@ mod tests {
     fn lint_hints_suggest_apply_when_dry_run() {
         let mut c = ctx(HintSource::Lint);
         c.dry_run = true;
+        c.lint_is_fix = true; // --dry-run requires --fix per CLI spec
         let data = json!({
             "files": [],
             "total": 0,
+            "total_fixed": 3,
+            "total_remaining": 0,
             "fixes": [{"file": "test.md", "actions": [{"kind": "insert-default", "property": "status", "new": "draft"}]}],
             "dry_run": true,
         });
@@ -2491,6 +2679,196 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("lint")),
             "should suggest lint: {hints:?}"
+        );
+    }
+
+    // --- UX-1: per-rule hints for HYALO001 / HYALO002 ---
+
+    #[test]
+    fn lint_hints_hyalo001_suggests_fix_rule() {
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{
+                "file": "test.md",
+                "rule_groups": [{"rule": "HYALO001", "count": 3, "shown": 3, "truncated": false,
+                                 "severity": "error", "autofixable": true,
+                                 "violations": [{"line": 4, "column": 1, "message": "bare []"}]}]
+            }],
+            "total": 3,
+            "rules_fired": 1,
+            "files_with_violations": 1,
+            "files_checked": 1,
+            "files_truncated": false,
+            "errors": 3,
+            "warnings": 0,
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("HYALO001") && h.cmd.contains("--fix")),
+            "should suggest lint --rule HYALO001 --fix for HYALO001 violations: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_hyalo002_suggests_find_todo() {
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{
+                "file": "iterations/iter-1.md",
+                "rule_groups": [{"rule": "HYALO002", "count": 5, "shown": 3, "truncated": true,
+                                 "severity": "error", "autofixable": false,
+                                 "violations": [{"line": 21, "column": 1, "message": "completed but tasks remain"}]}]
+            }],
+            "total": 5,
+            "rules_fired": 1,
+            "files_with_violations": 1,
+            "files_checked": 1,
+            "files_truncated": false,
+            "errors": 5,
+            "warnings": 0,
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("find --task todo") && h.cmd.contains("iter-1")),
+            "should suggest find --task todo with worst-offender file: {hints:?}"
+        );
+    }
+
+    // --- UX-2: rule dominance hint ---
+
+    #[test]
+    fn lint_hints_dominant_rule_suggests_tune() {
+        let c = ctx(HintSource::Lint);
+        // MD013 has 80 of 100 total violations → 80% share, ≥50 absolute.
+        let mut groups: Vec<serde_json::Value> = Vec::new();
+        for _ in 0..80 {
+            groups.push(json!({"line": 1, "column": 1, "message": "line too long"}));
+        }
+        let data = json!({
+            "files": [
+                {"file": "a.md", "rule_groups": [
+                    {"rule": "MD013", "count": 80, "shown": 3, "truncated": true,
+                     "severity": "warn", "autofixable": false,
+                     "violations": [{"line": 1, "column": 1, "message": "line too long"}]}
+                ]},
+                {"file": "b.md", "rule_groups": [
+                    {"rule": "HYALO001", "count": 20, "shown": 3, "truncated": true,
+                     "severity": "error", "autofixable": true,
+                     "violations": [{"line": 2, "column": 1, "message": "bare []"}]}
+                ]}
+            ],
+            "total": 100,
+            "rules_fired": 2,
+            "files_with_violations": 2,
+            "files_checked": 5,
+            "files_truncated": false,
+            "errors": 20,
+            "warnings": 80,
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.contains("lint-rules show MD013")),
+            "should suggest lint-rules show for dominant rule (80%): {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_no_dominance_when_below_threshold() {
+        let c = ctx(HintSource::Lint);
+        // MD013 has 30 of 60 total (50% but only 30 absolute < 50 min).
+        let data = json!({
+            "files": [
+                {"file": "a.md", "rule_groups": [
+                    {"rule": "MD013", "count": 30, "shown": 3, "truncated": true,
+                     "severity": "warn", "autofixable": false,
+                     "violations": [{"line": 1, "column": 1, "message": "line too long"}]}
+                ]},
+                {"file": "b.md", "rule_groups": [
+                    {"rule": "HYALO001", "count": 30, "shown": 3, "truncated": true,
+                     "severity": "error", "autofixable": true,
+                     "violations": [{"line": 2, "column": 1, "message": "bare []"}]}
+                ]}
+            ],
+            "total": 60,
+            "rules_fired": 2,
+            "files_with_violations": 2,
+            "files_checked": 5,
+            "files_truncated": false,
+            "errors": 30,
+            "warnings": 30,
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("lint-rules show")),
+            "should not suggest lint-rules show when below dominance threshold: {hints:?}"
+        );
+    }
+
+    // --- UX-7: smart fix/dry-run hints ---
+
+    #[test]
+    fn lint_hints_not_fix_mode_suggests_preview_not_apply() {
+        // When not in fix mode, only preview should be suggested, not apply.
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{"file": "test.md", "rule_groups": [
+                {"rule": "MD009", "count": 2, "shown": 2, "truncated": false,
+                 "severity": "warn", "autofixable": true,
+                 "violations": [{"line": 3, "column": 10, "message": "trailing spaces"}]}
+            ]}],
+            "total": 2,
+            "rules_fired": 1,
+            "files_with_violations": 1,
+            "files_checked": 1,
+            "files_truncated": false,
+            "errors": 0,
+            "warnings": 2,
+        });
+        let hints = generate_hints(&c, &data, None);
+        // Should have preview hint.
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("--fix --dry-run")),
+            "non-fix mode should suggest preview: {hints:?}"
+        );
+        // Should NOT suggest direct apply (user should preview first).
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.cmd.contains("lint --fix") && !h.cmd.contains("--dry-run")),
+            "non-fix mode should NOT suggest apply directly: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_fix_mode_applied_no_fix_hints() {
+        // When fix was applied (not dry-run), no fix hints.
+        let mut c = ctx(HintSource::Lint);
+        c.lint_is_fix = true;
+        // dry_run defaults to false
+        let data = json!({
+            "files": [],
+            "total_fixed": 3,
+            "total_remaining": 0,
+            "total_conflicts": 0,
+            "rules_fired": 1,
+            "files_with_violations": 0,
+            "files_checked": 3,
+            "files_truncated": false,
+            "errors": 0,
+            "warnings": 0,
+            "dry_run": false,
+        });
+        let hints = generate_hints(&c, &data, None);
+        // Should NOT suggest any lint --fix hints since we already applied.
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("lint --fix")),
+            "after applying fixes, should not suggest fix again: {hints:?}"
         );
     }
 }

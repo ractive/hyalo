@@ -218,7 +218,7 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
 - **read** — extract body content, a section, or line range
 - **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
-- **lint** — validate frontmatter against the `[schema]` and lint markdown body with mdbook-lint MD001..MD059 + HYALO001/002/003 native rules; supports `--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix`, `--fix-rule`; exit 1 when errors found
+- **lint** — validate frontmatter against the `[schema]` and lint markdown body with mdbook-lint MD001..MD059 + HYALO001/002 native rules; supports `--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix`, `--fix-rule`; exit 1 when errors found
 - **lint-rules** — manage which lint rules are enabled and their severity in `.hyalo.toml` (list, show, set, remove)
 - **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, set, remove)
 - **properties summary** — list property names and types
@@ -243,10 +243,9 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 `hyalo lint` runs two passes in one invocation:
 
 1. **Frontmatter** — validates against the `[schema]` block in `.hyalo.toml`. No-op when no schema is configured.
-2. **Markdown body** — stock mdbook-lint rules (MD001..MD059) plus three HYALO native rules:
+2. **Markdown body** — stock mdbook-lint rules (MD001..MD059) plus two HYALO native rules:
    - **HYALO001** — bare `[]` should be `- [ ]` (autofixable)
-   - **HYALO002** — frontmatter `title` should agree with first H1
-   - **HYALO003** — `status: completed` requires all task checkboxes ticked
+   - **HYALO002** — `status: completed` requires all task checkboxes ticked (fires only when `[schema.types.*].properties.status` is declared as an enum containing `"completed"`)
 
 ```bash
 hyalo lint                               # whole vault, summary mode
@@ -262,7 +261,7 @@ Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detai
 ```bash
 hyalo lint-rules list                          # see what's enabled
 hyalo lint-rules set MD013 --enabled false     # turn one off
-hyalo lint-rules set HYALO002 --severity error # promote to error
+hyalo lint-rules set HYALO001 --severity error # promote to error
 ```
 
 Lint also warns about comma-joined tags (e.g. `tags: ["cli,ux"]` instead of two list

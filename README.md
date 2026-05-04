@@ -69,8 +69,10 @@ hyalo links auto --exclude-title API --exclude-target-glob 'templates/*' --apply
 hyalo links auto --file notes/todo.md --apply   # single-file mode
 
 # Lint frontmatter against your schema and markdown body against
-# bundled rules (MD001..MD059 from mdbook-lint plus three HYALO native
+# bundled rules (MD001..MD059 from mdbook-lint plus two HYALO native
 # cross-cutting rules). `--fix` applies autofixes for both passes.
+# HYALO002 fires only when [schema.types.*].properties.status is
+# declared as an enum containing "completed".
 hyalo lint                              # full vault, summary mode
 hyalo lint --rule MD013 --detailed      # drill into a single rule
 hyalo lint --rule-prefix HYALO          # only HYALO native rules
@@ -82,7 +84,7 @@ hyalo lint --fix-rule HYALO001          # only autofix one rule
 hyalo lint-rules list
 hyalo lint-rules show MD013
 hyalo lint-rules set MD013 --enabled false
-hyalo lint-rules set HYALO002 --severity error
+hyalo lint-rules set HYALO001 --severity error
 hyalo lint-rules remove MD013           # revert to default
 ```
 

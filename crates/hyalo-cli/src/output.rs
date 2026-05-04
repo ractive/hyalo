@@ -757,6 +757,19 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                     .collect::<Vec<_>>()
                     .join("\n\n");
             }
+            // LintRules list: array of rule entries with id, effective_enabled, etc.
+            let is_lint_rules = arr.first().and_then(|v| v.as_object()).is_some_and(|m| {
+                m.contains_key("id")
+                    && m.contains_key("effective_enabled")
+                    && m.contains_key("autofixable")
+                    && m.contains_key("source")
+            });
+            if is_lint_rules {
+                let result = format_lint_rules_list_text(arr);
+                if !result.is_empty() {
+                    return result;
+                }
+            }
             // Use blank-line separator between FileObjects for readability.
             let is_file_objects = arr
                 .first()
@@ -779,6 +792,13 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
             if sig == "defaults,filename_template,properties,required,type" {
                 return format_type_show_text(map);
             }
+            // LintFixOutput (fix-mode): detected by `total_fixed` + `files`.
+            if map.contains_key("total_fixed")
+                && map.contains_key("files")
+                && map.contains_key("total_remaining")
+            {
+                return format_lint_fix_output_text(map);
+            }
             // LintOutput: detected by "files" array of {file, violations} + "total".
             if map.contains_key("total")
                 && map.contains_key("files")
@@ -798,6 +818,18 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 if is_lint {
                     return format_lint_output_text(map);
                 }
+            }
+            // LintRules mutation (set/remove): detected by `action` = "set" or "remove"
+            // with `rule_id`, `before`, `after`, `config_path` fields.
+            if matches!(
+                map.get("action").and_then(serde_json::Value::as_str),
+                Some("set" | "remove")
+            ) && map.contains_key("rule_id")
+                && map.contains_key("before")
+                && map.contains_key("after")
+                && map.contains_key("config_path")
+            {
+                return format_lint_rules_mutation_text(map);
             }
             // FileObject: dynamically compose filter from present fields.
             if map.contains_key("file") && map.contains_key("modified") {
@@ -1031,6 +1063,468 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
     if fix_count > 0 {
         let fixed_label = if dry_run { "would fix" } else { "fixed" };
         let _ = write!(s, " — {fixed_label} {fix_count}");
+    }
+
+    s
+}
+
+/// Format `ExtLintFixOutput` (fix-mode lint) as human-readable text.
+///
+/// Renders three prefixes: `fixed`, `remain`, `conflict`.
+fn format_lint_fix_output_text(map: &serde_json::Map<String, serde_json::Value>) -> String {
+    use std::fmt::Write as _;
+
+    let mut s = String::new();
+    let dry_run = map
+        .get("dry_run")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    let files = map.get("files").and_then(|f| f.as_array());
+    if let Some(files) = files {
+        for file_entry in files {
+            let file = file_entry
+                .get("file")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+
+            let has_content = file_entry
+                .get("fixed_groups")
+                .and_then(|g| g.as_array())
+                .is_some_and(|a| !a.is_empty())
+                || file_entry
+                    .get("remaining_groups")
+                    .and_then(|g| g.as_array())
+                    .is_some_and(|a| !a.is_empty())
+                || file_entry
+                    .get("conflicts")
+                    .and_then(|c| c.as_array())
+                    .is_some_and(|a| !a.is_empty());
+            if !has_content {
+                continue;
+            }
+
+            let _ = writeln!(s, "{file}:");
+            let prefix = if dry_run { "would fix" } else { "fixed  " };
+
+            // Fixed groups.
+            if let Some(fixed_groups) = file_entry.get("fixed_groups").and_then(|g| g.as_array()) {
+                for group in fixed_groups {
+                    let rule = group
+                        .get("rule")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("?");
+                    let violations = group.get("violations").and_then(|v| v.as_array());
+                    let count = group
+                        .get("count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    if let Some(violations) = violations.filter(|v| !v.is_empty()) {
+                        for v in violations {
+                            let line = v
+                                .get("line")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let message = v
+                                .get("message")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            if line > 0 {
+                                let _ = writeln!(s, "  {prefix}  {rule}  line {line}  {message}");
+                            } else {
+                                let _ = writeln!(s, "  {prefix}  {rule}  {message}");
+                            }
+                        }
+                    } else if count > 0 {
+                        let _ = writeln!(s, "  {prefix}  {rule}  ({count} violations)");
+                    }
+                }
+            }
+
+            // Remaining groups.
+            if let Some(remaining_groups) = file_entry
+                .get("remaining_groups")
+                .and_then(|g| g.as_array())
+            {
+                for group in remaining_groups {
+                    let rule = group
+                        .get("rule")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("?");
+                    let severity = group
+                        .get("severity")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("warn");
+                    let sev_pad = if severity == "error" {
+                        "error"
+                    } else {
+                        "warn "
+                    };
+                    let violations = group.get("violations").and_then(|v| v.as_array());
+                    let count = group
+                        .get("count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    let shown = group
+                        .get("shown")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(count);
+                    if let Some(violations) = violations {
+                        for v in violations {
+                            let line = v
+                                .get("line")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let message = v
+                                .get("message")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            if line > 0 {
+                                let _ = writeln!(
+                                    s,
+                                    "  remain  {sev_pad}  {rule}  line {line}  {message}"
+                                );
+                            } else {
+                                let _ = writeln!(s, "  remain  {sev_pad}  {rule}  {message}");
+                            }
+                        }
+                        if count > shown {
+                            let _ = writeln!(s, "  … ({} more {})", count - shown, rule);
+                        }
+                    }
+                }
+            }
+
+            // Conflicts.
+            if let Some(conflicts) = file_entry.get("conflicts").and_then(|c| c.as_array()) {
+                for conflict in conflicts {
+                    let rule = conflict
+                        .get("rule")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("?");
+                    let reason = conflict
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let _ = writeln!(s, "  conflict  {rule}  {reason}");
+                }
+            }
+        }
+    }
+
+    // Summary line.
+    let files_checked = map
+        .get("files_checked")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let total_fixed = map
+        .get("total_fixed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let total_remaining = map
+        .get("total_remaining")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let total_conflicts = map
+        .get("total_conflicts")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let files_label = if files_checked == 1 { "file" } else { "files" };
+    let fix_verb = if dry_run { "would fix" } else { "fixed" };
+    let _ = write!(
+        s,
+        "{files_checked} {files_label} checked: {total_fixed} {fix_verb}, {total_remaining} remaining, {total_conflicts} conflicts.",
+    );
+
+    s
+}
+
+/// Format a `lint-rules list` result as a column table.
+///
+/// Detects arrays of objects with `id`, `default_severity`, `effective_enabled`,
+/// `autofixable`, `source` fields.
+fn format_lint_rules_list_text(arr: &[serde_json::Value]) -> String {
+    use std::fmt::Write as _;
+
+    const DEFAULT_TERM_WIDTH: usize = 120;
+
+    if arr.is_empty() {
+        return String::new();
+    }
+
+    // Verify it looks like lint-rule entries.
+    let first_is_rule = arr.first().and_then(|v| v.as_object()).is_some_and(|m| {
+        m.contains_key("id")
+            && m.contains_key("effective_enabled")
+            && m.contains_key("autofixable")
+            && m.contains_key("source")
+    });
+    if !first_is_rule {
+        return String::new();
+    }
+
+    let term_width = DEFAULT_TERM_WIDTH;
+
+    // Collect rows.
+    let mut rows: Vec<[String; 6]> = Vec::with_capacity(arr.len());
+    let mut total_enabled = 0usize;
+    let mut total_autofixable = 0usize;
+
+    for entry in arr {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        let id = obj
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let name = obj
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let severity = obj
+            .get("effective_severity")
+            .or_else(|| obj.get("default_severity"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("warn")
+            .to_owned();
+        let enabled = obj
+            .get("effective_enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let autofix = obj
+            .get("autofixable")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let description = obj
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+
+        if enabled {
+            total_enabled += 1;
+        }
+        if autofix {
+            total_autofixable += 1;
+        }
+
+        rows.push([
+            id,
+            name,
+            severity,
+            if enabled {
+                "on".to_owned()
+            } else {
+                "off".to_owned()
+            },
+            if autofix {
+                "yes".to_owned()
+            } else {
+                "no".to_owned()
+            },
+            description,
+        ]);
+    }
+
+    // Column headers.
+    let headers = [
+        "ID",
+        "NAME",
+        "SEVERITY",
+        "ENABLED",
+        "AUTOFIX",
+        "DESCRIPTION",
+    ];
+
+    // Compute max widths for columns 0-4 (description is last, capped).
+    let mut col_widths = [0usize; 6];
+    for (i, h) in headers.iter().enumerate() {
+        col_widths[i] = h.len();
+    }
+    for row in &rows {
+        for i in 0..5 {
+            col_widths[i] = col_widths[i].max(row[i].len());
+        }
+    }
+
+    // Compute remaining width for description column.
+    // Fixed columns + separators (2 spaces between each).
+    let fixed_width: usize = col_widths[..5].iter().sum::<usize>() + 5 * 2; // 5 gaps of 2 spaces
+    let desc_available = term_width.saturating_sub(fixed_width).max(20);
+    let desc_width = desc_available.min(80);
+    col_widths[5] = desc_width;
+
+    let mut s = String::new();
+
+    // Header row.
+    for (i, h) in headers.iter().enumerate() {
+        if i > 0 {
+            s.push_str("  ");
+        }
+        if i == 5 {
+            s.push_str(h);
+        } else {
+            let _ = write!(s, "{h:<width$}", width = col_widths[i]);
+        }
+    }
+    s.push('\n');
+
+    // Data rows.
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i > 0 {
+                s.push_str("  ");
+            }
+            if i == 5 {
+                // Truncate description with ellipsis if needed.
+                if cell.chars().count() > desc_width {
+                    let truncated: String =
+                        cell.chars().take(desc_width.saturating_sub(1)).collect();
+                    let _ = write!(s, "{truncated}…");
+                } else {
+                    s.push_str(cell);
+                }
+            } else {
+                let _ = write!(s, "{cell:<width$}", width = col_widths[i]);
+            }
+        }
+        s.push('\n');
+    }
+
+    // Summary line.
+    let total = arr.len();
+    let total_disabled = total - total_enabled;
+    let _ = write!(
+        s,
+        "\n{total} rules, {total_enabled} enabled, {total_disabled} disabled. {total_autofixable} autofixable."
+    );
+
+    s
+}
+
+/// Map `Some(true)` → `"on"`, `Some(false)` → `"off"`, `None` → `"?"`.
+fn bool_label(b: Option<bool>) -> &'static str {
+    match b {
+        Some(true) => "on",
+        Some(false) => "off",
+        None => "?",
+    }
+}
+
+/// Format a `lint-rules set` or `lint-rules remove` result as human-readable text.
+///
+/// Expected JSON shapes:
+/// - set:    `{action: "set",    rule_id, dry_run, before: {enabled, severity}, after: {enabled, severity}, config_path}`
+/// - remove: `{action: "remove", rule_id, dry_run, removed, before: {enabled, severity}, after: {enabled, severity}, config_path}`
+///
+/// Rendered example:
+/// ```text
+/// HYALO002: enabled on → off (warn → warn)
+///   wrote .hyalo.toml
+/// ```
+fn format_lint_rules_mutation_text(map: &serde_json::Map<String, serde_json::Value>) -> String {
+    use std::fmt::Write as _;
+
+    let action = map
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("set");
+    let rule_id = map
+        .get("rule_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("?");
+    let dry_run = map
+        .get("dry_run")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let config_path = map
+        .get("config_path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(".hyalo.toml");
+
+    let before_enabled = map
+        .get("before")
+        .and_then(|b| b.get("enabled"))
+        .and_then(serde_json::Value::as_bool);
+    let before_severity = map
+        .get("before")
+        .and_then(|b| b.get("severity"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("warn");
+    let after_enabled = map
+        .get("after")
+        .and_then(|b| b.get("enabled"))
+        .and_then(serde_json::Value::as_bool);
+    let after_severity = map
+        .get("after")
+        .and_then(|b| b.get("severity"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("warn");
+
+    let mut s = String::new();
+
+    if action == "remove" {
+        let removed = map
+            .get("removed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !removed {
+            let reason = map
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no override found");
+            let _ = write!(s, "{rule_id}: no override to remove ({reason})");
+            return s;
+        }
+        // Show what changed when removing (reverts to defaults).
+        let en_changed = before_enabled != after_enabled;
+        let sev_changed = before_severity != after_severity;
+        let _ = write!(s, "{rule_id}: removed override");
+        if en_changed || sev_changed {
+            let _ = write!(s, " ({}", bool_label(before_enabled));
+            if sev_changed {
+                let _ = write!(s, ", {before_severity}");
+            }
+            let _ = write!(s, " → {}", bool_label(after_enabled));
+            if sev_changed {
+                let _ = write!(s, ", {after_severity}");
+            }
+            s.push(')');
+        }
+    } else {
+        // set action: show enabled and severity changes side-by-side.
+        let en_changed = before_enabled != after_enabled;
+        let sev_changed = before_severity != after_severity;
+
+        let _ = write!(s, "{rule_id}:");
+        if en_changed {
+            let _ = write!(
+                s,
+                " enabled {} → {}",
+                bool_label(before_enabled),
+                bool_label(after_enabled)
+            );
+        }
+        if sev_changed {
+            if en_changed {
+                s.push(',');
+            }
+            let _ = write!(s, " {before_severity} → {after_severity}");
+        }
+        if !en_changed && !sev_changed {
+            s.push_str(" (no change)");
+        }
+    }
+
+    // Indicate write vs dry-run.
+    s.push('\n');
+    if dry_run {
+        let _ = write!(s, "  dry-run, would write {config_path}");
+    } else {
+        let _ = write!(s, "  wrote {config_path}");
     }
 
     s
@@ -2086,5 +2580,96 @@ mod tests {
             "escape sequences should be stripped"
         );
         assert!(output.contains("Hello") && output.contains("World"));
+    }
+
+    // --- UX-6: lint-rules mutation text renderer ---
+
+    /// `lint-rules set` with enabled change renders before→after and config path.
+    #[test]
+    fn lint_rules_set_enabled_change_renders_diff() {
+        let value = serde_json::json!({
+            "action": "set",
+            "rule_id": "MD013",
+            "dry_run": false,
+            "before": {"enabled": true, "severity": "warn"},
+            "after": {"enabled": false, "severity": "warn"},
+            "config_path": ".hyalo.toml"
+        });
+        let out = format_success(Format::Text, &value);
+        assert!(out.contains("MD013:"), "should include rule id");
+        assert!(
+            out.contains("on") && out.contains("off"),
+            "should show enabled change"
+        );
+        assert!(out.contains("wrote .hyalo.toml"), "should mention write");
+    }
+
+    /// `lint-rules set` with severity change only.
+    #[test]
+    fn lint_rules_set_severity_change_renders_diff() {
+        let value = serde_json::json!({
+            "action": "set",
+            "rule_id": "HYALO001",
+            "dry_run": false,
+            "before": {"enabled": true, "severity": "warn"},
+            "after": {"enabled": true, "severity": "error"},
+            "config_path": ".hyalo.toml"
+        });
+        let out = format_success(Format::Text, &value);
+        assert!(out.contains("HYALO001:"));
+        assert!(out.contains("warn") && out.contains("error"));
+        assert!(out.contains("wrote .hyalo.toml"));
+    }
+
+    /// `lint-rules set` with dry-run says "dry-run, would write".
+    #[test]
+    fn lint_rules_set_dry_run_says_would_write() {
+        let value = serde_json::json!({
+            "action": "set",
+            "rule_id": "MD013",
+            "dry_run": true,
+            "before": {"enabled": true, "severity": "warn"},
+            "after": {"enabled": false, "severity": "warn"},
+            "config_path": ".hyalo.toml"
+        });
+        let out = format_success(Format::Text, &value);
+        assert!(out.contains("dry-run"), "should mention dry-run");
+        assert!(!out.contains("wrote "), "should not say wrote");
+    }
+
+    /// `lint-rules remove` with a removed override shows reverted state.
+    #[test]
+    fn lint_rules_remove_shows_reverted_state() {
+        let value = serde_json::json!({
+            "action": "remove",
+            "rule_id": "MD013",
+            "dry_run": false,
+            "removed": true,
+            "before": {"enabled": false, "severity": "warn"},
+            "after": {"enabled": true, "severity": "warn"},
+            "config_path": ".hyalo.toml"
+        });
+        let out = format_success(Format::Text, &value);
+        assert!(out.contains("MD013:"));
+        assert!(out.contains("removed override"));
+        assert!(out.contains("wrote .hyalo.toml"));
+    }
+
+    /// `lint-rules remove` when nothing to remove shows no-op message.
+    #[test]
+    fn lint_rules_remove_noop_shows_reason() {
+        let value = serde_json::json!({
+            "action": "remove",
+            "rule_id": "MD013",
+            "dry_run": false,
+            "removed": false,
+            "reason": "no override found",
+            "before": {"enabled": true, "severity": "warn"},
+            "after": {"enabled": true, "severity": "warn"},
+            "config_path": ".hyalo.toml"
+        });
+        let out = format_success(Format::Text, &value);
+        assert!(out.contains("MD013:"));
+        assert!(out.contains("no override to remove") || out.contains("no override found"));
     }
 }

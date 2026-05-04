@@ -1,11 +1,12 @@
 //! Markdown linting engine for hyalo.
 //!
-//! Wraps `mdbook-lint-core` + `mdbook-lint-rulesets` and adds three
+//! Wraps `mdbook-lint-core` + `mdbook-lint-rulesets` and adds two
 //! HYALO-native cross-cutting rules:
 //!
 //! - **HYALO001** — bare `[]` should be `- [ ]` (autofix).
-//! - **HYALO002** — frontmatter `title` ↔ first H1 agreement.
-//! - **HYALO003** — `status: completed` requires all task checkboxes ticked.
+//! - **HYALO002** — `status: completed` requires all task checkboxes ticked
+//!   (only fires when the schema declares `status` as an enum containing
+//!   `completed`).
 
 pub mod config;
 pub mod engine;

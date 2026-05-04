@@ -214,9 +214,17 @@ fn inject_ext_file_result(
         if let Some(files) = obj.get_mut("files").and_then(|f| f.as_array_mut()) {
             files.insert(0, extra_value);
         }
+        // Read-only shape has `total`.
         if let Some(n) = obj.get_mut("total").and_then(|v| v.as_u64()) {
             obj.insert(
                 "total".to_string(),
+                serde_json::Value::from(n + extra_violations as u64),
+            );
+        }
+        // Fix-mode shape has `total_remaining`.
+        if let Some(n) = obj.get_mut("total_remaining").and_then(|v| v.as_u64()) {
+            obj.insert(
+                "total_remaining".to_string(),
                 serde_json::Value::from(n + extra_violations as u64),
             );
         }
@@ -1297,6 +1305,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     ctx.config_dir,
                     &md_engine,
                     ctx.md_lint,
+                    ctx.schema,
                     enabled_only,
                     disabled_only,
                     rule_prefix.as_deref(),
@@ -1306,6 +1315,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &rule_id,
                     &md_engine,
                     ctx.md_lint,
+                    ctx.schema,
                     ctx.user_format,
                 )),
                 LintRulesAction::Set {
@@ -1320,6 +1330,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     severity.as_deref(),
                     dry_run,
                     &md_engine,
+                    ctx.md_lint,
                     ctx.user_format,
                 ),
                 LintRulesAction::Remove { rule_id, dry_run } => lint_rules_commands::remove_rule(
@@ -1327,6 +1338,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &rule_id,
                     dry_run,
                     &md_engine,
+                    ctx.md_lint,
                     ctx.user_format,
                 ),
             }

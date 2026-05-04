@@ -1024,7 +1024,7 @@ pub struct BodyViolation {
     pub fix: Option<serde_json::Value>,
 }
 
-/// Extended lint output for one file (new shape).
+/// Extended lint output for one file (read-only shape).
 #[derive(Debug, serde::Serialize)]
 pub struct ExtFileLintResult {
     pub file: String,
@@ -1032,7 +1032,36 @@ pub struct ExtFileLintResult {
     pub rule_groups: Vec<RuleGroup>,
 }
 
-/// Full extended lint output.
+/// One entry in `fixed_groups`: a rule + count of violations that were fixed.
+/// Includes `violations` so text renderers can show line/message details.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FixedGroup {
+    pub rule: String,
+    pub count: usize,
+    /// Violations that were fixed (same shape as `RuleGroup.violations`).
+    pub violations: Vec<BodyViolation>,
+}
+
+/// One entry in `conflicts`: a rule whose fix was skipped due to range overlap.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConflictEntry {
+    pub rule: String,
+    pub reason: String,
+}
+
+/// Extended lint output for one file in fix-mode.
+#[derive(Debug, serde::Serialize)]
+pub struct ExtFileLintFixResult {
+    pub file: String,
+    /// Rules that had fixes applied (or would be in DryRun).
+    pub fixed_groups: Vec<FixedGroup>,
+    /// Rules with violations that remain after fixing.
+    pub remaining_groups: Vec<RuleGroup>,
+    /// Rules whose fixes were skipped due to conflicts.
+    pub conflicts: Vec<ConflictEntry>,
+}
+
+/// Full extended lint output (read-only mode).
 #[derive(Debug, serde::Serialize)]
 pub struct ExtLintOutput {
     pub files: Vec<ExtFileLintResult>,
@@ -1051,6 +1080,23 @@ pub struct ExtLintOutput {
     /// Frontmatter fix actions applied (or previewed) per file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<FileFixResult>,
+}
+
+/// Full extended lint output in fix-mode.
+#[derive(Debug, serde::Serialize)]
+pub struct ExtLintFixOutput {
+    pub files: Vec<ExtFileLintFixResult>,
+    pub total_fixed: usize,
+    pub total_remaining: usize,
+    pub total_conflicts: usize,
+    pub rules_fired: usize,
+    pub files_with_violations: usize,
+    pub files_checked: usize,
+    pub files_truncated: bool,
+    pub errors: usize,
+    pub warnings: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
 }
 
 /// Options for the extended lint run.
@@ -1156,107 +1202,330 @@ pub fn lint_files_extended(
     let files_truncated = all_results.len() > opts.max_files;
     all_results.truncate(opts.max_files);
 
-    // Build output.
-    let mut total_violations = 0usize;
+    let is_fix_mode = matches!(opts.fix, FixMode::Apply | FixMode::DryRun);
+
+    // Shared counters used by both output paths.
     let mut total_errors = 0usize;
     let mut total_warnings = 0usize;
     let mut rules_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut output_files: Vec<ExtFileLintResult> = Vec::new();
-    let mut all_fix_actions: Vec<FileFixResult> = Vec::new();
 
-    for r in &all_results {
-        // Collect fix actions for this file (regardless of whether there are violations).
-        if !r.fix_actions.is_empty() {
-            all_fix_actions.push(FileFixResult {
-                file: r.rel_path.clone(),
-                actions: r.fix_actions.clone(),
-            });
-        }
-        if r.total_violations == 0 {
-            continue;
-        }
-        let mut rule_groups: Vec<RuleGroup> = Vec::new();
-        for (rule_id, violations) in &r.violations_by_rule {
-            let count = violations.len();
-            total_violations += count;
-            for v in violations {
-                match v.severity.as_str() {
-                    "error" => total_errors += 1,
-                    _ => total_warnings += 1,
+    let val = if is_fix_mode {
+        // -------------------------------------------------------------------
+        // Fix-mode output: fixed_groups / remaining_groups / conflicts shape.
+        // -------------------------------------------------------------------
+        let mut output_fix_files: Vec<ExtFileLintFixResult> = Vec::new();
+        let mut grand_total_fixed = 0usize;
+        let mut grand_total_remaining = 0usize;
+        let mut grand_total_conflicts = 0usize;
+
+        for r in &all_results {
+            // Build a set of (rule_id, order-within-rule) → FixOutcome from
+            // body_fix_outcomes.  We use a Vec<(rule, outcome)> indexed by the
+            // position among fixable diagnostics (same order as fixable_indices).
+            // Easier to just build maps indexed by rule.
+            let mut applied_by_rule: indexmap::IndexMap<String, Vec<BodyViolation>> =
+                indexmap::IndexMap::new();
+            let mut conflict_by_rule: indexmap::IndexMap<String, String> =
+                indexmap::IndexMap::new();
+
+            for (rule_id, outcome) in &r.body_fix_outcomes {
+                match outcome {
+                    FixOutcome::Applied => {
+                        applied_by_rule.entry(rule_id.clone()).or_default();
+                    }
+                    FixOutcome::Conflict { blocking_rule } => {
+                        conflict_by_rule
+                            .entry(rule_id.clone())
+                            .or_insert_with(|| blocking_rule.clone());
+                    }
+                    FixOutcome::NoFix => {}
                 }
             }
-            rules_seen.insert(rule_id.clone());
 
-            // SCHEMA (frontmatter) violations are autofixable via the existing
-            // frontmatter --fix pass (insert defaults, fix enum typos, normalize
-            // dates, infer type). Body rules look up autofixable from the engine.
-            let autofixable = if rule_id == "SCHEMA" {
-                true
-            } else {
-                md_lint_engine
+            // Count schema (frontmatter) fixes.
+            let schema_fix_count = r.fix_actions.len();
+
+            // fixed_groups: rules with at least one applied fix + SCHEMA if fixed.
+            let mut fixed_groups: Vec<FixedGroup> = Vec::new();
+            if schema_fix_count > 0 {
+                grand_total_fixed += schema_fix_count;
+                fixed_groups.push(FixedGroup {
+                    rule: "SCHEMA".to_owned(),
+                    count: schema_fix_count,
+                    violations: Vec::new(),
+                });
+            }
+            for (rule_id, _) in &applied_by_rule {
+                // Count violations for this rule that came from body_fix_outcomes.
+                let count = r
+                    .body_fix_outcomes
+                    .iter()
+                    .filter(|(rid, o)| rid == rule_id && matches!(o, FixOutcome::Applied))
+                    .count();
+                if count > 0 {
+                    grand_total_fixed += count;
+                    // Find violations from violations_by_rule to include detail.
+                    let viols = r
+                        .violations_by_rule
+                        .get(rule_id)
+                        .map(|vs| {
+                            let shown = vs.len().min(opts.max_per_rule);
+                            vs[..shown]
+                                .iter()
+                                .map(|v| BodyViolation {
+                                    line: v.line,
+                                    column: v.column,
+                                    message: v.message.clone(),
+                                    fix: v.fix.clone(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    fixed_groups.push(FixedGroup {
+                        rule: rule_id.clone(),
+                        count,
+                        violations: viols,
+                    });
+                }
+            }
+
+            // remaining_groups: violations not fixed.
+            let mut remaining_groups: Vec<RuleGroup> = Vec::new();
+            for (rule_id, violations) in &r.violations_by_rule {
+                // Skip rules that were fully fixed.
+                let fixed_count = r
+                    .body_fix_outcomes
+                    .iter()
+                    .filter(|(rid, o)| rid == rule_id && matches!(o, FixOutcome::Applied))
+                    .count();
+                let conflict_count = r
+                    .body_fix_outcomes
+                    .iter()
+                    .filter(|(rid, o)| rid == rule_id && matches!(o, FixOutcome::Conflict { .. }))
+                    .count();
+                // Remaining = total - fixed.  Conflicts stay in remaining.
+                let remaining_count = violations.len().saturating_sub(fixed_count);
+                if remaining_count == 0 {
+                    let _ = conflict_count; // conflicts also in remaining, keep them
+                }
+
+                // For SCHEMA violations, check if they were fixed by re-checking after apply.
+                // We include them in remaining only if they still exist (we use violations_by_rule
+                // which was computed BEFORE frontmatter fix — so after fix they may be resolved).
+                // Simplification: include SCHEMA remaining if fix_actions < violations count.
+                if rule_id == "SCHEMA" {
+                    let remaining = violations.len().saturating_sub(r.fix_actions.len());
+                    if remaining > 0 {
+                        let count = remaining;
+                        grand_total_remaining += count;
+                        for v in violations {
+                            match v.severity.as_str() {
+                                "error" => total_errors += 1,
+                                _ => total_warnings += 1,
+                            }
+                        }
+                        rules_seen.insert(rule_id.clone());
+                        let shown = count.min(opts.max_per_rule);
+                        let truncated = count > shown;
+                        let body_violations = violations[..shown]
+                            .iter()
+                            .map(|v| BodyViolation {
+                                line: v.line,
+                                column: v.column,
+                                message: v.message.clone(),
+                                fix: v.fix.clone(),
+                            })
+                            .collect();
+                        remaining_groups.push(RuleGroup {
+                            rule: rule_id.clone(),
+                            count,
+                            shown,
+                            truncated,
+                            severity: violations
+                                .first()
+                                .map_or("warn".to_owned(), |v| v.severity.clone()),
+                            autofixable: true,
+                            violations: body_violations,
+                        });
+                    }
+                    continue;
+                }
+
+                if remaining_count == 0 {
+                    continue;
+                }
+                grand_total_remaining += remaining_count;
+                for v in violations {
+                    match v.severity.as_str() {
+                        "error" => total_errors += 1,
+                        _ => total_warnings += 1,
+                    }
+                }
+                rules_seen.insert(rule_id.clone());
+
+                let autofixable = md_lint_engine
                     .available_rules()
                     .iter()
                     .find(|e| &e.id == rule_id)
-                    .is_some_and(|e| e.autofixable)
-            };
-            let severity = violations
-                .first()
-                .map_or_else(|| "warn".to_owned(), |v| v.severity.clone());
+                    .is_some_and(|e| e.autofixable);
+                let severity = violations
+                    .first()
+                    .map_or_else(|| "warn".to_owned(), |v| v.severity.clone());
+                let shown = remaining_count.min(opts.max_per_rule);
+                let truncated = remaining_count > shown;
+                let body_violations = violations[..shown]
+                    .iter()
+                    .map(|v| BodyViolation {
+                        line: v.line,
+                        column: v.column,
+                        message: v.message.clone(),
+                        fix: v.fix.clone(),
+                    })
+                    .collect();
+                remaining_groups.push(RuleGroup {
+                    rule: rule_id.clone(),
+                    count: remaining_count,
+                    shown,
+                    truncated,
+                    severity,
+                    autofixable,
+                    violations: body_violations,
+                });
+            }
+            remaining_groups.sort_by_key(|g| std::cmp::Reverse(g.count));
 
-            let shown = if opts.detailed {
-                violations.len()
-            } else {
-                violations.len().min(opts.max_per_rule)
-            };
-            let truncated = count > shown;
-            let body_violations: Vec<BodyViolation> = violations[..shown]
-                .iter()
-                .map(|v| BodyViolation {
-                    line: v.line,
-                    column: v.column,
-                    message: v.message.clone(),
-                    fix: v.fix.clone(),
-                })
-                .collect();
+            // conflicts: rules with at least one conflicting fix.
+            let mut conflicts: Vec<ConflictEntry> = Vec::new();
+            for (rule_id, blocking_rule) in &conflict_by_rule {
+                grand_total_conflicts += 1;
+                conflicts.push(ConflictEntry {
+                    rule: rule_id.clone(),
+                    reason: format!("range overlap with {blocking_rule}"),
+                });
+            }
 
-            rule_groups.push(RuleGroup {
-                rule: rule_id.clone(),
-                count,
-                shown,
-                truncated,
-                severity,
-                autofixable,
-                violations: body_violations,
+            if !fixed_groups.is_empty() || !remaining_groups.is_empty() || !conflicts.is_empty() {
+                output_fix_files.push(ExtFileLintFixResult {
+                    file: r.rel_path.clone(),
+                    fixed_groups,
+                    remaining_groups,
+                    conflicts,
+                });
+            }
+        }
+
+        let fix_output = ExtLintFixOutput {
+            files: output_fix_files,
+            total_fixed: grand_total_fixed,
+            total_remaining: grand_total_remaining,
+            total_conflicts: grand_total_conflicts,
+            rules_fired: rules_seen.len(),
+            files_with_violations: total_files_with_violations,
+            files_checked: files_checked_total,
+            files_truncated,
+            errors: total_errors,
+            warnings: total_warnings,
+            dry_run: matches!(opts.fix, FixMode::DryRun),
+        };
+        serde_json::to_value(&fix_output).context("failed to serialize fix lint output")?
+    } else {
+        // -------------------------------------------------------------------
+        // Read-only output: unchanged rule_groups shape.
+        // -------------------------------------------------------------------
+        let mut total_violations = 0usize;
+        let mut output_files: Vec<ExtFileLintResult> = Vec::new();
+        let mut all_fix_actions: Vec<FileFixResult> = Vec::new();
+
+        for r in &all_results {
+            if !r.fix_actions.is_empty() {
+                all_fix_actions.push(FileFixResult {
+                    file: r.rel_path.clone(),
+                    actions: r.fix_actions.clone(),
+                });
+            }
+            if r.total_violations == 0 {
+                continue;
+            }
+            let mut rule_groups: Vec<RuleGroup> = Vec::new();
+            for (rule_id, violations) in &r.violations_by_rule {
+                let count = violations.len();
+                total_violations += count;
+                for v in violations {
+                    match v.severity.as_str() {
+                        "error" => total_errors += 1,
+                        _ => total_warnings += 1,
+                    }
+                }
+                rules_seen.insert(rule_id.clone());
+
+                let autofixable = if rule_id == "SCHEMA" {
+                    true
+                } else {
+                    md_lint_engine
+                        .available_rules()
+                        .iter()
+                        .find(|e| &e.id == rule_id)
+                        .is_some_and(|e| e.autofixable)
+                };
+                let severity = violations
+                    .first()
+                    .map_or_else(|| "warn".to_owned(), |v| v.severity.clone());
+
+                let shown = if opts.detailed {
+                    violations.len()
+                } else {
+                    violations.len().min(opts.max_per_rule)
+                };
+                let truncated = count > shown;
+                let body_violations: Vec<BodyViolation> = violations[..shown]
+                    .iter()
+                    .map(|v| BodyViolation {
+                        line: v.line,
+                        column: v.column,
+                        message: v.message.clone(),
+                        fix: v.fix.clone(),
+                    })
+                    .collect();
+
+                rule_groups.push(RuleGroup {
+                    rule: rule_id.clone(),
+                    count,
+                    shown,
+                    truncated,
+                    severity,
+                    autofixable,
+                    violations: body_violations,
+                });
+            }
+            rule_groups.sort_by_key(|g| std::cmp::Reverse(g.count));
+            output_files.push(ExtFileLintResult {
+                file: r.rel_path.clone(),
+                rule_groups,
             });
         }
-        // Sort rule groups by count descending.
-        rule_groups.sort_by_key(|g| std::cmp::Reverse(g.count));
-        output_files.push(ExtFileLintResult {
-            file: r.rel_path.clone(),
-            rule_groups,
-        });
-    }
 
+        let output = ExtLintOutput {
+            files: output_files,
+            total: total_violations,
+            rules_fired: rules_seen.len(),
+            files_with_violations: total_files_with_violations,
+            files_checked: files_checked_total,
+            files_truncated,
+            errors: total_errors,
+            warnings: total_warnings,
+            dry_run: false,
+            fixes: all_fix_actions,
+        };
+        serde_json::to_value(&output).context("failed to serialize extended lint output")?
+    };
+
+    // Recompute counts from what we tracked above.
     let counts = LintCounts {
         errors: total_errors,
         warnings: total_warnings,
         files_with_issues: total_files_with_violations,
     };
 
-    let output = ExtLintOutput {
-        files: output_files,
-        total: total_violations,
-        rules_fired: rules_seen.len(),
-        files_with_violations: total_files_with_violations,
-        files_checked: files_checked_total,
-        files_truncated,
-        errors: total_errors,
-        warnings: total_warnings,
-        dry_run: matches!(opts.fix, FixMode::DryRun),
-        fixes: all_fix_actions,
-    };
-
-    let val = serde_json::to_value(&output).context("failed to serialize extended lint output")?;
     let outcome = CommandOutcome::success_with_total(
         crate::output::format_success(Format::Json, &val),
         total_files_with_violations as u64,
@@ -1274,6 +1543,17 @@ struct InternalViolation {
     fix: Option<serde_json::Value>,
 }
 
+/// Outcome for a single diagnostic's fix attempt (internal, used in fix-mode).
+#[derive(Debug)]
+enum FixOutcome {
+    /// Fix was applied (or would be in DryRun).
+    Applied,
+    /// Fix conflicted with another fix's range.
+    Conflict { blocking_rule: String },
+    /// Diagnostic had no fix, or fix was not selected.
+    NoFix,
+}
+
 /// Per-file lint result (internal, before grouping).
 struct PerFileLintResult {
     rel_path: String,
@@ -1282,6 +1562,9 @@ struct PerFileLintResult {
     body_modified: bool,
     /// Frontmatter fix actions applied or previewed.
     fix_actions: Vec<FixAction>,
+    /// Fix outcomes keyed by (rule_id, index_within_rule).
+    /// Only populated in fix-mode.
+    body_fix_outcomes: Vec<(String, FixOutcome)>,
 }
 
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
@@ -1328,6 +1611,7 @@ fn lint_one_file_extended(
                 total_violations: 1,
                 body_modified: false,
                 fix_actions: Vec::new(),
+                body_fix_outcomes: Vec::new(),
             });
         }
         Err(e) => return Err(e).context(format!("reading frontmatter from {rel_path}")),
@@ -1386,10 +1670,6 @@ fn lint_one_file_extended(
     }
 
     // Body pass — extract frontmatter fields needed for HYALO rules.
-    let frontmatter_title = properties
-        .get("title")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
     let frontmatter_status = properties
         .get("status")
         .and_then(|v| v.as_str())
@@ -1398,7 +1678,6 @@ fn lint_one_file_extended(
     let body_diagnostics = engine.lint_body(
         body_content,
         rel_path,
-        frontmatter_title.as_deref(),
         frontmatter_status.as_deref(),
         schema_has_completed,
         md_lint_config,
@@ -1406,16 +1685,39 @@ fn lint_one_file_extended(
     )?;
 
     // Apply body fixes if requested.
+    // Track per-diagnostic outcomes for the new fix-mode JSON shape.
+    let mut body_fix_outcomes: Vec<(String, FixOutcome)> = Vec::new();
+
     if matches!(fix, FixMode::Apply | FixMode::DryRun) && !body_diagnostics.is_empty() {
         let fix_all_rules = fix_rules.is_empty();
-        let fixable: Vec<&hyalo_mdlint::Diagnostic> = body_diagnostics
+        let fixable_indices: Vec<usize> = body_diagnostics
             .iter()
-            .filter(|d| d.fix.is_some())
-            .filter(|d| fix_all_rules || fix_rules.iter().any(|r| r == &d.rule_id))
+            .enumerate()
+            .filter(|(_, d)| d.fix.is_some())
+            .filter(|(_, d)| fix_all_rules || fix_rules.iter().any(|r| r == &d.rule_id))
+            .map(|(i, _)| i)
             .collect();
 
-        if !fixable.is_empty() {
-            let (new_body, _conflicts) = apply_body_fixes(body_content, &fixable);
+        if !fixable_indices.is_empty() {
+            let fixable_refs: Vec<&hyalo_mdlint::Diagnostic> = fixable_indices
+                .iter()
+                .map(|&i| &body_diagnostics[i])
+                .collect();
+            let (new_body, outcomes) = apply_body_fixes(body_content, &fixable_refs);
+
+            // Record per-diagnostic outcomes.
+            for (slot, orig_idx) in fixable_indices.iter().enumerate() {
+                let rule_id = body_diagnostics[*orig_idx].rule_id.clone();
+                let outcome = match &outcomes[slot] {
+                    FixOutcome::Applied => FixOutcome::Applied,
+                    FixOutcome::Conflict { blocking_rule } => FixOutcome::Conflict {
+                        blocking_rule: blocking_rule.clone(),
+                    },
+                    FixOutcome::NoFix => FixOutcome::NoFix,
+                };
+                body_fix_outcomes.push((rule_id, outcome));
+            }
+
             if new_body != body_content && matches!(fix, FixMode::Apply) {
                 // Reconstruct full file: frontmatter + fixed body.
                 let frontmatter_part = &content[..body_start];
@@ -1460,43 +1762,79 @@ fn lint_one_file_extended(
         total_violations,
         body_modified,
         fix_actions,
+        body_fix_outcomes,
     })
 }
 
-/// Apply body fixes greedily. Returns (fixed_content, conflict_count).
+/// Apply body fixes greedily.
+///
+/// Returns `(fixed_content, outcomes)` where `outcomes[i]` corresponds to
+/// `fixes[i]` — either `Applied`, `Conflict`, or (for diagnostics without a
+/// fix) `NoFix`.
 ///
 /// Fixes are applied in descending start-offset order so that earlier ranges
 /// (lower offsets) remain valid against the partially mutated buffer.
-fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String, usize) {
-    let mut ranges: Vec<(usize, usize, &str)> = fixes
+fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String, Vec<FixOutcome>) {
+    // Build (original_index, start, end) sorted by start descending.
+    let mut indexed: Vec<(usize, usize, usize)> = fixes
         .iter()
-        .filter_map(|d| {
-            d.fix
-                .as_ref()
-                .map(|f| (f.start, f.end, f.replacement.as_str()))
-        })
+        .enumerate()
+        .filter_map(|(i, d)| d.fix.as_ref().map(|f| (i, f.start, f.end)))
         .collect();
-    ranges.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    indexed.sort_by_key(|(_, start, _)| std::cmp::Reverse(*start));
 
     let mut result = body.to_owned();
-    let mut conflicts = 0usize;
-    let mut applied: Vec<std::ops::Range<usize>> = Vec::new();
-    for (start, end, replacement) in &ranges {
+    let mut applied: Vec<(usize, usize, usize)> = Vec::new(); // (orig_idx, start, end)
+    let mut outcome_map: std::collections::HashMap<usize, FixOutcome> =
+        std::collections::HashMap::new();
+
+    for (orig_idx, start, end) in &indexed {
         let start = *start;
         let end = *end;
-        if applied.iter().any(|r| start < r.end && end > r.start) {
-            conflicts += 1;
+        // Check overlap with already-applied ranges.
+        let conflict_with = applied
+            .iter()
+            .find(|(_, as_, ae)| start < *ae && end > *as_);
+        if let Some(&(blocking_idx, _, _)) = conflict_with {
+            let blocking_rule = fixes[blocking_idx].rule_id.clone();
+            outcome_map.insert(*orig_idx, FixOutcome::Conflict { blocking_rule });
             continue;
         }
         if end > result.len() {
-            conflicts += 1;
+            // Out-of-bounds — treat as conflict with "bounds".
+            outcome_map.insert(
+                *orig_idx,
+                FixOutcome::Conflict {
+                    blocking_rule: "out-of-bounds".to_owned(),
+                },
+            );
             continue;
         }
+        let replacement = fixes[*orig_idx]
+            .fix
+            .as_ref()
+            .map_or("", |f| f.replacement.as_str());
         result.replace_range(start..end, replacement);
-        applied.push(start..end);
+        applied.push((*orig_idx, start, end));
+        outcome_map.insert(*orig_idx, FixOutcome::Applied);
     }
 
-    (result, conflicts)
+    // Build outcomes in original order.
+    let outcomes: Vec<FixOutcome> = (0..fixes.len())
+        .map(|i| {
+            outcome_map.remove(&i).unwrap_or_else(|| {
+                if fixes[i].fix.is_some() {
+                    // Had a fix but not selected — NoFix (shouldn't happen since we
+                    // only pass fixable diagnostics, but be safe).
+                    FixOutcome::NoFix
+                } else {
+                    FixOutcome::NoFix
+                }
+            })
+        })
+        .collect();
+
+    (result, outcomes)
 }
 
 /// Find the byte offset where the document body starts (after the closing `---` line).

@@ -1,7 +1,7 @@
 //! Engine factory and rule catalog.
 //!
 //! Builds a `LintEngine` that combines `StandardRuleProvider` from
-//! `mdbook-lint-rulesets` with the three HYALO native rules.
+//! `mdbook-lint-rulesets` with the two HYALO native rules.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -37,8 +37,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     ("MD047", DiagSeverity::Warn),  // single-trailing-newline
     // HYALO native
     ("HYALO001", DiagSeverity::Error),
-    ("HYALO002", DiagSeverity::Warn),
-    ("HYALO003", DiagSeverity::Error),
+    ("HYALO002", DiagSeverity::Error),
 ];
 
 /// Rules that are **default-on** (cheap, structural, low false-positive).
@@ -46,7 +45,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
 static DEFAULT_ON: &[&str] = &[
     "MD001", "MD009", "MD010", "MD011", "MD012", "MD018", "MD019", "MD022", "MD023", "MD031",
     "MD034", "MD040", "MD042", "MD047", // HYALO rules are always default-on
-    "HYALO001", "HYALO002", "HYALO003",
+    "HYALO001", "HYALO002",
 ];
 
 // ---------------------------------------------------------------------------
@@ -120,15 +119,6 @@ impl HyaloLintEngine {
             },
             RuleCatalogEntry {
                 id: "HYALO002".to_owned(),
-                name: "title-h1-agreement".to_owned(),
-                description: "Frontmatter `title` and first H1 heading should agree".to_owned(),
-                default_severity: DiagSeverity::Warn,
-                default_enabled: true,
-                autofixable: false,
-                source: "hyalo-mdlint".to_owned(),
-            },
-            RuleCatalogEntry {
-                id: "HYALO003".to_owned(),
                 name: "completed-tasks".to_owned(),
                 description: "`status: completed` requires all task checkboxes to be ticked"
                     .to_owned(),
@@ -173,8 +163,7 @@ impl HyaloLintEngine {
     /// # Arguments
     /// - `body_content` — the body text (after `---` frontmatter).
     /// - `rel_path` — vault-relative path (for error messages).
-    /// - `frontmatter_title` — extracted from frontmatter (for HYALO002).
-    /// - `frontmatter_status` — extracted from frontmatter (for HYALO003).
+    /// - `frontmatter_status` — extracted from frontmatter (for HYALO002).
     /// - `schema_has_completed` — whether schema declares `status: completed`.
     /// - `config` — user lint configuration.
     /// - `rule_filter` — if non-empty, only run these rule IDs.
@@ -183,15 +172,13 @@ impl HyaloLintEngine {
         &self,
         body_content: &str,
         rel_path: &str,
-        frontmatter_title: Option<&str>,
         frontmatter_status: Option<&str>,
         schema_has_completed: bool,
         config: &LintConfig,
         rule_filter: &[String],
     ) -> Result<Vec<Diagnostic>> {
         use crate::rules::hyalo001::Hyalo001;
-        use crate::rules::hyalo002::{Hyalo002, TitleMode};
-        use crate::rules::hyalo003::Hyalo003;
+        use crate::rules::hyalo002::Hyalo002;
         use mdbook_lint_core::rule::Rule;
 
         let severity_map: HashMap<&str, DiagSeverity> = SEVERITY_TABLE.iter().copied().collect();
@@ -296,48 +283,18 @@ impl HyaloLintEngine {
             }
         }
 
-        // --- HYALO002 ---
+        // --- HYALO002 (completed-tasks; renamed from HYALO003 in iter-127) ---
         if should_run("HYALO002") {
-            let mode_str = config
-                .rules
-                .get("HYALO002")
-                .and_then(|ov| ov.mode())
-                .unwrap_or("either");
-            let mode = TitleMode::from_config_str(mode_str);
-            if mode != TitleMode::Off {
-                let doc = Document::new(body_content.to_string(), PathBuf::from(rel_path))
-                    .with_context(|| format!("creating Document for HYALO002 on {rel_path}"))?;
-                let rule = Hyalo002::new(mode, frontmatter_title.map(str::to_owned));
-                let sev = effective_severity("HYALO002");
-                let violations = rule
-                    .check(&doc)
-                    .with_context(|| format!("running HYALO002 on {rel_path}"))?;
-                for v in violations {
-                    diagnostics.push(Diagnostic {
-                        rule_id: "HYALO002".to_owned(),
-                        rule_name: v.rule_name.clone(),
-                        message: v.message.clone(),
-                        line: v.line,
-                        column: v.column,
-                        severity: sev,
-                        fix: None,
-                    });
-                }
-            }
-        }
-
-        // --- HYALO003 ---
-        if should_run("HYALO003") {
             let doc = Document::new(body_content.to_string(), PathBuf::from(rel_path))
-                .with_context(|| format!("creating Document for HYALO003 on {rel_path}"))?;
-            let rule = Hyalo003::new(schema_has_completed, frontmatter_status.map(str::to_owned));
-            let sev = effective_severity("HYALO003");
+                .with_context(|| format!("creating Document for HYALO002 on {rel_path}"))?;
+            let rule = Hyalo002::new(schema_has_completed, frontmatter_status.map(str::to_owned));
+            let sev = effective_severity("HYALO002");
             let violations = rule
                 .check(&doc)
-                .with_context(|| format!("running HYALO003 on {rel_path}"))?;
+                .with_context(|| format!("running HYALO002 on {rel_path}"))?;
             for v in violations {
                 diagnostics.push(Diagnostic {
-                    rule_id: "HYALO003".to_owned(),
+                    rule_id: "HYALO002".to_owned(),
                     rule_name: v.rule_name.clone(),
                     message: v.message.clone(),
                     line: v.line,
@@ -410,7 +367,8 @@ mod tests {
         // Should include HYALO rules
         assert!(rules.iter().any(|r| r.id == "HYALO001"));
         assert!(rules.iter().any(|r| r.id == "HYALO002"));
-        assert!(rules.iter().any(|r| r.id == "HYALO003"));
+        // Old HYALO003 was renamed to HYALO002 in iter-127.
+        assert!(!rules.iter().any(|r| r.id == "HYALO003"));
     }
 
     #[test]
@@ -418,15 +376,7 @@ mod tests {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
         let diagnostics = engine
-            .lint_body(
-                "trailing spaces   \n",
-                "test.md",
-                None,
-                None,
-                false,
-                &config,
-                &[],
-            )
+            .lint_body("trailing spaces   \n", "test.md", None, false, &config, &[])
             .unwrap();
         // MD009 (trailing spaces) is default-on
         assert!(diagnostics.iter().any(|d| d.rule_id == "MD009"));
@@ -437,7 +387,7 @@ mod tests {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
         let diagnostics = engine
-            .lint_body("[] Open task\n", "test.md", None, None, false, &config, &[])
+            .lint_body("[] Open task\n", "test.md", None, false, &config, &[])
             .unwrap();
         assert!(diagnostics.iter().any(|d| d.rule_id == "HYALO001"));
     }

@@ -1,169 +1,178 @@
-//! HYALO002 — frontmatter `title` ↔ first H1 agreement.
+//! HYALO002 — `status: completed` requires all task checkboxes ticked.
 //!
-//! Mode controls:
-//! - `either` (default) — no violation if either title or H1 is absent;
-//!   violation if both present and differ.
-//! - `match`  — violation if both present and differ (same as `either` in practice).
-//! - `off`    — rule disabled.
+//! Only fires when the `.hyalo.toml` schema declares `status` with `completed`
+//! in its enum values. Otherwise the rule is a no-op.
 
-use comrak::nodes::{AstNode, NodeValue};
+use comrak::nodes::AstNode;
 use mdbook_lint_core::{
     Document, Violation,
-    rule::{AstRule, RuleCategory, RuleMetadata},
+    rule::{Rule, RuleCategory, RuleMetadata},
     violation::Severity,
 };
 
-/// Mode for HYALO002.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TitleMode {
-    Either,
-    Match,
-    Off,
-}
-
-impl TitleMode {
-    /// Parse from a config string. Unknown values fall back to `Either`.
-    pub fn from_config_str(s: &str) -> Self {
-        match s {
-            "match" => Self::Match,
-            "off" => Self::Off,
-            _ => Self::Either,
-        }
-    }
-}
-
-/// HYALO002: frontmatter `title` ↔ first H1 agreement.
+/// HYALO002: `status: completed` → all tasks must be checked.
 pub struct Hyalo002 {
-    mode: TitleMode,
-    /// Frontmatter title to compare against (extracted before linting).
-    frontmatter_title: Option<String>,
+    /// Whether the schema declares `status` with `completed` in its enum.
+    /// If `false`, the rule is a no-op.
+    schema_has_completed: bool,
+    /// Frontmatter `status` value for the current file.
+    frontmatter_status: Option<String>,
 }
 
 impl Hyalo002 {
-    pub fn new(mode: TitleMode, frontmatter_title: Option<String>) -> Self {
+    pub fn new(schema_has_completed: bool, frontmatter_status: Option<String>) -> Self {
         Self {
-            mode,
-            frontmatter_title,
+            schema_has_completed,
+            frontmatter_status,
         }
     }
 }
 
-impl AstRule for Hyalo002 {
+impl Rule for Hyalo002 {
     fn id(&self) -> &'static str {
         "HYALO002"
     }
 
     fn name(&self) -> &'static str {
-        "title-h1-agreement"
+        "completed-tasks"
     }
 
     fn description(&self) -> &'static str {
-        "Frontmatter `title` and first H1 heading should agree (when both present)"
+        "`status: completed` requires all task checkboxes to be ticked"
     }
 
     fn metadata(&self) -> RuleMetadata {
-        RuleMetadata::stable(RuleCategory::Structure)
+        RuleMetadata::stable(RuleCategory::Content)
     }
 
-    fn check_ast<'a>(
+    fn check_with_ast<'a>(
         &self,
         document: &Document,
-        ast: &'a AstNode<'a>,
+        _ast: Option<&'a AstNode<'a>>,
     ) -> mdbook_lint_core::error::Result<Vec<Violation>> {
-        if self.mode == TitleMode::Off {
+        // Only active when schema has `completed` in the `status` enum.
+        if !self.schema_has_completed {
             return Ok(vec![]);
         }
 
-        let fm_title = match &self.frontmatter_title {
-            Some(t) if !t.is_empty() => t.as_str(),
-            _ => return Ok(vec![]), // no frontmatter title — either mode = no violation
+        // Only fires for `status: completed` files.
+        let status = match &self.frontmatter_status {
+            Some(s) => s.as_str(),
+            None => return Ok(vec![]),
         };
-
-        // Find the first H1 heading in the AST.
-        let Some(h1_text) = find_first_h1(document, ast) else {
-            return Ok(vec![]); // no H1 — either mode = no violation
-        };
-
-        if fm_title == h1_text {
+        if status != "completed" {
             return Ok(vec![]);
         }
 
+        // Scan for unchecked task items: lines matching `- [ ]` or `* [ ]`.
+        let mut open_tasks: Vec<usize> = Vec::new();
+        for (idx, line) in document.lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if is_open_task(trimmed) {
+                open_tasks.push(idx + 1); // 1-based line number
+            }
+        }
+
+        if open_tasks.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let count = open_tasks.len();
+        let first_line = open_tasks[0];
+        let verb = if count == 1 { "remains" } else { "remain" };
+        let plural = if count == 1 { "" } else { "s" };
         Ok(vec![self.create_violation(
-            format!("frontmatter `title` ({fm_title:?}) does not match first H1 ({h1_text:?})"),
+            format!(
+                "status is `completed` but {count} task{plural} {verb} unchecked (first at line {first_line})"
+            ),
+            first_line,
             1,
-            1,
-            Severity::Warning,
+            Severity::Error,
         )])
     }
 }
 
-/// Extract the text content of the first H1 heading node.
-fn find_first_h1<'a>(document: &Document, ast: &'a AstNode<'a>) -> Option<String> {
-    for node in ast.descendants() {
-        if let NodeValue::Heading(heading) = &node.data.borrow().value
-            && heading.level == 1
-        {
-            return Some(document.node_text(node).trim().to_owned());
-        }
-    }
-    None
+/// Returns true if the line (after left-trimming) is an open task item.
+fn is_open_task(trimmed: &str) -> bool {
+    trimmed.starts_with("- [ ]") || trimmed.starts_with("* [ ]") || trimmed.starts_with("+ [ ]")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mdbook_lint_core::Rule;
     use std::path::PathBuf;
 
-    fn check_with(content: &str, title: Option<&str>, mode: TitleMode) -> Vec<Violation> {
+    fn check(content: &str, schema_has_completed: bool, status: Option<&str>) -> Vec<Violation> {
         let doc = Document::new(content.to_string(), PathBuf::from("test.md")).unwrap();
-        let rule = Hyalo002::new(mode, title.map(str::to_owned));
+        let rule = Hyalo002::new(schema_has_completed, status.map(str::to_owned));
         rule.check(&doc).unwrap()
     }
 
     #[test]
-    fn no_violation_when_titles_match() {
-        let violations = check_with("# My Title\n\nBody\n", Some("My Title"), TitleMode::Either);
+    fn noop_when_schema_lacks_completed() {
+        let violations = check(
+            "- [ ] Open task\n",
+            false, // schema_has_completed = false
+            Some("completed"),
+        );
         assert!(violations.is_empty());
     }
 
     #[test]
-    fn violation_when_titles_differ() {
-        let violations = check_with(
-            "# H1 Title\n\nBody\n",
-            Some("Front Title"),
-            TitleMode::Either,
-        );
+    fn noop_when_status_not_completed() {
+        let violations = check("- [ ] Open task\n", true, Some("in-progress"));
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn noop_when_no_status() {
+        let violations = check("- [ ] Open task\n", true, None);
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn fires_when_completed_and_open_tasks() {
+        let violations = check("- [x] Done\n- [ ] Still open\n", true, Some("completed"));
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].rule_id, "HYALO002");
+        assert!(violations[0].message.contains("1 task"));
     }
 
     #[test]
-    fn no_violation_when_no_frontmatter_title() {
-        // No frontmatter title → either mode = no violation
-        let violations = check_with("# H1 Title\n\nBody\n", None, TitleMode::Either);
-        assert!(violations.is_empty());
-    }
-
-    #[test]
-    fn no_violation_when_no_h1() {
-        let violations = check_with(
-            "## Section\n\nBody\n",
-            Some("Front Title"),
-            TitleMode::Either,
-        );
-        assert!(violations.is_empty());
-    }
-
-    #[test]
-    fn off_mode_no_violation() {
-        let violations = check_with("# H1 Title\n\nBody\n", Some("Different"), TitleMode::Off);
-        assert!(violations.is_empty());
-    }
-
-    #[test]
-    fn match_mode_fires_when_different() {
-        let violations = check_with("# H1 Title\n\nBody\n", Some("Other"), TitleMode::Match);
+    fn singular_grammar_uses_remains() {
+        let violations = check("- [x] Done\n- [ ] One open\n", true, Some("completed"));
         assert_eq!(violations.len(), 1);
+        let msg = &violations[0].message;
+        assert!(
+            msg.contains("1 task remains unchecked"),
+            "expected singular 'remains' in: {msg}"
+        );
+    }
+
+    #[test]
+    fn plural_grammar_uses_remain() {
+        let violations = check(
+            "- [ ] First\n- [ ] Second\n- [ ] Third\n",
+            true,
+            Some("completed"),
+        );
+        assert_eq!(violations.len(), 1);
+        let msg = &violations[0].message;
+        assert!(
+            msg.contains("3 tasks remain unchecked"),
+            "expected plural 'remain' in: {msg}"
+        );
+    }
+
+    #[test]
+    fn no_violation_when_all_tasks_checked() {
+        let violations = check("- [x] Done\n- [x] Also done\n", true, Some("completed"));
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn no_violation_when_no_tasks() {
+        let violations = check("# Title\n\nSome body text.\n", true, Some("completed"));
+        assert!(violations.is_empty());
     }
 }
