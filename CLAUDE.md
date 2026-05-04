@@ -21,7 +21,8 @@ Then use target/release/hyalo to work with the documentation in `./hyalo-knowled
 - **Overview**: `hyalo summary`, `hyalo properties`, `hyalo tags`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set iterations/iteration-16-robustness.md --property status=completed`)
 - **Toggle tasks**: `hyalo task toggle <path> --all` (whole file), `--section "Tasks"` (by heading), `--line 5,7,9` (specific lines)
-- **Lint frontmatter**: `hyalo lint`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
+- **Lint frontmatter + markdown body**: `hyalo lint`, `hyalo lint --rule MD013 --detailed`, `hyalo lint --rule-prefix HYALO`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`, `hyalo lint --fix-rule HYALO001`
+- **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show MD013`, `hyalo lint-rules set MD013 --enabled false`, `hyalo lint-rules set MD013 --severity error`, `hyalo lint-rules remove MD013`
 - **Manage schemas**: `hyalo types list`, `hyalo types show <name>`, `hyalo types set <name> --required title,date`
 - Only fall back to Edit for body content changes (markdown prose) that hyalo can't handle
 - **Do NOT pass `--dir hyalo-knowledgebase/`** — `.hyalo.toml` already sets it as the default

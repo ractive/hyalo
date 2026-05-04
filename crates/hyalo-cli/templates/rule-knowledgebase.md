@@ -11,6 +11,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`
 - **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply`
 - **Move/rename**: `hyalo mv` (rewrites links across the vault)
+- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
+- **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show <ID>`, `hyalo lint-rules set <ID> --enabled false`, `hyalo lint-rules set <ID> --severity warn`
 
 Fall back to Edit for body prose changes, Write for new files, and Read when
 hyalo doesn't cover the operation (e.g., reading raw markdown for rewriting).

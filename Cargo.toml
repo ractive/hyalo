@@ -12,6 +12,7 @@ repository = "https://github.com/ractive/hyalo"
 [workspace.dependencies]
 # Internal crates
 hyalo-core = { path = "crates/hyalo-core", version = "0.14.0" }
+hyalo-mdlint = { path = "crates/hyalo-mdlint", version = "0.14.0" }
 
 # External dependencies
 anyhow = "1"

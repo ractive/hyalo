@@ -799,41 +799,51 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: LinksAction,
     },
-    /// Validate frontmatter properties against the `.hyalo.toml` schema (optional auto-fix)
+    /// Validate frontmatter (schema) and markdown body (mdbook-lint + HYALO native rules)
     #[command(
-        long_about = "Validate frontmatter properties against the schema defined in `.hyalo.toml`.\n\n\
-            Reads the `[schema.default]` and `[schema.types.*]` sections from `.hyalo.toml` to\n\
-            determine which properties are required, what types they should be, and which enum\n\
-            values are allowed. Reports violations at two severity levels:\n\n\
-            - error: schema violation (missing required property, wrong type, invalid enum value,\n\
-                     pattern mismatch)\n\
-            - warn:  soft issue (no 'type' property, no 'tags', property not declared in schema)\n\n\
-            When no `[schema]` section exists in `.hyalo.toml`, lint exits 0 with zero violations.\n\n\
+        long_about = "Validate frontmatter properties against the `.hyalo.toml` schema and lint the\n\
+            markdown body against bundled rules (mdbook-lint MD001..MD059 + HYALO native rules).\n\n\
+            FRONTMATTER PASS: schema violations from `[schema.default]` / `[schema.types.*]`.\n\
+            - error: missing required property, wrong type, invalid enum value, pattern mismatch\n\
+            - warn:  no 'type' property, no 'tags', property not declared in schema\n\
+            When no `[schema]` section exists, this pass exits 0 with zero violations.\n\n\
+            BODY PASS: ~14 default-on stock rules from mdbook-lint plus three HYALO native\n\
+            cross-cutting rules:\n\
+            \u{00a0} - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\
+            \u{00a0} - HYALO002: frontmatter `title` should agree with first H1\n\
+            \u{00a0} - HYALO003: `status: completed` requires all task checkboxes ticked\n\
+            Severity is hyalo-controlled. Manage rule enable/severity with `hyalo lint-rules`.\n\
+            Override defaults via `[lint]` and `[lint.rules]` in `.hyalo.toml`.\n\n\
             INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
             Without any file arguments, the entire vault is linted.\n\n\
-            OUTPUT: Text by default (per-file violations + summary line). Use --format json for a\n\
-            JSON payload (wrapped by the standard CLI envelope under `results`):\n\
-            {\"files\": [{\"file\": \"...\", \"violations\": [...]}], \"total\": N, \"fixes\": [...]}.\n\n\
-            AUTO-FIX: With --fix, `hyalo lint` attempts to repair fixable violations in place:\n\
-            \u{00a0} - Insert missing properties that have defaults in the schema ($today expands\n\
-            \u{00a0}   to the current date).\n\
-            \u{00a0} - Correct close enum typos (Levenshtein distance <= 2) to the nearest value.\n\
-            \u{00a0} - Normalize date formats (e.g. 2026-4-9 -> 2026-04-09).\n\
-            \u{00a0} - Infer a missing `type` property when the file path matches a\n\
-            \u{00a0}   [schema.types.*].filename-template.\n\
-            Missing required properties without defaults are reported, never fabricated.\n\
-            Use --dry-run to preview fixes without writing any files.\n\n\
+            OUTPUT: Text by default — summary mode groups violations by `(file, rule)` and caps\n\
+            output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
+            `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
+            for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
+            `files_with_violations`, and `files_truncated`.\n\n\
+            FILTER FLAGS:\n\
+            \u{00a0} --rule <ID>             restrict to a single rule\n\
+            \u{00a0} --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
+            \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\n\
+            AUTO-FIX: With --fix, hyalo applies frontmatter fixes (insert defaults, correct enum\n\
+            typos, normalize dates, infer type) and body fixes from autofixable rules. Body fixes\n\
+            are applied in `(start, end, rule_id)` order; overlapping fixes are deferred and\n\
+            reported as conflicts. Use --fix-rule <ID> (repeatable) to limit which rules autofix,\n\
+            or --dry-run to preview without writing.\n\n\
             EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo lint\n\
-            \u{00a0} hyalo lint iterations/iteration-101-bm25.md\n\
-            \u{00a0} hyalo lint --glob \"iterations/*.md\"\n\
-            \u{00a0} hyalo lint --format json\n\
-            \u{00a0} hyalo lint --limit 10\n\
-            \u{00a0} hyalo lint --fix\n\
-            \u{00a0} hyalo lint --fix --dry-run\n\n\
+            \u{00a0} hyalo lint --detailed\n\
+            \u{00a0} hyalo lint --rule MD013 --detailed\n\
+            \u{00a0} hyalo lint --rule-prefix HYALO\n\
+            \u{00a0} hyalo lint --max-per-rule 0\n\
+            \u{00a0} hyalo lint --fix --dry-run\n\
+            \u{00a0} hyalo lint --fix-rule HYALO001\n\
+            \u{00a0} hyalo lint --fix\n\n\
+            INDEX NOTE: The snapshot index does not accelerate the body pass — body bytes are\n\
+            not indexed. The frontmatter pass and file enumeration still benefit from --index.\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
-            are rewritten atomically, preserving body bytes and frontmatter key order.\n\n\
+            are rewritten atomically and the snapshot index is patched in-place.\n\n\
             TIP: Run `hyalo summary` to see a one-line lint count across the whole vault."
     )]
     Lint {
@@ -860,8 +870,39 @@ Repeatable (AND).\n\
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        /// Show full per-violation details (default: summary counts only)
+        #[arg(long)]
+        detailed: bool,
+        /// Restrict to a single rule ID (e.g. --rule MD013)
+        #[arg(long, value_name = "RULE_ID")]
+        rule: Option<String>,
+        /// Restrict to rules with this prefix (e.g. --rule-prefix HYALO)
+        #[arg(long, value_name = "PREFIX")]
+        rule_prefix: Option<String>,
+        /// Override per-rule violation cap (0 = unlimited; default from config or 3)
+        #[arg(long, value_name = "N", value_parser = parse_limit)]
+        max_per_rule: Option<usize>,
+        /// Only autofix the specified rule(s) — repeatable
+        #[arg(long, value_name = "RULE_ID", requires = "fix")]
+        fix_rule: Vec<String>,
         #[command(flatten)]
         index_flags: IndexFlags,
+    },
+    /// Manage markdown lint rule configuration in `.hyalo.toml`
+    #[command(
+        name = "lint-rules",
+        long_about = "Manage the markdown lint rule catalog.\n\n\
+            Lists, inspects, and overrides markdown lint rules stored in `[lint.rules]` in `.hyalo.toml`.\n\n\
+            Subcommands:\n\
+            - list:   Show all rules with their current effective settings (default).\n\
+            - show:   Show full details for a single rule.\n\
+            - set:    Enable/disable a rule or change its severity.\n\
+            - remove: Remove a rule override (revert to default).\n\n\
+            SIDE EFFECTS: set/remove modify .hyalo.toml. list and show are read-only."
+    )]
+    LintRules {
+        #[command(subcommand)]
+        action: Option<LintRulesAction>,
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
@@ -978,6 +1019,52 @@ pub(crate) enum TypesAction {
         #[arg(long, value_name = "TEMPLATE")]
         filename_template: Option<String>,
         /// Preview changes without writing any files
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LintRulesAction {
+    /// List all available lint rules with their current settings (default)
+    List {
+        /// Only show enabled rules
+        #[arg(long)]
+        enabled_only: bool,
+        /// Only show disabled rules
+        #[arg(long, conflicts_with = "enabled_only")]
+        disabled_only: bool,
+        /// Filter by rule ID prefix (e.g. --rule-prefix HYALO)
+        #[arg(long, value_name = "PREFIX")]
+        rule_prefix: Option<String>,
+    },
+    /// Show full details for a single rule
+    Show {
+        /// Rule ID (e.g. MD013 or HYALO001)
+        #[arg(value_name = "RULE_ID")]
+        rule_id: String,
+    },
+    /// Enable, disable, or change severity of a rule
+    Set {
+        /// Rule ID to configure
+        #[arg(value_name = "RULE_ID")]
+        rule_id: String,
+        /// Enable or disable the rule
+        #[arg(long, value_name = "BOOL")]
+        enabled: Option<bool>,
+        /// Override severity: warn or error
+        #[arg(long, value_name = "SEVERITY")]
+        severity: Option<String>,
+        /// Preview changes without writing to .hyalo.toml
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Remove a rule override (revert to default)
+    Remove {
+        /// Rule ID to reset
+        #[arg(value_name = "RULE_ID")]
+        rule_id: String,
+        /// Preview changes without writing to .hyalo.toml
         #[arg(long)]
         dry_run: bool,
     },

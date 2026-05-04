@@ -275,12 +275,20 @@ fn lint_json_output() {
     assert!(!files.is_empty());
     let first = &files[0];
     assert!(first["file"].is_string(), "expected file field");
-    assert!(first["violations"].is_array(), "expected violations array");
+    // New shape: violations grouped by rule
+    assert!(
+        first["rule_groups"].is_array(),
+        "expected rule_groups array"
+    );
 
-    let violations = first["violations"].as_array().unwrap();
+    let rule_groups = first["rule_groups"].as_array().unwrap();
+    assert!(!rule_groups.is_empty(), "expected at least one rule group");
+    let g = &rule_groups[0];
+    assert!(g["rule"].is_string(), "expected rule field");
+    assert!(g["severity"].is_string(), "expected severity field");
+    let violations = g["violations"].as_array().unwrap();
     assert!(!violations.is_empty(), "expected at least one violation");
     let v = &violations[0];
-    assert!(v["severity"].is_string(), "expected severity field");
     assert!(v["message"].is_string(), "expected message field");
 }
 
@@ -559,11 +567,11 @@ fn lint_json_excludes_clean_files() {
     let inner = &val["results"];
     let files = inner["files"].as_array().unwrap();
 
-    // Every file in the output should have at least one violation.
+    // Every file in the output should have at least one rule group (= at least one violation).
     for f in files {
-        let violations = f["violations"].as_array().unwrap();
+        let rule_groups = f["rule_groups"].as_array().unwrap();
         assert!(
-            !violations.is_empty(),
+            !rule_groups.is_empty(),
             "clean files should not appear in output: {}",
             f["file"]
         );
@@ -603,25 +611,25 @@ fn lint_limit_caps_output() {
         inner["total"].as_u64().unwrap() >= 1,
         "total should reflect all violations"
     );
-    // limited flag should be present and true
+    // files_truncated flag should be present and true
     assert_eq!(
-        inner["limited"].as_bool(),
+        inner["files_truncated"].as_bool(),
         Some(true),
-        "expected limited=true when output was truncated"
+        "expected files_truncated=true when output was truncated"
     );
-    // errors/warnings/files_with_issues should reflect all files, not just the limited slice
+    // errors/warnings/files_with_violations should reflect all files, not just the limited slice
     assert!(
         inner["errors"].as_u64().is_some(),
-        "expected errors field in LintOutput"
+        "expected errors field in ExtLintOutput"
     );
     assert!(
         inner["warnings"].as_u64().is_some(),
-        "expected warnings field in LintOutput"
+        "expected warnings field in ExtLintOutput"
     );
-    let files_with_issues = inner["files_with_issues"].as_u64().unwrap();
+    let files_with_violations = inner["files_with_violations"].as_u64().unwrap();
     assert!(
-        files_with_issues > 1,
-        "expected files_with_issues > 1 (full count, not limited), got {files_with_issues}"
+        files_with_violations > 1,
+        "expected files_with_violations > 1 (full count, not limited), got {files_with_violations}"
     );
 }
 

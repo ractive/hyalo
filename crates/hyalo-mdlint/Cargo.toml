@@ -1,0 +1,23 @@
+[package]
+name = "hyalo-mdlint"
+description = "Markdown linting engine for hyalo — wraps mdbook-lint-core + HYALO native rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Markdown linting engine
+mdbook-lint-core = "0.14"
+mdbook-lint-rulesets = { version = "0.14", default-features = false, features = ["standard"] }
+comrak = "0.21"
+
+[dev-dependencies]
+tempfile = { workspace = true }
