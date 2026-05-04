@@ -218,7 +218,8 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 - **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
 - **read** — extract body content, a section, or line range
 - **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
-- **lint** — validate frontmatter against the `[schema]` in `.hyalo.toml` (read-only); exit 1 when errors found
+- **lint** — validate frontmatter against the `[schema]` and lint markdown body with mdbook-lint MD001..MD059 + HYALO001/002/003 native rules; supports `--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix`, `--fix-rule`; exit 1 when errors found
+- **lint-rules** — manage which lint rules are enabled and their severity in `.hyalo.toml` (list, show, set, remove)
 - **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, set, remove)
 - **properties summary** — list property names and types
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
@@ -239,30 +240,29 @@ Start with `hyalo summary --format text` to orient yourself in a new directory.
 
 ## Schema & Lint
 
-Hyalo supports optional frontmatter schema validation. Define schemas in `.hyalo.toml` under `[schema.*]` sections, then run `hyalo lint` to validate files.
+`hyalo lint` runs two passes in one invocation:
+
+1. **Frontmatter** — validates against the `[schema]` block in `.hyalo.toml`. No-op when no schema is configured.
+2. **Markdown body** — stock mdbook-lint rules (MD001..MD059) plus three HYALO native rules:
+   - **HYALO001** — bare `[]` should be `- [ ]` (autofixable)
+   - **HYALO002** — frontmatter `title` should agree with first H1
+   - **HYALO003** — `status: completed` requires all task checkboxes ticked
 
 ```bash
-# Lint the whole vault
-hyalo lint
+hyalo lint                               # whole vault, summary mode
+hyalo lint iterations/iter-42.md         # one file
+hyalo lint --fix --dry-run               # preview autofixes
+hyalo lint --fix                         # apply
+```
 
-# Lint a single file
-hyalo lint iterations/iteration-42-feature.md
+Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix-rule`, etc.). The snapshot index does **not** accelerate the body pass.
 
-# Lint with a glob
-hyalo lint --glob "iterations/*.md"
+**Tune which rules run with `hyalo lint-rules`** (list / show / set / remove). Reach for it when a rule is too noisy on your KB style — disable it or change its severity rather than living with the warnings:
 
-# Lint only files matching a named type's filename template
-hyalo lint --type iteration
-
-# JSON output
-hyalo lint --format json
-
-# Limit output to first N files with violations
-hyalo lint --limit 10
-
-# Auto-fix: defaults, enum typos, date format, type inference, comma-joined tags
-hyalo lint --fix --dry-run
-hyalo lint --fix
+```bash
+hyalo lint-rules list                          # see what's enabled
+hyalo lint-rules set MD013 --enabled false     # turn one off
+hyalo lint-rules set HYALO002 --severity error # promote to error
 ```
 
 Lint also warns about comma-joined tags (e.g. `tags: ["cli,ux"]` instead of two list
