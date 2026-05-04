@@ -2,7 +2,7 @@
 title: Iteration 127 — Markdown linter follow-up (bugs + UX from dogfood v0.14.0)
 type: iteration
 date: 2026-05-04
-status: in-progress
+status: completed
 tags:
   - iteration
   - lint
