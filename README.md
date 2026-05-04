@@ -71,8 +71,9 @@ hyalo links auto --file notes/todo.md --apply   # single-file mode
 # Lint frontmatter against your schema and markdown body against
 # bundled rules (MD001..MD059 from mdbook-lint plus two HYALO native
 # cross-cutting rules). `--fix` applies autofixes for both passes.
-# HYALO002 fires only when [schema.types.*].properties.status is
-# declared as an enum containing "completed".
+# HYALO002 fires only when any schema declares `status` as an enum
+# containing "completed" — this includes the default schema as well
+# as any [schema.types.*].
 hyalo lint                              # full vault, summary mode
 hyalo lint --rule MD013 --detailed      # drill into a single rule
 hyalo lint --rule-prefix HYALO          # only HYALO native rules

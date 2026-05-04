@@ -1434,9 +1434,11 @@ fn per_rule_hint(ctx: &HintContext, rule_id: &str, worst_file: Option<&str>) -> 
             build_lint_with_filter_flags(ctx, &["lint", "--rule", "HYALO001", "--fix"]),
         )),
         "HYALO002" => worst_file.map(|file| {
+            // Use `--file <path>` rather than a positional, since `find`'s
+            // positional argument is the search pattern.
             Hint::new(
                 format!("See open tasks in {file}"),
-                build_command_with_file(ctx, &["find", "--task", "todo"], file, &[]),
+                build_command_no_glob(ctx, &["find", "--task", "todo", "--file", file]),
             )
         }),
         _ => None,
@@ -1568,9 +1570,11 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
                 })
             });
         if has_violations && hints.len() < MAX_HINTS {
+            // Preserve --rule / --rule-prefix / --fix-rule from the current
+            // invocation so the suggested preview doesn't widen scope.
             hints.push(Hint::new(
                 "Preview auto-fixes",
-                build_command_with_glob_and_files(ctx, &["lint", "--fix", "--dry-run"]),
+                build_lint_with_filter_flags(ctx, &["lint", "--fix", "--dry-run"]),
             ));
         }
     } else if is_dry_run {
@@ -1586,25 +1590,11 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
                 .and_then(|f| f.as_array())
                 .is_some_and(|a| !a.is_empty());
         if has_fixes && hints.len() < MAX_HINTS {
-            // Build the apply hint, mirroring current filter flags.
-            let mut apply_args = vec!["lint", "--fix"];
-            let rule_str;
-            let prefix_str;
-            let mut extra_args: Vec<&str> = Vec::new();
-            if let Some(rule) = &ctx.lint_rule {
-                rule_str = rule.clone();
-                extra_args.push("--rule");
-                extra_args.push(&rule_str);
-            }
-            if let Some(prefix) = &ctx.lint_rule_prefix {
-                prefix_str = prefix.clone();
-                extra_args.push("--rule-prefix");
-                extra_args.push(&prefix_str);
-            }
-            apply_args.extend_from_slice(&extra_args);
+            // Apply hint mirrors the previewed scope — preserve --rule,
+            // --rule-prefix, and --fix-rule via the lint-aware builder.
             hints.push(Hint::new(
                 "Apply auto-fixes",
-                build_command_with_glob_and_files(ctx, &apply_args),
+                build_lint_with_filter_flags(ctx, &["lint", "--fix"]),
             ));
         }
     }

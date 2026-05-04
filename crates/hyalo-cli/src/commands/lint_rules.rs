@@ -232,7 +232,11 @@ pub(crate) fn set_rule(
                     rule_id,
                     toml_edit::value(toml_edit::InlineTable::new())
                         .into_value()
-                        .expect("inline-table value"),
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "failed to build inline-table value for lint.rules.{rule_id}"
+                            )
+                        })?,
                 );
             }
         }

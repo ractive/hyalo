@@ -207,9 +207,24 @@ fn inject_ext_file_result(
 
     if let Some(obj) = value.as_object_mut() {
         let extra_violations: usize = extra.rule_groups.iter().map(|g| g.count).sum();
+        let is_fix_mode = obj.contains_key("total_remaining");
 
-        let extra_value =
-            serde_json::to_value(extra).context("failed to serialize view lint result")?;
+        // In fix-mode, the per-file shape is `ExtFileLintFixResult` (with
+        // `fixed_groups`/`remaining_groups`/`conflicts`), not the read-only
+        // `ExtFileLintResult` shape. Adapt before injecting so the renderer
+        // and JSON consumers see consistent structure.
+        let extra_value = if is_fix_mode {
+            let remaining_groups = serde_json::to_value(&extra.rule_groups)
+                .context("failed to serialize view lint groups")?;
+            serde_json::json!({
+                "file": extra.file,
+                "fixed_groups": serde_json::Value::Array(Vec::new()),
+                "remaining_groups": remaining_groups,
+                "conflicts": serde_json::Value::Array(Vec::new()),
+            })
+        } else {
+            serde_json::to_value(extra).context("failed to serialize view lint result")?
+        };
 
         if let Some(files) = obj.get_mut("files").and_then(|f| f.as_array_mut()) {
             files.insert(0, extra_value);
@@ -236,6 +251,34 @@ fn inject_ext_file_result(
             obj.insert(
                 "files_with_violations".to_string(),
                 serde_json::Value::from(n + 1),
+            );
+        }
+        // Bump severity totals so the summary stays consistent with the
+        // injected groups. View violations are categorised by `severity`
+        // ("error" or "warn") on each rule group.
+        let mut extra_errors: u64 = 0;
+        let mut extra_warnings: u64 = 0;
+        for g in &extra.rule_groups {
+            let n = g.count as u64;
+            match g.severity.as_str() {
+                "error" => extra_errors += n,
+                _ => extra_warnings += n,
+            }
+        }
+        if extra_errors > 0
+            && let Some(n) = obj.get_mut("errors").and_then(|v| v.as_u64())
+        {
+            obj.insert(
+                "errors".to_string(),
+                serde_json::Value::from(n + extra_errors),
+            );
+        }
+        if extra_warnings > 0
+            && let Some(n) = obj.get_mut("warnings").and_then(|v| v.as_u64())
+        {
+            obj.insert(
+                "warnings".to_string(),
+                serde_json::Value::from(n + extra_warnings),
             );
         }
     }

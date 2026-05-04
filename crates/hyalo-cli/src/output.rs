@@ -1230,10 +1230,14 @@ fn format_lint_fix_output_text(map: &serde_json::Map<String, serde_json::Value>)
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     let files_label = if files_checked == 1 { "file" } else { "files" };
-    let fix_verb = if dry_run { "would fix" } else { "fixed" };
+    let fixed_phrase = if dry_run {
+        format!("would fix {total_fixed}")
+    } else {
+        format!("fixed {total_fixed}")
+    };
     let _ = write!(
         s,
-        "{files_checked} {files_label} checked: {total_fixed} {fix_verb}, {total_remaining} remaining, {total_conflicts} conflicts.",
+        "{files_checked} {files_label} checked: {fixed_phrase} · remaining {total_remaining} · conflicts {total_conflicts}.",
     );
 
     s

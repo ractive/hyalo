@@ -1242,8 +1242,18 @@ pub fn lint_files_extended(
                 }
             }
 
-            // Count schema (frontmatter) fixes.
-            let schema_fix_count = r.fix_actions.len();
+            // SCHEMA fixed count: derived from re-validating post-fix
+            // properties (resolved = before - after). Falls back to 0 when
+            // the post-fix re-validation didn't run.
+            let schema_before = r
+                .violations_by_rule
+                .get("SCHEMA")
+                .map_or(0, std::vec::Vec::len);
+            let schema_after = r
+                .post_fix_schema_remaining
+                .as_ref()
+                .map_or(schema_before, std::vec::Vec::len);
+            let schema_fix_count = schema_before.saturating_sub(schema_after);
 
             // fixed_groups: rules with at least one applied fix + SCHEMA if fixed.
             let mut fixed_groups: Vec<FixedGroup> = Vec::new();
@@ -1256,31 +1266,32 @@ pub fn lint_files_extended(
                 });
             }
             for (rule_id, _) in &applied_by_rule {
-                // Count violations for this rule that came from body_fix_outcomes.
+                // Surface only diagnostics whose fix was actually Applied —
+                // not the entire `violations_by_rule[rule_id]` set, which
+                // also contains conflicts and not-selected entries for the
+                // same rule.
+                let viols: Vec<BodyViolation> = r
+                    .violations_by_rule
+                    .get(rule_id)
+                    .map(|vs| {
+                        vs.iter()
+                            .filter(|v| v.fixed)
+                            .take(opts.max_per_rule)
+                            .map(|v| BodyViolation {
+                                line: v.line,
+                                column: v.column,
+                                message: v.message.clone(),
+                                fix: v.fix.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let count = r
-                    .body_fix_outcomes
-                    .iter()
-                    .filter(|(rid, o)| rid == rule_id && matches!(o, FixOutcome::Applied))
-                    .count();
+                    .violations_by_rule
+                    .get(rule_id)
+                    .map_or(0, |vs| vs.iter().filter(|v| v.fixed).count());
                 if count > 0 {
                     grand_total_fixed += count;
-                    // Find violations from violations_by_rule to include detail.
-                    let viols = r
-                        .violations_by_rule
-                        .get(rule_id)
-                        .map(|vs| {
-                            let shown = vs.len().min(opts.max_per_rule);
-                            vs[..shown]
-                                .iter()
-                                .map(|v| BodyViolation {
-                                    line: v.line,
-                                    column: v.column,
-                                    message: v.message.clone(),
-                                    fix: v.fix.clone(),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
                     fixed_groups.push(FixedGroup {
                         rule: rule_id.clone(),
                         count,
@@ -1292,70 +1303,84 @@ pub fn lint_files_extended(
             // remaining_groups: violations not fixed.
             let mut remaining_groups: Vec<RuleGroup> = Vec::new();
             for (rule_id, violations) in &r.violations_by_rule {
-                // Skip rules that were fully fixed.
-                let fixed_count = r
-                    .body_fix_outcomes
-                    .iter()
-                    .filter(|(rid, o)| rid == rule_id && matches!(o, FixOutcome::Applied))
-                    .count();
-                let conflict_count = r
-                    .body_fix_outcomes
-                    .iter()
-                    .filter(|(rid, o)| rid == rule_id && matches!(o, FixOutcome::Conflict { .. }))
-                    .count();
-                // Remaining = total - fixed.  Conflicts stay in remaining.
-                let remaining_count = violations.len().saturating_sub(fixed_count);
-                if remaining_count == 0 {
-                    let _ = conflict_count; // conflicts also in remaining, keep them
-                }
-
-                // For SCHEMA violations, check if they were fixed by re-checking after apply.
-                // We include them in remaining only if they still exist (we use violations_by_rule
-                // which was computed BEFORE frontmatter fix — so after fix they may be resolved).
-                // Simplification: include SCHEMA remaining if fix_actions < violations count.
+                // SCHEMA: post-fix remaining set comes from re-running
+                // `validate_properties` against the mutated frontmatter,
+                // not from a fix_actions count heuristic.
                 if rule_id == "SCHEMA" {
-                    let remaining = violations.len().saturating_sub(r.fix_actions.len());
-                    if remaining > 0 {
-                        let count = remaining;
-                        grand_total_remaining += count;
-                        for v in violations {
-                            match v.severity.as_str() {
-                                "error" => total_errors += 1,
-                                _ => total_warnings += 1,
-                            }
-                        }
-                        rules_seen.insert(rule_id.clone());
-                        let shown = count.min(opts.max_per_rule);
-                        let truncated = count > shown;
-                        let body_violations = violations[..shown]
-                            .iter()
-                            .map(|v| BodyViolation {
-                                line: v.line,
-                                column: v.column,
-                                message: v.message.clone(),
-                                fix: v.fix.clone(),
-                            })
-                            .collect();
-                        remaining_groups.push(RuleGroup {
-                            rule: rule_id.clone(),
-                            count,
-                            shown,
-                            truncated,
-                            severity: violations
-                                .first()
-                                .map_or("warn".to_owned(), |v| v.severity.clone()),
-                            autofixable: true,
-                            violations: body_violations,
-                        });
+                    let remaining_owned: Vec<InternalViolation> =
+                        if let Some(post) = r.post_fix_schema_remaining.as_ref() {
+                            post.iter()
+                                .map(|v| InternalViolation {
+                                    line: v.line,
+                                    column: v.column,
+                                    message: v.message.clone(),
+                                    severity: v.severity.clone(),
+                                    fix: v.fix.clone(),
+                                    fixed: v.fixed,
+                                })
+                                .collect()
+                        } else {
+                            // No fix-mode SCHEMA pass ran (e.g., --fix-rule
+                            // filtered SCHEMA out). All originals remain.
+                            violations
+                                .iter()
+                                .map(|v| InternalViolation {
+                                    line: v.line,
+                                    column: v.column,
+                                    message: v.message.clone(),
+                                    severity: v.severity.clone(),
+                                    fix: v.fix.clone(),
+                                    fixed: v.fixed,
+                                })
+                                .collect()
+                        };
+                    let remaining = remaining_owned.len();
+                    if remaining == 0 {
+                        continue;
                     }
+                    grand_total_remaining += remaining;
+                    for v in &remaining_owned {
+                        match v.severity.as_str() {
+                            "error" => total_errors += 1,
+                            _ => total_warnings += 1,
+                        }
+                    }
+                    rules_seen.insert(rule_id.clone());
+                    let shown = remaining.min(opts.max_per_rule);
+                    let truncated = remaining > shown;
+                    let body_violations = remaining_owned
+                        .iter()
+                        .take(shown)
+                        .map(|v| BodyViolation {
+                            line: v.line,
+                            column: v.column,
+                            message: v.message.clone(),
+                            fix: v.fix.clone(),
+                        })
+                        .collect();
+                    remaining_groups.push(RuleGroup {
+                        rule: rule_id.clone(),
+                        count: remaining,
+                        shown,
+                        truncated,
+                        severity: remaining_owned
+                            .first()
+                            .map_or("warn".to_owned(), |v| v.severity.clone()),
+                        autofixable: true,
+                        violations: body_violations,
+                    });
                     continue;
                 }
 
+                // Body rules: filter out violations that were actually fixed.
+                let remaining_violations: Vec<&InternalViolation> =
+                    violations.iter().filter(|v| !v.fixed).collect();
+                let remaining_count = remaining_violations.len();
                 if remaining_count == 0 {
                     continue;
                 }
                 grand_total_remaining += remaining_count;
-                for v in violations {
+                for v in &remaining_violations {
                     match v.severity.as_str() {
                         "error" => total_errors += 1,
                         _ => total_warnings += 1,
@@ -1368,13 +1393,14 @@ pub fn lint_files_extended(
                     .iter()
                     .find(|e| &e.id == rule_id)
                     .is_some_and(|e| e.autofixable);
-                let severity = violations
+                let severity = remaining_violations
                     .first()
                     .map_or_else(|| "warn".to_owned(), |v| v.severity.clone());
                 let shown = remaining_count.min(opts.max_per_rule);
                 let truncated = remaining_count > shown;
-                let body_violations = violations[..shown]
+                let body_violations = remaining_violations
                     .iter()
+                    .take(shown)
                     .map(|v| BodyViolation {
                         line: v.line,
                         column: v.column,
@@ -1541,6 +1567,11 @@ struct InternalViolation {
     message: String,
     severity: String,
     fix: Option<serde_json::Value>,
+    /// True when this body diagnostic's fix was successfully applied during
+    /// the current fix-mode run. Always `false` for read-only and frontmatter
+    /// (SCHEMA) violations — frontmatter fixes are tracked separately via
+    /// `fix_actions`.
+    fixed: bool,
 }
 
 /// Outcome for a single diagnostic's fix attempt (internal, used in fix-mode).
@@ -1565,6 +1596,12 @@ struct PerFileLintResult {
     /// Fix outcomes keyed by (rule_id, index_within_rule).
     /// Only populated in fix-mode.
     body_fix_outcomes: Vec<(String, FixOutcome)>,
+    /// SCHEMA (frontmatter) violations remaining *after* applying fixes,
+    /// computed by re-running `validate_properties` against the mutated
+    /// frontmatter. `Some(vec![])` means all SCHEMA violations were resolved;
+    /// `None` means fix-mode was off or no SCHEMA pass ran. Body rules use
+    /// `InternalViolation.fixed` instead.
+    post_fix_schema_remaining: Option<Vec<InternalViolation>>,
 }
 
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
@@ -1603,6 +1640,7 @@ fn lint_one_file_extended(
                     message: format!("{}: {e}", crate::hints::PARSE_ERROR_PREFIX),
                     severity: "error".to_owned(),
                     fix: None,
+                    fixed: false,
                 }],
             );
             return Ok(PerFileLintResult {
@@ -1612,6 +1650,7 @@ fn lint_one_file_extended(
                 body_modified: false,
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
+                post_fix_schema_remaining: None,
             });
         }
         Err(e) => return Err(e).context(format!("reading frontmatter from {rel_path}")),
@@ -1643,6 +1682,7 @@ fn lint_one_file_extended(
                     message: v.message,
                     severity: sev.to_owned(),
                     fix: None,
+                    fixed: false,
                 });
         }
     }
@@ -1650,6 +1690,7 @@ fn lint_one_file_extended(
     // Apply frontmatter fixes if requested.
     let mut body_modified = false;
     let mut fix_actions: Vec<FixAction> = Vec::new();
+    let mut post_fix_schema_remaining: Option<Vec<InternalViolation>> = None;
     if matches!(fix, FixMode::Apply | FixMode::DryRun) {
         let fix_all_rules = fix_rules.is_empty();
         let should_fix_frontmatter = fix_all_rules
@@ -1665,6 +1706,33 @@ fn lint_one_file_extended(
                         .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
                 }
                 fix_actions = actions;
+            }
+            if should_include_frontmatter {
+                // Re-validate the mutated properties to get the actual
+                // post-fix SCHEMA remaining set. Avoids guessing via
+                // `fix_actions.len()`, which is not 1:1 with resolved
+                // diagnostics (one fix action can clear multiple violations,
+                // or insert defaults that don't clear any).
+                let has_tags_after = mutable.contains_key("tags");
+                let post = validate_properties(rel_path, &mutable, has_tags_after, schema);
+                let remaining: Vec<InternalViolation> = post
+                    .into_iter()
+                    .map(|v| {
+                        let sev = match v.severity {
+                            Severity::Error => "error",
+                            Severity::Warn => "warn",
+                        };
+                        InternalViolation {
+                            line: 1,
+                            column: 1,
+                            message: v.message,
+                            severity: sev.to_owned(),
+                            fix: None,
+                            fixed: false,
+                        }
+                    })
+                    .collect();
+                post_fix_schema_remaining = Some(remaining);
             }
         }
     }
@@ -1687,6 +1755,10 @@ fn lint_one_file_extended(
     // Apply body fixes if requested.
     // Track per-diagnostic outcomes for the new fix-mode JSON shape.
     let mut body_fix_outcomes: Vec<(String, FixOutcome)> = Vec::new();
+    // Set of body-diagnostic indices whose fix was Applied. Used below to
+    // mark `InternalViolation.fixed`, so downstream remaining/severity
+    // accounting can filter out fixed violations.
+    let mut applied_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     if matches!(fix, FixMode::Apply | FixMode::DryRun) && !body_diagnostics.is_empty() {
         let fix_all_rules = fix_rules.is_empty();
@@ -1709,7 +1781,10 @@ fn lint_one_file_extended(
             for (slot, orig_idx) in fixable_indices.iter().enumerate() {
                 let rule_id = body_diagnostics[*orig_idx].rule_id.clone();
                 let outcome = match &outcomes[slot] {
-                    FixOutcome::Applied => FixOutcome::Applied,
+                    FixOutcome::Applied => {
+                        applied_indices.insert(*orig_idx);
+                        FixOutcome::Applied
+                    }
                     FixOutcome::Conflict { blocking_rule } => FixOutcome::Conflict {
                         blocking_rule: blocking_rule.clone(),
                     },
@@ -1730,7 +1805,7 @@ fn lint_one_file_extended(
     }
 
     // Group body diagnostics by rule.
-    for d in body_diagnostics {
+    for (i, d) in body_diagnostics.into_iter().enumerate() {
         let sev = format!("{}", d.severity);
         let fix_val = d.fix.as_ref().map(|f| {
             serde_json::json!({
@@ -1740,6 +1815,7 @@ fn lint_one_file_extended(
                 "replacement": f.replacement,
             })
         });
+        let fixed = applied_indices.contains(&i);
         violations_by_rule
             .entry(d.rule_id.clone())
             .or_default()
@@ -1749,6 +1825,7 @@ fn lint_one_file_extended(
                 message: d.message,
                 severity: sev,
                 fix: fix_val,
+                fixed,
             });
     }
 
@@ -1763,6 +1840,7 @@ fn lint_one_file_extended(
         body_modified,
         fix_actions,
         body_fix_outcomes,
+        post_fix_schema_remaining,
     })
 }
 
