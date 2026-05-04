@@ -749,15 +749,22 @@ fn run_inner() -> Result<(), AppError> {
                 file,
                 glob,
                 r#type: _,
-                fix: _,
+                fix,
                 dry_run,
                 limit,
+                rule,
+                rule_prefix,
+                fix_rule,
                 ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Lint, &common);
                 ctx.glob.clone_from(glob);
                 ctx.dry_run = *dry_run;
                 ctx.has_limit = limit.is_some();
+                ctx.lint_is_fix = *fix;
+                ctx.lint_rule.clone_from(rule);
+                ctx.lint_rule_prefix.clone_from(rule_prefix);
+                ctx.lint_fix_rules.clone_from(fix_rule);
                 let mut targets: Vec<String> = file.clone();
                 if let Some(pos) = file_positional {
                     targets.insert(0, pos.clone());

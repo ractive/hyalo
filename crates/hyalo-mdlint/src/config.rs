@@ -26,7 +26,7 @@ impl LintConfig {
 /// A single rule override entry from `[lint.rules]`.
 ///
 /// Scalar form: `MD013 = false` → `RuleOverride::Enabled(false)`.
-/// Table form: `[lint.rules.MD013]` with `enabled`, `severity`, `mode`.
+/// Table form: `[lint.rules.MD013]` with `enabled`, `severity`.
 #[derive(Debug, Clone)]
 pub enum RuleOverride {
     /// Scalar bool: just toggle enabled/disabled.
@@ -35,8 +35,6 @@ pub enum RuleOverride {
     Table {
         enabled: Option<bool>,
         severity: Option<String>,
-        /// Mode for HYALO002: "match" | "either" | "off".
-        mode: Option<String>,
     },
 }
 
@@ -52,13 +50,6 @@ impl RuleOverride {
         match self {
             Self::Enabled(_) => None,
             Self::Table { severity, .. } => severity.as_deref(),
-        }
-    }
-
-    pub fn mode(&self) -> Option<&str> {
-        match self {
-            Self::Enabled(_) => None,
-            Self::Table { mode, .. } => mode.as_deref(),
         }
     }
 }

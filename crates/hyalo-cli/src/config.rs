@@ -364,12 +364,13 @@ fn parse_md_lint_config(raw: Option<&LintConfig>) -> hyalo_mdlint::LintConfig {
                     .get("severity")
                     .and_then(|v| v.as_str())
                     .map(str::to_owned);
-                let mode = tbl.get("mode").and_then(|v| v.as_str()).map(str::to_owned);
-                RuleOverride::Table {
-                    enabled,
-                    severity,
-                    mode,
+                if tbl.contains_key("mode") {
+                    crate::warn::warn(format!(
+                        "[lint.rules.{rule_id}].mode is no longer supported (the title↔H1 rule \
+                         was removed in iter-127); ignoring"
+                    ));
                 }
+                RuleOverride::Table { enabled, severity }
             }
             _ => {
                 crate::warn::warn(format!(

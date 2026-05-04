@@ -121,8 +121,7 @@ All queries below use `--index` — no additional disk scans needed.
 ### Schema & lint
 Check if type schemas are defined, then run lint. `hyalo lint` covers both frontmatter
 schema *and* the markdown body (stock mdbook-lint rules + HYALO native rules for things
-like bare `[]` checkboxes, title↔H1 disagreement, and `status: completed` with open
-tasks):
+like bare `[]` checkboxes and `status: completed` with open tasks):
 ```bash
 hyalo types list --format text
 hyalo lint --format text --index
@@ -204,8 +203,9 @@ abbreviations (`perf`/`performance`). The canonical form should be the one used 
 more files.
 
 ### Task completion vs status mismatch
-The `HYALO003` rule from the lint pass already flags `status: completed` files with
-open tasks. If you want a per-file breakdown with open/total counts, use the view:
+The `HYALO002` rule from the lint pass already flags `status: completed` files with
+open tasks (fires only when `[schema.types.*].properties.status` is declared as an enum
+containing `"completed"`). If you want a per-file breakdown with open/total counts, use the view:
 ```bash
 hyalo find --view completed-with-todos --index --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
 ```
@@ -233,8 +233,8 @@ hyalo lint --fix --format text --index
 If you only want to fix specific rules (e.g. body fixes only, leaving frontmatter
 alone), use `--fix-rule` or `--rule-prefix HYALO` — see `hyalo lint --help`.
 
-Unfixable violations (missing required properties, `HYALO002` title↔H1 disagreements,
-open tasks under `HYALO003`) are reported in Phase 5 for human attention.
+Unfixable violations (missing required properties, open tasks under `HYALO002`) are
+reported in Phase 5 for human attention.
 
 ### Fix broken links
 Use `hyalo links fix` to auto-repair broken links. It uses fuzzy matching to find the

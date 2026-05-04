@@ -2,8 +2,6 @@
 
 pub mod hyalo001;
 pub mod hyalo002;
-pub mod hyalo003;
 
 pub use hyalo001::Hyalo001;
 pub use hyalo002::Hyalo002;
-pub use hyalo003::Hyalo003;

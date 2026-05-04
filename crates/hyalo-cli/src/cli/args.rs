@@ -807,11 +807,12 @@ Repeatable (AND).\n\
             - error: missing required property, wrong type, invalid enum value, pattern mismatch\n\
             - warn:  no 'type' property, no 'tags', property not declared in schema\n\
             When no `[schema]` section exists, this pass exits 0 with zero violations.\n\n\
-            BODY PASS: ~14 default-on stock rules from mdbook-lint plus three HYALO native\n\
+            BODY PASS: ~14 default-on stock rules from mdbook-lint plus two HYALO native\n\
             cross-cutting rules:\n\
             \u{00a0} - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\
-            \u{00a0} - HYALO002: frontmatter `title` should agree with first H1\n\
-            \u{00a0} - HYALO003: `status: completed` requires all task checkboxes ticked\n\
+            \u{00a0} - HYALO002: `status: completed` requires all task checkboxes ticked\n\
+            \u{00a0}            (only fires when the schema declares `status` as an enum\n\
+            \u{00a0}            containing `completed`)\n\
             Severity is hyalo-controlled. Manage rule enable/severity with `hyalo lint-rules`.\n\
             Override defaults via `[lint]` and `[lint.rules]` in `.hyalo.toml`.\n\n\
             INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
