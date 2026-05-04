@@ -68,8 +68,22 @@ hyalo links auto --first-only --apply  # only first mention per target
 hyalo links auto --exclude-title API --exclude-target-glob 'templates/*' --apply
 hyalo links auto --file notes/todo.md --apply   # single-file mode
 
-# Lint against your schema
-hyalo lint --fix
+# Lint frontmatter against your schema and markdown body against
+# bundled rules (MD001..MD059 from mdbook-lint plus three HYALO native
+# cross-cutting rules). `--fix` applies autofixes for both passes.
+hyalo lint                              # full vault, summary mode
+hyalo lint --rule MD013 --detailed      # drill into a single rule
+hyalo lint --rule-prefix HYALO          # only HYALO native rules
+hyalo lint --fix --dry-run              # preview autofixes
+hyalo lint --fix                        # apply autofixes
+hyalo lint --fix-rule HYALO001          # only autofix one rule
+
+# Manage which rules are enabled and their severity (writes to .hyalo.toml).
+hyalo lint-rules list
+hyalo lint-rules show MD013
+hyalo lint-rules set MD013 --enabled false
+hyalo lint-rules set HYALO002 --severity error
+hyalo lint-rules remove MD013           # revert to default
 ```
 
 Every write command supports `--dry-run` to preview changes before applying them.

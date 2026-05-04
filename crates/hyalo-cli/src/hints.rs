@@ -1412,13 +1412,16 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
     let mut hints = Vec::new();
 
     // When output was truncated by the default limit, suggest showing all.
+    // Support both old `limited` and new `files_truncated` field names.
     let is_limited = data
-        .get("limited")
+        .get("files_truncated")
+        .or_else(|| data.get("limited"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if !ctx.has_limit && is_limited {
         let total_violations = data
-            .get("files_with_issues")
+            .get("files_with_violations")
+            .or_else(|| data.get("files_with_issues"))
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         hints.push(Hint::new(
@@ -1445,14 +1448,27 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
     }
 
     // When there are violations and we're not already in fix mode, suggest fixing.
+    // Check both new `rule_groups` shape and legacy `violations` shape.
     let has_violations = data
         .get("files")
         .and_then(|f| f.as_array())
         .is_some_and(|files| {
             files.iter().any(|file| {
-                file.get("violations")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|v| !v.is_empty())
+                // New shape: rule_groups with autofixable groups
+                file.get("rule_groups")
+                    .and_then(|rg| rg.as_array())
+                    .is_some_and(|groups| {
+                        groups.iter().any(|g| {
+                            g.get("autofixable")
+                                .and_then(serde_json::Value::as_bool)
+                                .unwrap_or(false)
+                        })
+                    })
+                    // Legacy shape
+                    || file
+                        .get("violations")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|v| !v.is_empty())
             })
         });
     if has_violations && !is_dry_run && hints.len() < MAX_HINTS {
@@ -1474,16 +1490,34 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
         .and_then(|f| f.as_array())
         .is_some_and(|files| {
             files.iter().any(|file| {
-                file.get("violations")
-                    .and_then(|v| v.as_array())
-                    .is_some_and(|v| {
-                        v.iter().any(|violation| {
-                            violation
-                                .get("message")
-                                .and_then(|m| m.as_str())
-                                .is_some_and(|m| m.starts_with(PARSE_ERROR_PREFIX))
+                // New shape: check messages inside rule_groups
+                file.get("rule_groups")
+                    .and_then(|rg| rg.as_array())
+                    .is_some_and(|groups| {
+                        groups.iter().any(|g| {
+                            g.get("violations")
+                                .and_then(|v| v.as_array())
+                                .is_some_and(|vs| {
+                                    vs.iter().any(|v| {
+                                        v.get("message")
+                                            .and_then(|m| m.as_str())
+                                            .is_some_and(|m| m.starts_with(PARSE_ERROR_PREFIX))
+                                    })
+                                })
                         })
                     })
+                    // Legacy shape: flat violations
+                    || file
+                        .get("violations")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|v| {
+                            v.iter().any(|violation| {
+                                violation
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .is_some_and(|m| m.starts_with(PARSE_ERROR_PREFIX))
+                            })
+                        })
             })
         });
     if has_parse_errors && hints.len() < MAX_HINTS {

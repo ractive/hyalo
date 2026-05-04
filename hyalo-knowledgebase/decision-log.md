@@ -464,3 +464,31 @@ Research across tools:
 - Updates DEC-031 point 3 (envelope format) — string array → object array
 - `HintSource` enum expanded from 4 to 15 variants
 - 12 generator functions in `hints.rs` covering all command families
+
+## DEC-041: Markdown Linter — Embed mdbook-lint-core + HYALO Native Rules (2026-05-04)
+
+**Context:** [[iterations/iteration-126-markdown-linter]] extends `hyalo lint` from frontmatter-only validation into a full markdown rule engine. Two design framings were considered: (A) hand-roll a small set of HYALO-specific rules only, or (B) embed `mdbook-lint-core` for stock markdownlint coverage (MD001..MD059) and add HYALO native rules on top.
+
+**Decision:** Adopt framing (B). Bundle `mdbook-lint-core` + `mdbook-lint-rulesets` via a new `crates/hyalo-mdlint` crate, and add three HYALO native cross-cutting rules — HYALO001 (bare `[]` checkbox), HYALO002 (frontmatter `title` ↔ first H1 agreement), HYALO003 (`status: completed` requires all task checkboxes ticked). Severity is hyalo-controlled via a static override table; user overrides land last. Curate a default-on set (~14 stock rules) and default-off set (noisy/stylistic). Output is shaped for AI agents — per-rule caps, summary mode, hint chains.
+
+**Why these tradeoffs:**
+
+1. **Stock coverage is a freebie.** Embedding mdbook-lint-core gives ~59 markdownlint rules at the cost of ~3 MB binary growth and ~24 transitive crates. Hand-rolling parity would burn weeks for no incremental UX value.
+
+2. **Cross-cutting rules are the headline.** No other linter has hyalo's parsed model in hand. HYALO001/002/003 enforce invariants that span frontmatter and body — these are rules nobody else can offer, and they justify the crate-organization overhead.
+
+3. **Severity belongs to hyalo.** mdbook-lint-core has no config-level severity override. We post-process violations after collection: a static `HashMap<&str, Severity>` rewrites severity per rule, then user overrides from `[lint.rules]` win. This keeps the user model coherent (one place to tune severity) regardless of upstream defaults.
+
+4. **Curated default-on set is opinionated but recoverable.** v1 ships a guess based on cheap-autofixable-structural heuristics. Worst case: flip 1–2 rules in v0.15.x after dogfooding feedback. Users can always override via `hyalo lint-rules set <ID> --enabled true|false`.
+
+5. **JSON envelope break is acceptable.** The previous flat `violations: [...]` shape becomes `rule_groups: [...]`. Small installed base, and the new shape is what AI agents actually want — grouped, capped, with explicit `truncated` flags.
+
+6. **Per-rule arg pass-through deferred.** mdbook-lint-core uses toml 0.5 while hyalo uses toml 1.x. A translation layer is non-trivial. v1 uses upstream defaults; we revisit if a user actually asks (e.g., MD013 `line_length=120`).
+
+**Consequences:**
+- New crate `crates/hyalo-mdlint` owns the engine factory, severity table, and HYALO rule provider
+- New `[lint]` and `[lint.rules]` sections in `.hyalo.toml`
+- New `hyalo lint-rules` command mirrors `hyalo types` / `hyalo views` shape
+- New flags on `hyalo lint`: `--detailed`, `--rule`, `--rule-prefix`, `--max-per-rule`, `--fix-rule`
+- Body autofix runs after frontmatter autofix; conflicts deferred and reported
+- Snapshot index does not accelerate body lint (body bytes aren't indexed) — documented in `lint --help`

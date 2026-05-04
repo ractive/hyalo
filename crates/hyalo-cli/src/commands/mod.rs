@@ -7,6 +7,7 @@ pub mod find;
 pub mod init;
 pub mod links;
 pub mod lint;
+pub mod lint_rules;
 pub(crate) mod mutation;
 pub mod mv;
 pub mod properties;

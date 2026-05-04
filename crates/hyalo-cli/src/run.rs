@@ -63,7 +63,8 @@ fn effective_index_path_for(
         | Commands::Deinit
         | Commands::Completion { .. }
         | Commands::Views { .. }
-        | Commands::Types { .. } => None,
+        | Commands::Types { .. }
+        | Commands::LintRules { .. } => None,
     };
 
     let raw = flags?.effective_index_path(vault_dir)?;
@@ -782,7 +783,8 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
-            | Commands::Views { .. } => None,
+            | Commands::Views { .. }
+            | Commands::LintRules { .. } => None,
         }
     } else {
         None
@@ -830,6 +832,7 @@ fn run_inner() -> Result<(), AppError> {
     let validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
     let case_insensitive_mode = config.case_insensitive_mode;
+    let md_lint = config.md_lint;
 
     // Propagate the configured frontmatter-link property list into the loaded
     // snapshot so that per-file refreshes (`rescan_entry` / `rename_entry`) use
@@ -850,6 +853,7 @@ fn run_inner() -> Result<(), AppError> {
         schema: &schema,
         validate_on_write,
         lint_ignore: &lint_ignore,
+        md_lint: &md_lint,
         case_insensitive_mode,
         exit_code_override: None,
         config_default_limit,

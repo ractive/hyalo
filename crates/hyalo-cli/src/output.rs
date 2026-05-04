@@ -787,8 +787,14 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 let is_lint = arr
                     .first()
                     .and_then(|v| v.as_object())
-                    .is_some_and(|m| m.contains_key("file") && m.contains_key("violations"))
-                    || arr.is_empty();
+                    .is_some_and(|m| {
+                        m.contains_key("file")
+                            && (m.contains_key("violations") || m.contains_key("rule_groups"))
+                    })
+                    // Empty file list with new-shape totals counts as lint.
+                    || (arr.is_empty()
+                        && (map.contains_key("rules_fired")
+                            || map.contains_key("files_checked")));
                 if is_lint {
                     return format_lint_output_text(map);
                 }
@@ -868,7 +874,7 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
         }
     }
 
-    // File violations.
+    // File violations — handle both the new `rule_groups` shape and the legacy `violations` shape.
     let files = map.get("files").and_then(|f| f.as_array());
     if let Some(files) = files {
         for file_entry in files {
@@ -876,29 +882,80 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
                 .get("file")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("?");
-            let violations = file_entry.get("violations").and_then(|v| v.as_array());
-            let Some(violations) = violations else {
-                continue;
-            };
-            if violations.is_empty() {
-                continue;
-            }
-            let _ = writeln!(s, "{file}:");
-            for v in violations {
-                let severity = v
-                    .get("severity")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("warn");
-                let message = v
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                let pad = if severity == "error" {
-                    "error"
-                } else {
-                    "warn "
-                };
-                let _ = writeln!(s, "  {pad}  {message}");
+
+            // New shape: violations are grouped by rule under `rule_groups`.
+            if let Some(rule_groups) = file_entry.get("rule_groups").and_then(|rg| rg.as_array()) {
+                if rule_groups.is_empty() {
+                    continue;
+                }
+                let _ = writeln!(s, "{file}:");
+                for group in rule_groups {
+                    let rule = group
+                        .get("rule")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("?");
+                    let severity = group
+                        .get("severity")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("warn");
+                    let pad = if severity == "error" {
+                        "error"
+                    } else {
+                        "warn "
+                    };
+                    let violations = group.get("violations").and_then(|v| v.as_array());
+                    let count = group
+                        .get("count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    let shown = group
+                        .get("shown")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(count);
+                    if let Some(violations) = violations {
+                        for v in violations {
+                            let line = v
+                                .get("line")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let message = v
+                                .get("message")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            if line > 0 {
+                                let _ = writeln!(s, "  {pad}  {rule}  line {line}  {message}");
+                            } else {
+                                let _ = writeln!(s, "  {pad}  {rule}  {message}");
+                            }
+                        }
+                        if count > shown {
+                            let _ = writeln!(s, "  … ({} more {})", count - shown, rule);
+                        }
+                    }
+                }
+            } else if let Some(violations) = file_entry.get("violations").and_then(|v| v.as_array())
+            {
+                // Legacy shape: flat violations array.
+                if violations.is_empty() {
+                    continue;
+                }
+                let _ = writeln!(s, "{file}:");
+                for v in violations {
+                    let severity = v
+                        .get("severity")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("warn");
+                    let message = v
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let pad = if severity == "error" {
+                        "error"
+                    } else {
+                        "warn "
+                    };
+                    let _ = writeln!(s, "  {pad}  {message}");
+                }
             }
         }
     }
@@ -911,12 +968,16 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
         .get("warnings")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    // Support both old `files_with_issues` and new `files_with_violations`.
     let files_with_issues: u64 = map
-        .get("files_with_issues")
+        .get("files_with_violations")
+        .or_else(|| map.get("files_with_issues"))
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    // Support both old `limited` and new `files_truncated`.
     let limited = map
-        .get("limited")
+        .get("files_truncated")
+        .or_else(|| map.get("limited"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let shown_files = map
@@ -925,9 +986,14 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
         .map_or(0, |arr| {
             arr.iter()
                 .filter(|e| {
-                    e.get("violations")
-                        .and_then(|v| v.as_array())
-                        .is_some_and(|v| !v.is_empty())
+                    // New shape: has rule_groups
+                    e.get("rule_groups")
+                        .and_then(|rg| rg.as_array())
+                        .is_some_and(|rg| !rg.is_empty())
+                        // Legacy shape: has violations
+                        || e.get("violations")
+                            .and_then(|v| v.as_array())
+                            .is_some_and(|v| !v.is_empty())
                 })
                 .count()
         });

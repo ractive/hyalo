@@ -1,17 +1,18 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    Commands, FindFilters, IndexFlags, LinksAction, PropertiesAction, TagsAction, TaskAction,
-    TypesAction, ViewsAction, resolve_single_file,
+    Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, PropertiesAction, TagsAction,
+    TaskAction, TypesAction, ViewsAction, resolve_single_file,
 };
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
-    find as find_commands, links as links_commands, lint as lint_commands, mv as mv_commands,
-    properties, read as read_commands, remove as remove_commands, resolve_index,
-    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    find as find_commands, links as links_commands, lint as lint_commands,
+    lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
+    remove as remove_commands, resolve_index, set as set_commands, summary as summary_commands,
+    tags as tag_commands, tasks as task_commands,
 };
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::parse_language;
@@ -89,6 +90,8 @@ pub(crate) struct CommandContext<'a> {
     pub validate_on_write: bool,
     /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore` in `.hyalo.toml`.
     pub lint_ignore: &'a [String],
+    /// Markdown lint configuration from `[lint]` in `.hyalo.toml`.
+    pub md_lint: &'a hyalo_mdlint::LintConfig,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub case_insensitive_mode: CaseInsensitiveMode,
     /// Optional exit code override set by commands that need a non-0/2 exit code
@@ -134,6 +137,110 @@ fn resolve_limit(
             }
         }
     }
+}
+
+/// Public wrapper for [`patch_index_for_modified_files`] used by the body-lint pass.
+pub(crate) fn patch_index_for_modified_files_pub(
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
+    dir: &Path,
+    modified_files: &[String],
+) -> Result<()> {
+    patch_index_for_modified_files(snapshot_index, index_path, dir, modified_files)
+}
+
+/// Convert a legacy [`lint_commands::FileLintResult`] (frontmatter/view violations, old shape)
+/// into an [`lint_commands::ExtFileLintResult`] (new rule_groups shape).
+///
+/// View violations are grouped under the synthetic rule id `SCHEMA`.
+fn adapt_view_result_to_ext(
+    result: &lint_commands::FileLintResult,
+) -> lint_commands::ExtFileLintResult {
+    let violations: Vec<lint_commands::BodyViolation> = result
+        .violations
+        .iter()
+        .map(|v| lint_commands::BodyViolation {
+            line: 0,
+            column: 0,
+            message: v.message.clone(),
+            fix: None,
+        })
+        .collect();
+
+    let total = violations.len();
+    let rule_groups = if total == 0 {
+        vec![]
+    } else {
+        vec![lint_commands::RuleGroup {
+            rule: "SCHEMA".to_string(),
+            count: total,
+            shown: total,
+            truncated: false,
+            severity: "warn".to_string(),
+            autofixable: false,
+            violations,
+        }]
+    };
+
+    lint_commands::ExtFileLintResult {
+        file: result.file.clone(),
+        rule_groups,
+    }
+}
+
+/// Inject an [`lint_commands::ExtFileLintResult`] into the serialized
+/// [`lint_commands::ExtLintOutput`] stored inside a `CommandOutcome`.
+///
+/// Deserializes the JSON, prepends the new file result, updates `files_with_violations`
+/// and `total`, then re-serializes.
+fn inject_ext_file_result(
+    outcome: CommandOutcome,
+    extra: &lint_commands::ExtFileLintResult,
+) -> Result<CommandOutcome> {
+    let (payload, total_count) = match outcome {
+        CommandOutcome::Success { output, total } => (output, total),
+        other => return Ok(other),
+    };
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&payload).context("failed to re-parse extended lint output JSON")?;
+
+    if let Some(obj) = value.as_object_mut() {
+        let extra_violations: usize = extra.rule_groups.iter().map(|g| g.count).sum();
+
+        let extra_value =
+            serde_json::to_value(extra).context("failed to serialize view lint result")?;
+
+        if let Some(files) = obj.get_mut("files").and_then(|f| f.as_array_mut()) {
+            files.insert(0, extra_value);
+        }
+        if let Some(n) = obj.get_mut("total").and_then(|v| v.as_u64()) {
+            obj.insert(
+                "total".to_string(),
+                serde_json::Value::from(n + extra_violations as u64),
+            );
+        }
+        if extra_violations > 0
+            && let Some(n) = obj
+                .get_mut("files_with_violations")
+                .and_then(|v| v.as_u64())
+        {
+            obj.insert(
+                "files_with_violations".to_string(),
+                serde_json::Value::from(n + 1),
+            );
+        }
+    }
+
+    let extra_violations: usize = extra.rule_groups.iter().map(|g| g.count).sum();
+    let bump_total = extra_violations > 0;
+    let new_payload = crate::output::format_success(crate::output::Format::Json, &value);
+    Ok(match total_count {
+        Some(t) => {
+            CommandOutcome::success_with_total(new_payload, if bump_total { t + 1 } else { t })
+        }
+        None => CommandOutcome::success(new_payload),
+    })
 }
 
 /// Patch the snapshot index for a list of vault-relative paths that were
@@ -976,6 +1083,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             fix,
             dry_run,
             limit: cli_limit,
+            detailed,
+            rule,
+            rule_prefix,
+            max_per_rule,
+            fix_rule,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
             // Resolve --type to a glob pattern from its filename_template.
@@ -1110,20 +1222,41 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
             };
 
-            let (outcome, mut counts) = lint_commands::lint_files_with_options(
-                &filtered_pairs,
-                ctx.schema,
-                fix_mode,
-                resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
+            // Decide which lint path to use: extended (body+frontmatter) or legacy.
+            // The extended path is used whenever the new flags are active OR when the
+            // engine is available.  We always use the extended path now.
+            let md_engine = hyalo_mdlint::HyaloLintEngine::create()
+                .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
+
+            let max_per_rule_eff =
+                max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule());
+            // CLI --limit overrides the config max_files when provided.
+            let max_files_eff = cli_limit.unwrap_or_else(|| ctx.md_lint.max_files());
+
+            let mut ext_opts = lint_commands::ExtLintOptions {
+                fix: fix_mode,
+                detailed,
+                rule_filter: rule.as_deref(),
+                rule_prefix: rule_prefix.as_deref(),
+                max_per_rule: max_per_rule_eff,
+                max_files: max_files_eff,
+                fix_rules: &fix_rule,
                 snapshot_index,
                 index_path,
+                vault_dir: dir,
+            };
+
+            let (outcome, mut counts) = lint_commands::lint_files_extended(
+                &filtered_pairs,
+                ctx.schema,
+                &md_engine,
+                ctx.md_lint,
+                &mut ext_opts,
             )?;
 
             // Additional config-level lint: check view definitions.
-            //
-            // Views live in `.hyalo.toml`, which is located in `ctx.config_dir`
-            // — that directory can differ from `dir` when the config sets
-            // `dir = "subkb"` and the `.hyalo.toml` sits in the parent.
+            // NOTE: in the extended path, view violations are reported separately.
+            // For now we keep the prepend behavior to maintain compatibility.
             let config_violations = lint_commands::validate_views(ctx.config_dir);
             let outcome = if let Some(view_result) = config_violations {
                 for v in &view_result.violations {
@@ -1133,7 +1266,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     }
                 }
                 counts.files_with_issues += 1;
-                lint_commands::prepend_file_result(outcome, &view_result)?
+                // Adapt view result into the new shape — inject as a file with SCHEMA group.
+                let adapted = adapt_view_result_to_ext(&view_result);
+                inject_ext_file_result(outcome, &adapted)?
             } else {
                 outcome
             };
@@ -1144,6 +1279,57 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             }
 
             Ok(outcome)
+        }
+        Commands::LintRules { action } => {
+            let action = action.unwrap_or(LintRulesAction::List {
+                enabled_only: false,
+                disabled_only: false,
+                rule_prefix: None,
+            });
+            let md_engine = hyalo_mdlint::HyaloLintEngine::create()
+                .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
+            match action {
+                LintRulesAction::List {
+                    enabled_only,
+                    disabled_only,
+                    rule_prefix,
+                } => Ok(lint_rules_commands::list_rules(
+                    ctx.config_dir,
+                    &md_engine,
+                    ctx.md_lint,
+                    enabled_only,
+                    disabled_only,
+                    rule_prefix.as_deref(),
+                    effective_format,
+                )),
+                LintRulesAction::Show { rule_id } => Ok(lint_rules_commands::show_rule(
+                    &rule_id,
+                    &md_engine,
+                    ctx.md_lint,
+                    ctx.user_format,
+                )),
+                LintRulesAction::Set {
+                    rule_id,
+                    enabled,
+                    severity,
+                    dry_run,
+                } => lint_rules_commands::set_rule(
+                    ctx.config_dir,
+                    &rule_id,
+                    enabled,
+                    severity.as_deref(),
+                    dry_run,
+                    &md_engine,
+                    ctx.user_format,
+                ),
+                LintRulesAction::Remove { rule_id, dry_run } => lint_rules_commands::remove_rule(
+                    ctx.config_dir,
+                    &rule_id,
+                    dry_run,
+                    &md_engine,
+                    ctx.user_format,
+                ),
+            }
         }
         // `Init`, `Deinit`, and `Completion` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),

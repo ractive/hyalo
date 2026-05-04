@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 use hyalo_core::case_index::CaseInsensitiveMode;
 use hyalo_core::schema::{RawSchemaConfig, SchemaConfig};
+use hyalo_mdlint::RuleOverride;
 
 /// Search-specific configuration from `[search]` in `.hyalo.toml`.
 #[derive(Debug, Deserialize)]
@@ -45,6 +46,14 @@ struct LintConfig {
     /// parse-error warnings for these files.
     #[serde(default)]
     ignore: Vec<String>,
+    /// Per-rule output cap (default 3).
+    max_violations_per_rule: Option<usize>,
+    /// Worst-offender file cap (default 50).
+    max_files: Option<usize>,
+    /// Per-rule overrides. Stored as raw TOML to handle both scalar (`MD013 = false`)
+    /// and table (`[lint.rules.MD013]`) forms.
+    #[serde(default)]
+    rules: Option<toml::Value>,
 }
 
 /// Raw deserialized representation of `.hyalo.toml`.
@@ -109,6 +118,8 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) validate_on_write: bool,
     /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore`.
     pub(crate) lint_ignore: Vec<String>,
+    /// Markdown linting config (max caps, per-rule overrides).
+    pub(crate) md_lint: hyalo_mdlint::LintConfig,
     /// Parsed schema configuration from `[schema.*]` sections.
     pub(crate) schema: SchemaConfig,
     /// Default output limit for list commands.
@@ -150,6 +161,7 @@ impl ResolvedDefaults {
             frontmatter_link_props: None,
             validate_on_write: false,
             lint_ignore: Vec::new(),
+            md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
             default_limit: None,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
@@ -282,7 +294,12 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         search_language: cfg.search.and_then(|s| s.language),
         frontmatter_link_props: cfg.links.and_then(|l| l.frontmatter_properties),
         validate_on_write,
-        lint_ignore: cfg.lint.map(|l| l.ignore).unwrap_or_default(),
+        lint_ignore: cfg
+            .lint
+            .as_ref()
+            .map(|l| l.ignore.clone())
+            .unwrap_or_default(),
+        md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
@@ -312,6 +329,59 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
             SchemaConfig::default()
         }
     }
+}
+
+/// Parse `[lint]` into a `hyalo_mdlint::LintConfig` for markdown body linting.
+///
+/// Rule IDs are not validated against the catalog here — any string is
+/// accepted as a key, so forward-compat with newer rule IDs is preserved.
+/// Only unexpected value types (neither bool nor table) emit a warning.
+fn parse_md_lint_config(raw: Option<&LintConfig>) -> hyalo_mdlint::LintConfig {
+    let Some(lc) = raw else {
+        return hyalo_mdlint::LintConfig::default();
+    };
+    let mut config = hyalo_mdlint::LintConfig {
+        max_violations_per_rule: lc.max_violations_per_rule,
+        max_files: lc.max_files,
+        rules: HashMap::new(),
+    };
+
+    // Parse [lint.rules] which can be a mix of scalar (bool) and table entries.
+    let Some(rules_val) = &lc.rules else {
+        return config;
+    };
+    let Some(rules_table) = rules_val.as_table() else {
+        crate::warn::warn("[lint.rules] is not a TOML table — ignoring");
+        return config;
+    };
+
+    for (rule_id, value) in rules_table {
+        let override_val = match value {
+            toml::Value::Boolean(b) => RuleOverride::Enabled(*b),
+            toml::Value::Table(tbl) => {
+                let enabled = tbl.get("enabled").and_then(toml::Value::as_bool);
+                let severity = tbl
+                    .get("severity")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                let mode = tbl.get("mode").and_then(|v| v.as_str()).map(str::to_owned);
+                RuleOverride::Table {
+                    enabled,
+                    severity,
+                    mode,
+                }
+            }
+            _ => {
+                crate::warn::warn(format!(
+                    "[lint.rules.{rule_id}] has unexpected type — expected bool or table"
+                ));
+                continue;
+            }
+        };
+        config.rules.insert(rule_id.clone(), override_val);
+    }
+
+    config
 }
 
 #[cfg(test)]
