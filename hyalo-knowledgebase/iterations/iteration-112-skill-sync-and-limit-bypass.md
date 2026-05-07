@@ -1,8 +1,8 @@
 ---
-title: "Iteration 112 — Sync Skills with Recent Features, Bypass Default Limit for --jq/--count"
+title: Iteration 112 — Sync Skills with Recent Features, Bypass Default Limit for --jq/--count
 type: iteration
 date: 2026-04-14
-status: in-progress
+status: completed
 branch: iter-112/skill-sync-and-limit-bypass
 tags:
   - skills
@@ -27,5 +27,5 @@ and `--count` pipelines received only 50 results due to the default limit.
 - [x] Update help texts to document limit bypass behaviour
 - [x] E2e tests for jq/count limit bypass, show alias, schema auto-string
 - [x] Address review: fix help text wording, stale `types create` ref, add tags bypass test
-- [ ] Update README with limit bypass and show alias
-- [ ] Create iteration file
+- [x] Update README with limit bypass and show alias
+- [x] Create iteration file
