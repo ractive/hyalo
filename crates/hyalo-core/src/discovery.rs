@@ -244,6 +244,44 @@ pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<b
     Ok(canonical_full.starts_with(canonical_dir))
 }
 
+/// If `path_arg` is an absolute path that lies inside the canonical vault `dir`,
+/// return the equivalent vault-relative path. Otherwise return `None`.
+///
+/// Lets the CLI rewrite an absolute `--file` path (which LLM-driven shells
+/// often pass) into the relative form `resolve_file` expects, while keeping
+/// genuinely-out-of-vault absolute paths unchanged so they still hit
+/// `OutsideVault`.
+///
+/// Returns `None` if:
+/// - the input is not absolute (caller can pass it straight through),
+/// - the vault dir cannot be canonicalized,
+/// - the (possibly canonicalized) input does not start with the canonical vault,
+/// - or the path equals the vault dir itself (no remainder).
+#[must_use]
+pub fn strip_absolute_vault_prefix(dir: &Path, path_arg: &str) -> Option<String> {
+    let p = Path::new(path_arg);
+    if !p.is_absolute() {
+        return None;
+    }
+    let canonical_dir = canonicalize_vault_dir(dir).ok()?;
+    // Prefer canonicalized input (resolves symlinks, `..`, etc.); fall back to
+    // the literal path so non-existent files inside the vault still rewrite.
+    let candidate = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let stripped = candidate.strip_prefix(&canonical_dir).ok()?;
+    // Reject leftover parent-traversal segments. When canonicalize falls back
+    // to the literal path, a string like `/vault/../vault/x.md` can survive
+    // strip_prefix with a `..` in the remainder; we must not hand that to
+    // resolve_file as if it were a clean vault-relative path.
+    if stripped
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    let s = stripped.to_string_lossy().replace('\\', "/");
+    if s.is_empty() { None } else { Some(s) }
+}
+
 /// Strip the vault `dir` prefix from a path if present.
 ///
 /// Compares path components so `dir = "docs"` matches the leading `docs/` in
@@ -1508,6 +1546,85 @@ mod tests {
 
         let err = resolve_file(tmp.path(), "/etc/passwd.md").unwrap_err();
         assert!(matches!(err, FileResolveError::OutsideVault { .. }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 128 — strip_absolute_vault_prefix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn strip_abs_returns_none_for_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            strip_absolute_vault_prefix(tmp.path(), "notes/foo.md"),
+            None
+        );
+        assert_eq!(strip_absolute_vault_prefix(tmp.path(), "./foo.md"), None);
+    }
+
+    #[test]
+    fn strip_abs_strips_prefix_for_path_inside_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("notes")).unwrap();
+        fs::write(tmp.path().join("notes/foo.md"), "").unwrap();
+
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        let abs = canonical.join("notes/foo.md");
+        let abs_str = abs.to_string_lossy();
+
+        assert_eq!(
+            strip_absolute_vault_prefix(tmp.path(), &abs_str),
+            Some("notes/foo.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn strip_abs_returns_none_for_path_outside_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        // /etc/passwd.md cannot lie inside a tempdir
+        assert_eq!(
+            strip_absolute_vault_prefix(tmp.path(), "/etc/passwd.md"),
+            None
+        );
+    }
+
+    #[test]
+    fn strip_abs_returns_none_for_path_equal_to_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        let abs_str = canonical.to_string_lossy();
+        assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
+    }
+
+    #[test]
+    fn strip_abs_handles_nonexistent_file_inside_vault() {
+        // A user can pass an absolute path to a file that doesn't exist (yet).
+        // We still want to rewrite it so `resolve_file` can produce the proper
+        // NotFound diagnostic instead of a misleading OutsideVault.
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        let abs = canonical.join("missing.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(
+            strip_absolute_vault_prefix(tmp.path(), &abs_str),
+            Some("missing.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn strip_abs_rejects_parent_traversal_in_nonexistent_path() {
+        // When canonicalize falls back to the literal path (because the file
+        // doesn't exist), a `..` segment can survive strip_prefix. We must
+        // refuse to rewrite such paths — handing `../foo.md` to resolve_file
+        // would either error or silently escape the vault.
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        // Build something like `<canonical>/sub/../escape.md` where neither
+        // `sub` nor `escape.md` exists, so canonicalize fails and we keep the
+        // literal form with `..` intact.
+        let abs = canonical.join("sub/../escape.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
     }
 
     // -----------------------------------------------------------------------

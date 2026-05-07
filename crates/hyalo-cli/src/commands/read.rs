@@ -2,7 +2,6 @@
 
 use crate::output::{CommandOutcome, Format, format_error};
 use anyhow::{Context, Result};
-use hyalo_core::discovery;
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, parse_atx_heading};
 use hyalo_core::scanner;
@@ -187,7 +186,7 @@ pub fn run(
     user_format: Format,
 ) -> Result<CommandOutcome> {
     // Resolve file
-    let (full_path, rel_path) = match discovery::resolve_file(dir, file) {
+    let (full_path, rel_path) = match super::resolve_file_user(dir, file) {
         Ok(r) => r,
         Err(e) => return Ok(super::resolve_error_to_outcome(e, format)),
     };

@@ -2,8 +2,12 @@
 title: Iteration 128 — Detect and warn about LLM hyalo misuse
 type: iteration
 date: 2026-05-07
-tags: [ux, llm, dx, validation]
-status: planned
+tags:
+  - ux
+  - llm
+  - dx
+  - validation
+status: in-progress
 branch: iter-128/llm-misuse-warning
 ---
 
@@ -45,8 +49,8 @@ Behavior changes:
 
 Warning text should be short, blunt, and tell the LLM exactly what to do:
 
-```
-warning: hyalo is configured with dir = "<dir>" (from .hyalo.toml).
+```text
+warning: hyalo is configured with dir = "<dir>".
   Do not cd into "<dir>" or pass absolute paths to --file.
   Run hyalo from the project root and pass paths relative to "<dir>", e.g.
     hyalo set iterations/iteration-17.md --property status=in-progress
@@ -54,26 +58,26 @@ warning: hyalo is configured with dir = "<dir>" (from .hyalo.toml).
 
 ## Tasks
 
-- [ ] Detect absolute `--file` / positional paths in `discovery::resolve_file`; if the canonical path is inside the canonical vault, strip the prefix and continue (instead of returning `OutsideVault`)
-- [ ] Keep `OutsideVault` error when an absolute path canonicalizes outside the vault
-- [ ] Detect when CWD equals or is inside the canonical vault dir, given that `.hyalo.toml` was found in an ancestor of the vault — emit the warning once per invocation
-- [ ] Implement the warning helper that fires at most once per process run (e.g., `OnceCell`-gated emit on stderr)
-- [ ] Wire the trigger into the file-resolution path so absolute-path warnings fire from any subcommand using `--file`
-- [ ] Wire the CWD-in-vault check into CLI startup (after config load) so it fires for every subcommand, not just file-mutating ones
-- [ ] Unit tests: absolute path inside vault → warn + resolve correctly; absolute path outside vault → still errors; CWD inside vault → warn fires; CWD outside vault → no warn; warning fires only once when multiple `--file` args are given
-- [ ] e2e test: invoke a command from inside the configured `dir` and assert the warning appears on stderr with the expected text
-- [ ] e2e test: invoke a command with an absolute `--file` inside the vault from the project root and assert the warning + successful execution
-- [ ] Update CLI help text / README / `.claude/CLAUDE.md` if any guidance contradicts the new behavior
-- [ ] Audit the hyalo skill (`.claude/skills/hyalo/SKILL.md` and the synced copy under `~/.claude/skills/hyalo/`) — add an explicit "always run from the project root, never cd into the configured `dir`, never use absolute `--file` paths" rule with a worked example, so the skill teaches the same lesson the runtime warning does
-- [ ] Dogfood: run hyalo against `hyalo-knowledgebase` and a sibling KB with absolute paths, confirm warnings render readably and don't double-fire
+- [x] Detect absolute `--file` / positional paths in `discovery::resolve_file`; if the canonical path is inside the canonical vault, strip the prefix and continue (instead of returning `OutsideVault`)
+- [x] Keep `OutsideVault` error when an absolute path canonicalizes outside the vault
+- [x] Detect when CWD equals or is inside the canonical vault dir, given that `.hyalo.toml` was found in an ancestor of the vault — emit the warning once per invocation
+- [x] Implement the warning helper that fires at most once per process run (e.g., `OnceCell`-gated emit on stderr)
+- [x] Wire the trigger into the file-resolution path so absolute-path warnings fire from any subcommand using `--file`
+- [x] Wire the CWD-in-vault check into CLI startup (after config load) so it fires for every subcommand, not just file-mutating ones
+- [x] Unit tests: absolute path inside vault → warn + resolve correctly; absolute path outside vault → still errors; CWD inside vault → warn fires; CWD outside vault → no warn; warning fires only once when multiple `--file` args are given
+- [x] e2e test: invoke a command from inside the configured `dir` and assert the warning appears on stderr with the expected text
+- [x] e2e test: invoke a command with an absolute `--file` inside the vault from the project root and assert the warning + successful execution
+- [x] Update CLI help text / README / `.claude/CLAUDE.md` if any guidance contradicts the new behavior
+- [x] Audit the hyalo skill (`.claude/skills/hyalo/SKILL.md` and the synced copy under `~/.claude/skills/hyalo/`) — add an explicit "always run from the project root, never cd into the configured `dir`, never use absolute `--file` paths" rule with a worked example, so the skill teaches the same lesson the runtime warning does
+- [x] Dogfood: run hyalo against `hyalo-knowledgebase` and a sibling KB with absolute paths, confirm warnings render readably and don't double-fire
 
 ## Acceptance Criteria
 
-- [ ] Absolute `--file` path that resolves inside the vault works and emits one warning to stderr
-- [ ] Absolute `--file` path that resolves outside the vault still hard-errors with `OutsideVault`
-- [ ] Running any hyalo subcommand from inside the configured `dir` emits one warning to stderr and otherwise behaves identically
-- [ ] Warning is emitted at most once per process invocation, even with multiple `--file` args or repeated triggers
-- [ ] Warning text references the actual configured `dir` value and gives a concrete corrective example
-- [ ] hyalo skill (project + global copies) explicitly tells the LLM to run from the project root and never cd into `dir` or use absolute paths
-- [ ] All existing tests pass; new unit + e2e tests cover the four cases above
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` all clean
+- [x] Absolute `--file` path that resolves inside the vault works and emits one warning to stderr
+- [x] Absolute `--file` path that resolves outside the vault still hard-errors with `OutsideVault`
+- [x] Running any hyalo subcommand from inside the configured `dir` emits one warning to stderr and otherwise behaves identically
+- [x] Warning is emitted at most once per process invocation, even with multiple `--file` args or repeated triggers
+- [x] Warning text references the actual configured `dir` value and gives a concrete corrective example
+- [x] hyalo skill (project + global copies) explicitly tells the LLM to run from the project root and never cd into `dir` or use absolute paths
+- [x] All existing tests pass; new unit + e2e tests cover the four cases above
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` all clean

@@ -4,7 +4,6 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::discovery;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_graph::is_self_link;
 
@@ -30,7 +29,7 @@ pub fn backlinks(
     limit: Option<usize>,
 ) -> Result<CommandOutcome> {
     // Resolve the file argument to a relative path (same as in `backlinks`)
-    let (_full_path, rel) = match discovery::resolve_file(dir, file_arg) {
+    let (_full_path, rel) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
         Err(e) => {
             return Ok(crate::commands::resolve_error_to_outcome(e, format));
