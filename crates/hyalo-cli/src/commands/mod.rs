@@ -28,17 +28,25 @@ use hyalo_core::discovery::{self, FileResolveError};
 /// Wrap `discovery::resolve_file` with the LLM-misuse warning.
 ///
 /// If `path_arg` is an absolute path that lies inside the canonical vault,
-/// rewrite it to its vault-relative form, emit the misuse warning, and call
-/// `resolve_file` with the rewritten path. Otherwise fall through to
-/// `resolve_file` unchanged — including for absolute paths that resolve
-/// outside the vault, which still hit `OutsideVault`.
+/// rewrite it to its vault-relative form, call `resolve_file` with the
+/// rewritten path, and emit the misuse warning only when resolution
+/// succeeds. Otherwise fall through to `resolve_file` unchanged — including
+/// for absolute paths that resolve outside the vault, which still hit
+/// `OutsideVault`.
+///
+/// The warning is gated on `Ok` so an absolute path that fails for an
+/// unrelated reason (e.g. NotFound) doesn't bury the actual error under a
+/// stylistic nag.
 pub fn resolve_file_user(
     dir: &std::path::Path,
     path_arg: &str,
 ) -> std::result::Result<(std::path::PathBuf, String), FileResolveError> {
     if let Some(rewritten) = discovery::strip_absolute_vault_prefix(dir, path_arg) {
-        crate::warn::warn_llm_misuse(dir);
-        return discovery::resolve_file(dir, &rewritten);
+        let result = discovery::resolve_file(dir, &rewritten);
+        if result.is_ok() {
+            crate::warn::warn_llm_misuse(dir);
+        }
+        return result;
     }
     discovery::resolve_file(dir, path_arg)
 }

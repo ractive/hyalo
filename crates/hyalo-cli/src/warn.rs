@@ -215,16 +215,17 @@ pub fn warn_glob_dir_overlap(dir: &std::path::Path, globs: &[String], matched_co
 /// Emit the LLM-misuse warning for a given configured vault `dir`.
 ///
 /// LLM-driven shells (Claude Code etc.) frequently `cd` into the configured
-/// `dir` or pass absolute `--file` paths. Both work badly — `dir` from
-/// `.hyalo.toml` already pins the vault root. This warning teaches them not
-/// to repeat the mistake, while the underlying command still proceeds.
+/// `dir` or pass absolute `--file` paths. Both work badly — the configured
+/// `dir` (whether from `.hyalo.toml` or a `--dir` flag) already pins the
+/// vault root. This warning teaches them not to repeat the mistake, while
+/// the underlying command still proceeds.
 ///
 /// Goes through `warn()`, so it dedupes by message (one print per process)
 /// and respects `--quiet`.
 pub fn warn_llm_misuse(dir: &std::path::Path) {
     let dir_display = dir.display();
     warn(format!(
-        "hyalo is configured with dir = \"{dir_display}\" (from .hyalo.toml).\n  \
+        "hyalo is configured with dir = \"{dir_display}\".\n  \
          Do not cd into \"{dir_display}\" or pass absolute paths to --file.\n  \
          Run hyalo from the project root and pass paths relative to \"{dir_display}\", e.g.\n    \
          hyalo set iterations/iteration-17.md --property status=in-progress"
@@ -262,8 +263,11 @@ pub(crate) fn warn_if_cwd_in_vault_with_cwd(cwd: &std::path::Path) {
         let toml_path = ancestor.join(".hyalo.toml");
         if toml_path.is_file() {
             check_cwd_against_config(&cwd_canonical, ancestor, &toml_path);
-            // Found the closest .hyalo.toml; whether or not it triggered the
-            // warning, stop walking — config-loading uses the closest one.
+            // The closest ancestor `.hyalo.toml` is the project root for this
+            // misuse check; whether or not it triggered the warning, stop
+            // walking. (Note: `config::load_config()` itself only reads CWD's
+            // `.hyalo.toml`, not ancestors — this walk exists specifically to
+            // detect the misuse case where the user `cd`-ed past the config.)
             return;
         }
         current = ancestor.parent();

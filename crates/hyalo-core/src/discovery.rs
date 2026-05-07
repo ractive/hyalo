@@ -268,6 +268,16 @@ pub fn strip_absolute_vault_prefix(dir: &Path, path_arg: &str) -> Option<String>
     // the literal path so non-existent files inside the vault still rewrite.
     let candidate = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let stripped = candidate.strip_prefix(&canonical_dir).ok()?;
+    // Reject leftover parent-traversal segments. When canonicalize falls back
+    // to the literal path, a string like `/vault/../vault/x.md` can survive
+    // strip_prefix with a `..` in the remainder; we must not hand that to
+    // resolve_file as if it were a clean vault-relative path.
+    if stripped
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
     let s = stripped.to_string_lossy().replace('\\', "/");
     if s.is_empty() { None } else { Some(s) }
 }
@@ -1599,6 +1609,22 @@ mod tests {
             strip_absolute_vault_prefix(tmp.path(), &abs_str),
             Some("missing.md".to_owned())
         );
+    }
+
+    #[test]
+    fn strip_abs_rejects_parent_traversal_in_nonexistent_path() {
+        // When canonicalize falls back to the literal path (because the file
+        // doesn't exist), a `..` segment can survive strip_prefix. We must
+        // refuse to rewrite such paths — handing `../foo.md` to resolve_file
+        // would either error or silently escape the vault.
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        // Build something like `<canonical>/sub/../escape.md` where neither
+        // `sub` nor `escape.md` exists, so canonicalize fails and we keep the
+        // literal form with `..` intact.
+        let abs = canonical.join("sub/../escape.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
     }
 
     // -----------------------------------------------------------------------

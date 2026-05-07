@@ -112,8 +112,11 @@ fn absolute_file_outside_vault_still_errors() {
         .failure();
 
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    // The canonical Display form of `FileResolveError::OutsideVault` is
+    // "file resolves outside vault boundary: …" — assert against the
+    // user-visible substring, not the variant name.
     assert!(
-        stderr.contains("outside vault") || stderr.contains("OutsideVault"),
+        stderr.contains("outside vault"),
         "expected outside-vault error for absolute path outside vault, got: {stderr}"
     );
     // And the misuse warning must NOT fire — that's reserved for paths that

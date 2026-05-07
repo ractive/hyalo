@@ -269,13 +269,6 @@ fn run_inner() -> Result<(), AppError> {
     // covers the common case but this ensures correctness after full parsing).
     crate::warn::init(cli.quiet);
 
-    // LLM-driven shells (Claude Code etc.) often `cd` into the configured
-    // vault dir and pass paths relative to that subdir. The command works,
-    // but the next call from a sibling dir blows up. Walk ancestors looking
-    // for `.hyalo.toml`; if CWD is inside the configured vault, warn once.
-    // Done here, after quiet-flag init, so it fires for every subcommand.
-    crate::warn::warn_if_cwd_in_vault();
-
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
@@ -364,6 +357,17 @@ fn run_inner() -> Result<(), AppError> {
             "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
             dir.display()
         )));
+    }
+
+    // LLM-driven shells (Claude Code etc.) often `cd` into the configured
+    // vault dir and pass paths relative to that subdir. The current command
+    // works, but the next call from a sibling dir blows up. If CWD is inside
+    // the configured vault, warn once. Skipped when --dir was passed
+    // explicitly: the user has named the vault directly, so the ancestor
+    // walk would just produce false positives from unrelated `.hyalo.toml`
+    // files. Init/Deinit/Completion early-return above this point.
+    if !dir_from_cli {
+        crate::warn::warn_if_cwd_in_vault();
     }
 
     // Derive site_prefix with tri-state precedence:

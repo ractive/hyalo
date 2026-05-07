@@ -49,8 +49,8 @@ Behavior changes:
 
 Warning text should be short, blunt, and tell the LLM exactly what to do:
 
-```
-warning: hyalo is configured with dir = "<dir>" (from .hyalo.toml).
+```text
+warning: hyalo is configured with dir = "<dir>".
   Do not cd into "<dir>" or pass absolute paths to --file.
   Run hyalo from the project root and pass paths relative to "<dir>", e.g.
     hyalo set iterations/iteration-17.md --property status=in-progress
