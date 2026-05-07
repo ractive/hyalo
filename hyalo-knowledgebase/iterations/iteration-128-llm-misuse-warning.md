@@ -7,7 +7,7 @@ tags:
   - llm
   - dx
   - validation
-status: in-progress
+status: completed
 branch: iter-128/llm-misuse-warning
 ---
 
