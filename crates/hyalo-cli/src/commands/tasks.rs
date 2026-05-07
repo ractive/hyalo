@@ -4,7 +4,6 @@ use std::path::Path;
 
 use crate::commands::resolve_error_to_outcome;
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::discovery;
 use hyalo_core::heading::{SectionFilter, parse_atx_heading};
 use hyalo_core::index::{SnapshotIndex, format_modified};
 use hyalo_core::types::{TaskDryRunResult, TaskInfo, TaskReadResult};
@@ -92,7 +91,7 @@ pub fn task_read(
     all: bool,
     format: Format,
 ) -> Result<CommandOutcome> {
-    let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
+    let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
@@ -164,7 +163,7 @@ pub fn task_toggle(
     index_path: Option<&Path>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
-    let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
+    let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };
@@ -283,7 +282,7 @@ pub fn task_set_status(
     index_path: Option<&Path>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
-    let (full_path, rel_path) = match discovery::resolve_file(dir, file_arg) {
+    let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
         Err(e) => return Ok(resolve_error_to_outcome(e, format)),
     };

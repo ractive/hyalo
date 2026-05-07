@@ -16,6 +16,7 @@ mod init;
 mod jq;
 mod links;
 mod lint;
+mod llm_misuse;
 mod mv;
 mod positional_file;
 mod properties;

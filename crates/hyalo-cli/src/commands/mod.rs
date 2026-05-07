@@ -24,6 +24,24 @@ pub mod views;
 use crate::output::{CommandOutcome, Format};
 use anyhow::Result;
 use hyalo_core::discovery::{self, FileResolveError};
+
+/// Wrap `discovery::resolve_file` with the LLM-misuse warning.
+///
+/// If `path_arg` is an absolute path that lies inside the canonical vault,
+/// rewrite it to its vault-relative form, emit the misuse warning, and call
+/// `resolve_file` with the rewritten path. Otherwise fall through to
+/// `resolve_file` unchanged — including for absolute paths that resolve
+/// outside the vault, which still hit `OutsideVault`.
+pub fn resolve_file_user(
+    dir: &std::path::Path,
+    path_arg: &str,
+) -> std::result::Result<(std::path::PathBuf, String), FileResolveError> {
+    if let Some(rewritten) = discovery::strip_absolute_vault_prefix(dir, path_arg) {
+        crate::warn::warn_llm_misuse(dir);
+        return discovery::resolve_file(dir, &rewritten);
+    }
+    discovery::resolve_file(dir, path_arg)
+}
 use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild, SnapshotIndex, VaultIndex};
 use std::path::{Path, PathBuf};
 
@@ -54,7 +72,7 @@ pub fn collect_files(
             let mut resolved = Vec::new();
             let mut errors = Vec::new();
             for f in files {
-                match discovery::resolve_file(dir, f) {
+                match resolve_file_user(dir, f) {
                     Ok(r) => resolved.push(r),
                     Err(e) => errors.push((f.clone(), e)),
                 }
@@ -210,7 +228,7 @@ pub fn build_scanned_index(
             let mut resolved = Vec::new();
             let mut first_err = None;
             for f in files_arg {
-                match discovery::resolve_file(dir, f) {
+                match resolve_file_user(dir, f) {
                     Ok(r) => resolved.push(r),
                     Err(e) if first_err.is_none() => first_err = Some(e),
                     Err(_) => {}

@@ -130,6 +130,35 @@ hyalo find --property status=in-progress --fields tasks \
 
 **Run `hyalo --help` and `hyalo <command> --help` to learn the full API.**
 
+## Always run hyalo from the project root
+
+Hyalo reads `dir` from `.hyalo.toml` at the project root, so it already knows where the
+knowledgebase lives. You never need to `cd` anywhere or use absolute paths — and doing so
+is actively wrong.
+
+- **ALWAYS run hyalo from the project root** (the directory that contains `.hyalo.toml`).
+  Never `cd` into the configured `dir` first.
+- **ALWAYS pass `--file` paths relative to the configured `dir`** (e.g.
+  `iterations/iteration-17.md`). Never pass an absolute path.
+
+Worked example:
+
+```bash
+# ✅ Right (from project root — hyalo resolves the path against `dir`)
+hyalo set iterations/iteration-17.md --property status=in-progress
+
+# ❌ Wrong (cd into the configured dir — hyalo gets confused about the vault root)
+cd hyalo-knowledgebase && hyalo set iterations/iteration-17.md --property status=in-progress
+
+# ❌ Wrong (absolute path — bypasses the configured `dir` entirely)
+hyalo set --file /Users/me/proj/hyalo-knowledgebase/iterations/iteration-17.md --property status=in-progress
+```
+
+Hyalo emits a stderr warning when it detects either anti-pattern (running from inside the
+configured `dir`, or being passed an absolute `--file` path). **Treat that warning as a
+correction signal**: stop, move back to the project root, and rewrite the path as a
+vault-relative one before continuing.
+
 ## Setup (run once per project)
 
 ALWAYS run `which hyalo` as your very first step. Do not skip this.

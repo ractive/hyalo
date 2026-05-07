@@ -7,7 +7,6 @@ use serde::Serialize;
 
 use crate::commands::mutation;
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::discovery;
 use hyalo_core::index::SnapshotIndex;
 use hyalo_core::link_rewrite::{self, Replacement, RewritePlan};
 
@@ -48,7 +47,7 @@ pub fn mv(
     index_path: Option<&Path>,
 ) -> Result<CommandOutcome> {
     // 1. Validate source exists
-    let (_src_full, old_rel) = match discovery::resolve_file(dir, file_arg) {
+    let (_src_full, old_rel) = match super::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
         Err(e) => return Ok(crate::commands::resolve_error_to_outcome(e, format)),
     };
