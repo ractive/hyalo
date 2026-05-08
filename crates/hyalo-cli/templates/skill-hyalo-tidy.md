@@ -38,7 +38,7 @@ Get the lay of the land and create a snapshot index for fast repeated queries.
 
 ```bash
 # 1. High-level overview (baseline for the final health dashboard)
-hyalo summary --format text
+hyalo summary
 
 # 2. Create snapshot index (one scan, reused by all subsequent queries)
 hyalo create-index
@@ -57,7 +57,7 @@ avoid repeated disk scans. For complex reshaping, combine hyalo filtering with `
 
 Also grab the tag vocabulary for inconsistency detection:
 ```bash
-hyalo tags summary --format text --index
+hyalo tags summary --index
 ```
 
 ## Phase 2 — Gather recent signal
@@ -98,8 +98,8 @@ fi
 
 If found, query it with hyalo (memory files are outside the vault, so no --index here):
 ```bash
-hyalo --dir "$MEMORY_DIR" find --property type=project --format text
-hyalo --dir "$MEMORY_DIR" find --property type=feedback --format text
+hyalo --dir "$MEMORY_DIR" find --property type=project
+hyalo --dir "$MEMORY_DIR" find --property type=feedback
 ```
 
 Look for:
@@ -119,12 +119,14 @@ git log --diff-filter=A --name-only --since="4 weeks ago" -- "hyalo-knowledgebas
 All queries below use `--index` — no additional disk scans needed.
 
 ### Schema & lint
-Check if type schemas are defined, then run lint. `hyalo lint` covers both frontmatter
-schema *and* the markdown body (stock mdbook-lint rules + HYALO native rules for things
-like bare `[]` checkboxes and `status: completed` with open tasks):
+Check if type schemas are defined, then run lint in strict mode. `hyalo lint` covers
+both frontmatter schema *and* the markdown body (stock mdbook-lint rules + HYALO native
+rules for things like bare `[]` checkboxes and `status: completed` with open tasks).
+`--strict` promotes the "no `type` property" and "undeclared property in frontmatter"
+warnings to errors so a tidy pass fails fast on schema drift:
 ```bash
-hyalo types list --format text
-hyalo lint --format text --index
+hyalo types list
+hyalo lint --strict --index
 ```
 
 If `hyalo types list` returns zero types but files have a `type` property, propose
@@ -146,7 +148,7 @@ one in Phase 5.
 ### Broken links
 ```bash
 # Dry-run shows broken links with proposed fixes and confidence scores
-hyalo links fix --index --format text
+hyalo links fix --index
 ```
 This categorizes links as **fixable** (fuzzy match found) vs **unfixable** (no match).
 Note the counts for the health dashboard. Actual fixes happen in Phase 4.
@@ -226,8 +228,8 @@ If lint reported fixable violations in Phase 3, auto-fix them. `--fix` covers bo
 passes — frontmatter (defaults, typos, dates, types) and body (e.g. `HYALO001` bare
 brackets, trailing whitespace). Always preview with `--dry-run` first:
 ```bash
-hyalo lint --fix --dry-run --format text --index
-hyalo lint --fix --format text --index
+hyalo lint --fix --dry-run --index
+hyalo lint --fix --index
 ```
 
 If you only want to fix specific rules (e.g. body fixes only, leaving frontmatter
@@ -242,10 +244,10 @@ correct target (handles moves to `done/`, case changes, extension mismatches, et
 
 ```bash
 # Preview what will be fixed
-hyalo links fix --format text --index
+hyalo links fix --index
 
 # Apply fixes
-hyalo links fix --apply --format text --index
+hyalo links fix --apply --index
 ```
 
 Review the dry-run output first. For any links it can't resolve (reported as unfixable),
@@ -302,9 +304,9 @@ on legitimate exceptions), suggest tuning it via `hyalo lint-rules` rather than
 silently leaving the warnings in place.
 
 ### KB health dashboard
-Re-run `hyalo summary --format text` (fresh scan after mutations — no `--index`) and
-compare with Phase 1 baseline. Report the delta: statuses changed, links fixed, tags
-normalized, files moved.
+Re-run `hyalo summary` (fresh scan after mutations — no `--index`) and compare with
+Phase 1 baseline. Report the delta: statuses changed, links fixed, tags normalized,
+files moved.
 
 ## Ground rules
 

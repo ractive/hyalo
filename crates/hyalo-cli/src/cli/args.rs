@@ -106,20 +106,21 @@ pub(crate) fn resolve_single_file(
         If a file path starts with the --dir prefix, it is stripped automatically \
         (e.g. --file docs/note.md resolves to note.md when --dir is docs). \
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
-        OUTPUT: Returns JSON by default (--format json). All JSON is wrapped in a consistent envelope:\n\
+        OUTPUT: Default format is \"text\" when stdout is a terminal, \"json\" when piped. \
+        All JSON is wrapped in a consistent envelope:\n\
         \u{00a0} {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
         total is present for list commands (find, tags, properties, backlinks). \
         hints is always present (empty [] when --no-hints). \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
         --count prints just the total as a bare integer (shortcut for --jq '.total').\n\
-        Use --format text for human-readable output. \
+        Use --format text for human-readable output, --format json for machine-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
         Override with --site-prefix <PREFIX>, or --site-prefix \"\" to disable. Also settable in .hyalo.toml.\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
-        \u{00a0} format = \"text\"       # default --format (CLI default is json)\n\
+        \u{00a0} format = \"text\"       # pin format regardless of TTY detection\n\
         \u{00a0} hints = false          # disable hints (CLI default is on)\n\
         \u{00a0} site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
         CLI flags always take precedence.\n\n\
@@ -132,7 +133,8 @@ pub(crate) struct Cli {
     pub dir: Option<PathBuf>,
 
     /// Output format: "json" or "text".
-    /// Default: "json" (Override via .hyalo.toml)
+    /// Default: "text" when stdout is a terminal, "json" when piped.
+    /// Override for a session via .hyalo.toml: format = "text"
     #[arg(long, global = true)]
     pub format: Option<Format>,
 
@@ -886,6 +888,12 @@ Repeatable (AND).\n\
         /// Only autofix the specified rule(s) — repeatable
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
+        /// Promote schema warnings to errors for "no 'type' property" and
+        /// "undeclared property in frontmatter", causing lint to exit non-zero
+        /// when those issues are found.
+        /// Overrides `[lint] strict` in `.hyalo.toml` for this invocation.
+        #[arg(long)]
+        strict: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },

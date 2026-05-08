@@ -660,3 +660,107 @@ fn lint_limit_text_format_shows_truncation_notice() {
         "expected 'with issues' summary in text output, got:\n{stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bucket 2: --strict flag
+// ---------------------------------------------------------------------------
+
+/// `hyalo lint --strict` exits non-zero when a file has no `type` property.
+#[test]
+fn lint_strict_exits_nonzero_when_file_missing_type() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.note]
+required = ["title"]
+"#,
+    );
+    // File with no `type` property — would be a warning in normal mode.
+    write_md(
+        tmp.path(),
+        "no_type.md",
+        "---\ntitle: No Type\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "--strict: lint should exit non-zero when file has no type; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The JSON should show errors > 0.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let errors = json["results"]["errors"].as_u64().unwrap_or(0);
+    assert!(
+        errors > 0,
+        "--strict: errors should be > 0 in JSON output; got: {stdout}"
+    );
+}
+
+/// `hyalo lint --strict` exits zero on a clean vault (all files have `type`).
+#[test]
+fn lint_strict_exits_zero_on_clean_vault() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.note]
+required = ["title"]
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "clean.md",
+        "---\ntitle: Clean\ntype: note\ntags:\n  - test\n---\nBody.\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict"])
+        .assert()
+        .success()
+        .code(0);
+}
+
+/// `[lint] strict = true` in `.hyalo.toml` has the same effect as `--strict`.
+#[test]
+fn lint_strict_from_config_exits_nonzero_when_file_missing_type() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[lint]
+strict = true
+
+[schema.types.note]
+required = ["title"]
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "no_type.md",
+        "---\ntitle: No Type\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "[lint] strict=true: lint should exit non-zero when file has no type"
+    );
+}

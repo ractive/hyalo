@@ -15,13 +15,13 @@ After an iteration or before starting one, build hyalo with "cargo build --relea
 Then use target/release/hyalo to work with the documentation in `./hyalo-knowledgebase/` to dogfood what you did. Mention issues you have using it, propose features you'd like to have.
 
 **Always use hyalo for knowledgebase interactions — never use Edit/Read/Grep directly:**
-- **Search/filter**: `hyalo find --property status=planned --tag iteration --format text`
-- **Body search**: `hyalo find "broken links" --format text` or regex: `hyalo find -e 'TODO|FIXME' --format text`
-- **Title regex**: `hyalo find --property 'title~=link' --format text`
+- **Search/filter**: `hyalo find --property status=planned --tag iteration`
+- **Body search**: `hyalo find "broken links"` or regex: `hyalo find -e 'TODO|FIXME'`
+- **Title regex**: `hyalo find --property 'title~=link'`
 - **Overview**: `hyalo summary`, `hyalo properties`, `hyalo tags`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set iterations/iteration-16-robustness.md --property status=completed`)
 - **Toggle tasks**: `hyalo task toggle <path> --all` (whole file), `--section "Tasks"` (by heading), `--line 5,7,9` (specific lines)
-- **Lint frontmatter + markdown body**: `hyalo lint`, `hyalo lint --rule MD013 --detailed`, `hyalo lint --rule-prefix HYALO`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`, `hyalo lint --fix-rule HYALO001`
+- **Lint frontmatter + markdown body**: `hyalo lint`, `hyalo lint --rule MD013 --detailed`, `hyalo lint --rule-prefix HYALO`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --fix --dry-run`, `hyalo lint --fix`, `hyalo lint --fix-rule HYALO001`
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show MD013`, `hyalo lint-rules set MD013 --enabled false`, `hyalo lint-rules set MD013 --severity error`, `hyalo lint-rules remove MD013`
 - **Manage schemas**: `hyalo types list`, `hyalo types show <name>`, `hyalo types set <name> --required title,date`
 - Only fall back to Edit for body content changes (markdown prose) that hyalo can't handle

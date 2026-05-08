@@ -1736,3 +1736,80 @@ fn find_orphan_composes_with_sort_and_limit() {
     let files: Vec<&str> = arr.iter().map(|v| v["file"].as_str().unwrap()).collect();
     assert_eq!(files, vec!["a.md", "b.md"], "sorted by file, limited to 2");
 }
+
+// --- Finding 2: `../` relative markdown links resolve correctly ---
+
+/// `a/foo.md` links to `[x](../sibling/y.md)` and `sibling/y.md` exists.
+/// The `links.path` field must be populated (not `null`/unresolved).
+#[test]
+fn relative_dotdot_link_resolves_in_find() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Create a/foo.md with a ../sibling/y.md link.
+    fs::create_dir_all(tmp.path().join("a")).unwrap();
+    fs::create_dir_all(tmp.path().join("sibling")).unwrap();
+    fs::write(
+        tmp.path().join("a/foo.md"),
+        md!(r"
+---
+title: Foo
+---
+See [x](../sibling/y.md) for details.
+"),
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("sibling/y.md"),
+        md!(r"
+---
+title: Y
+---
+# Y
+"),
+    )
+    .unwrap();
+
+    let fields = Fields {
+        links: true,
+        ..Default::default()
+    };
+
+    let out = unwrap_success(
+        run_find(
+            tmp.path(),
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &["a/foo.md".to_string()],
+            &[],
+            &fields,
+            None,
+            false,
+            None,
+            false,
+            None,
+            Format::Json,
+        )
+        .unwrap(),
+    );
+
+    let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+    assert_eq!(arr.len(), 1, "should find a/foo.md");
+    let links = arr[0]["links"].as_array().expect("links field present");
+    assert_eq!(links.len(), 1, "one link");
+    let path_val = &links[0]["path"];
+    assert!(
+        !path_val.is_null(),
+        "../sibling/y.md link should resolve; got path={path_val}"
+    );
+    // The resolved path should be the vault-relative form.
+    let path_str = path_val.as_str().expect("path is string");
+    assert_eq!(
+        path_str, "sibling/y.md",
+        "resolved path should be vault-relative sibling/y.md"
+    );
+}

@@ -1112,6 +1112,9 @@ pub struct ExtLintOptions<'a> {
     pub snapshot_index: &'a mut Option<hyalo_core::index::SnapshotIndex>,
     pub index_path: Option<&'a Path>,
     pub vault_dir: &'a Path,
+    /// When `true`, promote "no 'type' property" and "undeclared property in
+    /// frontmatter" from `Severity::Warn` to `Severity::Error`.
+    pub strict: bool,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1140,6 +1143,8 @@ pub fn lint_files_extended(
     // Determine if schema has `status: completed` in any type.
     let schema_has_completed = schema_has_completed_status(schema);
 
+    let strict = opts.strict;
+
     // Process files in parallel. Each worker lints one file.
     let per_file: Vec<Result<PerFileLintResult>> = files
         .par_iter()
@@ -1155,6 +1160,7 @@ pub fn lint_files_extended(
                 opts.fix,
                 opts.fix_rules,
                 opts.max_per_rule,
+                strict,
             )
         })
         .collect();
@@ -1617,6 +1623,7 @@ fn lint_one_file_extended(
     fix: FixMode,
     fix_rules: &[String],
     max_per_rule: usize,
+    strict: bool,
 ) -> Result<PerFileLintResult> {
     // Read the file content once.
     let content =
@@ -1669,7 +1676,19 @@ fn lint_one_file_extended(
         let has_tags = properties.contains_key("tags");
         let fm_violations = validate_properties(rel_path, &properties, has_tags, schema);
         for v in fm_violations {
-            let sev = match v.severity {
+            // In strict mode, promote the two targeted schema warnings to errors.
+            let effective_severity = if strict && v.severity == Severity::Warn {
+                let is_missing_type = v.message.contains("no 'type' property");
+                let is_undeclared = v.message.contains("is not declared in schema");
+                if is_missing_type || is_undeclared {
+                    Severity::Error
+                } else {
+                    v.severity
+                }
+            } else {
+                v.severity
+            };
+            let sev = match effective_severity {
                 Severity::Error => "error",
                 Severity::Warn => "warn",
             };
@@ -2274,6 +2293,121 @@ mod tests {
             comma_warn.unwrap().message.contains("comma-joined"),
             "message should mention comma-joined"
         );
+    }
+
+    // --- Strict mode unit tests ---
+
+    fn make_schema_with_declared_prop() -> SchemaConfig {
+        // Schema with a declared `note` type that has `title` as required and
+        // `date` as a declared property, so any other property is "undeclared".
+        make_schema(&["title"], "note", &[], HashMap::new())
+    }
+
+    /// Helper: run lint in extended mode on a single file.
+    fn lint_extended_strict(
+        path: &std::path::Path,
+        rel: &str,
+        schema: &SchemaConfig,
+        strict: bool,
+    ) -> (crate::output::CommandOutcome, LintCounts) {
+        let engine = hyalo_mdlint::HyaloLintEngine::create().unwrap();
+        let md_config = hyalo_mdlint::LintConfig::default();
+        let files = vec![(path.to_path_buf(), rel.to_owned())];
+        let mut snapshot: Option<hyalo_core::index::SnapshotIndex> = None;
+        let vault_dir = path.parent().unwrap();
+        let mut opts = ExtLintOptions {
+            fix: FixMode::Off,
+            detailed: false,
+            rule_filter: None,
+            rule_prefix: None,
+            max_per_rule: 100,
+            max_files: 100,
+            fix_rules: &[],
+            snapshot_index: &mut snapshot,
+            index_path: None,
+            vault_dir,
+            strict,
+        };
+        lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
+    }
+
+    /// In strict mode the "no 'type' property" warning becomes an error.
+    #[test]
+    fn strict_mode_promotes_no_type_to_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_type.md");
+        std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
+
+        let schema = make_schema_with_declared_prop();
+        let (_, counts) = lint_extended_strict(&path, "no_type.md", &schema, true);
+        assert!(counts.errors > 0, "strict mode: no-type should be an error");
+    }
+
+    /// Without strict mode the "no 'type' property" is still a warning.
+    #[test]
+    fn non_strict_no_type_stays_warn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_type.md");
+        std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
+
+        let schema = make_schema_with_declared_prop();
+        let (_, counts) = lint_extended_strict(&path, "no_type.md", &schema, false);
+        // The "no type" warn plus "no tags" warn.
+        assert_eq!(
+            counts.errors, 0,
+            "non-strict: no-type should remain a warning"
+        );
+        assert!(counts.warnings > 0, "non-strict: warnings expected");
+    }
+
+    /// In strict mode, undeclared properties become errors.
+    #[test]
+    fn strict_mode_promotes_undeclared_property_to_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("undeclared.md");
+        // `type: note` present (avoids no-type warning), but `unknown_prop` is not
+        // declared in the note schema's `properties` map.
+        std::fs::write(
+            &path,
+            "---\ntitle: Hello\ntype: note\nunknown_prop: oops\n---\nBody\n",
+        )
+        .unwrap();
+
+        let schema = {
+            // Build a schema where `note` has declared `properties` so
+            // the undeclared-property path fires.
+            use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("title".to_owned());
+            ts.properties.insert(
+                "title".to_owned(),
+                PropertyConstraint::String { pattern: None },
+            );
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (_, counts) = lint_extended_strict(&path, "undeclared.md", &schema, true);
+        assert!(
+            counts.errors > 0,
+            "strict: undeclared prop should be an error"
+        );
+    }
+
+    /// Strict mode only promotes the two targeted warnings; "no tags" stays a warn.
+    #[test]
+    fn strict_mode_leaves_no_tags_as_warn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_tags.md");
+        // Has type, no tags — triggers "no tags defined" warning.
+        std::fs::write(&path, "---\ntitle: Hello\ntype: note\n---\nBody\n").unwrap();
+
+        let schema = make_schema_with_declared_prop();
+        let (_, counts) = lint_extended_strict(&path, "no_tags.md", &schema, true);
+        // "no tags" should still be a warning, not an error.
+        assert_eq!(counts.errors, 0, "strict: no-tags should stay as warn");
+        assert!(counts.warnings > 0, "strict: no-tags warning still present");
     }
 
     #[test]

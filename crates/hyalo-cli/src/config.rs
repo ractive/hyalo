@@ -54,6 +54,12 @@ struct LintConfig {
     /// and table (`[lint.rules.MD013]`) forms.
     #[serde(default)]
     rules: Option<toml::Value>,
+    /// When `true`, promote "no 'type' property" and "undeclared property in
+    /// frontmatter" from `Severity::Warn` to `Severity::Error`, causing lint
+    /// to exit non-zero on those warnings.  Overridable per-invocation with
+    /// `hyalo lint --strict`.
+    #[serde(default)]
+    strict: bool,
 }
 
 /// Raw deserialized representation of `.hyalo.toml`.
@@ -104,7 +110,9 @@ pub(crate) struct ResolvedDefaults {
     /// in this file, so mutations must target `config_dir/.hyalo.toml` — not the
     /// vault directory (which may be a subdirectory specified via `dir = "…"`).
     pub(crate) config_dir: PathBuf,
-    pub(crate) format: String,
+    /// Explicit format from `.hyalo.toml`, or `None` if not set.
+    /// When `None`, format resolution falls back to TTY detection at runtime.
+    pub(crate) format: Option<String>,
     pub(crate) hints: bool,
     /// Explicit site-prefix override from `.hyalo.toml`, if any.
     pub(crate) site_prefix: Option<String>,
@@ -129,6 +137,10 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) default_limit: Option<usize>,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub(crate) case_insensitive_mode: CaseInsensitiveMode,
+    /// When `true`, "no 'type' property" and "undeclared property in frontmatter"
+    /// warnings are promoted to errors.  From `[lint] strict = true` in `.hyalo.toml`.
+    /// Can be overridden per-invocation with `hyalo lint --strict`.
+    pub(crate) lint_strict: bool,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -154,7 +166,7 @@ impl ResolvedDefaults {
         Self {
             dir: PathBuf::from("."),
             config_dir: PathBuf::from("."),
-            format: "json".to_owned(),
+            format: None,
             hints: true,
             site_prefix: None,
             search_language: None,
@@ -165,6 +177,7 @@ impl ResolvedDefaults {
             schema: SchemaConfig::default(),
             default_limit: None,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
+            lint_strict: false,
         }
     }
 
@@ -285,10 +298,12 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         }
     };
 
+    let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
+
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
         config_dir: dir.to_path_buf(),
-        format: cfg.format.unwrap_or(defaults.format),
+        format: cfg.format,
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
         search_language: cfg.search.and_then(|s| s.language),
@@ -303,6 +318,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         schema,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
+        lint_strict,
     }
 }
 
@@ -419,7 +435,7 @@ hints = true
 
         let resolved = load_config_from(dir.path());
         assert_eq!(resolved.dir, PathBuf::from("notes"));
-        assert_eq!(resolved.format, "text");
+        assert_eq!(resolved.format, Some("text".to_owned()));
         assert!(resolved.hints);
         assert_eq!(resolved.site_prefix, None);
     }
@@ -448,7 +464,8 @@ site_prefix = "docs"
         let resolved = load_config_from(dir.path());
         // Only hints overridden; dir and format stay at defaults.
         assert_eq!(resolved.dir, PathBuf::from("."));
-        assert_eq!(resolved.format, "json");
+        // format is None when not set in config (TTY detection applies at runtime).
+        assert_eq!(resolved.format, None);
         assert!(
             !resolved.hints,
             "config should override the default (true) to false"
@@ -480,7 +497,7 @@ site_prefix = "docs"
 
         // config.rs does not validate the format string — that is the caller's job.
         let resolved = load_config_from(dir.path());
-        assert_eq!(resolved.format, "xml");
+        assert_eq!(resolved.format, Some("xml".to_owned()));
         assert_eq!(resolved.dir, PathBuf::from("."));
         assert!(resolved.hints);
     }

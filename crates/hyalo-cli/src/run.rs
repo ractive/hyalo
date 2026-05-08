@@ -1,3 +1,4 @@
+use std::io::IsTerminal as _;
 use std::process;
 
 use clap::{CommandFactory, FromArgMatches};
@@ -11,6 +12,17 @@ use crate::hints::{CommonHintFlags, HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
 use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
 use hyalo_core::index::SnapshotIndex;
+
+/// Resolve the default output format based on whether stdout is a TTY.
+///
+/// - TTY (interactive terminal): `Format::Text` — human-readable by default.
+/// - Piped / redirected: `Format::Json` — machine-readable by default.
+///
+/// Takes an `is_tty: bool` parameter so callers can inject a test value.
+/// Production call site: `resolve_format_by_tty(std::io::stdout().is_terminal())`.
+pub(crate) fn resolve_format_by_tty(is_tty: bool) -> Format {
+    if is_tty { Format::Text } else { Format::Json }
+}
 
 /// Extract the effective index path from whichever subcommand is active.
 ///
@@ -147,7 +159,7 @@ fn run_inner() -> Result<(), AppError> {
         .dir
         .components()
         .ne(std::path::Path::new(".").components());
-    let hide_format = config.format != "json";
+    let hide_format = config.format.as_deref().is_some_and(|f| f != "json");
 
     let mut cmd = Cli::command();
     if hide_dir {
@@ -404,17 +416,26 @@ fn run_inner() -> Result<(), AppError> {
         }
     };
     let site_prefix = site_prefix_owned.as_deref();
-    // CLI --format is already validated by Clap; fall back to config (String) with runtime parse.
+    // Resolve the output format.
+    //
+    // Precedence (highest first):
+    //   1. Explicit `--format` CLI flag.
+    //   2. `format = "..."` in `.hyalo.toml`.
+    //   3. TTY detection: `text` when stdout is a terminal, `json` when piped.
     let format = if let Some(f) = cli.format {
         f
-    } else if let Some(fmt) = Format::from_str_opt(&config.format) {
-        fmt
+    } else if let Some(ref fmt_str) = config.format {
+        if let Some(fmt) = Format::from_str_opt(fmt_str) {
+            fmt
+        } else {
+            eprintln!(
+                "Invalid output format '{fmt_str}' in .hyalo.toml; supported formats are: json, text"
+            );
+            return Err(AppError::Exit(2));
+        }
     } else {
-        eprintln!(
-            "Invalid output format '{}' in .hyalo.toml; supported formats are: json, text",
-            config.format
-        );
-        return Err(AppError::Exit(2));
+        // No explicit flag or config — use TTY detection.
+        resolve_format_by_tty(std::io::stdout().is_terminal())
     };
     let hints_flag = if cli.hints {
         true
@@ -851,6 +872,7 @@ fn run_inner() -> Result<(), AppError> {
     let lint_ignore = config.lint_ignore;
     let case_insensitive_mode = config.case_insensitive_mode;
     let md_lint = config.md_lint;
+    let lint_strict_from_config = config.lint_strict;
 
     // Propagate the configured frontmatter-link property list into the loaded
     // snapshot so that per-file refreshes (`rescan_entry` / `rename_entry`) use
@@ -876,6 +898,7 @@ fn run_inner() -> Result<(), AppError> {
         exit_code_override: None,
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,
+        lint_strict: lint_strict_from_config,
     };
     let result = dispatch(cli.command, &mut ctx);
     let exit_code_override = ctx.exit_code_override;
@@ -893,5 +916,22 @@ fn run_inner() -> Result<(), AppError> {
         Ok(())
     } else {
         Err(AppError::Exit(final_code))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// When stdout is a TTY, the default format should be `Text`.
+    #[test]
+    fn resolve_format_by_tty_returns_text_for_tty() {
+        assert_eq!(resolve_format_by_tty(true), Format::Text);
+    }
+
+    /// When stdout is piped (not a TTY), the default format should be `Json`.
+    #[test]
+    fn resolve_format_by_tty_returns_json_for_pipe() {
+        assert_eq!(resolve_format_by_tty(false), Format::Json);
     }
 }

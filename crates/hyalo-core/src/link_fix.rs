@@ -118,6 +118,7 @@ pub struct FixReport {
 /// - `CaseMismatch(canonical)` — exact resolution failed but the case index
 ///   found a unique canonical path; caller should record as a case-mismatch.
 /// - `Broken` — nothing resolves.
+#[derive(PartialEq)]
 enum LinkResolution {
     Resolved(Option<String>),
     CaseMismatch(String),
@@ -205,6 +206,12 @@ pub(crate) fn detect_broken_links(
             // Normalize the target before resolution.
             // Wikilinks are vault-relative; markdown links may be relative to
             // the source file's directory.
+            //
+            // For bare-basename markdown links (no `/` in target) we resolve
+            // against the source file's directory first.  If that path exists
+            // the link is valid and we stop there — no case-mismatch recording.
+            // Only when source-relative resolution fails do we fall back to
+            // vault-relative (so `resolve_target` can find globally unique stems).
             let resolved_target = match link.kind {
                 LinkKind::Wikilink => link.target.clone(),
                 LinkKind::Markdown => {
@@ -213,7 +220,15 @@ pub(crate) fn detect_broken_links(
                     } else if link.target.contains('/') || link.target.contains('\\') {
                         normalize_target(Path::new(&source_str), &link.target)
                     } else {
-                        link.target.clone()
+                        // Bare basename: try source-relative first.
+                        let src_rel = normalize_target(Path::new(&source_str), &link.target);
+                        if classify_link(&canonical, &src_rel, site_prefix, case_index)
+                            == LinkResolution::Broken
+                        {
+                            link.target.clone()
+                        } else {
+                            src_rel
+                        }
                     }
                 }
             };
@@ -282,6 +297,15 @@ pub fn detect_broken_links_from_index(
         for (line, link) in &entry.links {
             total_links += 1;
 
+            // Normalize the target before resolution.
+            // Wikilinks are vault-relative; markdown links may be relative to
+            // the source file's directory.
+            //
+            // For bare-basename markdown links (no `/` in target) we resolve
+            // against the source file's directory first.  If that path exists
+            // the link is valid and we stop there — no case-mismatch recording.
+            // Only when source-relative resolution fails do we fall back to
+            // vault-relative (so `resolve_target` can find globally unique stems).
             let resolved_target = match link.kind {
                 LinkKind::Wikilink => link.target.clone(),
                 LinkKind::Markdown => {
@@ -290,7 +314,15 @@ pub fn detect_broken_links_from_index(
                     } else if link.target.contains('/') || link.target.contains('\\') {
                         normalize_target(Path::new(&entry.rel_path), &link.target)
                     } else {
-                        link.target.clone()
+                        // Bare basename: try source-relative first.
+                        let src_rel = normalize_target(Path::new(&entry.rel_path), &link.target);
+                        if classify_link(&canonical, &src_rel, site_prefix, case_index)
+                            == LinkResolution::Broken
+                        {
+                            link.target.clone()
+                        } else {
+                            src_rel
+                        }
                     }
                 }
             };
@@ -1193,6 +1225,83 @@ mod tests {
                 "old_target should preserve original casing"
             );
         }
+    }
+
+    // --- Finding 1: bare-basename intra-folder links not flagged as case-mismatches ---
+
+    /// `a/foo.md` links to `[x](bar.md)` and `a/bar.md` exists.
+    /// The link should resolve via source-relative lookup and produce no case-mismatch.
+    #[test]
+    fn bare_basename_markdown_link_in_subfolder_not_flagged() {
+        use crate::link_graph::FileLinks;
+        use crate::links::{Link, LinkKind};
+
+        let tmp = vault_with_files(&[("a/foo.md", "[x](bar.md)\n"), ("a/bar.md", "# Bar\n")]);
+
+        let file_links = vec![FileLinks {
+            source: PathBuf::from("a/foo.md"),
+            links: vec![(
+                1,
+                Link {
+                    target: "bar.md".to_string(),
+                    label: Some("x".to_string()),
+                    kind: LinkKind::Markdown,
+                },
+            )],
+        }];
+
+        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be a case-mismatch"
+        );
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be broken"
+        );
+    }
+
+    /// Same scenario via the index-based detection path.
+    #[test]
+    fn bare_basename_markdown_link_in_subfolder_not_flagged_from_index() {
+        use crate::index::{ScanOptions, ScannedIndex};
+
+        let tmp = vault_with_files(&[
+            ("a/foo.md", "---\ntitle: Foo\n---\n[x](bar.md)\n"),
+            ("a/bar.md", "---\ntitle: Bar\n---\n# Bar\n"),
+        ]);
+
+        let files = vec![
+            (tmp.path().join("a/foo.md"), "a/foo.md".to_string()),
+            (tmp.path().join("a/bar.md"), "a/bar.md".to_string()),
+        ];
+        let built = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be a case-mismatch (index path)"
+        );
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be broken (index path)"
+        );
     }
 
     #[test]

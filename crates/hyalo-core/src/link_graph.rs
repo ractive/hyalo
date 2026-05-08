@@ -483,7 +483,7 @@ pub(crate) fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> Stri
 ///
 /// Only called for targets that contain `/` or `\`.  Wikilink-style bare note
 /// names are left unchanged by the caller.
-pub(crate) fn normalize_target(source: &Path, target: &str) -> String {
+pub fn normalize_target(source: &Path, target: &str) -> String {
     let base = source.parent().unwrap_or(Path::new(""));
     let joined = base.join(target);
     normalize_path_components(&joined)
@@ -492,7 +492,7 @@ pub(crate) fn normalize_target(source: &Path, target: &str) -> String {
 /// Remove `.` and resolve `..` components in `path`, returning a forward-slash
 /// separated string.  Does not touch the filesystem (`canonicalize` is avoided
 /// so that this works for files that may not exist yet, e.g. in tests).
-pub(crate) fn normalize_path_components(path: &Path) -> String {
+pub fn normalize_path_components(path: &Path) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for component in path.components() {
         match component {
