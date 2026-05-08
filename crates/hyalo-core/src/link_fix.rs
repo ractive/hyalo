@@ -118,6 +118,7 @@ pub struct FixReport {
 /// - `CaseMismatch(canonical)` — exact resolution failed but the case index
 ///   found a unique canonical path; caller should record as a case-mismatch.
 /// - `Broken` — nothing resolves.
+#[derive(PartialEq)]
 enum LinkResolution {
     Resolved(Option<String>),
     CaseMismatch(String),
@@ -165,6 +166,50 @@ fn classify_link(
     LinkResolution::Broken
 }
 
+/// Resolve a link's target to a vault-relative path and classify it.
+///
+/// Centralizes the bare-basename-fallback logic shared by
+/// [`detect_broken_links`] and [`detect_broken_links_from_index`].  The
+/// returned `LinkResolution` is the verdict for the *resolved* path so the
+/// caller doesn't need to invoke [`classify_link`] a second time (which would
+/// double the stat syscalls in the bare-basename path).
+fn resolve_and_classify_link(
+    canonical: &Path,
+    source_rel: &str,
+    link: &crate::links::Link,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> (String, LinkResolution) {
+    match link.kind {
+        LinkKind::Wikilink => {
+            let res = classify_link(canonical, &link.target, site_prefix, case_index);
+            (link.target.clone(), res)
+        }
+        LinkKind::Markdown => {
+            if link.target.starts_with('/') {
+                let res = classify_link(canonical, &link.target, site_prefix, case_index);
+                (link.target.clone(), res)
+            } else if link.target.contains('/') || link.target.contains('\\') {
+                let target = normalize_target(Path::new(source_rel), &link.target);
+                let res = classify_link(canonical, &target, site_prefix, case_index);
+                (target, res)
+            } else {
+                // Bare basename: try source-relative first, fall back to
+                // vault-relative on Broken so globally-unique stems still resolve.
+                let src_rel = normalize_target(Path::new(source_rel), &link.target);
+                let src_resolution =
+                    classify_link(canonical, &src_rel, site_prefix, case_index);
+                if src_resolution == LinkResolution::Broken {
+                    let res = classify_link(canonical, &link.target, site_prefix, case_index);
+                    (link.target.clone(), res)
+                } else {
+                    (src_rel, src_resolution)
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Broken link detection
 // ---------------------------------------------------------------------------
@@ -202,23 +247,10 @@ pub(crate) fn detect_broken_links(
         for (line, link) in &fl.links {
             total_links += 1;
 
-            // Normalize the target before resolution.
-            // Wikilinks are vault-relative; markdown links may be relative to
-            // the source file's directory.
-            let resolved_target = match link.kind {
-                LinkKind::Wikilink => link.target.clone(),
-                LinkKind::Markdown => {
-                    if link.target.starts_with('/') {
-                        link.target.clone()
-                    } else if link.target.contains('/') || link.target.contains('\\') {
-                        normalize_target(Path::new(&source_str), &link.target)
-                    } else {
-                        link.target.clone()
-                    }
-                }
-            };
+            let (_resolved_target, resolution) =
+                resolve_and_classify_link(&canonical, &source_str, link, site_prefix, case_index);
 
-            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+            match resolution {
                 LinkResolution::Resolved(None) => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {
@@ -282,20 +314,15 @@ pub fn detect_broken_links_from_index(
         for (line, link) in &entry.links {
             total_links += 1;
 
-            let resolved_target = match link.kind {
-                LinkKind::Wikilink => link.target.clone(),
-                LinkKind::Markdown => {
-                    if link.target.starts_with('/') {
-                        link.target.clone()
-                    } else if link.target.contains('/') || link.target.contains('\\') {
-                        normalize_target(Path::new(&entry.rel_path), &link.target)
-                    } else {
-                        link.target.clone()
-                    }
-                }
-            };
+            let (_resolved_target, resolution) = resolve_and_classify_link(
+                &canonical,
+                &entry.rel_path,
+                link,
+                site_prefix,
+                case_index,
+            );
 
-            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+            match resolution {
                 LinkResolution::Resolved(None) => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {
@@ -1193,6 +1220,83 @@ mod tests {
                 "old_target should preserve original casing"
             );
         }
+    }
+
+    // --- Finding 1: bare-basename intra-folder links not flagged as case-mismatches ---
+
+    /// `a/foo.md` links to `[x](bar.md)` and `a/bar.md` exists.
+    /// The link should resolve via source-relative lookup and produce no case-mismatch.
+    #[test]
+    fn bare_basename_markdown_link_in_subfolder_not_flagged() {
+        use crate::link_graph::FileLinks;
+        use crate::links::{Link, LinkKind};
+
+        let tmp = vault_with_files(&[("a/foo.md", "[x](bar.md)\n"), ("a/bar.md", "# Bar\n")]);
+
+        let file_links = vec![FileLinks {
+            source: PathBuf::from("a/foo.md"),
+            links: vec![(
+                1,
+                Link {
+                    target: "bar.md".to_string(),
+                    label: Some("x".to_string()),
+                    kind: LinkKind::Markdown,
+                },
+            )],
+        }];
+
+        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be a case-mismatch"
+        );
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be broken"
+        );
+    }
+
+    /// Same scenario via the index-based detection path.
+    #[test]
+    fn bare_basename_markdown_link_in_subfolder_not_flagged_from_index() {
+        use crate::index::{ScanOptions, ScannedIndex};
+
+        let tmp = vault_with_files(&[
+            ("a/foo.md", "---\ntitle: Foo\n---\n[x](bar.md)\n"),
+            ("a/bar.md", "---\ntitle: Bar\n---\n# Bar\n"),
+        ]);
+
+        let files = vec![
+            (tmp.path().join("a/foo.md"), "a/foo.md".to_string()),
+            (tmp.path().join("a/bar.md"), "a/bar.md".to_string()),
+        ];
+        let built = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be a case-mismatch (index path)"
+        );
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "intra-folder bare-basename markdown link should not be broken (index path)"
+        );
     }
 
     #[test]

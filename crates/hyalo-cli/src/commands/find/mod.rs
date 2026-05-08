@@ -21,7 +21,8 @@ use hyalo_core::discovery;
 use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField};
 use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_scope};
 use hyalo_core::index::VaultIndex;
-use hyalo_core::link_graph::is_self_link;
+use hyalo_core::link_graph::{is_self_link, normalize_target};
+use hyalo_core::links::LinkKind;
 use hyalo_core::types::{
     BacklinkInfo, ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
 };
@@ -648,9 +649,46 @@ pub fn find(
                     .links
                     .iter()
                     .map(|(_, link)| {
+                        // Markdown links stored in the index carry the raw
+                        // (unresolved) target as written in the file.  Resolve
+                        // them against the source file's directory before
+                        // calling `resolve_target`, which rejects `..` components
+                        // for security reasons.  Wikilinks remain vault-relative.
+                        let resolved = match link.kind {
+                            LinkKind::Wikilink => link.target.clone(),
+                            LinkKind::Markdown => {
+                                if link.target.starts_with('/') {
+                                    link.target.clone()
+                                } else if link.target.contains('/') || link.target.contains('\\') {
+                                    normalize_target(
+                                        std::path::Path::new(&entry.rel_path),
+                                        &link.target,
+                                    )
+                                } else {
+                                    // Bare basename: try source-relative first so
+                                    // same-folder links resolve correctly.
+                                    let src_rel = normalize_target(
+                                        std::path::Path::new(&entry.rel_path),
+                                        &link.target,
+                                    );
+                                    if discovery::resolve_target(
+                                        &canonical_dir,
+                                        &src_rel,
+                                        site_prefix,
+                                        case_index,
+                                    )
+                                    .is_some()
+                                    {
+                                        src_rel
+                                    } else {
+                                        link.target.clone()
+                                    }
+                                }
+                            }
+                        };
                         let path = discovery::resolve_target(
                             &canonical_dir,
-                            &link.target,
+                            &resolved,
                             site_prefix,
                             case_index,
                         );

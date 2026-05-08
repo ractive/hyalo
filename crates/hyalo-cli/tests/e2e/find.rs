@@ -3805,3 +3805,35 @@ fn find_fields_outline_is_alias_for_sections() {
     );
     assert!(sections_has_sections);
 }
+
+// ---------------------------------------------------------------------------
+// Bucket 3: TTY-aware format default
+// ---------------------------------------------------------------------------
+
+/// Without `--format`, piped output should default to JSON.
+///
+/// In e2e tests, `assert_cmd::Command` captures stdout via a pipe, so stdout
+/// is NOT a terminal. The TTY-detection code should therefore pick `json`.
+#[test]
+fn find_without_format_flag_produces_json_when_piped() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap(), "find"])
+        .output()
+        .expect("hyalo find should run");
+
+    assert!(
+        output.status.success(),
+        "hyalo find exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // When piped, should be valid JSON.
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(
+        parsed.is_ok(),
+        "without --format, piped output should be JSON; got:\n{stdout}"
+    );
+}

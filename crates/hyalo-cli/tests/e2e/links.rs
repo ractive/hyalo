@@ -2194,3 +2194,83 @@ Alice went to Start the project. Then Alice returned. We Start again.
         "Alice should appear exactly once with --first-only"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Finding 1 regression: bare-basename intra-folder links must not be rewritten
+// ---------------------------------------------------------------------------
+
+/// After `hyalo mv`, `links fix` must NOT rewrite a bare-basename markdown link
+/// whose target already exists in the source file's own directory.
+///
+/// Scenario: `a/foo.md` contains `[bar](bar.md)`. `a/bar.md` exists. The link
+/// resolves correctly via source-relative lookup, so `links fix` must leave it
+/// untouched (no case-mismatch rewrite, no broken-link entry).
+#[test]
+fn links_fix_does_not_rewrite_intra_folder_bare_basename() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    // Create a/foo.md linking to bar.md (same folder) and a/bar.md
+    fs::create_dir_all(dir.join("a")).unwrap();
+    write_md(
+        dir,
+        "a/foo.md",
+        md!(r"
+---
+title: Foo
+---
+See [bar](bar.md) for details.
+"),
+    );
+    write_md(
+        dir,
+        "a/bar.md",
+        md!(r"
+---
+title: Bar
+---
+# Bar
+"),
+    );
+
+    // Run links fix (dry-run) — should report 0 changes.
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+
+    assert!(
+        output.status.success(),
+        "links fix exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+
+    // broken count must be 0
+    let broken = json["results"]["broken"].as_u64().unwrap_or(0);
+    assert_eq!(broken, 0, "bare-basename link should not be broken");
+
+    // case_mismatches must be 0
+    let case_mismatches = json["results"]["case_mismatches"].as_u64().unwrap_or(0);
+    assert_eq!(
+        case_mismatches, 0,
+        "bare-basename link should not be flagged as case-mismatch"
+    );
+
+    // The source file must be unchanged.
+    let content = fs::read_to_string(dir.join("a/foo.md")).unwrap();
+    assert!(
+        content.contains("[bar](bar.md)"),
+        "bare-basename link must not be rewritten; content: {content}"
+    );
+}

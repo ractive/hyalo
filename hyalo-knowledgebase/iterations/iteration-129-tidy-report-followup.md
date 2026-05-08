@@ -1,5 +1,5 @@
 ---
-title: "Iteration 129 — Tidy report follow-up"
+title: Iteration 129 — Tidy report follow-up
 type: iteration
 date: 2026-05-08
 tags:
@@ -8,7 +8,7 @@ tags:
   - links
   - schema
   - ux
-status: planned
+status: in-progress
 branch: iter-129/tidy-report-followup
 ---
 
@@ -78,59 +78,59 @@ Three coherent buckets:
 
 ## Tasks
 
-- [ ] Investigate finding 1: write a failing unit test in
+- [x] Investigate finding 1: write a failing unit test in
   `crates/hyalo-core/src/link_fix.rs` that builds two files in the same folder
   (`a/foo.md` linking to `bar.md`, with `a/bar.md` existing) and asserts no
   `case_mismatches` / `LinkCaseMismatch` `FixPlan` is produced after a
   `links fix` pass — pin down the exact code path that overcorrects
-- [ ] Fix finding 1: change the bare-basename branch in
+- [x] Fix finding 1: change the bare-basename branch in
   `detect_broken_links_from_index` (and the twin in `detect_broken_links`) so
   markdown links without `/` are resolved against the source file's directory
   before classification, matching the behavior of links that already contain a
   slash; preserve wikilink semantics (still vault-relative)
-- [ ] Investigate finding 2: write a failing unit/e2e test for `hyalo lint`
+- [x] Investigate finding 2: write a failing unit/e2e test for `hyalo lint`
   against a file containing `[x](../sibling/y.md)` where `y.md` exists; locate
   whichever resolver is reporting "unresolved" (likely a lint rule path
   separate from `link_fix.rs`, since `normalize_target` already collapses `..`
   correctly)
-- [ ] Fix finding 2: route the offending lint check through the same
+- [x] Fix finding 2: route the offending lint check through the same
   `normalize_target` / `normalize_path_components` helper used by `link_fix`,
   so `../`-relative markdown links resolve against the file's own directory
-- [ ] Add `[lint] strict = false` to the config schema in `.hyalo.toml`
+- [x] Add `[lint] strict = false` to the config schema in `.hyalo.toml`
   parsing (default `false` for backwards compat); thread it into the
   `LintConfig` struct used by `commands/lint.rs`
-- [ ] Add `--strict` CLI flag to `hyalo lint` that overrides the config value
+- [x] Add `--strict` CLI flag to `hyalo lint` that overrides the config value
   for a single invocation
-- [ ] In `commands/lint.rs` around lines 760-845, when strict mode is on,
+- [x] In `commands/lint.rs` around lines 760-845, when strict mode is on,
   promote `severity: Severity::Warn` to `Severity::Error` for the
   "no 'type' property" warning and for the "undeclared property in frontmatter"
   warning; leave other warnings (no tags, etc.) alone — strict is specifically
   about schema declaredness
-- [ ] Output-format default: change `Cli::format` resolution in `run.rs` /
+- [x] Output-format default: change `Cli::format` resolution in `run.rs` /
   `output.rs` so that when `format` is `None` after merging CLI flag + config,
   use `std::io::IsTerminal` on `std::io::stdout()` to pick `Format::Text` for
   TTY and `Format::Json` for pipes. Existing explicit `--format` and
   `.hyalo.toml` defaults still win
-- [ ] Update `--format` help text in `crates/hyalo-cli/src/cli/args.rs:134-137`
+- [x] Update `--format` help text in `crates/hyalo-cli/src/cli/args.rs:134-137`
   to reflect the new TTY-aware default
-- [ ] Update README and `.claude/CLAUDE.md` to mention: `text` is auto-default
+- [x] Update README and `.claude/CLAUDE.md` to mention: `text` is auto-default
   for interactive use, `--format text` no longer needs to be appended
   manually, and `--strict` for schema enforcement
-- [ ] Update the hyalo skill (`.claude/skills/hyalo/SKILL.md` and the global
+- [x] Update the hyalo skill (`.claude/skills/hyalo/SKILL.md` and the global
   copy under `~/.claude/skills/hyalo/`) to drop the "always append
   `--format text`" advice — it becomes unnecessary noise once piped vs TTY is
   detected automatically. Replace with a brief note about strict mode being
   available
-- [ ] Update the `hyalo-tidy` skill (`.claude/skills/hyalo-tidy/SKILL.md`
+- [x] Update the `hyalo-tidy` skill (`.claude/skills/hyalo-tidy/SKILL.md`
   and the global copy under `~/.claude/skills/hyalo-tidy/` if present) to
   run `hyalo lint --strict` as part of the tidy workflow, so a tidy pass
   fails fast on missing-type / undeclared-property issues instead of
   silently leaving them as warnings
-- [ ] Unit tests: bare-basename intra-folder link is not flagged after `mv`;
+- [x] Unit tests: bare-basename intra-folder link is not flagged after `mv`;
   `../sibling.md` resolves correctly; `[lint] strict = true` promotes the two
   targeted warnings to errors; `IsTerminal`-based default selection picks
   `Json` when stdout is piped (use a fake/redirected handle in the test)
-- [ ] e2e tests: `hyalo links fix` after a `hyalo mv` does not rewrite
+- [x] e2e tests: `hyalo links fix` after a `hyalo mv` does not rewrite
   in-folder bare-basename links (regression test for the original tidy pass);
   `hyalo lint --strict` exits non-zero on a file with no `type` property and
   zero on a clean vault; `hyalo find ...` (no `--format`) prints text when
@@ -140,29 +140,32 @@ Three coherent buckets:
   of the wardrobe-assistants.ch knowledgebase (or any sibling vault), confirm
   the seven manual reverts from the original report are no longer needed and
   that `hyalo lint` reports zero false-positive `../` unresolved warnings.
-  Capture observations in a fresh tool report
-- [ ] Run `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  Capture observations in a fresh tool report.
+  *(Release build + bug-driven verification landed via unit/e2e tests; a
+  fresh sibling-vault tidy pass and tool report were not produced in this
+  PR — defer to a follow-up dogfood session.)*
+- [x] Run `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace -q` and fix every issue before opening the PR
 
 ## Acceptance Criteria
 
-- [ ] `hyalo links fix` after `hyalo mv` leaves bare-basename markdown links
+- [x] `hyalo links fix` after `hyalo mv` leaves bare-basename markdown links
   unchanged when the target exists in the source file's own directory
-- [ ] `hyalo lint` does not report `[x](../sibling/y.md)` as unresolved when
+- [x] `hyalo lint` does not report `[x](../sibling/y.md)` as unresolved when
   `sibling/y.md` exists relative to the file's directory
-- [ ] `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`) exits
+- [x] `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`) exits
   non-zero when any file is missing a `type` property or carries undeclared
   frontmatter fields, and exits zero on a clean vault
-- [ ] Running `hyalo find ...` (no `--format`) interactively in a terminal
+- [x] Running `hyalo find ...` (no `--format`) interactively in a terminal
   prints text by default; the same command piped to a file produces JSON
-- [ ] `--format` and `.hyalo.toml` `format` settings still take precedence over
+- [x] `--format` and `.hyalo.toml` `format` settings still take precedence over
   the TTY-detected default when explicitly set
-- [ ] Help text, README, `.claude/CLAUDE.md`, and the hyalo skill all reflect
+- [x] Help text, README, `.claude/CLAUDE.md`, and the hyalo skill all reflect
   the new defaults; no leftover guidance saying "always append `--format text`"
-- [ ] The `hyalo-tidy` skill invokes `hyalo lint --strict` as part of its
+- [x] The `hyalo-tidy` skill invokes `hyalo lint --strict` as part of its
   workflow, so a tidy pass surfaces schema gaps as errors
-- [ ] Backtick-rewriting (finding 3) and per-file ignore directive
+- [x] Backtick-rewriting (finding 3) and per-file ignore directive
   (finding 5) are documented as deferred in the iteration notes; no code
   change is shipped for either in this iteration
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, and
   `cargo test --workspace -q` are all clean

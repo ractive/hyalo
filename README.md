@@ -26,7 +26,7 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 ### Why hyalo?
 
 - **Fast.** Parallel scanning, streaming I/O, optional snapshot index. Handles 10,000+ file vaults in under a second.
-- **Structured output.** JSON by default with built-in `--jq` support. Easy to pipe into scripts, CI, or AI agents.
+- **Structured output.** TTY-aware: compact `text` for terminals, `json` when piped — with built-in `--jq` support. Easy to pipe into scripts, CI, or AI agents.
 - **AI-agent friendly.** Designed as a tool for [Claude Code](https://claude.ai/claude-code) and other LLM coding agents. One command sets up the integration: `hyalo init --claude`.
 - **Safe mutations.** Dry-run mode on all write operations. Preview before committing changes.
 - **Cross-platform.** Works on macOS, Linux, and Windows. No runtime dependencies.
@@ -39,8 +39,8 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 # Omit --dir if the project root itself is the knowledgebase.
 hyalo init --dir docs
 
-# Get a bird's-eye view
-hyalo summary --format text
+# Get a bird's-eye view (output format auto-detected: text on terminals, json when piped)
+hyalo summary
 
 # Full-text search (BM25 ranked, with boolean operators)
 hyalo find "retry backoff"
@@ -77,6 +77,7 @@ hyalo links auto --file notes/todo.md --apply   # single-file mode
 hyalo lint                              # full vault, summary mode
 hyalo lint --rule MD013 --detailed      # drill into a single rule
 hyalo lint --rule-prefix HYALO          # only HYALO native rules
+hyalo lint --strict                     # promote missing-type and undeclared-property warnings to errors
 hyalo lint --fix --dry-run              # preview autofixes
 hyalo lint --fix                        # apply autofixes
 hyalo lint --fix-rule HYALO001          # only autofix one rule
@@ -149,7 +150,7 @@ Pre-built binaries for Linux (x86_64, ARM64, glibc and musl), macOS (Apple Silic
 
 ```toml
 dir = "./my-vault"        # vault directory (default: ".")
-format = "text"           # output format: "json" (default) or "text"
+format = "text"           # output format: "json" or "text" (default: TTY-aware — text on terminals, json when piped)
 hints = false             # drill-down command hints (default: true)
 default_limit = 100       # max results for list commands (default: 50; 0 = unlimited)
 

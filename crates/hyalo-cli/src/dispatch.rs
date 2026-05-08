@@ -106,6 +106,10 @@ pub(crate) struct CommandContext<'a> {
     /// When true, the output is consumed programmatically (`--jq` or `--count`),
     /// so the default limit should not apply — only an explicit `--limit` is honoured.
     pub programmatic_output: bool,
+    /// Strict schema validation mode from `[lint] strict = true` in `.hyalo.toml`.
+    /// When `true`, "no 'type' property" and "undeclared property" warnings are
+    /// promoted to errors, and lint exits non-zero on them.
+    pub lint_strict: bool,
 }
 
 /// Resolve the effective limit for a list command.
@@ -1139,8 +1143,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             rule_prefix,
             max_per_rule,
             fix_rule,
+            strict: lint_strict_flag,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
+            // --strict flag wins over config value; config value is the fallback.
+            let effective_strict = lint_strict_flag || ctx.lint_strict;
             // Resolve --type to a glob pattern from its filename_template.
             let type_glob: Option<String> = if let Some(type_name) = lint_type {
                 use hyalo_core::filename_template::FilenameTemplate;
@@ -1295,6 +1302,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 snapshot_index,
                 index_path,
                 vault_dir: dir,
+                strict: effective_strict,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
