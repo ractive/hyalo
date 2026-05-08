@@ -136,11 +136,14 @@ Three coherent buckets:
   zero on a clean vault; `hyalo find ...` (no `--format`) prints text when
   run interactively (test via piping a TTY allocator if available, otherwise
   assert behavior with `IsTerminal` mocked)
-- [x] Dogfood: `cargo build --release`; re-run a tidy pass against a fresh copy
+- [ ] Dogfood: `cargo build --release`; re-run a tidy pass against a fresh copy
   of the wardrobe-assistants.ch knowledgebase (or any sibling vault), confirm
   the seven manual reverts from the original report are no longer needed and
   that `hyalo lint` reports zero false-positive `../` unresolved warnings.
-  Capture observations in a fresh tool report
+  Capture observations in a fresh tool report.
+  *(Release build + bug-driven verification landed via unit/e2e tests; a
+  fresh sibling-vault tidy pass and tool report were not produced in this
+  PR — defer to a follow-up dogfood session.)*
 - [x] Run `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace -q` and fix every issue before opening the PR
 
