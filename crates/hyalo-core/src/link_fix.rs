@@ -166,6 +166,50 @@ fn classify_link(
     LinkResolution::Broken
 }
 
+/// Resolve a link's target to a vault-relative path and classify it.
+///
+/// Centralizes the bare-basename-fallback logic shared by
+/// [`detect_broken_links`] and [`detect_broken_links_from_index`].  The
+/// returned `LinkResolution` is the verdict for the *resolved* path so the
+/// caller doesn't need to invoke [`classify_link`] a second time (which would
+/// double the stat syscalls in the bare-basename path).
+fn resolve_and_classify_link(
+    canonical: &Path,
+    source_rel: &str,
+    link: &crate::links::Link,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> (String, LinkResolution) {
+    match link.kind {
+        LinkKind::Wikilink => {
+            let res = classify_link(canonical, &link.target, site_prefix, case_index);
+            (link.target.clone(), res)
+        }
+        LinkKind::Markdown => {
+            if link.target.starts_with('/') {
+                let res = classify_link(canonical, &link.target, site_prefix, case_index);
+                (link.target.clone(), res)
+            } else if link.target.contains('/') || link.target.contains('\\') {
+                let target = normalize_target(Path::new(source_rel), &link.target);
+                let res = classify_link(canonical, &target, site_prefix, case_index);
+                (target, res)
+            } else {
+                // Bare basename: try source-relative first, fall back to
+                // vault-relative on Broken so globally-unique stems still resolve.
+                let src_rel = normalize_target(Path::new(source_rel), &link.target);
+                let src_resolution =
+                    classify_link(canonical, &src_rel, site_prefix, case_index);
+                if src_resolution == LinkResolution::Broken {
+                    let res = classify_link(canonical, &link.target, site_prefix, case_index);
+                    (link.target.clone(), res)
+                } else {
+                    (src_rel, src_resolution)
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Broken link detection
 // ---------------------------------------------------------------------------
@@ -203,37 +247,10 @@ pub(crate) fn detect_broken_links(
         for (line, link) in &fl.links {
             total_links += 1;
 
-            // Normalize the target before resolution.
-            // Wikilinks are vault-relative; markdown links may be relative to
-            // the source file's directory.
-            //
-            // For bare-basename markdown links (no `/` in target) we resolve
-            // against the source file's directory first.  If that path exists
-            // the link is valid and we stop there — no case-mismatch recording.
-            // Only when source-relative resolution fails do we fall back to
-            // vault-relative (so `resolve_target` can find globally unique stems).
-            let resolved_target = match link.kind {
-                LinkKind::Wikilink => link.target.clone(),
-                LinkKind::Markdown => {
-                    if link.target.starts_with('/') {
-                        link.target.clone()
-                    } else if link.target.contains('/') || link.target.contains('\\') {
-                        normalize_target(Path::new(&source_str), &link.target)
-                    } else {
-                        // Bare basename: try source-relative first.
-                        let src_rel = normalize_target(Path::new(&source_str), &link.target);
-                        if classify_link(&canonical, &src_rel, site_prefix, case_index)
-                            == LinkResolution::Broken
-                        {
-                            link.target.clone()
-                        } else {
-                            src_rel
-                        }
-                    }
-                }
-            };
+            let (_resolved_target, resolution) =
+                resolve_and_classify_link(&canonical, &source_str, link, site_prefix, case_index);
 
-            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+            match resolution {
                 LinkResolution::Resolved(None) => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {
@@ -297,37 +314,15 @@ pub fn detect_broken_links_from_index(
         for (line, link) in &entry.links {
             total_links += 1;
 
-            // Normalize the target before resolution.
-            // Wikilinks are vault-relative; markdown links may be relative to
-            // the source file's directory.
-            //
-            // For bare-basename markdown links (no `/` in target) we resolve
-            // against the source file's directory first.  If that path exists
-            // the link is valid and we stop there — no case-mismatch recording.
-            // Only when source-relative resolution fails do we fall back to
-            // vault-relative (so `resolve_target` can find globally unique stems).
-            let resolved_target = match link.kind {
-                LinkKind::Wikilink => link.target.clone(),
-                LinkKind::Markdown => {
-                    if link.target.starts_with('/') {
-                        link.target.clone()
-                    } else if link.target.contains('/') || link.target.contains('\\') {
-                        normalize_target(Path::new(&entry.rel_path), &link.target)
-                    } else {
-                        // Bare basename: try source-relative first.
-                        let src_rel = normalize_target(Path::new(&entry.rel_path), &link.target);
-                        if classify_link(&canonical, &src_rel, site_prefix, case_index)
-                            == LinkResolution::Broken
-                        {
-                            link.target.clone()
-                        } else {
-                            src_rel
-                        }
-                    }
-                }
-            };
+            let (_resolved_target, resolution) = resolve_and_classify_link(
+                &canonical,
+                &entry.rel_path,
+                link,
+                site_prefix,
+                case_index,
+            );
 
-            match classify_link(&canonical, &resolved_target, site_prefix, case_index) {
+            match resolution {
                 LinkResolution::Resolved(None) => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {

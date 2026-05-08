@@ -47,11 +47,34 @@ impl std::fmt::Display for Severity {
     }
 }
 
+/// Stable identifier for schema warnings that strict mode promotes to errors.
+///
+/// Strict-mode promotion matches on these constants rather than the
+/// user-facing `message`, so reworded messages don't silently disable
+/// the promotion logic.
+pub const VIOLATION_KIND_MISSING_TYPE: &str = "schema/missing-type";
+pub const VIOLATION_KIND_UNDECLARED_PROPERTY: &str = "schema/undeclared-property";
+
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize)]
 pub struct Violation {
     pub severity: Severity,
     pub message: String,
+    /// Stable kind identifier for programmatic dispatch (e.g. strict-mode
+    /// promotion in `lint_file`). `None` for ad-hoc violations that don't
+    /// need to be matched programmatically.
+    #[serde(skip)]
+    pub kind: Option<&'static str>,
+}
+
+impl Default for Violation {
+    fn default() -> Self {
+        Self {
+            severity: Severity::Warn,
+            message: String::new(),
+            kind: None,
+        }
+    }
 }
 
 /// Lint results for a single file.
@@ -264,6 +287,7 @@ pub fn validate_views(dir: &Path) -> Option<FileLintResult> {
         if !has_narrowing && has_fields {
             violations.push(Violation {
                 severity: Severity::Warn,
+                kind: None,
                 message: format!(
                     "view '{name}' has no narrowing filter — `fields` controls display columns only, \
                      not filtering. Did you mean `orphan = true` or `dead_end = true`?"
@@ -272,6 +296,7 @@ pub fn validate_views(dir: &Path) -> Option<FileLintResult> {
         } else if !has_narrowing {
             violations.push(Violation {
                 severity: Severity::Warn,
+                kind: None,
                 message: format!(
                     "view '{name}' has no narrowing filter — add at least one of: \
                      tag, properties, task, orphan, dead_end, broken_links, glob, file, title"
@@ -451,6 +476,7 @@ fn lint_file_with_fix(
                     file: rel_path.to_owned(),
                     violations: vec![Violation {
                         severity: Severity::Error,
+                        kind: None,
                         message: format!("{}: {e}", crate::hints::PARSE_ERROR_PREFIX),
                     }],
                 },
@@ -756,6 +782,7 @@ fn validate_properties(
     {
         violations.push(Violation {
             severity: Severity::Error,
+            kind: None,
             message: format!("property \"type\" expected string, got {v}"),
         });
     }
@@ -764,6 +791,7 @@ fn validate_properties(
     if type_value.is_none() && !schema.is_empty() {
         violations.push(Violation {
             severity: Severity::Warn,
+            kind: Some(VIOLATION_KIND_MISSING_TYPE),
             message: "no 'type' property — validating against default schema only".to_owned(),
         });
     }
@@ -783,6 +811,7 @@ fn validate_properties(
                 .unwrap_or_default();
             violations.push(Violation {
                 severity: Severity::Error,
+                kind: None,
                 message: format!("missing required property \"{req}\"{type_hint}"),
             });
         }
@@ -792,6 +821,7 @@ fn validate_properties(
     if !has_tags && !schema.types.is_empty() {
         violations.push(Violation {
             severity: Severity::Warn,
+            kind: None,
             message: "no tags defined".to_owned(),
         });
     }
@@ -820,6 +850,7 @@ fn validate_properties(
                     {
                         violations.push(Violation {
                             severity: Severity::Warn,
+                            kind: None,
                             message: format!(
                                 "tag \"{tag}\" appears to be comma-joined -- should be separate list items"
                             ),
@@ -843,6 +874,7 @@ fn validate_properties(
             // intentionally permissive about extra fields.
             violations.push(Violation {
                 severity: Severity::Warn,
+                kind: Some(VIOLATION_KIND_UNDECLARED_PROPERTY),
                 message: format!("property \"{name}\" is not declared in schema"),
             });
         }
@@ -866,6 +898,7 @@ fn validate_constraint(
             let Some(s) = value_as_str(value) else {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!("property \"{name}\" expected string, got {value}"),
                 });
             };
@@ -879,6 +912,7 @@ fn validate_constraint(
                         if !re.is_match(s) {
                             return Some(Violation {
                                 severity: Severity::Error,
+                                kind: None,
                                 message: format!(
                                     "property \"{name}\" value {s:?} does not match pattern {pat:?}"
                                 ),
@@ -888,6 +922,7 @@ fn validate_constraint(
                     Err(e) => {
                         return Some(Violation {
                             severity: Severity::Error,
+                            kind: None,
                             message: format!("property \"{name}\": invalid pattern {pat:?}: {e}"),
                         });
                     }
@@ -899,12 +934,14 @@ fn validate_constraint(
             let Some(s) = value_as_str(value) else {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!("property \"{name}\" expected date (YYYY-MM-DD), got {value}"),
                 });
             };
             if !is_iso8601_date(s) {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!("property \"{name}\" expected date (YYYY-MM-DD), got \"{s}\""),
                 });
             }
@@ -914,6 +951,7 @@ fn validate_constraint(
             if !matches!(value, Value::Number(_)) {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!("property \"{name}\" expected number, got {value}"),
                 });
             }
@@ -923,6 +961,7 @@ fn validate_constraint(
             if !matches!(value, Value::Bool(_)) {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!("property \"{name}\" expected boolean, got {value}"),
                 });
             }
@@ -932,6 +971,7 @@ fn validate_constraint(
             if !matches!(value, Value::Array(_)) {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!("property \"{name}\" expected list, got {value}"),
                 });
             }
@@ -941,6 +981,7 @@ fn validate_constraint(
             let Some(s) = value_as_str(value) else {
                 return Some(Violation {
                     severity: Severity::Error,
+                    kind: None,
                     message: format!(
                         "property \"{name}\" expected one of [{}], got {value}",
                         values.join(", ")
@@ -958,6 +999,7 @@ fn validate_constraint(
                 .unwrap_or_default();
             Some(Violation {
                 severity: Severity::Error,
+                kind: None,
                 message: format!(
                     "property \"{name}\" value \"{s}\" not in [{}]{suggestion}",
                     values.join(", ")
@@ -1677,14 +1719,15 @@ fn lint_one_file_extended(
         let fm_violations = validate_properties(rel_path, &properties, has_tags, schema);
         for v in fm_violations {
             // In strict mode, promote the two targeted schema warnings to errors.
-            let effective_severity = if strict && v.severity == Severity::Warn {
-                let is_missing_type = v.message.contains("no 'type' property");
-                let is_undeclared = v.message.contains("is not declared in schema");
-                if is_missing_type || is_undeclared {
-                    Severity::Error
-                } else {
-                    v.severity
-                }
+            // Match on the stable `kind` identifier rather than message text so
+            // future message rewordings don't silently disable promotion.
+            let effective_severity = if strict
+                && v.severity == Severity::Warn
+                && matches!(
+                    v.kind,
+                    Some(VIOLATION_KIND_MISSING_TYPE | VIOLATION_KIND_UNDECLARED_PROPERTY)
+                ) {
+                Severity::Error
             } else {
                 v.severity
             };

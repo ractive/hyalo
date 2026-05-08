@@ -420,10 +420,15 @@ fn run_inner() -> Result<(), AppError> {
     //
     // Precedence (highest first):
     //   1. Explicit `--format` CLI flag.
-    //   2. `format = "..."` in `.hyalo.toml`.
-    //   3. TTY detection: `text` when stdout is a terminal, `json` when piped.
+    //   2. `--jq` (forces JSON unless an explicit format is set, since jq
+    //      operates on JSON — without this, TTY users running
+    //      `hyalo find ... --jq '...'` would hit the format-conflict error).
+    //   3. `format = "..."` in `.hyalo.toml`.
+    //   4. TTY detection: `text` when stdout is a terminal, `json` when piped.
     let format = if let Some(f) = cli.format {
         f
+    } else if cli.jq.is_some() {
+        Format::Json
     } else if let Some(ref fmt_str) = config.format {
         if let Some(fmt) = Format::from_str_opt(fmt_str) {
             fmt
