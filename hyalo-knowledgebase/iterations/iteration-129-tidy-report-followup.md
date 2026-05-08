@@ -8,7 +8,7 @@ tags:
   - links
   - schema
   - ux
-status: in-progress
+status: completed
 branch: iter-129/tidy-report-followup
 ---
 
