@@ -57,7 +57,7 @@ Verified via e2e test in prior session. The `format_error` path already included
 
 ## Issues Found
 
-None. All 9 items from iteration-132 work correctly in production use against the knowledgebase.
+None. All 8 items from iteration-132 (BUG-B, BUG-C, UX-A, UX-B, UX-C, UX-D, UX-E, UX-F) work correctly in production use against the knowledgebase. BUG-A (mv wikilink rewrite) is verified by the new mv e2e tests rather than dogfooding.
 
 ## Notes
 

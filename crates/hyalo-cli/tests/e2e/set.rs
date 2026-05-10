@@ -1202,3 +1202,18 @@ fn set_created_property_non_date_emits_note() {
         .expect("expected note field for created");
     assert!(note.contains("oops"), "expected bad value in note: {note}");
 }
+
+#[test]
+fn set_modified_property_non_date_emits_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "modified=oops", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let note = json["note"]
+        .as_str()
+        .expect("expected note field for modified");
+    assert!(note.contains("oops"), "expected bad value in note: {note}");
+}

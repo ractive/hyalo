@@ -1474,6 +1474,30 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         language,
                         ..
                     } = filters;
+                    if orphan && dead_end {
+                        crate::warn::warn(
+                            "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
+                        );
+                    }
+                    for t in &tag {
+                        if let Err(msg) = crate::commands::tags::validate_tag(t) {
+                            return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+                        }
+                    }
+                    if let Some(ref lang) = language
+                        && let Err(e) = parse_language(lang)
+                    {
+                        return Ok(CommandOutcome::UserError(format!(
+                            "invalid --language value {lang:?}: {e}"
+                        )));
+                    }
+                    if let Some(cfg_lang) = ctx.config_language
+                        && let Err(e) = parse_language(cfg_lang)
+                    {
+                        return Ok(CommandOutcome::UserError(format!(
+                            "invalid [search].language config value {cfg_lang:?}: {e}"
+                        )));
+                    }
                     let prop_filters: Vec<filter::PropertyFilter> = match properties
                         .iter()
                         .map(|s| filter::parse_property_filter(s))

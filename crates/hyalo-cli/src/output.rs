@@ -369,7 +369,8 @@ const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""
 
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
-/// Key signature: `dry_run,modified,property,scanned,skipped,total,value[,note]`
+/// Key signature: `dry_run,modified,property,scanned,skipped,total,value` (without note)
+/// or `dry_run,modified,note,property,scanned,skipped,total,value` (with note, alphabetically sorted).
 /// Format: `[dry-run] property=value: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 /// Appends `  note: <msg>` when a `note` field is present.

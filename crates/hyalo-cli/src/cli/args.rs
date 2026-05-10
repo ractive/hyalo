@@ -799,7 +799,7 @@ Repeatable (AND).\n\
             Scans the vault for links that cannot be resolved to an existing file, \
             then uses fuzzy matching (case-insensitive, extension mismatch, shortest-path, \
             Jaro-Winkler) to find the best candidate replacement.\n\n\
-            Default behaviour (no subcommand): dry-run of `links fix` — shows what would be\n\
+            Default behavior (no subcommand): dry-run of `links fix` — shows what would be\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
             OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
             (source, line, old_target, new_target, strategy, confidence), and \

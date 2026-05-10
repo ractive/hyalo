@@ -998,7 +998,7 @@ fn mv_bare_wikilink_all_forms_rewritten() {
         "fragment+alias: {content}"
     );
     assert!(
-        content.contains("[[sub/b]]") || content.contains("[[sub/b]]"),
+        content.contains("[[sub/b]]") || content.contains("[[sub/B]]"),
         "case: {content}"
     );
 }

@@ -99,7 +99,7 @@ See [B](sub/b.md) and [[b]] and [[b|alias]].
 Expected: `[[b]]` → `[[sub/b]]`, `[[b|alias]]` → `[[sub/b|alias]]`, and the report should list
 those rewrites.
 Actual: only the markdown link is rewritten. The wikilinks are now broken (`hyalo find
---broken-links` confirms `"b" (unresolved)` in `a.md`). `hyalo backlinks renamed/b-new.md` reports
+--broken-links` confirms `"b" (unresolved)` in `a.md`). `hyalo backlinks sub/b.md` reports
 "No backlinks found" because the inbound wikilink edge was lost.
 
 `hyalo mv ... --dry-run` exhibits the same blind spot — the preview only mentions the markdown
