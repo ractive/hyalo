@@ -226,14 +226,25 @@ pub(crate) fn set_rule(
             doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
 
         // If the existing entry is a scalar bool, promote it to a table so
-        // we can index into it without panicking.
+        // we can index into it without panicking. Handle both regular and
+        // inline parent tables — `lint = { rules = { MD013 = false } }`
+        // encodes `lint_rules` as an inline table, and skipping it here would
+        // resurrect the same panic the regular-table branch is guarding
+        // against.
         if lint_rules
             .get(rule_id)
             .is_some_and(|item| !item.is_table() && !item.is_inline_table())
-            && let Some(rules_tbl) = lint_rules.as_table_mut()
         {
-            rules_tbl.remove(rule_id);
-            rules_tbl.insert(rule_id, toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(rules_tbl) = lint_rules.as_table_mut() {
+                rules_tbl.remove(rule_id);
+                rules_tbl.insert(rule_id, toml_edit::Item::Table(toml_edit::Table::new()));
+            } else if let Some(rules_inline) = lint_rules.as_inline_table_mut() {
+                rules_inline.remove(rule_id);
+                rules_inline.insert(
+                    rule_id,
+                    toml_edit::Value::InlineTable(toml_edit::InlineTable::default()),
+                );
+            }
         }
 
         let rule_entry =
@@ -293,6 +304,10 @@ pub(crate) fn set_rule(
     let path_str = toml_path.display().to_string();
 
     if dry_run {
+        // Mirror the non-dry-run write decision so the text formatter can
+        // distinguish a tautological dry-run (no diff) from one that would
+        // mutate the file.
+        let would_write = new_contents != contents;
         let val = serde_json::json!({
             "action": "set",
             "rule_id": rule_id,
@@ -309,6 +324,7 @@ pub(crate) fn set_rule(
             },
             "config_path": path_str,
             "preview": new_contents,
+            "wrote": would_write,
         });
         return Ok(CommandOutcome::success(format_success(Format::Json, &val)));
     }

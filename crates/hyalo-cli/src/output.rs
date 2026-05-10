@@ -1541,7 +1541,11 @@ fn format_lint_rules_mutation_text(map: &serde_json::Map<String, serde_json::Val
         .unwrap_or(true);
     s.push('\n');
     if dry_run {
-        let _ = write!(s, "  dry-run, would write {config_path}");
+        if wrote {
+            let _ = write!(s, "  dry-run, would write {config_path}");
+        } else {
+            let _ = write!(s, "  dry-run, no changes to {config_path}");
+        }
     } else if wrote {
         let _ = write!(s, "  wrote {config_path}");
     } else {
