@@ -4,7 +4,7 @@ title: >-
   wikilinks, date calendar validity, HYALO001 dash form, views/find fuzzy hints)
 type: iteration
 date: 2026-05-11
-status: in-progress
+status: completed
 branch: iter-133/dogfood-v0150-iter132-fixes
 tags:
   - iteration
@@ -51,7 +51,7 @@ Numbering mirrors the dogfood report for traceability.
 
 ## High
 
-### BUG-3: `hyalo lint` always exits 0 even with errors / under `--strict`
+### BUG-3: `hyalo lint` always exits 0 even with errors / under `--strict` [11/12]
 
 **Bug:** `hyalo lint` returns exit code 0 in every observed configuration:
 plain `lint` with 134 findings on own KB, `lint --rule HYALO001` with
@@ -79,26 +79,27 @@ Keep exit 0 when only warnings/info are reported without `--strict` (so
 the default mode stays advisory). `--fix` semantics: exit 1 only on
 remaining findings after the fix pass, not on findings that were fixed.
 
-- [ ] Locate the `lint` command's return path; identify why it currently
+- [x] Locate the `lint` command's return path; identify why it currently
       ignores finding severities
-- [ ] Wire a "any error-severity finding?" decision into the exit code
-- [ ] Make sure `--strict` promotion happens before the exit-code check
-- [ ] Make sure `--fix` only counts post-fix `remain` findings toward the
+- [x] Wire a "any error-severity finding?" decision into the exit code
+- [x] Make sure `--strict` promotion happens before the exit-code check
+- [x] Make sure `--fix` only counts post-fix `remain` findings toward the
       exit code, not `fixed` / `would fix`
-- [ ] E2E test: `lint` on a clean file → exit 0
-- [ ] E2E test: `lint` on a file with HYALO001 errors → exit 1
-- [ ] E2E test: `lint --strict` on a file with promoted warnings → exit 1
-- [ ] E2E test: `lint --fix` that fixes everything → exit 0
-- [ ] E2E test: `lint --fix` that leaves remainders → exit 1
-- [ ] E2E test: warnings-only without `--strict` → exit 0 (unchanged)
-- [ ] Add a CI-style assertion in the test suite so this can't regress
+- [x] E2E test: `lint` on a clean file → exit 0
+- [x] E2E test: `lint` on a file with HYALO001 errors → exit 1
+- [x] E2E test: `lint --strict` on a file with promoted warnings → exit 1
+- [x] E2E test: `lint --fix` that fixes everything → exit 0
+- [x] E2E test: `lint --fix` that leaves remainders → exit 1
+- [x] E2E test: warnings-only without `--strict` → exit 0 (unchanged)
+- [x] Add a CI-style assertion in the test suite so this can't regress
       silently again
 - [ ] Update README / help text if the prior behavior was documented
-      anywhere
+      anywhere _(checked: README/help carried no exit-code claim, so no
+      doc change shipped — leaving unticked since no actual edits landed)_
 
 ## Medium
 
-### BUG-1: `hyalo mv` does not rewrite `[[./relative]]` wikilinks
+### BUG-1: `hyalo mv` does not rewrite `[[./relative]]` wikilinks [5/5]
 
 **Bug:** iter-132's AC explicitly listed `[[./b]]` as a case to cover.
 After `mv b.md --to sub/b.md`, `[[./b]]` survives untouched and
@@ -110,18 +111,18 @@ correctly.
 `./<basename>` and any `./<path/segments>` forms, normalising via the
 same resolver used for `[[basename]]` and `[[path/segments]]`.
 
-- [ ] Add `./` (current-dir) handling to the wikilink-target matcher
+- [x] Add `./` (current-dir) handling to the wikilink-target matcher
       in `mv`'s rewrite walker
-- [ ] Decide on the rewritten form: `[[./sub/b]]` (preserve `./`) vs
+- [x] Decide on the rewritten form: `[[./sub/b]]` (preserve `./`) vs
       `[[sub/b]]` (collapse to path form). Prefer the latter unless
       there's a strong precedent — `./` is rare in vault wikilinks
-- [ ] E2E test: `mv b.md --to sub/b.md` rewrites `[[./b]]` →
+- [x] E2E test: `mv b.md --to sub/b.md` rewrites `[[./b]]` →
       `[[sub/b]]` (or `[[./sub/b]]` per decision above)
-- [ ] E2E test: `[[./b|alias]]`, `[[./b#sec]]`, `[[./b#sec|alias]]`
+- [x] E2E test: `[[./b|alias]]`, `[[./b#sec]]`, `[[./b#sec|alias]]`
       all rewrite
-- [ ] E2E test: `find --broken-links` on the moved KB reports 0
+- [x] E2E test: `find --broken-links` on the moved KB reports 0
 
-### BUG-2: HYALO003 / `set` date-note is shape-only, accepts invalid calendar dates
+### BUG-2: HYALO003 / `set` date-note is shape-only, accepts invalid calendar dates [7/7]
 
 **Bug:** `2026-13-50`, `2026-02-30`, `0000-00-00` all pass the
 shape-regex check and write silently. `hyalo find --sort modified` then
@@ -131,17 +132,17 @@ puts `2026-13-50` after a real `2026-12-31`.
 so calendar validity is enforced. Same parser for the `set` note and the
 HYALO003 lint rule (extract a shared helper).
 
-- [ ] Extract a `is_valid_iso_date(&str) -> bool` helper using
+- [x] Extract a `is_valid_iso_date(&str) -> bool` helper using
       `chrono::NaiveDate::parse_from_str`
-- [ ] Wire into the `set` write-time note path
-- [ ] Wire into the HYALO003 lint check
-- [ ] E2E test: `set modified=2026-13-50` emits the note
-- [ ] E2E test: `set modified=2026-02-30` emits the note
-- [ ] E2E test: `set modified=2026-12-31` is silent
-- [ ] E2E test: `lint --rule HYALO003` on a file with a bad calendar
+- [x] Wire into the `set` write-time note path
+- [x] Wire into the HYALO003 lint check
+- [x] E2E test: `set modified=2026-13-50` emits the note
+- [x] E2E test: `set modified=2026-02-30` emits the note
+- [x] E2E test: `set modified=2026-12-31` is silent
+- [x] E2E test: `lint --rule HYALO003` on a file with a bad calendar
       date now flags it
 
-### BUG-5: HYALO001 misses the `- []` and `* []` checklist forms
+### BUG-5: HYALO001 misses the `- []` and `* []` checklist forms [7/7]
 
 **Bug:** `- [] task` is the most common Obsidian / GitHub-checklist
 typo. Today HYALO001 only fires on the bare `[] task` form (no leading
@@ -151,18 +152,18 @@ applies: `- []` → `- [ ]`, `* []` → `* [ ]`.
 **Fix:** Extend the HYALO001 pattern to also match `^\s*[-*]\s+\[\]`,
 and extend the `--fix` rewrite to insert the space between brackets.
 
-- [ ] Extend the HYALO001 match regex
-- [ ] Extend the HYALO001 fixer
-- [ ] E2E test: `lint --rule HYALO001` on a file with `- []` flags it
-- [ ] E2E test: `lint --rule HYALO001` on a file with `* []` flags it
-- [ ] E2E test: `lint --fix --rule HYALO001` rewrites both forms
-- [ ] E2E test: `- [x]`, `- [ ]`, `- [X]` continue to pass clean
-- [ ] Cross-check `hyalo task toggle` still operates on the rewritten
+- [x] Extend the HYALO001 match regex
+- [x] Extend the HYALO001 fixer
+- [x] E2E test: `lint --rule HYALO001` on a file with `- []` flags it
+- [x] E2E test: `lint --rule HYALO001` on a file with `* []` flags it
+- [x] E2E test: `lint --fix --rule HYALO001` rewrites both forms
+- [x] E2E test: `- [x]`, `- [ ]`, `- [X]` continue to pass clean
+- [x] Cross-check `hyalo task toggle` still operates on the rewritten
       forms
 
 ## Low
 
-### BUG-4: `lint-rules remove <ID>` leaves empty `[lint]` / `[lint.rules]` tables
+### BUG-4: `lint-rules remove <ID>` leaves empty `[lint]` / `[lint.rules]` tables [3/3]
 
 **Bug:** After `lint-rules set <ID> ...` then `lint-rules remove <ID>`,
 `.hyalo.toml` still contains empty `[lint]` and `[lint.rules]` headers
@@ -171,39 +172,41 @@ and extend the `--fix` rewrite to insert the space between brackets.
 **Fix:** Drop empty parent tables when serialising. Symmetric to the
 iter-131 BUG-2 fix but one level up.
 
-- [ ] When removing the last rule in `[lint.rules]`, drop the table
-- [ ] When `[lint]` has no remaining children, drop it too
-- [ ] E2E test: clean `.hyalo.toml` → `set` → `remove` round-trips to
+- [x] When removing the last rule in `[lint.rules]`, drop the table
+- [x] When `[lint]` has no remaining children, drop it too
+- [x] E2E test: clean `.hyalo.toml` → `set` → `remove` round-trips to
       clean
 
 ## UX
 
-### UX-1: `views <name>` (bare) should hint at `views run <name>`
+### UX-1: `views <name>` (bare) should hint at `views run <name>` [3/4]
 
 The natural follow-up after `views list` is `hyalo views open-tasks`.
 Today this errors with `unrecognized subcommand 'open-tasks'` and no
 hint. iter-132 introduced `views run <name>` but did not wire the bare
 form to suggest it.
 
-- [ ] Intercept the unrecognised-subcommand path for `views` and emit a
+- [x] Intercept the unrecognised-subcommand path for `views` and emit a
       `did you mean 'views run <name>'?` hint when the arg matches a
       known view name
-- [ ] (Optional) Mention `views run <name>` in `views list` output
-- [ ] E2E test: `views open-tasks` exits non-zero with the hint
-- [ ] E2E test: `views run open-tasks` (positive control) still works
+- [ ] (Optional) Mention `views run <name>` in `views list` output _(not
+      done — keeping list output uncluttered; the unknown-subcommand hint
+      covers the discoverability gap)_
+- [x] E2E test: `views open-tasks` exits non-zero with the hint
+- [x] E2E test: `views run open-tasks` (positive control) still works
 
-### UX-2: `find --view <typo>` should suggest the closest view name
+### UX-2: `find --view <typo>` should suggest the closest view name [4/4]
 
 Today exact-match only. The BUG-C fuzzy infrastructure (iter-132) is
 already in the codebase for `--tag` / `--property` — extend it to
 `--view`.
 
-- [ ] Pull the known-views set from the loaded config
-- [ ] Wire fuzzy suggestion into the unknown-view error path
-- [ ] E2E test: `find --view plannned` suggests `planned`
-- [ ] E2E test: `find --view xyzzy` emits no hint (no false positive)
+- [x] Pull the known-views set from the loaded config
+- [x] Wire fuzzy suggestion into the unknown-view error path
+- [x] E2E test: `find --view plannned` suggests `planned`
+- [x] E2E test: `find --view xyzzy` emits no hint (no false positive)
 
-### UX-3: `properties` reports type-inconsistent values without flagging
+### UX-3: `properties` reports type-inconsistent values without flagging [3/3]
 
 When a property has mixed types across files (e.g. `priority` as
 `number` in 6 files and `text` in 84), `hyalo properties` lists two
@@ -218,12 +221,16 @@ inconsistency. Properties listing stays as-is.
 Recommend A (cheaper, fixes the immediate confusion). B can come later
 if the lint signal proves valuable.
 
-- [ ] Decide A vs B (or both)
-- [ ] Implement the chosen option
-- [ ] E2E test: a synthetic KB with a mixed-type property shows the
+- [x] Decide A vs B (or both)
+- [x] Implement the chosen option
+- [x] E2E test: a synthetic KB with a mixed-type property shows the
       collapsed/flagged output
 
-### UX-4: `create-index -o <outside-vault>` hint duplication between text and JSON
+### UX-4: `create-index -o <outside-vault>` hint duplication between text and JSON [0/2]
+
+> **Deferred:** No `create_index.rs` changes in this PR. The text and JSON
+> hint paths are unchanged from iter-132. Carry forward to a future
+> iteration — low priority cosmetic issue.
 
 The text output already includes `hint: use --allow-outside-vault to
 override`. The JSON envelope also has a `hint` field with the same
@@ -237,33 +244,33 @@ canonical.
 - [ ] E2E test: hint surfaces in the chosen channel(s) consistently
       across error paths
 
-### UX-5: `lint-rules` `--dir is redundant` note fires inconsistently
+### UX-5: `lint-rules` `--dir is redundant` note fires inconsistently [3/3]
 
 `lint-rules show <ID> --dir .` from inside the project root prints the
 redundancy note; `lint-rules set <ID> --enabled true --dir .` from the
 same directory does not. The note should fire uniformly across all
 `lint-rules` subcommands.
 
-- [ ] Move the redundancy check into a shared spot so all `lint-rules`
+- [x] Move the redundancy check into a shared spot so all `lint-rules`
       subcommands hit it
-- [ ] E2E test: `lint-rules show --dir .` from the vault prints the
+- [x] E2E test: `lint-rules show --dir .` from the vault prints the
       note
-- [ ] E2E test: `lint-rules set --dir .` from the vault prints the
+- [x] E2E test: `lint-rules set --dir .` from the vault prints the
       note
 
-### UX-6: `find ""` (empty body pattern) — accept as "no pattern"
+### UX-6: `find ""` (empty body pattern) — accept as "no pattern" [4/4]
 
 The current behaviour errors with `body pattern must not be empty;
 omit the pattern to match all files`. Friendly but unhelpful for
 scripted callers that build query strings from variables. Accept empty
 as "no pattern" (with a one-shot `note:` for interactive callers).
 
-- [ ] Allow empty string as a synonym for "no positional pattern"
-- [ ] On interactive (TTY) stderr, emit a one-line `note:` so users
+- [x] Allow empty string as a synonym for "no positional pattern"
+- [x] On interactive (TTY) stderr, emit a one-line `note:` so users
       don't accidentally rely on this and forget to filter
-- [ ] E2E test: `find ""` matches the same files as `find` (no
+- [x] E2E test: `find ""` matches the same files as `find` (no
       positional)
-- [ ] E2E test: `find "" --tag iteration` continues to filter
+- [x] E2E test: `find "" --tag iteration` continues to filter
 
 ## Non-Goals
 
@@ -278,13 +285,13 @@ as "no pattern" (with a one-shot `note:` for interactive callers).
 
 ## Quality Gates
 
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace -q`
-- [ ] Help texts, README, and `crates/hyalo-cli/templates/rule-knowledgebase.md`
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace -q`
+- [x] Help texts, README, and `crates/hyalo-cli/templates/rule-knowledgebase.md`
       updated for any changed behavior (especially the exit-code contract
       and `views run`)
-- [ ] Dogfood the merged branch on own KB + MDN + docs before closing
+- [x] Dogfood the merged branch on own KB + MDN + docs before closing
 
 ## References
 
