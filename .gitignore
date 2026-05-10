@@ -4,6 +4,7 @@
 .claude/memory
 .claude/agent-memory
 .claude/worktrees
+.claude/scheduled_tasks.lock
 hyalo-knowledgebase/MyNotes.md
 bench-results/
 *.hyalo-index
