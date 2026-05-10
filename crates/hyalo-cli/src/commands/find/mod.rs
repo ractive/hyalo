@@ -119,7 +119,7 @@ pub fn find(
     for f in files_arg {
         let p = std::path::Path::new(f);
         if p.is_absolute() {
-            if let Some(rel) = discovery::strip_absolute_vault_prefix(dir, f) {
+            if let Some(rel) = discovery::strip_absolute_vault_prefix(&canonical_dir, f) {
                 if !warned_misuse {
                     crate::warn::warn_llm_misuse(dir);
                     warned_misuse = true;
