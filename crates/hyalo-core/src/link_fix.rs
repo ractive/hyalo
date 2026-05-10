@@ -197,8 +197,7 @@ fn resolve_and_classify_link(
                 // Bare basename: try source-relative first, fall back to
                 // vault-relative on Broken so globally-unique stems still resolve.
                 let src_rel = normalize_target(Path::new(source_rel), &link.target);
-                let src_resolution =
-                    classify_link(canonical, &src_rel, site_prefix, case_index);
+                let src_resolution = classify_link(canonical, &src_rel, site_prefix, case_index);
                 if src_resolution == LinkResolution::Broken {
                     let res = classify_link(canonical, &link.target, site_prefix, case_index);
                     (link.target.clone(), res)

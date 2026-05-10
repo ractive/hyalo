@@ -39,7 +39,12 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 # Omit --dir if the project root itself is the knowledgebase.
 hyalo init --dir docs
 
+# Inspect the effective configuration (resolved dir, config path, hints, format, site_prefix)
+hyalo config                             # text by default on a terminal
+hyalo config --format json               # structured output for scripting / LLM agents
+
 # Get a bird's-eye view (output format auto-detected: text on terminals, json when piped)
+# Includes the resolved `kb dir` as the first line.
 hyalo summary
 
 # Full-text search (BM25 ranked, with boolean operators)
@@ -171,6 +176,17 @@ values = ["planned", "in-progress", "completed", "superseded"]
 ```
 
 See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to validate your vault against them.
+
+### CWD-aware behaviour
+
+When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _context-aware_:
+
+- **`hyalo --help`** prepends a short banner confirming which vault `dir` is active — useful when working from shell history or AI agent loops.
+- **`hyalo --version`** appends `(kb dir: <dir>)` so the resolved directory is visible at a glance.
+- **`hyalo summary`** includes the resolved `kb dir:` as its first output line.
+- **`hyalo config`** prints the full resolved configuration — handy for debugging `.hyalo.toml` resolution or feeding config into an LLM context.
+- Running from _inside_ the vault directory emits a warning banner suggesting you `cd ..` to the project root so hyalo can find `.hyalo.toml`.
+- Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time note that `--dir` is redundant.
 
 ### Saved views
 

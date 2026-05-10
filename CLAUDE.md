@@ -18,6 +18,7 @@ Then use target/release/hyalo to work with the documentation in `./hyalo-knowled
 - **Search/filter**: `hyalo find --property status=planned --tag iteration`
 - **Body search**: `hyalo find "broken links"` or regex: `hyalo find -e 'TODO|FIXME'`
 - **Title regex**: `hyalo find --property 'title~=link'`
+- **Inspect config**: `hyalo config` (text) or `hyalo config --format json` — shows effective dir, config path, hints, format, site_prefix
 - **Overview**: `hyalo summary`, `hyalo properties`, `hyalo tags`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append` (e.g., `hyalo set iterations/iteration-16-robustness.md --property status=completed`)
 - **Toggle tasks**: `hyalo task toggle <path> --all` (whole file), `--section "Tasks"` (by heading), `--line 5,7,9` (specific lines)

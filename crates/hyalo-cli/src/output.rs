@@ -343,9 +343,9 @@ const TASK_READ_RESULT_FILTER: &str =
 const TASK_DRY_RUN_RESULT_FILTER: &str =
     r#""\"\(.file)\":\(.line) [\(.old_status)] -> [\(.status)] \(.text)""#;
 
-/// `VaultSummary`: `{dead_ends, files, links, orphans, properties, recent_files, status, tags, tasks}`
+/// `VaultSummary`: `{dir, dead_ends, files, links, orphans, properties, recent_files, status, tags, tasks}`
 /// Compact single-line-per-section format (~20-30 lines regardless of vault size).
-const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
+const VAULT_SUMMARY_FILTER: &str = r#""kb dir: \(.dir)\nFiles: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -447,8 +447,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // TaskDryRunResult
         "done,file,line,old_status,status,text" => Some(TASK_DRY_RUN_RESULT_FILTER),
         // VaultSummary
-        "dead_ends,files,links,orphans,properties,recent_files,status,tags,tasks"
-        | "dead_ends,files,links,orphans,properties,recent_files,schema,status,tags,tasks" => {
+        "dead_ends,dir,files,links,orphans,properties,recent_files,status,tags,tasks"
+        | "dead_ends,dir,files,links,orphans,properties,recent_files,schema,status,tags,tasks" => {
             Some(VAULT_SUMMARY_FILTER)
         }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,

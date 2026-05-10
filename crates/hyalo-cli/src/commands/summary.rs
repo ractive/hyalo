@@ -334,6 +334,7 @@ pub fn summary(
     };
 
     let vault_summary = VaultSummary {
+        dir: dir.display().to_string(),
         files: file_counts,
         orphans,
         dead_ends,

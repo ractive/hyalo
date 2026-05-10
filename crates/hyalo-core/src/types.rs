@@ -150,6 +150,8 @@ pub struct LintSummary {
 /// High-level vault summary.
 #[derive(Debug, Clone, Serialize)]
 pub struct VaultSummary {
+    /// Resolved vault directory (display string).
+    pub dir: String,
     pub files: FileCounts,
     pub orphans: usize,
     pub dead_ends: usize,

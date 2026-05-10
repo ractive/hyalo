@@ -921,6 +921,17 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: Option<TypesAction>,
     },
+    /// Print the effective configuration (resolved .hyalo.toml path, dir, and all settings)
+    #[command(
+        name = "config",
+        display_order = 899,
+        long_about = "Print the effective configuration for the current working directory.\n\n\
+            Shows which .hyalo.toml is active (or none), its raw contents, and all resolved\n\
+            effective values: dir, cwd, format, hints, site_prefix, and more.\n\n\
+            OUTPUT: Line-by-line in text format; JSON object with --format json.\n\
+            SIDE EFFECTS: None (read-only)."
+    )]
+    Config,
     /// Generate shell completions for the given shell
     #[command(
         display_order = 900,
