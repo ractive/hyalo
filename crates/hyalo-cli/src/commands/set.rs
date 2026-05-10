@@ -58,26 +58,12 @@ pub(crate) fn is_date_typed_property(name: &str) -> bool {
         .any(|k| k.eq_ignore_ascii_case(name))
 }
 
-/// Returns `true` when `value` looks like a valid ISO 8601 date (`YYYY-MM-DD`).
+/// Returns `true` when `value` is exactly a YYYY-MM-DD ISO 8601 date.
 ///
-/// This is a heuristic check: month 01–12, day 01–31. Does not validate
-/// actual calendar dates (e.g. Feb 31).
+/// Delegates to `hyalo_core::util::is_iso8601_date` so `set` and the
+/// HYALO003 lint rule agree on what counts as a date.
 pub(crate) fn looks_like_date(value: &str) -> bool {
-    let b = value.as_bytes();
-    if b.len() < 10 {
-        return false;
-    }
-    if b[4] != b'-' || b[7] != b'-' {
-        return false;
-    }
-    for &i in &[0usize, 1, 2, 3, 5, 6, 8, 9] {
-        if !b[i].is_ascii_digit() {
-            return false;
-        }
-    }
-    let month = (b[5] - b'0') * 10 + (b[6] - b'0');
-    let day = (b[8] - b'0') * 10 + (b[9] - b'0');
-    (1..=12).contains(&month) && (1..=31).contains(&day)
+    hyalo_core::util::is_iso8601_date(value)
 }
 
 // ---------------------------------------------------------------------------

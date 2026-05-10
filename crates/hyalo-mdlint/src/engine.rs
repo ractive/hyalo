@@ -182,15 +182,13 @@ impl HyaloLintEngine {
     ) -> Vec<Diagnostic> {
         use crate::rules::hyalo003::check_date_keys;
 
-        let default_on: std::collections::HashSet<&str> = DEFAULT_ON.iter().copied().collect();
-
         // Is the rule enabled?
         let enabled = if let Some(ov) = config.rules.get("HYALO003")
             && let Some(b) = ov.enabled()
         {
             b
         } else {
-            default_on.contains("HYALO003")
+            DEFAULT_ON.contains(&"HYALO003")
         };
         if !enabled {
             return vec![];

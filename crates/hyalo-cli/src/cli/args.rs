@@ -1010,8 +1010,8 @@ pub(crate) enum ViewsAction {
     /// Any extra find flags passed after the view name are merged on top of
     /// the saved filter set (list filters extend, scalar flags override).
     ///
-    /// Example: `hyalo views open-tasks`
-    ///          `hyalo views drafts --tag project`
+    /// Example: `hyalo views run open-tasks`
+    ///          `hyalo views run drafts --tag project`
     #[command(
         external_subcommand = false,
         long_about = "Run a saved view as if you called `hyalo find --view <NAME>`.\n\n\

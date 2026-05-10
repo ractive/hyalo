@@ -997,9 +997,11 @@ fn mv_bare_wikilink_all_forms_rewritten() {
         content.contains("[[sub/b#sec|a]]"),
         "fragment+alias: {content}"
     );
+    // The original `[[B]]` (uppercase) must no longer appear as a bare wikilink;
+    // it must have been rewritten to either `[[sub/b]]` or `[[sub/B]]`.
     assert!(
-        content.contains("[[sub/b]]") || content.contains("[[sub/B]]"),
-        "case: {content}"
+        !content.contains("[[B]]"),
+        "case-mismatched bare wikilink [[B]] was not rewritten: {content}"
     );
 }
 
