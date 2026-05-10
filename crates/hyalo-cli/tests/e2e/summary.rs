@@ -151,6 +151,20 @@ fn summary_json_has_all_fields() {
 
     // recent_files
     assert!(json["results"]["recent_files"].is_array());
+
+    // BUG-3 (iter-131): a top-level `dir` field must be exposed at the
+    // envelope root so consumers can read it without traversing into
+    // `results`.
+    let top_dir = json["dir"]
+        .as_str()
+        .expect("envelope `dir` must be a string");
+    let inner_dir = json["results"]["dir"]
+        .as_str()
+        .expect("results.dir must still be a string");
+    assert_eq!(
+        top_dir, inner_dir,
+        "envelope `dir` must mirror the resolved kb dir from results"
+    );
 }
 
 #[test]

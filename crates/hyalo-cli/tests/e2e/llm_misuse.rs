@@ -172,6 +172,96 @@ fn warning_fires_only_once_for_multiple_file_args() {
 }
 
 #[test]
+fn find_file_with_abs_path_inside_vault_matches() {
+    // BUG-1 (iter-131): `find --file <abs-path-inside-vault>` previously
+    // emitted the misuse warning but matched against the unstripped absolute
+    // path, returning zero results.
+    let project = make_project();
+    let canonical_project = dunce::canonicalize(project.path()).unwrap();
+    let abs_file = canonical_project
+        .join("kb/iterations/iteration-17.md")
+        .to_string_lossy()
+        .into_owned();
+
+    let assert = hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["find", "--file", &abs_file, "--format", "json"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("hyalo is configured with dir = \"kb\""),
+        "expected misuse warning, got: {stderr}"
+    );
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    let total = v.get("total").and_then(serde_json::Value::as_u64);
+    assert_eq!(
+        total,
+        Some(1),
+        "expected exactly one match for abs-path inside vault, got: {stdout}"
+    );
+}
+
+#[test]
+fn find_file_with_relative_path_unchanged() {
+    // Regression guard for BUG-1's fix: relative paths must keep working.
+    let project = make_project();
+
+    let assert = hyalo_no_hints()
+        .current_dir(project.path())
+        .args([
+            "find",
+            "--file",
+            "iterations/iteration-17.md",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid json");
+    assert_eq!(v.get("total").and_then(serde_json::Value::as_u64), Some(1));
+}
+
+#[test]
+fn find_file_with_abs_path_outside_vault_errors() {
+    // UX-2 (iter-131): an abs path outside the vault must produce a clear
+    // error, not a silently empty result.
+    let project = make_project();
+    let outside = TempDir::new().unwrap();
+    write_md(
+        outside.path(),
+        "stray.md",
+        "---\ntitle: Stray\n---\nBody.\n",
+    );
+    let canonical_outside = dunce::canonicalize(outside.path()).unwrap();
+    let abs_file = canonical_outside
+        .join("stray.md")
+        .to_string_lossy()
+        .into_owned();
+
+    let assert = hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["find", "--file", &abs_file, "--format", "json"])
+        .assert()
+        .failure();
+
+    let stdout_or_stderr = {
+        let mut s = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        s.push_str(&String::from_utf8(assert.get_output().stderr.clone()).unwrap());
+        s
+    };
+    assert!(
+        stdout_or_stderr.contains("outside vault"),
+        "expected outside-vault error from find --file, got: {stdout_or_stderr}"
+    );
+}
+
+#[test]
 fn quiet_flag_suppresses_misuse_warning() {
     let project = make_project();
     let vault = project.path().join("kb");

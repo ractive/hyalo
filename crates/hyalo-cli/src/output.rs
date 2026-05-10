@@ -166,6 +166,17 @@ pub fn build_envelope_value(
     if let Some(t) = total {
         envelope["total"] = serde_json::json!(t);
     }
+    // Hoist a top-level `dir` field when results carry one (e.g. `summary`),
+    // so consumers can read it without traversing into `results`. This matches
+    // the shape of `hyalo config --format json`, which surfaces `dir` at the
+    // top level.
+    if let Some(dir) = value
+        .as_object()
+        .and_then(|o| o.get("dir"))
+        .and_then(serde_json::Value::as_str)
+    {
+        envelope["dir"] = serde_json::json!(dir);
+    }
     envelope
 }
 
@@ -1523,12 +1534,18 @@ fn format_lint_rules_mutation_text(map: &serde_json::Map<String, serde_json::Val
         }
     }
 
-    // Indicate write vs dry-run.
+    // Indicate write vs dry-run vs no-op.
+    let wrote = map
+        .get("wrote")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
     s.push('\n');
     if dry_run {
         let _ = write!(s, "  dry-run, would write {config_path}");
-    } else {
+    } else if wrote {
         let _ = write!(s, "  wrote {config_path}");
+    } else {
+        let _ = write!(s, "  {config_path} unchanged");
     }
 
     s

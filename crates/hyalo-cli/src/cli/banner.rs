@@ -12,14 +12,28 @@
 /// an explicit path so unit tests can exercise it without mutating the process state.
 pub(crate) fn cwd_help_banner() -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
-    cwd_help_banner_for(&cwd)
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    cwd_help_banner_for_tty(&cwd, is_tty)
 }
 
 /// Inner implementation that accepts an explicit CWD path.
 ///
 /// Factored out so unit tests can pass any directory without changing the process
 /// working directory.
+#[cfg(test)]
 pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
+    cwd_help_banner_for_tty(cwd, true)
+}
+
+/// Variant that controls emoji rendering based on TTY.
+///
+/// When `is_tty` is `false` (stdout is piped/redirected), emoji prefixes are
+/// suppressed so that `hyalo --help | cat` produces clean ASCII text. The
+/// banner content is otherwise unchanged.
+pub(crate) fn cwd_help_banner_for_tty(cwd: &std::path::Path, is_tty: bool) -> Option<String> {
+    let info_prefix = if is_tty { "\u{2139}\u{fe0f}  " } else { "" };
+    let warn_prefix = if is_tty { "\u{26a0}\u{fe0f}  " } else { "" };
+
     // Case 1: CWD contains .hyalo.toml — banner tells the user which dir is active.
     let local_toml = cwd.join(".hyalo.toml");
     if local_toml.is_file() {
@@ -30,7 +44,7 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
             .display()
             .to_string();
         return Some(format!(
-            "\u{2139}\u{fe0f}  hyalo runs against `{dir_value}` (from ./.hyalo.toml). \
+            "{info_prefix}hyalo runs against `{dir_value}` (from ./.hyalo.toml). \
              Don't `cd` into it; pass paths relative to `{dir_value}`.\n"
         ));
     }
@@ -42,7 +56,7 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
     while let Some(ancestor) = current {
         let toml_path = ancestor.join(".hyalo.toml");
         if toml_path.is_file() {
-            if let Some(banner) = check_inside_vault(&cwd_canonical, ancestor) {
+            if let Some(banner) = check_inside_vault(&cwd_canonical, ancestor, warn_prefix) {
                 return Some(banner);
             }
             // Closest ancestor config found; stop walking even if no banner.
@@ -60,6 +74,7 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
 fn check_inside_vault(
     cwd_canonical: &std::path::Path,
     config_dir: &std::path::Path,
+    warn_prefix: &str,
 ) -> Option<String> {
     // Use the real config loader so we get the same `dir` resolution (and the
     // same malformed-file fallback) as the main CLI.
@@ -81,7 +96,7 @@ fn check_inside_vault(
     if cwd_canonical.starts_with(&vault_canonical) {
         let repo_root = config_dir.display();
         Some(format!(
-            "\u{26a0}\u{fe0f}  You are inside the kb folder. \
+            "{warn_prefix}You are inside the kb folder. \
              Run hyalo from `{repo_root}` instead — `dir` is auto-resolved from .hyalo.toml.\n"
         ))
     } else {
@@ -193,6 +208,47 @@ mod tests {
         assert!(
             result.is_none(),
             "expected None for sibling of vault, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn info_banner_omits_emoji_when_not_tty() {
+        let tmp = make_temp();
+        fs::create_dir_all(tmp.path().join("kb")).unwrap();
+        fs::write(tmp.path().join(".hyalo.toml"), "dir = \"kb\"\n").unwrap();
+
+        let tty = cwd_help_banner_for_tty(tmp.path(), true).expect("tty banner");
+        let piped = cwd_help_banner_for_tty(tmp.path(), false).expect("piped banner");
+
+        assert!(tty.contains('\u{2139}'), "TTY banner should keep emoji");
+        assert!(
+            !piped.contains('\u{2139}') && !piped.contains('\u{26a0}'),
+            "piped banner must drop emoji prefixes, got: {piped:?}"
+        );
+        assert!(
+            piped.contains("runs against `kb`"),
+            "piped banner keeps text, got: {piped:?}"
+        );
+    }
+
+    #[test]
+    fn warn_banner_omits_emoji_when_not_tty() {
+        let tmp = make_temp();
+        fs::create_dir_all(tmp.path().join("kb")).unwrap();
+        fs::write(tmp.path().join(".hyalo.toml"), "dir = \"kb\"\n").unwrap();
+        let cwd = tmp.path().join("kb");
+
+        let tty = cwd_help_banner_for_tty(&cwd, true).expect("tty warn banner");
+        let piped = cwd_help_banner_for_tty(&cwd, false).expect("piped warn banner");
+
+        assert!(tty.contains('\u{26a0}'), "TTY warn banner keeps emoji");
+        assert!(
+            !piped.contains('\u{26a0}') && !piped.contains('\u{2139}'),
+            "piped warn banner drops emoji, got: {piped:?}"
+        );
+        assert!(
+            piped.contains("inside the kb folder"),
+            "piped warn banner keeps text, got: {piped:?}"
         );
     }
 

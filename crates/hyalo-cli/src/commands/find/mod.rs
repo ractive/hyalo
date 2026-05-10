@@ -110,6 +110,36 @@ pub fn find(
     // Canonicalize the vault directory for link resolution
     let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
 
+    // Rewrite each --file argument to its vault-relative form when it is an
+    // absolute path inside the vault (mirrors what `set --file` etc. do via
+    // `resolve_file_user`). An absolute path *outside* the vault is escalated
+    // to a UserError so we never silently return zero results.
+    let mut rewritten_files: Vec<String> = Vec::with_capacity(files_arg.len());
+    let mut warned_misuse = false;
+    for f in files_arg {
+        let p = std::path::Path::new(f);
+        if p.is_absolute() {
+            if let Some(rel) = discovery::strip_absolute_vault_prefix(dir, f) {
+                if !warned_misuse {
+                    crate::warn::warn_llm_misuse(dir);
+                    warned_misuse = true;
+                }
+                rewritten_files.push(rel);
+            } else {
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    format,
+                    "file resolves outside vault boundary",
+                    Some(f),
+                    Some("pass a path relative to the vault dir"),
+                    None,
+                )));
+            }
+        } else {
+            rewritten_files.push(f.clone());
+        }
+    }
+    let files_arg: &[String] = &rewritten_files;
+
     // Filter entries by --file / --glob scoping
     let scoped_entries = filter_index_entries(index.entries(), files_arg, globs)?;
 

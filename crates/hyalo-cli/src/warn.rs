@@ -79,6 +79,31 @@ pub fn warn(msg: impl AsRef<str>) {
     eprintln!("warning: {msg}");
 }
 
+/// Emit an informational note to stderr (prefixed with `note:`).
+///
+/// Same dedup/quiet semantics as [`warn`], but uses the `note:` prefix so the
+/// message reads as advisory rather than a warning. Callers should pass the
+/// bare message text — do not include a leading `note:` (the function adds it).
+pub fn note(msg: impl AsRef<str>) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let msg = msg.as_ref();
+
+    if let Ok(mut guard) = SUPPRESSED.lock()
+        && let Some(ref mut map) = *guard
+    {
+        if let Some(count) = map.get_mut(msg) {
+            *count += 1;
+            return;
+        }
+        map.insert(msg.to_owned(), 0);
+    }
+
+    eprintln!("note: {msg}");
+}
+
 /// Reset the warning system to its initial state.
 ///
 /// **For use in tests only.**  Clears the dedup map and resets the quiet flag
