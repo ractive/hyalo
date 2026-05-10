@@ -141,6 +141,10 @@ pub(crate) struct ResolvedDefaults {
     /// warnings are promoted to errors.  From `[lint] strict = true` in `.hyalo.toml`.
     /// Can be overridden per-invocation with `hyalo lint --strict`.
     pub(crate) lint_strict: bool,
+    /// `true` when a `.hyalo.toml` file was found AND parsed successfully.
+    /// `false` when the file was missing, unreadable, or malformed (in which
+    /// case all other fields are hardcoded defaults).
+    pub(crate) loaded_from_file: bool,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -178,6 +182,7 @@ impl ResolvedDefaults {
             default_limit: None,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
             lint_strict: false,
+            loaded_from_file: false,
         }
     }
 
@@ -319,6 +324,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         default_limit: cfg.default_limit,
         case_insensitive_mode,
         lint_strict,
+        loaded_from_file: true,
     }
 }
 

@@ -359,12 +359,11 @@ fn run_inner() -> Result<(), AppError> {
         let report =
             crate::commands::config::collect_config_report(&cwd).map_err(AppError::Internal)?;
         match crate::commands::config::run_config(&report, format) {
-            Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
+            CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
                 print!("{output}");
                 return Ok(());
             }
-            Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
-            Err(e) => return Err(AppError::Internal(e)),
+            CommandOutcome::UserError(output) => return Err(AppError::User(output)),
         }
     }
     // Merge: CLI args override config, config overrides hardcoded defaults.
@@ -377,6 +376,10 @@ fn run_inner() -> Result<(), AppError> {
     // We need this before `config` is potentially shadowed by the target config.
     let cwd_config_resolved_dir = config.config_dir.join(&config.dir);
     let cwd_config_dir_str = config.dir.display().to_string();
+    // Whether the CWD `.hyalo.toml` was actually parsed cleanly. Used to gate
+    // the redundant-`--dir` warning so we don't claim a malformed/ignored config
+    // "already sets dir = ...".
+    let cwd_config_parsed_ok = config.loaded_from_file;
     // Determine the effective vault directory and the config to use:
     //
     // - When --dir is explicitly provided on the CLI, validate first, then
@@ -409,8 +412,9 @@ fn run_inner() -> Result<(), AppError> {
 
     // Warn when --dir is redundant: the user passed a dir that matches what
     // .hyalo.toml would have resolved to anyway. Only fires when .hyalo.toml
-    // is actually present in CWD (otherwise there's no config to be redundant with).
-    if dir_from_cli && cwd_has_config {
+    // is present AND parsed successfully — otherwise the loader fell back to
+    // defaults and the message would be misleading.
+    if dir_from_cli && cwd_has_config && cwd_config_parsed_ok {
         // Compare the CLI-provided dir against what the CWD config resolved to.
         // `cwd_config_resolved_dir` was captured before `config` was shadowed.
         if let (Ok(a), Ok(b)) = (

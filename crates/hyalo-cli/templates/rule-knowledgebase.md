@@ -6,7 +6,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Search/filter**: `hyalo find --property status=planned --tag iteration`
 - **Body search**: `hyalo find "broken links"`
 - **Title regex**: `hyalo find --property 'title~=link'`
-- **Inspect config**: `hyalo config` — shows resolved dir, config path, hints, format, site_prefix
+- **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
 - **Read content/sections**: `hyalo read <path>` or `hyalo read <path> --section "Heading"`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`

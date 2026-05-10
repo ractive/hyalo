@@ -39,7 +39,7 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 # Omit --dir if the project root itself is the knowledgebase.
 hyalo init --dir docs
 
-# Inspect the effective configuration (resolved dir, config path, hints, format, site_prefix)
+# Inspect the effective configuration (effective dir, config path, hints, format, site_prefix)
 hyalo config                             # text by default on a terminal
 hyalo config --format json               # structured output for scripting / LLM agents
 

@@ -23,7 +23,12 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
     // Case 1: CWD contains .hyalo.toml — banner tells the user which dir is active.
     let local_toml = cwd.join(".hyalo.toml");
     if local_toml.is_file() {
-        let dir_value = read_dir_from_toml(&local_toml).unwrap_or_else(|| ".".to_owned());
+        // Use the same loader as the rest of the CLI so the banner reflects
+        // the effective `dir` (and falls back gracefully on malformed configs).
+        let dir_value = crate::config::load_config_from(cwd)
+            .dir
+            .display()
+            .to_string();
         return Some(format!(
             "\u{2139}\u{fe0f}  hyalo runs against `{dir_value}` (from ./.hyalo.toml). \
              Don't `cd` into it; pass paths relative to `{dir_value}`.\n"
@@ -37,7 +42,7 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
     while let Some(ancestor) = current {
         let toml_path = ancestor.join(".hyalo.toml");
         if toml_path.is_file() {
-            if let Some(banner) = check_inside_vault(&cwd_canonical, ancestor, &toml_path) {
+            if let Some(banner) = check_inside_vault(&cwd_canonical, ancestor) {
                 return Some(banner);
             }
             // Closest ancestor config found; stop walking even if no banner.
@@ -50,18 +55,20 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
 }
 
 /// Check whether `cwd_canonical` is inside the vault configured by the `.hyalo.toml`
-/// at `toml_path` (which lives in `config_dir`). Returns the warning banner string
-/// if so, or `None` if not inside the vault (or on any error).
+/// in `config_dir`. Returns the warning banner string if so, or `None` if not
+/// inside the vault (or on any error).
 fn check_inside_vault(
     cwd_canonical: &std::path::Path,
     config_dir: &std::path::Path,
-    toml_path: &std::path::Path,
 ) -> Option<String> {
-    let dir_value = read_dir_from_toml(toml_path).unwrap_or_else(|| ".".to_owned());
+    // Use the real config loader so we get the same `dir` resolution (and the
+    // same malformed-file fallback) as the main CLI.
+    let resolved = crate::config::load_config_from(config_dir);
+    let dir_value = resolved.dir;
 
     // dir = "." means the vault root IS the config dir — CWD in an ancestor can never
     // be "inside" it in the misuse sense.
-    if std::path::Path::new(&dir_value)
+    if dir_value
         .components()
         .eq(std::path::Path::new(".").components())
     {
@@ -80,19 +87,6 @@ fn check_inside_vault(
     } else {
         None
     }
-}
-
-/// Read the `dir` field from a `.hyalo.toml` file.
-///
-/// Returns `None` if the file cannot be read or parsed, or if no `dir` key is present
-/// (caller should default to `"."` in that case).
-fn read_dir_from_toml(path: &std::path::Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let parsed: toml::Value = toml::from_str(&text).ok()?;
-    parsed
-        .get("dir")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
 }
 
 // ---------------------------------------------------------------------------

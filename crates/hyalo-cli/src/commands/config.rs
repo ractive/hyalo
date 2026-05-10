@@ -59,14 +59,14 @@ pub(crate) fn collect_config_report(cwd: &Path) -> anyhow::Result<ConfigReport> 
 }
 
 /// Run `hyalo config` and return a `CommandOutcome` ready for the output pipeline.
-pub(crate) fn run_config(report: &ConfigReport, format: Format) -> anyhow::Result<CommandOutcome> {
+pub(crate) fn run_config(report: &ConfigReport, format: Format) -> CommandOutcome {
     match format {
         Format::Json => run_config_json(report),
-        Format::Text => Ok(run_config_text(report)),
+        Format::Text => run_config_text(report),
     }
 }
 
-fn run_config_json(report: &ConfigReport) -> anyhow::Result<CommandOutcome> {
+fn run_config_json(report: &ConfigReport) -> CommandOutcome {
     let obj = json!({
         "config_path": report.config_path.as_ref().map(|p| p.display().to_string()),
         "raw_contents": report.raw_contents,
@@ -77,11 +77,7 @@ fn run_config_json(report: &ConfigReport) -> anyhow::Result<CommandOutcome> {
         "site_prefix": report.site_prefix,
     });
 
-    let json_str = serde_json::to_string(&obj).context("serialising config JSON")?;
-    Ok(CommandOutcome::success(format_success(
-        Format::Json,
-        &serde_json::from_str::<serde_json::Value>(&json_str).context("re-parsing config JSON")?,
-    )))
+    CommandOutcome::success(format_success(Format::Json, &obj))
 }
 
 fn run_config_text(report: &ConfigReport) -> CommandOutcome {
