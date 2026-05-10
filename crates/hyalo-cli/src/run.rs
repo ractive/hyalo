@@ -284,10 +284,9 @@ fn run_inner() -> Result<(), AppError> {
             // parent context is already a known subcommand like `properties`.
             if e.kind() == clap::error::ErrorKind::InvalidSubcommand {
                 use clap::error::{ContextKind, ContextValue};
-                let parent_is_properties = raw_args
-                    .iter()
-                    .any(|a| a == "properties" || a == "property");
-                let parent_is_views = raw_args.iter().any(|a| a == "views");
+                let top_sub = crate::suggest::top_level_subcommand(&raw_args, &Cli::command());
+                let parent_is_properties = matches!(top_sub, Some("properties") | Some("property"));
+                let parent_is_views = top_sub == Some("views");
                 if let Some(invalid) = e.context().find_map(|(k, v)| {
                     if k == ContextKind::InvalidSubcommand {
                         if let ContextValue::String(s) = v {

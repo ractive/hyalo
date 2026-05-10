@@ -1216,6 +1216,12 @@ fn mv_dot_slash_wikilink_unrelated_not_rewritten() {
         .unwrap();
     assert!(mv_out.status.success(), "mv failed");
 
+    let json: serde_json::Value = serde_json::from_slice(&mv_out.stdout).unwrap();
+    assert_eq!(
+        json["results"]["total_links_updated"], 0,
+        "[[./c]] should not be rewritten when moving unrelated file b.md"
+    );
+
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(
         content.contains("[[./c]]"),

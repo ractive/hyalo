@@ -435,8 +435,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
     match key_sig {
         // PropertyInfo
         "name,type,value" => Some(PROPERTY_INFO_FILTER),
-        // PropertySummaryEntry
-        "count,name,type" => Some(PROPERTY_SUMMARY_ENTRY_FILTER),
+        // PropertySummaryEntry (mixed_types is skipped when None, so two signatures)
+        "count,name,type" | "count,mixed_types,name,type" => Some(PROPERTY_SUMMARY_ENTRY_FILTER),
         // TagSummary
         "tags,total" => Some(TAG_SUMMARY_FILTER),
         // TagSummaryEntry
