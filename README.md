@@ -181,12 +181,16 @@ See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to 
 
 When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _context-aware_:
 
-- **`hyalo --help`** prepends a short banner confirming which vault `dir` is active — useful when working from shell history or AI agent loops.
+- **`hyalo --help`** prepends a short banner confirming which vault `dir` is active — useful when working from shell history or AI agent loops. Banner emojis (`ℹ️ `/`⚠️`) are TTY-gated: piped output is plain text.
 - **`hyalo --version`** appends `(kb dir: <dir>)` so the resolved directory is visible at a glance.
-- **`hyalo summary`** includes the resolved `kb dir:` as its first output line.
+- **`hyalo summary`** includes the resolved `kb dir:` as its first output line. The `--format json` envelope exposes the same value as a top-level `dir` field alongside `total`, `tags`, `properties`, etc.
 - **`hyalo config`** prints the full resolved configuration — handy for debugging `.hyalo.toml` resolution or feeding config into an LLM context.
 - Running from _inside_ the vault directory emits a warning banner suggesting you `cd ..` to the project root so hyalo can find `.hyalo.toml`.
-- Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time note that `--dir` is redundant.
+- Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time `note:` that `--dir` is redundant.
+
+### `--file` path semantics
+
+Subcommands that accept `--file <path>` (`find`, `set`, `backlinks`, `read`, `links`, `mv`) accept either a vault-relative path or an absolute path that points _inside_ the configured vault. Absolute in-vault paths are canonicalised to the vault-relative form (with a one-time stderr warning, since pasting absolute paths is usually an LLM accident). An absolute path that resolves _outside_ the vault exits non-zero with `error: file resolves outside vault boundary` rather than silently returning an empty result set.
 
 ### Saved views
 
