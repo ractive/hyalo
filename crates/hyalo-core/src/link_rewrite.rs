@@ -433,6 +433,23 @@ fn plan_inbound_rewrites(
             let matches = match span.kind {
                 LinkKind::Wikilink => {
                     let t = &span.link.target;
+                    // Normalize `./`-prefixed wikilinks (e.g. `[[./b]]`) to the
+                    // path form without the leading `./` (e.g. `b`).  Such links
+                    // are rare but valid and were missed before this fix.
+                    // `source_rel` gives the directory context so we can resolve
+                    // `./b` relative to the source file.
+                    // Resolve `./`-relative wikilink against the source file's dir.
+                    // e.g. `[[./b]]` in `notes/a.md` → `notes/b` (or `b` at root).
+                    let t_resolved: std::borrow::Cow<str> =
+                        if let Some(without_dot_slash) = t.strip_prefix("./") {
+                            std::borrow::Cow::Owned(normalize_target(
+                                Path::new(source_rel),
+                                without_dot_slash,
+                            ))
+                        } else {
+                            std::borrow::Cow::Borrowed(t.as_str())
+                        };
+                    let t = t_resolved.as_ref();
                     let is_bare = !(t.contains('/') || t.contains('\\'));
                     if is_bare {
                         // Bare wikilinks (e.g. [[note]]) are resolved via the
@@ -1605,5 +1622,73 @@ mod tests {
         assert_eq!(moved_plan.replacements.len(), 1);
         assert_eq!(moved_plan.replacements[0].old_text, "[peer](peer.md)");
         assert_eq!(moved_plan.replacements[0].new_text, "[peer](sub/peer.md)");
+    }
+
+    // --- BUG-1: `[[./relative]]` wikilink rewriting ---
+
+    #[test]
+    fn plan_mv_inbound_wikilink_dot_slash_plain() {
+        // `[[./b]]` in a.md should rewrite to `[[sub/b]]` after mv b.md → sub/b.md.
+        let vault = create_vault(&[("a.md", "See [[./b]] here\n"), ("b.md", "Content\n")]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].rel_path, "a.md");
+        assert_eq!(plans[0].replacements.len(), 1);
+        // The `./`-relative link should be rewritten to the new stem.
+        assert_eq!(plans[0].replacements[0].old_text, "[[./b]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b]]");
+    }
+
+    #[test]
+    fn plan_mv_inbound_wikilink_dot_slash_with_alias() {
+        let vault = create_vault(&[
+            ("a.md", "See [[./b|my note]] here\n"),
+            ("b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements.len(), 1);
+        assert_eq!(plans[0].replacements[0].old_text, "[[./b|my note]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b|my note]]");
+    }
+
+    #[test]
+    fn plan_mv_inbound_wikilink_dot_slash_with_section() {
+        let vault = create_vault(&[("a.md", "See [[./b#sec]] here\n"), ("b.md", "Content\n")]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements.len(), 1);
+        assert_eq!(plans[0].replacements[0].old_text, "[[./b#sec]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#sec]]");
+    }
+
+    #[test]
+    fn plan_mv_inbound_wikilink_dot_slash_with_section_and_alias() {
+        let vault = create_vault(&[
+            ("a.md", "See [[./b#sec|note]] here\n"),
+            ("b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements.len(), 1);
+        assert_eq!(plans[0].replacements[0].old_text, "[[./b#sec|note]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#sec|note]]");
+    }
+
+    #[test]
+    fn plan_mv_inbound_wikilink_unrelated_dot_slash_not_rewritten() {
+        // `[[./other]]` should NOT be rewritten when moving `b.md`.
+        let vault = create_vault(&[
+            ("a.md", "See [[./other]] here\n"),
+            ("b.md", "Content\n"),
+            ("other.md", "Other\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        // a.md should not appear in plans (it has no link to b.md).
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_none(),
+            "[[./other]] must not be rewritten for mv b.md"
+        );
     }
 }

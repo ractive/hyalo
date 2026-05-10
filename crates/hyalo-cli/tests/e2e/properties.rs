@@ -573,3 +573,65 @@ fn properties_bare_defaults_to_summary() {
         .expect("should produce results array in envelope");
     assert!(!arr.is_empty(), "should have properties in summary");
 }
+
+// ---------------------------------------------------------------------------
+// UX-3: properties summary collapses mixed-type properties to one row (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn properties_summary_mixed_type_collapses_to_one_row() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+
+    // "tags" as a list in one file, as a string in another — mixed types
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntags:\n  - rust\n  - cli\n---\n",
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\ntitle: B\ntags: single-string\n---\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["properties", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "properties should succeed");
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["results"].as_array().expect("results array");
+
+    // Find the "tags" entry
+    let tags_entries: Vec<&serde_json::Value> = arr
+        .iter()
+        .filter(|e| e["name"].as_str() == Some("tags"))
+        .collect();
+
+    // Should be exactly ONE row for "tags" (collapsed)
+    assert_eq!(
+        tags_entries.len(),
+        1,
+        "mixed-type 'tags' should collapse to one row, got: {tags_entries:?}"
+    );
+
+    let tags = tags_entries[0];
+    // Type should be "mixed"
+    assert_eq!(
+        tags["type"].as_str(),
+        Some("mixed"),
+        "mixed-type property should have type='mixed', got: {tags}"
+    );
+
+    // mixed_types breakdown should be present
+    let mixed = tags["mixed_types"]
+        .as_array()
+        .expect("mixed_types array should be present");
+    assert!(
+        mixed.len() >= 2,
+        "should have at least 2 type entries in mixed_types, got: {mixed:?}"
+    );
+}

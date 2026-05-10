@@ -337,7 +337,14 @@ fn insert_file_links(
         // written in any file always refers to `backlog/item.md` at the
         // vault root, never a path relative to the source file.  They
         // must NOT be passed through `normalize_target`.
-        if link.kind == LinkKind::Markdown
+        //
+        // Exception: `[[./something]]` uses an explicit current-directory
+        // prefix.  Normalize these the same way as markdown links so that
+        // `[[./b]]` in `notes/a.md` is indexed as `notes/b` and matches
+        // a backlink query for `notes/b.md`.
+        if link.kind == LinkKind::Wikilink && link.target.starts_with("./") {
+            link.target = normalize_target(&file_links.source, &link.target[2..]);
+        } else if link.kind == LinkKind::Markdown
             && (link.target.contains('/') || link.target.contains('\\'))
         {
             if link.target.starts_with('/') {

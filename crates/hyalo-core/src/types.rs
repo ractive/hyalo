@@ -28,6 +28,19 @@ pub struct PropertySummaryEntry {
     #[serde(rename = "type")]
     pub prop_type: String,
     pub count: usize,
+    /// Present only when the property has inconsistent types across files.
+    /// Each entry is `(type_name, file_count)` for that type variant.
+    /// When `None`, all occurrences share the same type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_types: Option<Vec<MixedTypeEntry>>,
+}
+
+/// One type variant in a mixed-type property summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct MixedTypeEntry {
+    #[serde(rename = "type")]
+    pub prop_type: String,
+    pub count: usize,
 }
 
 // ---------------------------------------------------------------------------

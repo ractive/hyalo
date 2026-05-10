@@ -417,22 +417,22 @@ fn bm25_text_output_includes_score() {
 }
 
 // ---------------------------------------------------------------------------
-// 12. Empty pattern is rejected
+// 12. Empty pattern is treated as no pattern — matches all files (UX-6)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn bm25_empty_pattern_rejected() {
+fn bm25_empty_pattern_matches_all_files() {
     let tmp = setup_bm25_vault();
     let output = hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path())
-        .args(["find", ""])
+        .args(["find", "", "--format", "json"])
         .output()
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "empty pattern should return a non-zero exit code"
+        output.status.success(),
+        "empty pattern should exit zero (matches all files)"
     );
 }
 
@@ -703,22 +703,22 @@ fn bm25_mixed_or_negation() {
 }
 
 // ---------------------------------------------------------------------------
-// 22. Whitespace-only query is rejected
+// 22. Whitespace-only query is treated as no pattern — matches all files (UX-6)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn bm25_whitespace_only_query_rejected() {
+fn bm25_whitespace_only_query_matches_all_files() {
     let tmp = setup_bm25_vault();
     let output = hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path())
-        .args(["find", "   "])
+        .args(["find", "   ", "--format", "json"])
         .output()
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "whitespace-only query should return a non-zero exit code"
+        output.status.success(),
+        "whitespace-only query should exit zero (treated as no pattern)"
     );
 }
 

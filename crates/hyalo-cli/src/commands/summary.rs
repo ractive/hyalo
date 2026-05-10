@@ -234,13 +234,16 @@ pub fn summary(
         directories,
     };
 
-    // Build properties summary
+    // Build properties summary (no mixed-type collapse for the summary view —
+    // it intentionally lists each (name, type) pair separately so the reader
+    // can see the distribution at a glance).
     let mut properties: Vec<PropertySummaryEntry> = property_counts
         .into_iter()
         .map(|((name, prop_type), count)| PropertySummaryEntry {
             name,
             prop_type,
             count,
+            mixed_types: None,
         })
         .collect();
     properties.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));

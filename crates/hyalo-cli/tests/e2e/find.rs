@@ -2842,43 +2842,39 @@ fn find_sort_property_empty_key_errors() {
 }
 
 // ---------------------------------------------------------------------------
-// Empty body pattern error
+// Empty body pattern — treated as "no pattern" (matches all files, UX-6)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn find_empty_body_pattern_errors() {
+fn find_empty_body_pattern_matches_all_files() {
     let tmp = setup_vault();
     let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
-    cmd.args(["find", ""]);
+    cmd.args(["find", "", "--format", "json"]);
     let output = cmd.output().unwrap();
     assert!(
-        !output.status.success(),
-        "empty pattern should exit non-zero"
+        output.status.success(),
+        "empty pattern should exit zero (matches all files)"
     );
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.contains("body pattern must not be empty"),
-        "stderr should contain error about empty pattern, got: {stderr}"
-    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::Value::Null);
+    assert!(json.is_object(), "should return JSON object, got: {stdout}");
 }
 
 #[test]
-fn find_whitespace_only_body_pattern_errors() {
+fn find_whitespace_only_body_pattern_matches_all_files() {
     let tmp = setup_vault();
     let mut cmd = hyalo_no_hints();
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
-    cmd.args(["find", "   "]);
+    cmd.args(["find", "   ", "--format", "json"]);
     let output = cmd.output().unwrap();
     assert!(
-        !output.status.success(),
-        "whitespace-only pattern should exit non-zero"
+        output.status.success(),
+        "whitespace-only pattern should exit zero (treated as no pattern)"
     );
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.contains("body pattern must not be empty"),
-        "stderr should contain error about empty pattern, got: {stderr}"
-    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or(serde_json::Value::Null);
+    assert!(json.is_object(), "should return JSON object, got: {stdout}");
 }
 
 // ---------------------------------------------------------------------------
@@ -3918,5 +3914,30 @@ fn find_desc_alias_for_reverse() {
     assert_eq!(
         json_reverse["results"], json_desc["results"],
         "--desc and --reverse should return identical results"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UX-6: `find ""` matches all files; combined with --tag still filters (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_empty_pattern_with_tag_filter_still_applies_tag() {
+    let tmp = setup_vault();
+    // setup_vault creates files with tags; use --tag to filter
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "", "--tag", "nonexistent-xyz", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "empty pattern with --tag should succeed"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // With a tag that no file has, total should be 0
+    assert_eq!(
+        json["total"], 0,
+        "empty pattern + nonexistent tag should return 0 results, got: {json}"
     );
 }

@@ -82,31 +82,43 @@ impl Rule for Hyalo001 {
     }
 }
 
-/// Returns `true` when `trimmed` starts with a bare `[]` or `[ ]` that is
-/// NOT already a proper task-list marker (e.g. `- [ ]` or `* [ ]`) and is
-/// NOT a markdown link / reference-link definition (e.g. `[ref]: url`,
-/// `[label](url)`).
+/// Returns `true` when `trimmed` (the line with leading whitespace removed)
+/// looks like a bare or malformed checkbox that should be `- [ ]`.
+///
+/// Detects two families:
+///
+/// 1. **Prefixed-bullet bare brackets** — a list bullet (`-`, `*`, `+`)
+///    followed by one or more spaces and then `[]` (no space inside).
+///    Examples: `- [] task`, `* [] done`.
+///    Already-correct forms `- [ ]`, `- [x]`, `- [X]` are excluded.
+///
+/// 2. **Bare prefix-less brackets** — `[]`, `[ ]`, `[x]`, `[X]` at the
+///    start of the line, NOT followed by `:` or `(` (which would make them
+///    markdown reference-link definitions or inline links).
 fn is_bare_checkbox(trimmed: &str) -> bool {
-    // Already a proper task-list item: starts with `- [ ]`, `- [x]`, `* [ ]`, etc.
-    if trimmed.starts_with("- [ ]")
-        || trimmed.starts_with("- [x]")
-        || trimmed.starts_with("- [X]")
-        || trimmed.starts_with("* [ ]")
-        || trimmed.starts_with("* [x]")
-        || trimmed.starts_with("* [X]")
-        || trimmed.starts_with("+ [ ]")
-        || trimmed.starts_with("+ [x]")
-        || trimmed.starts_with("+ [X]")
-    {
-        return false;
+    // Family 1: list bullet + space(s) + `[]`
+    // Pattern: `[-*+] +\[\]`
+    // Correct forms (`- [ ]`, `- [x]`, `- [X]`, `* [ ]`, etc.) must NOT fire.
+    for bullet in ['-', '*', '+'] {
+        let rest = match trimmed.strip_prefix(bullet) {
+            Some(r) if !r.is_empty() && r.starts_with(' ') => r,
+            _ => continue,
+        };
+        // rest starts with at least one space
+        let after_spaces = rest.trim_start_matches(' ');
+        // Match bare `[]` only — `[ ]` / `[x]` / `[X]` are proper forms.
+        if after_spaces.starts_with("[]") {
+            return true;
+        }
     }
 
+    // Family 2: no leading bullet — `[]`, `[ ]`, `[x]`, `[X]` at the line start.
+    // Already a proper task-list item means it has a bullet prefix already checked above.
     // Candidate prefix length (the closing `]` position).
     let prefix_len = if trimmed.starts_with("[ ]") {
         3
     } else if trimmed.starts_with("[]") || trimmed.starts_with("[x]") || trimmed.starts_with("[X]")
     {
-        // `[]`, `[x]`, `[X]` — `]` is at index 1 or 2.
         if trimmed.starts_with("[]") { 2 } else { 3 }
     } else {
         return false;
@@ -115,16 +127,33 @@ fn is_bare_checkbox(trimmed: &str) -> bool {
     // Reject markdown link forms: the next non-space character after `]` is
     // `:` (reference-link definition: `[x]: url`) or `(` (inline link: `[x](url)`).
     let after = trimmed[prefix_len..].trim_start_matches(' ');
-    if after.starts_with(':') || after.starts_with('(') {
-        return false;
-    }
-
-    true
+    !after.starts_with(':') && !after.starts_with('(')
 }
 
-/// Build the replacement string: strip the bare checkbox prefix and prepend `- [ ]`.
+/// Build the replacement string for a bare or malformed checkbox.
+///
+/// For prefixed-bullet bare brackets (`- [] task`, `* [] done`): insert the
+/// missing space so `- []` becomes `- [ ]`.
+///
+/// For prefix-less bare brackets (`[] task`, `[ ] task`, `[x] task`):
+/// prepend `- ` so the line becomes a proper list item.
 fn build_replacement(trimmed: &str) -> String {
-    // Determine what comes after the bare `[]` / `[ ]` / `[x]` / `[X]`
+    // Family 1: prefixed-bullet bare `[]`.
+    // e.g. `- [] task` → `- [ ] task`
+    for bullet in ['-', '*', '+'] {
+        let rest = match trimmed.strip_prefix(bullet) {
+            Some(r) if r.starts_with(' ') => r,
+            _ => continue,
+        };
+        let after_spaces = rest.trim_start_matches(' ');
+        if let Some(after_bracket) = after_spaces.strip_prefix("[]") {
+            // Preserve any spaces between bullet and bracket.
+            let spaces = &rest[..rest.len() - after_spaces.len()];
+            return format!("{bullet}{spaces}[ ]{after_bracket}");
+        }
+    }
+
+    // Family 2: prefix-less bare brackets.
     let (prefix_len, checked) = if trimmed.starts_with("[ ]") || trimmed.starts_with("[]") {
         let len = if trimmed.starts_with("[ ]") { 3 } else { 2 };
         (len, false)
@@ -215,6 +244,90 @@ mod tests {
         assert!(
             violations.is_empty(),
             "inline links should not trigger HYALO001"
+        );
+    }
+
+    // --- Prefixed-bullet bare bracket forms (BUG-5) ---
+
+    #[test]
+    fn detects_dash_bare_bracket() {
+        let violations = check("- [] Task one\n");
+        assert_eq!(violations.len(), 1, "- [] should fire HYALO001");
+    }
+
+    #[test]
+    fn detects_star_bare_bracket() {
+        let violations = check("* [] Task one\n");
+        assert_eq!(violations.len(), 1, "* [] should fire HYALO001");
+    }
+
+    #[test]
+    fn detects_plus_bare_bracket() {
+        let violations = check("+ [] Task one\n");
+        assert_eq!(violations.len(), 1, "+ [] should fire HYALO001");
+    }
+
+    #[test]
+    fn no_violation_for_dash_proper_task() {
+        // These are already correct; none should fire.
+        let violations = check("- [ ] Task\n- [x] Done\n- [X] Also done\n");
+        assert!(
+            violations.is_empty(),
+            "proper task-list forms must not trigger HYALO001"
+        );
+    }
+
+    #[test]
+    fn no_violation_for_star_proper_task() {
+        let violations = check("* [ ] Task\n* [x] Done\n");
+        assert!(
+            violations.is_empty(),
+            "* [ ] forms must not trigger HYALO001"
+        );
+    }
+
+    #[test]
+    fn autofix_dash_bare_bracket() {
+        // `- [] task` → `- [ ] task`
+        let violations = check("- [] Task one\n");
+        assert_eq!(violations.len(), 1);
+        let fix = violations[0].fix.as_ref().expect("fix should be present");
+        assert_eq!(
+            fix.replacement.as_deref(),
+            Some("- [ ] Task one"),
+            "fix should insert space inside brackets"
+        );
+    }
+
+    #[test]
+    fn autofix_star_bare_bracket() {
+        let violations = check("* [] Task two\n");
+        assert_eq!(violations.len(), 1);
+        let fix = violations[0].fix.as_ref().unwrap();
+        assert_eq!(fix.replacement.as_deref(), Some("* [ ] Task two"));
+    }
+
+    #[test]
+    fn autofix_dash_bare_bracket_idempotent() {
+        let content = "- [] Task one\n";
+        let violations = check(content);
+        let fix = violations[0].fix.as_ref().unwrap();
+        let fixed = fix.replacement.as_deref().unwrap_or("");
+        let v2 = check(fixed);
+        assert!(v2.is_empty(), "- [] fix should be idempotent");
+    }
+
+    #[test]
+    fn indented_dash_bare_bracket() {
+        // Indented lists should also be caught.
+        let violations = check("  - [] indented task\n");
+        assert_eq!(violations.len(), 1, "indented - [] should fire HYALO001");
+        let fix = violations[0].fix.as_ref().unwrap();
+        // The replacement covers the trimmed portion: `- [] indented task` → `- [ ] indented task`
+        assert_eq!(
+            fix.replacement.as_deref(),
+            Some("- [ ] indented task"),
+            "fix should insert space inside brackets"
         );
     }
 }

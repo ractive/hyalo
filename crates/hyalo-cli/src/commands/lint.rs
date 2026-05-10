@@ -1716,7 +1716,23 @@ fn lint_one_file_extended(
             .any(|r| r.starts_with("FRONTMATTER") || r == "SCHEMA");
     if should_include_frontmatter {
         let has_tags = properties.contains_key("tags");
-        let fm_violations = validate_properties(rel_path, &properties, has_tags, schema);
+        let mut fm_violations = validate_properties(rel_path, &properties, has_tags, schema);
+
+        // Under --strict, the missing-type warning is promoted to an error.
+        // `validate_properties` only emits it when the schema is non-empty, but
+        // strict mode should catch missing `type` regardless — inject it when
+        // the schema was empty and the property is absent (BUG-3 / iter-133).
+        let already_has_missing_type = fm_violations
+            .iter()
+            .any(|v| v.kind == Some(VIOLATION_KIND_MISSING_TYPE));
+        if strict && !already_has_missing_type && !properties.contains_key("type") {
+            fm_violations.push(Violation {
+                severity: Severity::Warn,
+                kind: Some(VIOLATION_KIND_MISSING_TYPE),
+                message: "no 'type' property — validating against default schema only".to_owned(),
+            });
+        }
+
         for v in fm_violations {
             // In strict mode, promote the two targeted schema warnings to errors.
             // Match on the stable `kind` identifier rather than message text so

@@ -1129,3 +1129,102 @@ fn mv_bare_wikilink_backlinks_updated() {
         "a.md should appear as backlink for sub/b.md"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-1: mv should rewrite [[./relative]] wikilinks (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_dot_slash_wikilink_plain_rewritten() {
+    // [[./b]] in a.md should be rewritten when b.md is moved to sub/b.md.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[./b]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    let mv_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
+        .output()
+        .unwrap();
+    assert!(
+        mv_out.status.success(),
+        "mv failed: {:?}",
+        String::from_utf8_lossy(&mv_out.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[sub/b]]"),
+        "[[./b]] should be rewritten to [[sub/b]], got: {content}"
+    );
+}
+
+#[test]
+fn mv_dot_slash_wikilink_with_alias_rewritten() {
+    // [[./b|Alias]] should be rewritten to [[sub/b|Alias]].
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[./b|My Note]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    let mv_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
+        .output()
+        .unwrap();
+    assert!(mv_out.status.success(), "mv failed");
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[sub/b|My Note]]"),
+        "[[./b|My Note]] should become [[sub/b|My Note]], got: {content}"
+    );
+}
+
+#[test]
+fn mv_dot_slash_wikilink_with_section_rewritten() {
+    // [[./b#section]] should be rewritten to [[sub/b#section]].
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[./b#intro]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    let mv_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
+        .output()
+        .unwrap();
+    assert!(mv_out.status.success(), "mv failed");
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[sub/b#intro]]"),
+        "[[./b#intro]] should become [[sub/b#intro]], got: {content}"
+    );
+}
+
+#[test]
+fn mv_dot_slash_wikilink_unrelated_not_rewritten() {
+    // [[./c]] should NOT be rewritten when b.md is moved.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[./c]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+    write_md(tmp.path(), "c.md", "Other.\n");
+
+    let mv_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
+        .output()
+        .unwrap();
+    assert!(mv_out.status.success(), "mv failed");
+
+    let json: serde_json::Value = serde_json::from_slice(&mv_out.stdout).unwrap();
+    assert_eq!(
+        json["results"]["total_links_updated"], 0,
+        "[[./c]] should not be rewritten when moving unrelated file b.md"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[./c]]"),
+        "[[./c]] should not be rewritten when b.md is moved, got: {content}"
+    );
+}

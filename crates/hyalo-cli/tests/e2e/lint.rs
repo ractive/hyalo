@@ -1011,3 +1011,146 @@ fn create_index_outside_vault_text_shows_hint() {
         "expected hint in text output for outside-vault error, stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-3: lint exit code regression guard (iter-133)
+// Ensures exit code is always 0 for clean vaults and 1 for error violations.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_exit_code_is_zero_for_clean_vault() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = [\"title\"]\n",
+    );
+    write_md(
+        tmp.path(),
+        "clean.md",
+        "---\ntitle: Clean Note\ntype: note\n---\nBody text.\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint"])
+        .assert()
+        .code(0);
+}
+
+#[test]
+fn lint_exit_code_is_one_when_error_violations_found() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = [\"title\", \"date\"]\n",
+    );
+    // File is missing the required "date" property
+    write_md(tmp.path(), "bad.md", "---\ntitle: Missing Date\n---\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn lint_exit_code_is_one_for_strict_with_warnings() {
+    // --strict promotes missing-type warnings to errors → exit 1.
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    // File has no "type" property (warning-level without --strict)
+    write_md(tmp.path(), "no_type.md", "---\ntitle: No Type\n---\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict"])
+        .assert()
+        .code(1);
+}
+
+// ---------------------------------------------------------------------------
+// BUG-5: HYALO001 must detect `- []` and `* []` forms (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_hyalo001_detects_dash_bare_bracket() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "tasks.md",
+        "---\ntitle: Tasks\n---\n\n- [] Do something\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO001"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("HYALO001"),
+        "HYALO001 should fire for `- []`, stdout: {stdout}"
+    );
+    assert_eq!(output.status.code(), Some(1), "`- []` should cause exit 1");
+}
+
+#[test]
+fn lint_hyalo001_detects_star_bare_bracket() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "tasks.md",
+        "---\ntitle: Tasks\n---\n\n* [] Do something\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO001"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("HYALO001"),
+        "HYALO001 should fire for `* []`, stdout: {stdout}"
+    );
+    assert_eq!(output.status.code(), Some(1), "`* []` should cause exit 1");
+}
+
+#[test]
+fn lint_hyalo001_fix_dash_bare_bracket() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "tasks.md",
+        "---\ntitle: Tasks\n---\n\n- [] Do something\n",
+    );
+
+    // Apply fix
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "HYALO001"])
+        .assert()
+        .success();
+
+    // After fix, no HYALO001 violations remain
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO001"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "after --fix, HYALO001 should not fire"
+    );
+    let content = std::fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert!(
+        content.contains("- [ ] Do something"),
+        "fix should insert space: `- [ ] Do something`, got: {content}"
+    );
+}

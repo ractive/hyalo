@@ -66,6 +66,25 @@ pub(crate) fn looks_like_date(value: &str) -> bool {
     hyalo_core::util::is_iso8601_date(value)
 }
 
+/// Returns `true` when `value` has the `YYYY-MM-DD` structural shape
+/// (exactly 10 chars, digits in the right positions, dashes as separators)
+/// but without validating the calendar (month/day range).
+///
+/// Used to distinguish "looks like a date but is invalid" from "not a date
+/// at all" so we can emit a hard error in the former case and a soft note
+/// in the latter.
+fn has_date_shape(value: &str) -> bool {
+    if value.len() != 10 {
+        return false;
+    }
+    let b = value.as_bytes();
+    b[4] == b'-'
+        && b[7] == b'-'
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[8..10].iter().all(u8::is_ascii_digit)
+}
+
 // ---------------------------------------------------------------------------
 // Parsing helper
 // ---------------------------------------------------------------------------
@@ -252,6 +271,24 @@ pub fn set(
                     return Ok(CommandOutcome::UserError(out));
                 }
             };
+            // Reject values that look like YYYY-MM-DD but fail calendar
+            // validation on date-typed properties (BUG-2 / iter-133).
+            if is_date_typed_property(name)
+                && has_date_shape(raw_value)
+                && !looks_like_date(raw_value)
+            {
+                let out = crate::output::format_error(
+                    format,
+                    &format!(
+                        "value {raw_value:?} is not a valid ISO 8601 date \
+                         (YYYY-MM-DD) for property '{name}'"
+                    ),
+                    None,
+                    Some("check month (01–12) and day ranges for the given month"),
+                    None,
+                );
+                return Ok(CommandOutcome::UserError(out));
+            }
             v.push((name, raw_value, value));
         }
         v

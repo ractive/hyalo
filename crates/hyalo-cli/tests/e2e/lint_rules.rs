@@ -140,3 +140,91 @@ fn set_severity_to_non_default_still_writes_override() {
         Some(true)
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-4: lint-rules remove must leave clean TOML (no empty tables) (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_rule_leaves_clean_toml() {
+    // Set a rule override, then remove it — the resulting TOML must not contain
+    // empty [lint] or [lint.rules] tables.
+    let project = make_project();
+    let toml_path = project.path().join(".hyalo.toml");
+
+    // Add an override
+    hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["lint-rules", "set", "HYALO002", "--severity", "warn"])
+        .assert()
+        .success();
+
+    // Verify the override was written
+    let before = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(
+        before.contains("HYALO002"),
+        "override should be present before remove, got:\n{before}"
+    );
+
+    // Remove the override
+    hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["lint-rules", "remove", "HYALO002"])
+        .assert()
+        .success();
+
+    // Verify no empty tables remain
+    let after = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(
+        !after.contains("[lint.rules]"),
+        "empty [lint.rules] table should be pruned, got:\n{after}"
+    );
+    assert!(
+        !after.contains("[lint.rules.HYALO002]"),
+        "removed rule section should be gone, got:\n{after}"
+    );
+    assert!(
+        !after.contains("[lint]"),
+        "empty [lint] table should be pruned, got:\n{after}"
+    );
+}
+
+#[test]
+fn remove_rule_with_multiple_overrides_only_prunes_target() {
+    // When two rules are set and one is removed, the other must remain.
+    let project = make_project();
+    let toml_path = project.path().join(".hyalo.toml");
+
+    hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["lint-rules", "set", "HYALO001", "--severity", "warn"])
+        .assert()
+        .success();
+
+    hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["lint-rules", "set", "HYALO002", "--severity", "warn"])
+        .assert()
+        .success();
+
+    hyalo_no_hints()
+        .current_dir(project.path())
+        .args(["lint-rules", "remove", "HYALO001"])
+        .assert()
+        .success();
+
+    let after = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(
+        !after.contains("HYALO001"),
+        "removed rule should be gone, got:\n{after}"
+    );
+    assert!(
+        after.contains("HYALO002"),
+        "remaining rule should still be present, got:\n{after}"
+    );
+    // [lint.rules] should still exist (still has HYALO002)
+    assert!(
+        after.contains("[lint") && after.contains("HYALO002"),
+        "lint section should remain for HYALO002, got:\n{after}"
+    );
+}

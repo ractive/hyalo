@@ -438,6 +438,11 @@ pub(crate) fn remove_rule(
         .with_context(|| format!("parsing {}", toml_path.display()))?;
 
     let removed = remove_rule_from_doc(&mut doc, rule_id);
+    // Prune empty `[lint.rules]` and `[lint]` tables that may have been left
+    // behind by the removal (mirrors the pruning done in `set_rule`).
+    if removed {
+        prune_empty_lint_tables(&mut doc);
+    }
 
     if !removed {
         let val = serde_json::json!({

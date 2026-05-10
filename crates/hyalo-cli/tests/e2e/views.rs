@@ -746,3 +746,73 @@ fn views_run_unknown_view_errors() {
         "expected 'unknown view' in error, stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-1: `hyalo views <name>` (bare, no subcommand) should hint at `views run`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn views_bare_name_hints_at_views_run() {
+    // setup_with_view creates a "drafts" view
+    let tmp = setup_with_view();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["views", "drafts"])
+        .output()
+        .unwrap();
+    // Should exit non-zero (not a valid subcommand)
+    assert!(
+        !output.status.success(),
+        "bare 'views <name>' should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should hint at `views run`
+    assert!(
+        stderr.contains("views run") || stderr.contains("run"),
+        "should hint at 'hyalo views run <name>', stderr: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UX-2: `find --view <typo>` should suggest closest view name (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_unknown_view_typo_suggests_correction() {
+    // "draft" is a 1-character typo of "drafts" (setup_with_view creates "drafts")
+    let tmp = setup_with_view();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "draft"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "unknown view should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("drafts"),
+        "should suggest 'drafts' for typo 'draft', stderr: {stderr}"
+    );
+}
+
+#[test]
+fn find_unknown_view_no_false_positive_suggestion() {
+    // A completely unrelated view name should get the generic "views list" hint,
+    // not a false-positive suggestion.
+    let tmp = setup_with_view();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "xyzzynonexistent"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "unknown view should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("views list") || stderr.contains("views"),
+        "should suggest 'views list' tip, stderr: {stderr}"
+    );
+    // Must NOT suggest "drafts" (edit distance too large)
+    assert!(
+        !stderr.contains("did you mean: hyalo find --view drafts"),
+        "should NOT suggest 'drafts' for a completely different name, stderr: {stderr}"
+    );
+}
