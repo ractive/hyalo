@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 pub mod append;
 pub mod backlinks;
+pub(crate) mod config;
 pub mod create_index;
 pub mod drop_index;
 pub mod find;

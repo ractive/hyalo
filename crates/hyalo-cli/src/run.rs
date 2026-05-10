@@ -4,6 +4,7 @@ use std::process;
 use clap::{CommandFactory, FromArgMatches};
 
 use crate::cli::args::{Cli, Commands, FindFilters, IndexFlags};
+use crate::cli::banner::cwd_help_banner;
 use crate::cli::help::{filter_examples, filter_long_help};
 use crate::commands::init as init_commands;
 use crate::dispatch::{CommandContext, dispatch};
@@ -74,6 +75,7 @@ fn effective_index_path_for(
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }
+        | Commands::Config
         | Commands::Views { .. }
         | Commands::Types { .. }
         | Commands::LintRules { .. } => None,
@@ -161,12 +163,31 @@ fn run_inner() -> Result<(), AppError> {
         .ne(std::path::Path::new(".").components());
     let hide_format = config.format.as_deref().is_some_and(|f| f != "json");
 
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd_has_config = cwd.join(".hyalo.toml").is_file();
+
     let mut cmd = Cli::command();
     if hide_dir {
         cmd = cmd.mut_arg("dir", |a| a.hide(true));
     }
     if hide_format {
         cmd = cmd.mut_arg("format", |a| a.hide(true));
+    }
+
+    // Append `(kb dir: <dir>)` to the version string when .hyalo.toml is in CWD.
+    if cwd_has_config {
+        let version_with_dir = format!(
+            "{} (kb dir: {})",
+            env!("CARGO_PKG_VERSION"),
+            config.dir.display()
+        );
+        cmd = cmd.version(version_with_dir);
+    }
+
+    // Prepend CWD-aware banner when relevant (info if .hyalo.toml in CWD,
+    // warning if running from inside the vault). Shown by both -h and --help.
+    if let Some(banner) = cwd_help_banner() {
+        cmd = cmd.before_help(banner.clone()).before_long_help(banner);
     }
 
     // Apply runtime-filtered help text so that examples and cookbook entries
@@ -288,7 +309,10 @@ fn run_inner() -> Result<(), AppError> {
     if cli.count
         && matches!(
             cli.command,
-            Commands::Init { .. } | Commands::Deinit | Commands::Completion { .. }
+            Commands::Init { .. }
+                | Commands::Deinit
+                | Commands::Completion { .. }
+                | Commands::Config
         )
     {
         eprintln!("{COUNT_UNSUPPORTED_ERROR}");
@@ -320,12 +344,42 @@ fn run_inner() -> Result<(), AppError> {
         clap_complete::generate(shell, &mut cmd, "hyalo", &mut std::io::stdout());
         return Ok(());
     }
+    // `config` inspects CWD directly and does not need normal pipeline setup.
+    // Dispatch before config validation (dir-doesn't-exist check) so it always works.
+    if let Commands::Config = cli.command {
+        // Determine output format (respect --format if given; otherwise default to Text
+        // since this command is read-only introspection, not a pipeline command).
+        let format = cli.format.unwrap_or_else(|| {
+            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                crate::output::Format::Text
+            } else {
+                crate::output::Format::Json
+            }
+        });
+        let report =
+            crate::commands::config::collect_config_report(&cwd).map_err(AppError::Internal)?;
+        match crate::commands::config::run_config(&report, format) {
+            CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
+                print!("{output}");
+                return Ok(());
+            }
+            CommandOutcome::UserError(output) => return Err(AppError::User(output)),
+        }
+    }
     // Merge: CLI args override config, config overrides hardcoded defaults.
     // Track whether --dir was explicitly passed (not from config) so hints
     // can omit it when the user relies on .hyalo.toml.
     let dir_from_cli = cli.dir.is_some();
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
+    // Save the CWD-derived vault dir for the redundant-dir warning below.
+    // We need this before `config` is potentially shadowed by the target config.
+    let cwd_config_resolved_dir = config.config_dir.join(&config.dir);
+    let cwd_config_dir_str = config.dir.display().to_string();
+    // Whether the CWD `.hyalo.toml` was actually parsed cleanly. Used to gate
+    // the redundant-`--dir` warning so we don't claim a malformed/ignored config
+    // "already sets dir = ...".
+    let cwd_config_parsed_ok = config.loaded_from_file;
     // Determine the effective vault directory and the config to use:
     //
     // - When --dir is explicitly provided on the CLI, validate first, then
@@ -355,6 +409,24 @@ fn run_inner() -> Result<(), AppError> {
     };
     // The directory where .hyalo.toml lives. Views/types are stored there.
     let config_dir = config.config_dir.clone();
+
+    // Warn when --dir is redundant: the user passed a dir that matches what
+    // .hyalo.toml would have resolved to anyway. Only fires when .hyalo.toml
+    // is present AND parsed successfully — otherwise the loader fell back to
+    // defaults and the message would be misleading.
+    if dir_from_cli && cwd_has_config && cwd_config_parsed_ok {
+        // Compare the CLI-provided dir against what the CWD config resolved to.
+        // `cwd_config_resolved_dir` was captured before `config` was shadowed.
+        if let (Ok(a), Ok(b)) = (
+            dunce::canonicalize(&dir),
+            dunce::canonicalize(&cwd_config_resolved_dir),
+        ) && a == b
+        {
+            crate::warn::warn(format!(
+                "note: --dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
+            ));
+        }
+    }
 
     // Validate that the resolved dir exists and is a directory (for the
     // non-CLI case where dir comes from .hyalo.toml).
@@ -827,6 +899,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
+            | Commands::Config
             | Commands::Views { .. }
             | Commands::LintRules { .. } => None,
         }

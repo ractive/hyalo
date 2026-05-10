@@ -1464,5 +1464,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ),
             }
         }
+        // Config is dispatched as an early-return in run.rs before dispatch() is called.
+        Commands::Config => unreachable!("Config command is handled before dispatch"),
     }
 }
