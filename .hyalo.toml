@@ -141,3 +141,8 @@ properties = ["status=planned"]
 [views.stale-in-progress]
 fields = ["tasks"]
 properties = ["status=in-progress"]
+
+[lint]
+
+[lint.rules]
+MD013 = true

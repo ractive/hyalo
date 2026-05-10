@@ -65,11 +65,19 @@ pub fn find(
     config_language: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Result<CommandOutcome> {
-    if pattern.is_some_and(|p| p.trim().is_empty()) {
-        return Ok(CommandOutcome::UserError(
-            "body pattern must not be empty; omit the pattern to match all files".to_owned(),
-        ));
-    }
+    // An empty-string pattern is accepted as "no body filter" rather than
+    // being rejected with an error.  This makes scripted callers that build
+    // query strings from variables work without special-casing the empty case.
+    // On an interactive terminal (stderr is a TTY) we emit a one-line note so
+    // the user doesn't accidentally rely on this behaviour without knowing it.
+    let pattern = if pattern.is_some_and(|p| p.trim().is_empty()) {
+        if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+            eprintln!("note: empty body pattern treated as no pattern (matches all files)");
+        }
+        None
+    } else {
+        pattern
+    };
 
     let sort_needs_backlinks = matches!(sort, Some(SortField::BacklinksCount));
     let sort_needs_links = matches!(sort, Some(SortField::LinksCount));

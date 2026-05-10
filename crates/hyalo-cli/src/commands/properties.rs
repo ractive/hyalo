@@ -7,7 +7,7 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
-use hyalo_core::types::PropertySummaryEntry;
+use hyalo_core::types::{MixedTypeEntry, PropertySummaryEntry};
 use serde::Serialize;
 
 /// Aggregate property summary using pre-scanned index data.
@@ -21,7 +21,8 @@ pub fn properties_summary(
     format: Format,
     limit: Option<usize>,
 ) -> Result<CommandOutcome> {
-    let mut agg: std::collections::BTreeMap<(String, String), usize> =
+    // Aggregate: property name → (type → count).
+    let mut agg: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>> =
         std::collections::BTreeMap::new();
 
     for entry in index.entries() {
@@ -32,25 +33,50 @@ pub fn properties_summary(
         {
             continue;
         }
-        for (key, value) in entry
-            .properties
-            .iter()
-            .filter(|(k, _)| k.as_str() != "tags")
-        {
+        for (key, value) in &entry.properties {
             let prop_type = frontmatter::infer_type(value).to_owned();
-            *agg.entry((key.clone(), prop_type)).or_insert(0) += 1;
+            *agg.entry(key.clone())
+                .or_default()
+                .entry(prop_type)
+                .or_insert(0) += 1;
         }
     }
 
+    // Collapse each property: if multiple types exist, mark as "mixed".
     let mut result: Vec<PropertySummaryEntry> = agg
         .into_iter()
-        .map(|((name, prop_type), count)| PropertySummaryEntry {
-            name,
-            prop_type,
-            count,
+        .map(|(name, type_counts)| {
+            let total_count: usize = type_counts.values().sum();
+            if type_counts.len() == 1 {
+                // Single type — no mixed indicator.
+                let prop_type = type_counts.into_keys().next().unwrap_or_default();
+                PropertySummaryEntry {
+                    name,
+                    prop_type,
+                    count: total_count,
+                    mixed_types: None,
+                }
+            } else {
+                // Multiple types — collapse to "mixed" with breakdown.
+                let mut variants: Vec<MixedTypeEntry> = type_counts
+                    .into_iter()
+                    .map(|(t, c)| MixedTypeEntry {
+                        prop_type: t,
+                        count: c,
+                    })
+                    .collect();
+                // Sort by count descending for most-frequent-first display.
+                variants.sort_by(|a, b| b.count.cmp(&a.count).then(a.prop_type.cmp(&b.prop_type)));
+                PropertySummaryEntry {
+                    name,
+                    prop_type: "mixed".to_owned(),
+                    count: total_count,
+                    mixed_types: Some(variants),
+                }
+            }
         })
         .collect();
-    result.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
+    result.sort_by(|a, b| a.name.cmp(&b.name));
 
     let total = result.len() as u64;
     if let Some(n) = limit.filter(|n| *n > 0) {
@@ -384,9 +410,9 @@ Keywords: other
     }
 
     #[test]
-    fn properties_summary_distinguishes_types() {
-        // Same property name with different types should produce separate entries
-        // (consistent with summary command's (name, type) keying)
+    fn properties_summary_collapses_mixed_types() {
+        // When a property has different types across files, it should be
+        // collapsed into ONE entry with type="mixed" and a `mixed_types` breakdown.
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("text.md"), "---\npriority: high\n---\n").unwrap();
         fs::write(tmp.path().join("number.md"), "---\npriority: 3\n---\n").unwrap();
@@ -397,14 +423,24 @@ Keywords: other
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         let priority_entries: Vec<&serde_json::Value> =
             parsed.iter().filter(|p| p["name"] == "priority").collect();
-        // Two entries: one text, one number -- not collapsed into a single entry
+        // Now collapsed to one entry with type="mixed"
         assert_eq!(
             priority_entries.len(),
-            2,
-            "expected 2 entries for 'priority', got: {priority_entries:?}"
+            1,
+            "expected 1 collapsed entry for 'priority', got: {priority_entries:?}"
         );
-        assert_eq!(priority_entries[0]["count"], 1);
-        assert_eq!(priority_entries[1]["count"], 1);
+        let entry = priority_entries[0];
+        assert_eq!(entry["type"], "mixed");
+        assert_eq!(entry["count"], 2);
+        // mixed_types breakdown should be present
+        let mixed = entry["mixed_types"].as_array().expect("mixed_types array");
+        assert_eq!(mixed.len(), 2, "expected 2 type variants in mixed_types");
+        let types: Vec<&str> = mixed.iter().filter_map(|m| m["type"].as_str()).collect();
+        assert!(types.contains(&"text"), "expected 'text' in mixed_types");
+        assert!(
+            types.contains(&"number"),
+            "expected 'number' in mixed_types"
+        );
     }
 
     #[test]

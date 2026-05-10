@@ -557,8 +557,8 @@ title: Empty Body
 }
 
 #[test]
-fn find_empty_string_pattern_errors() {
-    // `hyalo find ""` must return a user error, not match all files.
+fn find_empty_string_pattern_matches_all_files() {
+    // `hyalo find ""` is now treated as "no body pattern" (matches all files).
     let tmp = setup_vault_with_empty_body();
     let fields = Fields::default();
 
@@ -583,20 +583,19 @@ fn find_empty_string_pattern_errors() {
     )
     .unwrap();
 
-    match outcome {
-        CommandOutcome::UserError(msg) => {
-            assert!(
-                msg.contains("body pattern must not be empty"),
-                "error message should mention empty pattern, got: {msg}"
-            );
-        }
-        _ => panic!("expected user error for empty pattern"),
-    }
+    // Should succeed and return all files (same as running with no pattern at all).
+    let out = match outcome {
+        CommandOutcome::Success { output, .. } => output,
+        other => panic!("expected success for empty pattern, got: {other:?}"),
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let arr = parsed.as_array().expect("expected array");
+    assert_eq!(arr.len(), 2, "empty pattern should match all 2 files");
 }
 
 #[test]
-fn find_whitespace_only_pattern_errors() {
-    // `hyalo find "   "` should also return a user error.
+fn find_whitespace_only_pattern_matches_all_files() {
+    // `hyalo find "   "` (whitespace only) is also treated as no pattern.
     let tmp = setup_vault_with_empty_body();
     let fields = Fields::default();
 
@@ -621,15 +620,17 @@ fn find_whitespace_only_pattern_errors() {
     )
     .unwrap();
 
-    match outcome {
-        CommandOutcome::UserError(msg) => {
-            assert!(
-                msg.contains("body pattern must not be empty"),
-                "error message should mention empty pattern, got: {msg}"
-            );
-        }
-        _ => panic!("expected user error for whitespace-only pattern"),
-    }
+    let out = match outcome {
+        CommandOutcome::Success { output, .. } => output,
+        other => panic!("expected success for whitespace pattern, got: {other:?}"),
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let arr = parsed.as_array().expect("expected array");
+    assert_eq!(
+        arr.len(),
+        2,
+        "whitespace-only pattern should match all 2 files"
+    );
 }
 
 // --- find: task filter ---

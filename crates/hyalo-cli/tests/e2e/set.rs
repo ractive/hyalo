@@ -1217,3 +1217,98 @@ fn set_modified_property_non_date_emits_note() {
         .expect("expected note field for modified");
     assert!(note.contains("oops"), "expected bad value in note: {note}");
 }
+
+// ---------------------------------------------------------------------------
+// BUG-2: date property validation must reject calendar-invalid dates (iter-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_date_rejects_month_13() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2026-13-01", "--file", "note.md"],
+    );
+    // Should fail — month 13 is invalid
+    assert!(
+        !status.success(),
+        "date=2026-13-01 should be rejected (month 13 is invalid), stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_date_rejects_day_32() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2026-01-32", "--file", "note.md"],
+    );
+    assert!(
+        !status.success(),
+        "date=2026-01-32 should be rejected (day 32 is invalid), stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_date_rejects_feb_30() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2026-02-30", "--file", "note.md"],
+    );
+    assert!(
+        !status.success(),
+        "date=2026-02-30 should be rejected (February has at most 29 days), stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_date_accepts_valid_date() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2026-05-11", "--file", "note.md"],
+    );
+    assert!(
+        status.success(),
+        "date=2026-05-11 should be accepted, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_date_accepts_leap_day() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2024-02-29", "--file", "note.md"],
+    );
+    assert!(
+        status.success(),
+        "2024-02-29 is a valid leap day, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn set_date_rejects_non_leap_feb_29() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, _json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2023-02-29", "--file", "note.md"],
+    );
+    assert!(
+        !status.success(),
+        "2023-02-29 should be rejected (2023 is not a leap year), stderr: {stderr}"
+    );
+}

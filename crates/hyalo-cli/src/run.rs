@@ -287,6 +287,7 @@ fn run_inner() -> Result<(), AppError> {
                 let parent_is_properties = raw_args
                     .iter()
                     .any(|a| a == "properties" || a == "property");
+                let parent_is_views = raw_args.iter().any(|a| a == "views");
                 if let Some(invalid) = e.context().find_map(|(k, v)| {
                     if k == ContextKind::InvalidSubcommand {
                         if let ContextValue::String(s) = v {
@@ -298,6 +299,23 @@ fn run_inner() -> Result<(), AppError> {
                         None
                     }
                 }) {
+                    // Special hint for `hyalo views <name>`: suggest `views run <name>`
+                    // when `<name>` matches a known view in .hyalo.toml.
+                    if parent_is_views {
+                        // Load views from the config resolved so far (use CWD as fallback).
+                        let config_dir_for_views = config.config_dir.clone();
+                        let known_views = crate::commands::views::load_views(&config_dir_for_views);
+                        if known_views.contains_key(invalid) {
+                            eprintln!("{e}\n  hint: did you mean 'hyalo views run {invalid}'?\n");
+                            return Err(AppError::Exit(2));
+                        }
+                        // If not an exact match, still give a generic hint.
+                        eprintln!(
+                            "{e}\n  hint: to run a saved view use 'hyalo views run <name>' \
+                             (run 'hyalo views list' to see all views)\n"
+                        );
+                        return Err(AppError::Exit(2));
+                    }
                     // Special hint for `hyalo properties <something>` typos.
                     if parent_is_properties {
                         eprintln!(
@@ -554,17 +572,32 @@ fn run_inner() -> Result<(), AppError> {
     } = cli.command
     {
         let views = crate::commands::views::load_views(&config_dir);
-        match views.get(view_name) {
-            Some(base) => {
-                let overlay = std::mem::take(filters);
-                *filters = base.clone();
-                filters.merge_from(&overlay);
-            }
-            None => {
-                return Err(AppError::User(format!(
-                    "Error: unknown view '{view_name}'\n\n  tip: run 'hyalo views list' to see available views"
-                )));
-            }
+        if let Some(base) = views.get(view_name) {
+            let overlay = std::mem::take(filters);
+            *filters = base.clone();
+            filters.merge_from(&overlay);
+        } else {
+            // Offer a fuzzy suggestion when the view name is a close typo
+            // of a known view (reuses the same threshold as --tag/--property).
+            const MAX_DIST: usize = 2;
+            let known: Vec<&str> = views.keys().map(String::as_str).collect();
+            let suggestion = known
+                .iter()
+                .map(|k| (strsim::damerau_levenshtein(view_name, k), *k))
+                .filter(|(d, _)| *d <= MAX_DIST)
+                .min_by_key(|(d, _)| *d)
+                .map(|(_, k)| k);
+            let tip = if let Some(s) = suggestion {
+                format!(
+                    "  did you mean: hyalo find --view {s}\n  \
+                     tip: run 'hyalo views list' to see all views"
+                )
+            } else {
+                "  tip: run 'hyalo views list' to see available views".to_owned()
+            };
+            return Err(AppError::User(format!(
+                "Error: unknown view '{view_name}'\n\n{tip}"
+            )));
         }
     }
 

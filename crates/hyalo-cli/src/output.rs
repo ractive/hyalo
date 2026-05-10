@@ -304,9 +304,11 @@ pub fn format_error(
 /// When value is an array (list type), join elements with ", " for readability.
 const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)""#;
 
-/// `PropertySummaryEntry`: `{count, name, type}`
-const PROPERTY_SUMMARY_ENTRY_FILTER: &str =
-    r#""\(.name)\t\(.type)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
+/// `PropertySummaryEntry`: `{count, name, type, mixed_types?}`
+///
+/// When `mixed_types` is present the type column shows `mixed (N text, M number…)`
+/// so the user can see at a glance that the property is not uniformly typed.
+const PROPERTY_SUMMARY_ENTRY_FILTER: &str = r#""\(.name)\t\(if .mixed_types then "mixed (" + (.mixed_types | map("\(.count) \(.type)") | join(", ")) + ")" else .type end)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
 
 /// `TagSummary`: `{tags, total}`
 const TAG_SUMMARY_FILTER: &str = r#""\(.total) unique \(if .total == 1 then "tag" else "tags" end)\n\(.tags | map("  \(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)") | join("\n"))""#;
