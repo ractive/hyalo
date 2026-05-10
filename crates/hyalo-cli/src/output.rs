@@ -369,10 +369,11 @@ const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)): \(.text)""
 
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
-/// Key signature: `dry_run,modified,property,scanned,skipped,total,value`
+/// Key signature: `dry_run,modified,property,scanned,skipped,total,value[,note]`
 /// Format: `[dry-run] property=value: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
-const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+/// Appends `  note: <msg>` when a `note` field is present.
+const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.property)=\(.value): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)\(if .note then "\n  note: \(.note)" else "" end)""#;
 
 /// Mutation result with `property` only (no value field):
 /// covers `RemovePropertyResult` (without value).
@@ -463,8 +464,9 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
             Some(VAULT_SUMMARY_FILTER)
         }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
-        // RemovePropertyResult with value)
-        "dry_run,modified,property,scanned,skipped,total,value" => {
+        // RemovePropertyResult with value) — with or without optional `note` field
+        "dry_run,modified,property,scanned,skipped,total,value"
+        | "dry_run,modified,note,property,scanned,skipped,total,value" => {
             Some(PROPERTY_VALUE_MUTATION_FILTER)
         }
         // Mutation results with property only (RemovePropertyResult without value)

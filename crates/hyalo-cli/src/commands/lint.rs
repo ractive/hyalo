@@ -1749,6 +1749,27 @@ fn lint_one_file_extended(
         }
     }
 
+    // HYALO003 — date-format: frontmatter date-typed keys must hold YYYY-MM-DD values.
+    for diag in
+        engine.lint_frontmatter_hyalo003(rel_path, &properties, md_lint_config, rule_filter, strict)
+    {
+        let sev = match diag.severity {
+            hyalo_mdlint::DiagSeverity::Error => "error",
+            hyalo_mdlint::DiagSeverity::Warn => "warn",
+        };
+        violations_by_rule
+            .entry("HYALO003".to_owned())
+            .or_default()
+            .push(InternalViolation {
+                line: diag.line,
+                column: diag.column,
+                message: diag.message,
+                severity: sev.to_owned(),
+                fix: None,
+                fixed: false,
+            });
+    }
+
     // Apply frontmatter fixes if requested.
     let mut body_modified = false;
     let mut fix_actions: Vec<FixAction> = Vec::new();

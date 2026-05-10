@@ -943,6 +943,8 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "comrak",
+ "hyalo-core",
+ "indexmap",
  "mdbook-lint-core",
  "mdbook-lint-rulesets",
  "serde",

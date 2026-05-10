@@ -192,6 +192,16 @@ pub(crate) struct Cli {
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
 
+    /// Use the snapshot index at PATH (global alias for the per-subcommand `--index-file`).
+    ///
+    /// Equivalent to passing `--index-file PATH` after the subcommand.
+    /// When both the global flag and the subcommand flag are provided, the
+    /// subcommand value takes precedence.
+    ///
+    /// Relative paths are resolved against the current working directory.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub index_file: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -237,12 +247,12 @@ pub(crate) struct FindFilters {
     #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
-    /// Sort order: 'file' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
+    /// Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
     #[arg(long)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
-    /// Reverse the sort order (ascending becomes descending and vice versa)
-    #[arg(long)]
+    /// Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc
+    #[arg(long, alias = "desc")]
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
     /// Maximum number of results to return (0 = unlimited).
@@ -789,17 +799,18 @@ Repeatable (AND).\n\
             Scans the vault for links that cannot be resolved to an existing file, \
             then uses fuzzy matching (case-insensitive, extension mismatch, shortest-path, \
             Jaro-Winkler) to find the best candidate replacement.\n\n\
-            Default behaviour is a dry run — no files are modified. Pass --apply to write fixes.\n\n\
+            Default behaviour (no subcommand): dry-run of `links fix` — shows what would be\n\
+            repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
             OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
             (source, line, old_target, new_target, strategy, confidence), and \
             the list of links that could not be matched.\n\
-            SIDE EFFECTS: None unless --apply is passed.\n\n\
+            SIDE EFFECTS: None unless `links fix --apply` is passed.\n\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
             or 'hyalo find --broken-links' (list files with unresolved links)."
     )]
     Links {
         #[command(subcommand)]
-        action: LinksAction,
+        action: Option<LinksAction>,
     },
     /// Validate frontmatter (schema) and markdown body (mdbook-lint + HYALO native rules)
     #[command(
@@ -888,9 +899,15 @@ Repeatable (AND).\n\
         /// Only autofix the specified rule(s) — repeatable
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
-        /// Promote schema warnings to errors for "no 'type' property" and
-        /// "undeclared property in frontmatter", causing lint to exit non-zero
-        /// when those issues are found.
+        /// Promote schema warnings to errors: "no 'type' property",
+        /// "undeclared property in frontmatter", and date-format violations
+        /// (HYALO003), causing lint to exit non-zero when those issues are found.
+        ///
+        /// Note: missing-type and undeclared-property promotions require a
+        /// `[schema.types.*]` block in `.hyalo.toml` — on a schema-less vault
+        /// these warnings are never emitted and `--strict` has no visible effect
+        /// for those checks.
+        ///
         /// Overrides `[lint] strict` in `.hyalo.toml` for this invocation.
         #[arg(long)]
         strict: bool,
@@ -987,6 +1004,29 @@ pub(crate) enum ViewsAction {
         /// View name to delete
         #[arg(value_name = "NAME")]
         name: String,
+    },
+    /// Run a saved view: equivalent to `hyalo find --view <NAME>`
+    ///
+    /// Any extra find flags passed after the view name are merged on top of
+    /// the saved filter set (list filters extend, scalar flags override).
+    ///
+    /// Example: `hyalo views open-tasks`
+    ///          `hyalo views drafts --tag project`
+    #[command(
+        external_subcommand = false,
+        long_about = "Run a saved view as if you called `hyalo find --view <NAME>`.\n\n\
+            Extra find flags passed after the view name extend or override the saved filters.\n\n\
+            SIDE EFFECTS: None (read-only find)."
+    )]
+    Run {
+        /// View name to run
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Additional find filters to merge on top of the view
+        #[command(flatten)]
+        filters: FindFilters,
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
 }
 

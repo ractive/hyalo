@@ -17,12 +17,13 @@ pub enum SortField {
 
 /// Parse a sort field from a string.
 ///
-/// Accepts built-in fields (`file`, `modified`, `backlinks_count`, `links_count`)
+/// Accepts built-in fields (`file` / `path`, `modified`, `backlinks_count`, `links_count`)
 /// and frontmatter property names via the `property:<KEY>` syntax.
 /// `title` and `date` are convenient aliases for `property:title` and `property:date`.
+/// `path` is an alias for `file`.
 pub fn parse_sort(input: &str) -> Result<SortField> {
     match input {
-        "file" => Ok(SortField::File),
+        "file" | "path" => Ok(SortField::File),
         "modified" => Ok(SortField::Modified),
         "backlinks_count" => Ok(SortField::BacklinksCount),
         "links_count" => Ok(SortField::LinksCount),
@@ -37,8 +38,9 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
                 Ok(SortField::Property(key.to_owned()))
             } else {
                 bail!(
-                    "unknown sort field {other:?}: valid values are 'file', 'modified', \
-                     'backlinks_count', 'links_count', 'title', 'date', 'score', or 'property:<KEY>'"
+                    "unknown sort field {other:?}: valid values are 'file' (or 'path'), \
+                     'modified', 'backlinks_count', 'links_count', 'title', 'date', \
+                     'score', or 'property:<KEY>'"
                 )
             }
         }

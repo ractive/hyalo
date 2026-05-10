@@ -433,12 +433,27 @@ fn plan_inbound_rewrites(
             let matches = match span.kind {
                 LinkKind::Wikilink => {
                     let t = &span.link.target;
-                    // Only match wikilinks that already contain a path separator.
-                    // Bare name wikilinks (e.g. [[note]]) are left alone — they
-                    // don't encode a location and will work once shortest-path
-                    // resolution is implemented.
-                    if !(t.contains('/') || t.contains('\\')) {
-                        false
+                    let is_bare = !(t.contains('/') || t.contains('\\'));
+                    if is_bare {
+                        // Bare wikilinks (e.g. [[note]]) are resolved via the
+                        // case-insensitive stem index: only match when the stem
+                        // is unambiguous (unique file in vault with that stem).
+                        if let Some(idx) = case_index {
+                            let t_norm = t.to_ascii_lowercase();
+                            // Strip .md extension for stem lookup if present.
+                            let stem = if std::path::Path::new(&t_norm)
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                            {
+                                &t_norm[..t_norm.len() - 3]
+                            } else {
+                                &t_norm
+                            };
+                            let canonical = idx.lookup_stem(stem);
+                            canonical == Some(old_rel) || canonical == Some(old_stem)
+                        } else {
+                            false
+                        }
                     } else if t == old_stem || t == old_rel {
                         true
                     } else if let Some(idx) = case_index {
@@ -777,37 +792,92 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_not_rewritten() {
-        // Bare wikilinks (no path separator) are left alone — they are name-based
-        // references that don't encode a location.
+    fn plan_mv_bare_wikilink_rewritten_when_stem_unique() {
+        // Bare wikilinks are now rewritten via case-insensitive stem lookup
+        // when the stem is unambiguous (unique file in the vault).
         let vault = create_vault(&[
             ("a.md", "---\ntitle: A\n---\nSee [[b]] for details\n"),
             ("b.md", "---\ntitle: B\n---\nContent\n"),
         ]);
         let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1, "bare wikilink [[b]] should be rewritten");
+        assert_eq!(plans[0].replacements[0].old_text, "[[b]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_ambiguous_not_rewritten() {
+        // When multiple files share the same stem, the wikilink is ambiguous
+        // and must not be rewritten (it could point at either file).
+        let vault = create_vault(&[
+            ("a.md", "See [[b]] here\n"),
+            ("b.md", "Content root\n"),
+            ("sub/b.md", "Content sub\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        // stem "b" is ambiguous (two files: b.md and sub/b.md) — no rewrite.
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
-            plans.is_empty(),
-            "bare wikilink [[b]] should not be rewritten"
+            a_plan.is_none(),
+            "ambiguous bare wikilink [[b]] should not be rewritten: {plans:?}"
         );
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_with_alias_not_rewritten() {
+    fn plan_mv_bare_wikilink_with_alias_rewritten() {
         let vault = create_vault(&[("a.md", "See [[b|my note]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
-        assert!(
-            plans.is_empty(),
-            "bare wikilink [[b|my note]] should not be rewritten"
+        assert_eq!(
+            plans.len(),
+            1,
+            "bare wikilink with alias should be rewritten"
         );
+        assert_eq!(plans[0].replacements[0].old_text, "[[b|my note]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b|my note]]");
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_with_fragment_not_rewritten() {
+    fn plan_mv_bare_wikilink_with_fragment_rewritten() {
         let vault = create_vault(&[("a.md", "See [[b#section]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        assert_eq!(
+            plans.len(),
+            1,
+            "bare wikilink with fragment should be rewritten"
+        );
+        assert_eq!(plans[0].replacements[0].old_text, "[[b#section]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#section]]");
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_case_mismatch_rewritten() {
+        // [[B]] matches b.md case-insensitively and is rewritten.
+        let vault = create_vault(&[("a.md", "See [[B]] here\n"), ("b.md", "Content\n")]);
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        assert_eq!(
+            plans.len(),
+            1,
+            "case-mismatched bare wikilink should be rewritten"
+        );
+        assert_eq!(plans[0].replacements[0].old_text, "[[B]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_unrelated_not_rewritten() {
+        // [[c]] and [[bb]] must not be rewritten when b.md is moved.
+        let vault = create_vault(&[
+            ("a.md", "See [[c]] and [[bb]] here\n"),
+            ("b.md", "B\n"),
+            ("c.md", "C\n"),
+            ("bb.md", "BB\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        // a.md has no links to b.md — no plan for it.
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
-            plans.is_empty(),
-            "bare wikilink [[b#section]] should not be rewritten"
+            a_plan.is_none(),
+            "unrelated wikilinks must not be rewritten: {plans:?}"
         );
     }
 
@@ -1027,13 +1097,19 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_with_md_extension_not_rewritten() {
-        // [[b.md]] is a bare wikilink (no path separator) — leave it alone.
+    fn plan_mv_bare_wikilink_with_md_extension_rewritten() {
+        // [[b.md]] is a bare wikilink — stem lookup finds the unique "b" → b.md,
+        // so it IS rewritten when b.md moves (same resolution as [[b]]).
+        // The rewritten link uses the stem form without .md extension.
         let vault = create_vault(&[("a.md", "See [[b.md]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1, "[[b.md]] should be rewritten: {plans:?}");
+        assert_eq!(plans[0].replacements[0].old_text, "[[b.md]]");
+        // The new wikilink uses the new relative path stem (with sub/ prefix).
         assert!(
-            plans.is_empty(),
-            "bare wikilink [[b.md]] should not be rewritten"
+            plans[0].replacements[0].new_text.starts_with("[[sub/"),
+            "expected sub/ prefix: {:?}",
+            plans[0].replacements[0].new_text
         );
     }
 

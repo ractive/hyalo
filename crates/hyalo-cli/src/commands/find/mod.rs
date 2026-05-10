@@ -912,6 +912,12 @@ pub fn find(
         t
     };
 
+    // --- Fuzzy suggestions when results are empty (BUG-C) ---
+    if total == 0 {
+        fuzzy_suggest_tags(index, tag_filters);
+        fuzzy_suggest_property_keys(index, property_filters);
+    }
+
     // --- Serialize ---
     let json_array: Vec<serde_json::Value> = results
         .into_iter()
@@ -923,6 +929,90 @@ pub fn find(
         crate::output::format_success(format, &json_output),
         total as u64,
     ))
+}
+
+// ---------------------------------------------------------------------------
+// BUG-C: fuzzy suggestions for empty find results
+// ---------------------------------------------------------------------------
+
+/// Maximum Damerau-Levenshtein distance to qualify as a suggestion.
+const FUZZY_MAX_DISTANCE: usize = 2;
+/// Maximum number of suggestions to show.
+const FUZZY_MAX_SUGGESTIONS: usize = 3;
+
+/// Emit a stderr hint if a queried tag looks like a typo.
+fn fuzzy_suggest_tags(index: &dyn VaultIndex, tag_filters: &[String]) {
+    if tag_filters.is_empty() {
+        return;
+    }
+    // Collect all distinct tags from the index.
+    let mut all_tags: Vec<String> = index
+        .entries()
+        .iter()
+        .flat_map(|e| e.tags.iter().cloned())
+        .collect();
+    all_tags.sort_unstable();
+    all_tags.dedup();
+
+    for queried in tag_filters {
+        // Skip if there's an exact match (the file just doesn't exist, not a typo).
+        if all_tags.iter().any(|t| filter::tag_matches(t, queried)) {
+            continue;
+        }
+        let mut ranked: Vec<(usize, &str)> = all_tags
+            .iter()
+            .map(|t| (strsim::damerau_levenshtein(queried, t), t.as_str()))
+            .filter(|(d, _)| *d <= FUZZY_MAX_DISTANCE)
+            .collect();
+        ranked.sort_unstable_by_key(|(d, t)| (*d, *t));
+        ranked.truncate(FUZZY_MAX_SUGGESTIONS);
+        if !ranked.is_empty() {
+            let suggestions: Vec<&str> = ranked.iter().map(|(_, t)| *t).collect();
+            crate::warn::warn(format!(
+                "no files matched --tag {queried:?}; did you mean: {}?",
+                suggestions.join(", ")
+            ));
+        }
+    }
+}
+
+/// Emit a stderr hint if a queried property key looks like a typo.
+fn fuzzy_suggest_property_keys(index: &dyn VaultIndex, property_filters: &[PropertyFilter]) {
+    if property_filters.is_empty() {
+        return;
+    }
+    // Collect all distinct property keys from the index.
+    let mut all_keys: Vec<String> = index
+        .entries()
+        .iter()
+        .flat_map(|e| e.properties.keys().cloned())
+        .collect();
+    all_keys.sort_unstable();
+    all_keys.dedup();
+
+    for filter in property_filters {
+        let Some(queried_key) = filter.key() else {
+            continue;
+        };
+        // Skip if there's an exact key match (value mismatch, not a key typo).
+        if all_keys.iter().any(|k| k == queried_key) {
+            continue;
+        }
+        let mut ranked: Vec<(usize, &str)> = all_keys
+            .iter()
+            .map(|k| (strsim::damerau_levenshtein(queried_key, k), k.as_str()))
+            .filter(|(d, _)| *d <= FUZZY_MAX_DISTANCE)
+            .collect();
+        ranked.sort_unstable_by_key(|(d, k)| (*d, *k));
+        ranked.truncate(FUZZY_MAX_SUGGESTIONS);
+        if !ranked.is_empty() {
+            let suggestions: Vec<&str> = ranked.iter().map(|(_, k)| *k).collect();
+            crate::warn::warn(format!(
+                "no files matched --property {queried_key:?}; did you mean: {}?",
+                suggestions.join(", ")
+            ));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1750,3 +1750,84 @@ fn init_rejects_index_flag() {
         "init --index should fail (flag not defined on that subcommand)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-C: global --index-file flag
+// ---------------------------------------------------------------------------
+
+/// `hyalo --index-file PATH find` should use the index at PATH.
+#[test]
+fn global_index_file_flag_works_for_find() {
+    let tmp = setup_vault();
+    let index_path = tmp.path().join(".hyalo-index");
+
+    // Create the index first
+    let create = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index"])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "create-index should succeed, stderr: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    // Use global --index-file to run find
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--index-file", index_path.to_str().unwrap()])
+        .args(["find", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "find with global --index-file should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert!(
+        json["total"].as_u64().unwrap_or(0) > 0,
+        "expected results from index, got: {json}"
+    );
+}
+
+/// When both global --index-file A and subcommand --index-file B are provided,
+/// the subcommand value B takes precedence.
+#[test]
+fn subcommand_index_file_takes_precedence_over_global() {
+    let tmp = setup_vault();
+    let index_path = tmp.path().join(".hyalo-index");
+    let nonexistent = tmp.path().join("nonexistent.idx");
+
+    // Create the real index
+    hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    // Global flag points to nonexistent, subcommand flag points to real index.
+    // Should succeed because subcommand wins.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--index-file", nonexistent.to_str().unwrap()])
+        .args([
+            "find",
+            "--index-file",
+            index_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    // Should succeed (subcommand index is valid)
+    assert!(
+        output.status.success(),
+        "subcommand --index-file should override global, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

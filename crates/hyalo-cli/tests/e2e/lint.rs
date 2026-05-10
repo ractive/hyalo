@@ -764,3 +764,250 @@ required = ["title"]
         "[lint] strict=true: lint should exit non-zero when file has no type"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-B: HYALO003 — date-format lint rule
+// ---------------------------------------------------------------------------
+
+/// A file with `date: 2026-05-10` (valid ISO 8601) should not trigger HYALO003.
+#[test]
+fn lint_hyalo003_clean_date_no_violation() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\ndate: 2026-05-10\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO003", "--format", "json"])
+        .output()
+        .unwrap();
+
+    // Should be clean — exit 0
+    assert!(output.status.success(), "expected exit 0 for clean date");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    // results.files_with_violations should be 0
+    let with_violations = json["results"]["files_with_violations"]
+        .as_u64()
+        .unwrap_or(0);
+    assert_eq!(
+        with_violations, 0,
+        "expected no violations for valid date, got: {json}"
+    );
+}
+
+/// A file with `date: not-a-date` should trigger HYALO003 (warn by default).
+#[test]
+fn lint_hyalo003_bad_date_emits_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\ntitle: Note\ndate: not-a-date\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO003", "--format", "json"])
+        .output()
+        .unwrap();
+
+    // Default severity is warn; exit code 0 (warnings don't fail by default)
+    assert!(
+        output.status.success(),
+        "expected exit 0 for warn-level HYALO003"
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // results.files is the array of file results
+    let files = json["results"]["files"]
+        .as_array()
+        .expect("results.files array");
+    assert!(
+        !files.is_empty(),
+        "expected HYALO003 violation, stdout: {stdout}"
+    );
+
+    // Check that HYALO003 appears in the rule_groups of the first file
+    let found = files.iter().any(|f| {
+        f["rule_groups"]
+            .as_array()
+            .is_some_and(|rgs| rgs.iter().any(|rg| rg["rule"] == "HYALO003"))
+    });
+    assert!(found, "expected HYALO003 in rule_groups, stdout: {stdout}");
+}
+
+/// HYALO003 is promoted to error under `--strict`.
+#[test]
+fn lint_hyalo003_strict_promotes_to_error() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\ntitle: Note\ndate: oops\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--rule", "HYALO003"])
+        .output()
+        .unwrap();
+
+    // Under --strict, HYALO003 is an error → exit 1
+    assert!(
+        !output.status.success(),
+        "expected exit 1 for HYALO003 under --strict"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("HYALO003"),
+        "expected HYALO003 in output, stdout: {stdout}"
+    );
+}
+
+/// HYALO003 fires for `created`, `modified`, `updated` as well.
+#[test]
+fn lint_hyalo003_checks_all_date_keys() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "multi.md",
+        "---\ntitle: Note\ncreated: bad\nmodified: 2026-05-10\nupdated: also-bad\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO003", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let files = json["results"]["files"]
+        .as_array()
+        .expect("results.files array");
+    assert!(
+        !files.is_empty(),
+        "expected HYALO003 violations, stdout: {stdout}"
+    );
+
+    // Collect all HYALO003 violation messages from rule_groups
+    let all_messages: Vec<String> = files
+        .iter()
+        .flat_map(|f| {
+            f["rule_groups"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter(|rg| rg["rule"] == "HYALO003")
+                .flat_map(|rg| {
+                    rg["violations"]
+                        .as_array()
+                        .unwrap_or(&vec![])
+                        .iter()
+                        .filter_map(|v| v["message"].as_str().map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        all_messages.iter().any(|m| m.contains("created")),
+        "expected 'created' violation, messages: {all_messages:?}"
+    );
+    assert!(
+        all_messages.iter().any(|m| m.contains("updated")),
+        "expected 'updated' violation, messages: {all_messages:?}"
+    );
+    // `modified` has a valid date — should not appear
+    assert!(
+        !all_messages.iter().any(|m| m.contains("modified")),
+        "unexpected 'modified' violation (date is valid), messages: {all_messages:?}"
+    );
+}
+
+/// HYALO003 appears in `lint-rules list`.
+#[test]
+fn lint_rules_list_includes_hyalo003() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint-rules", "list", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    // lint-rules list wraps rules in results array
+    let rules = json["results"].as_array().expect("results array");
+    let found = rules.iter().any(|r| r["id"] == "HYALO003");
+    assert!(found, "HYALO003 not found in lint-rules list");
+}
+
+// ---------------------------------------------------------------------------
+// UX-E: lint --strict help text mentions schema dependency
+// ---------------------------------------------------------------------------
+
+/// `hyalo lint --help` should mention that --strict requires a schema block.
+#[test]
+fn lint_strict_help_mentions_schema_dependency() {
+    let output = hyalo_no_hints().args(["lint", "--help"]).output().unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("schema") || stdout.contains("[schema"),
+        "expected --strict help to mention schema dependency, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("strict"),
+        "expected --strict flag in help, stdout: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UX-A: create-index text output shows hint when outside vault
+// ---------------------------------------------------------------------------
+
+/// `hyalo create-index -o /tmp/...` text output should include the hint.
+#[test]
+fn create_index_outside_vault_text_shows_hint() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+
+    let out_path = std::env::temp_dir().join("hyalo-test-outside.idx");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "create-index",
+            "-o",
+            out_path.to_str().unwrap(),
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+
+    // Should fail (outside vault)
+    assert!(
+        !output.status.success(),
+        "expected failure for outside-vault index path"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hint") || stderr.contains("--allow-outside-vault"),
+        "expected hint in text output for outside-vault error, stderr: {stderr}"
+    );
+}

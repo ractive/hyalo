@@ -2274,3 +2274,51 @@ title: Bar
         "bare-basename link must not be rewritten; content: {content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-B: `hyalo links` (no subcommand) runs `links fix --dry-run`
+// ---------------------------------------------------------------------------
+
+/// `hyalo links` with no subcommand should behave identically to `hyalo links fix --dry-run`.
+#[test]
+fn links_no_subcommand_same_as_fix_dry_run() {
+    let tmp = setup_vault();
+
+    let out_default = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let out_explicit = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "fix", "--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+
+    // Both should succeed
+    assert!(
+        out_default.status.success(),
+        "hyalo links should succeed, stderr: {}",
+        String::from_utf8_lossy(&out_default.stderr)
+    );
+    assert!(out_explicit.status.success());
+
+    let json_default: serde_json::Value =
+        serde_json::from_slice(&out_default.stdout).expect("valid JSON");
+    let json_explicit: serde_json::Value =
+        serde_json::from_slice(&out_explicit.stdout).expect("valid JSON");
+
+    // The "applied" flag must be false (dry-run mode)
+    assert_eq!(
+        json_default["results"]["applied"], false,
+        "default should be dry-run (applied=false)"
+    );
+    assert_eq!(json_explicit["results"]["applied"], false);
+
+    // broken count should match
+    assert_eq!(
+        json_default["results"]["broken"], json_explicit["results"]["broken"],
+        "broken count should be the same"
+    );
+}

@@ -25,6 +25,8 @@ pub(crate) struct SetPropertyResult {
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 /// Result of a `set --tag T` operation across files.
@@ -36,6 +38,46 @@ pub(crate) struct SetTagResult {
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Date-typed property validation (BUG-B)
+// ---------------------------------------------------------------------------
+
+/// Property names that are treated as date-typed.
+///
+/// When a value is set for one of these properties and it does not parse as
+/// a valid ISO 8601 date (`YYYY-MM-DD`), a `note:` is emitted to inform the
+/// user that the value will sort lexicographically rather than chronologically.
+const DATE_TYPED_PROPERTIES: &[&str] = &["date", "created", "modified", "updated"];
+
+/// Returns `true` when `name` is a known date-typed property key.
+pub(crate) fn is_date_typed_property(name: &str) -> bool {
+    DATE_TYPED_PROPERTIES
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(name))
+}
+
+/// Returns `true` when `value` looks like a valid ISO 8601 date (`YYYY-MM-DD`).
+///
+/// This is a heuristic check: month 01–12, day 01–31. Does not validate
+/// actual calendar dates (e.g. Feb 31).
+pub(crate) fn looks_like_date(value: &str) -> bool {
+    let b = value.as_bytes();
+    if b.len() < 10 {
+        return false;
+    }
+    if b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    for &i in &[0usize, 1, 2, 3, 5, 6, 8, 9] {
+        if !b[i].is_ascii_digit() {
+            return false;
+        }
+    }
+    let month = (b[5] - b'0') * 10 + (b[6] - b'0');
+    let day = (b[8] - b'0') * 10 + (b[9] - b'0');
+    (1..=12).contains(&month) && (1..=31).contains(&day)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +409,17 @@ pub fn set(
 
     for ((name, raw_value, _), (modified, skipped)) in parsed_props.iter().zip(prop_results) {
         let total = modified.len() + skipped.len();
+        // BUG-B: emit a note when a date-typed property receives a non-date value.
+        let note =
+            if is_date_typed_property(name) && !raw_value.is_empty() && !looks_like_date(raw_value)
+            {
+                Some(format!(
+                    "value {raw_value:?} is not a valid ISO 8601 date (YYYY-MM-DD); \
+                 the property will sort lexicographically rather than chronologically"
+                ))
+            } else {
+                None
+            };
         let result = SetPropertyResult {
             property: (*name).to_owned(),
             value: (*raw_value).to_owned(),
@@ -375,6 +428,7 @@ pub fn set(
             total,
             scanned,
             dry_run,
+            note,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));

@@ -1040,7 +1040,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             effective_format,
             allow_outside_vault,
         ),
-        Commands::Links { action } => match action {
+        Commands::Links { action } => match action.unwrap_or(LinksAction::Fix {
+            dry_run: true,
+            apply: false,
+            threshold: 0.8,
+            glob: vec![],
+            ignore_target: vec![],
+            index_flags: IndexFlags::default(),
+        }) {
             LinksAction::Fix {
                 dry_run: _,
                 apply,
@@ -1426,6 +1433,164 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
                 ViewsAction::Remove { name } => {
                     crate::commands::views::remove_view(ctx.config_dir, &name, effective_format)
+                }
+                ViewsAction::Run {
+                    name,
+                    mut filters,
+                    index_flags: _, // consumed in run.rs before dispatch
+                } => {
+                    // Load the named view and merge the CLI overlay on top.
+                    let views = crate::commands::views::load_views(ctx.config_dir);
+                    match views.get(&name) {
+                        Some(base) => {
+                            let overlay = std::mem::take(&mut filters);
+                            filters = base.clone();
+                            filters.merge_from(&overlay);
+                        }
+                        None => {
+                            return Ok(CommandOutcome::UserError(format!(
+                                "Error: unknown view '{name}'\n\n  tip: run 'hyalo views list' to see available views"
+                            )));
+                        }
+                    }
+                    // Propagate the view's saved pattern to the BM25 search.
+                    let pattern = filters.pattern.clone();
+                    let FindFilters {
+                        regexp,
+                        properties,
+                        tag,
+                        task,
+                        sections,
+                        file,
+                        glob,
+                        fields,
+                        sort,
+                        reverse,
+                        limit,
+                        broken_links,
+                        orphan,
+                        dead_end,
+                        title,
+                        language,
+                        ..
+                    } = filters;
+                    let prop_filters: Vec<filter::PropertyFilter> = match properties
+                        .iter()
+                        .map(|s| filter::parse_property_filter(s))
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(f) => f,
+                        Err(e) => {
+                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                        }
+                    };
+                    let task_filter = match task.as_deref().map(filter::parse_task_filter) {
+                        Some(Ok(f)) => Some(f),
+                        Some(Err(e)) => {
+                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                        }
+                        None => None,
+                    };
+                    let parsed_fields = match filter::Fields::parse(&fields) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                        }
+                    };
+                    let sort_field = match sort.as_deref().map(filter::parse_sort) {
+                        Some(Ok(f)) => Some(f),
+                        Some(Err(e)) => {
+                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                        }
+                        None => None,
+                    };
+                    let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
+                        .iter()
+                        .map(|s| hyalo_core::heading::SectionFilter::parse(s))
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(f) => f,
+                        Err(e) => {
+                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                        }
+                    };
+                    let file: Vec<String> = file
+                        .into_iter()
+                        .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
+                        .collect();
+                    let sort_needs_backlinks =
+                        matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
+                    let sort_needs_links =
+                        matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
+                    let sort_needs_title =
+                        matches!(sort_field.as_ref(), Some(filter::SortField::Title));
+                    let has_task_filter = task_filter.is_some();
+                    let has_section_filter = !section_filters.is_empty();
+                    let has_bm25_search = pattern.is_some();
+                    let has_title_filter = title.is_some();
+                    let needs_body = find_commands::needs_body(
+                        &parsed_fields,
+                        has_task_filter,
+                        has_section_filter,
+                    ) || sort_needs_links
+                        || sort_needs_title
+                        || broken_links
+                        || orphan
+                        || dead_end
+                        || has_title_filter
+                        || has_bm25_search;
+                    let needs_full_vault =
+                        parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
+                    let scan_body = needs_body || needs_full_vault;
+                    match resolve_index(
+                        snapshot_index.as_ref(),
+                        dir,
+                        &file,
+                        &glob,
+                        effective_format,
+                        site_prefix,
+                        needs_full_vault,
+                        &ScanOptions {
+                            scan_body,
+                            bm25_tokenize: false,
+                            default_language: None,
+                            frontmatter_link_props: ctx.frontmatter_link_props,
+                        },
+                    )? {
+                        IndexResolution::Resolved(resolved) => {
+                            let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                            find_commands::find(
+                                resolved.as_index(),
+                                dir,
+                                site_prefix,
+                                pattern.as_deref(),
+                                regexp.as_deref(),
+                                &prop_filters,
+                                &tag,
+                                task_filter.as_ref(),
+                                &section_filters,
+                                &file,
+                                &glob,
+                                &parsed_fields,
+                                sort_field.as_ref(),
+                                reverse,
+                                resolve_limit(
+                                    limit,
+                                    ctx.config_default_limit,
+                                    ctx.programmatic_output,
+                                ),
+                                broken_links,
+                                orphan,
+                                dead_end,
+                                title.as_deref(),
+                                effective_format,
+                                language.as_deref(),
+                                ctx.config_language,
+                                ci.as_ref(),
+                            )
+                        }
+                        IndexResolution::Outcome(outcome) => Ok(outcome),
+                    }
                 }
             }
         }
