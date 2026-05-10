@@ -198,31 +198,43 @@ pub(crate) fn set_rule(
         .parse::<toml_edit::DocumentMut>()
         .with_context(|| format!("parsing {}", toml_path.display()))?;
 
-    // Determine form: scalar (only enabled, no severity) or table.
-    let use_table = severity.is_some();
+    // Compute the desired post-set state by combining new flags with defaults.
+    let target_enabled = enabled.unwrap_or(before_enabled);
+    let target_severity_str = severity.map_or_else(|| before_severity.clone(), str::to_owned);
+    let default_severity_str = format!("{}", entry.default_severity);
 
-    // Ensure [lint] table exists.
-    if doc.get("lint").is_none() {
-        doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
-    }
+    // An override is needed for each dimension only when the target diverges
+    // from the rule's built-in default. Setting a value back to its default is
+    // a no-op (BUG-2) — we should remove any existing override and prune
+    // empty parent tables.
+    let need_enabled_override = target_enabled != entry.default_enabled;
+    let need_severity_override = target_severity_str != default_severity_str;
 
-    let lint_rules =
-        doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    if !need_enabled_override && !need_severity_override {
+        // Pure no-op: drop any existing override on this rule.
+        if let Some(rules_item) = doc.get_mut("lint").and_then(|lint| lint.get_mut("rules"))
+            && let Some(rules_tbl) = rules_item.as_table_mut()
+        {
+            rules_tbl.remove(rule_id);
+        }
+    } else if need_severity_override {
+        // Table form is required to carry severity.
+        if doc.get("lint").is_none() {
+            doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        let lint_rules =
+            doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
 
-    if use_table {
-        // Table form: [lint.rules.RULE_ID]
-        // BUG-1 fix: if the existing entry is a scalar bool, we cannot index into
-        // it as a table (it would panic with "index not found"). Detect the scalar
-        // form and promote it to a table, preserving its boolean as `enabled`.
-        let promoted_enabled: Option<bool> = lint_rules
+        // If the existing entry is a scalar bool, promote it to a table so
+        // we can index into it without panicking. Handle both regular and
+        // inline parent tables — `lint = { rules = { MD013 = false } }`
+        // encodes `lint_rules` as an inline table, and skipping it here would
+        // resurrect the same panic the regular-table branch is guarding
+        // against.
+        if lint_rules
             .get(rule_id)
-            .filter(|item| !item.is_table() && !item.is_inline_table())
-            .and_then(|item| item.as_value())
-            .and_then(toml_edit::Value::as_bool);
-
-        let needs_promotion = promoted_enabled.is_some();
-        if needs_promotion {
-            // Replace the scalar with an empty table; preserve enabled below.
+            .is_some_and(|item| !item.is_table() && !item.is_inline_table())
+        {
             if let Some(rules_tbl) = lint_rules.as_table_mut() {
                 rules_tbl.remove(rule_id);
                 rules_tbl.insert(rule_id, toml_edit::Item::Table(toml_edit::Table::new()));
@@ -230,13 +242,7 @@ pub(crate) fn set_rule(
                 rules_inline.remove(rule_id);
                 rules_inline.insert(
                     rule_id,
-                    toml_edit::value(toml_edit::InlineTable::new())
-                        .into_value()
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "failed to build inline-table value for lint.rules.{rule_id}"
-                            )
-                        })?,
+                    toml_edit::Value::InlineTable(toml_edit::InlineTable::default()),
                 );
             }
         }
@@ -244,27 +250,41 @@ pub(crate) fn set_rule(
         let rule_entry =
             lint_rules[rule_id].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
 
-        // Preserve the existing scalar's value when no explicit --enabled was given.
-        if let Some(b) = enabled {
-            rule_entry["enabled"] = toml_edit::value(b);
-        } else if let Some(prev) = promoted_enabled {
-            rule_entry["enabled"] = toml_edit::value(prev);
+        if need_enabled_override {
+            rule_entry["enabled"] = toml_edit::value(target_enabled);
+        } else if let Some(tbl) = rule_entry.as_table_mut() {
+            tbl.remove("enabled");
+        } else if let Some(inline) = rule_entry.as_inline_table_mut() {
+            inline.remove("enabled");
         }
-        if let Some(sev) = severity {
-            rule_entry["severity"] = toml_edit::value(sev);
+        rule_entry["severity"] = toml_edit::value(target_severity_str.clone());
+    } else {
+        // Only `enabled` diverges from default — scalar form is enough.
+        if doc.get("lint").is_none() {
+            doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
         }
-    } else if let Some(b) = enabled {
-        // Only `--enabled` provided. If a table-form override already exists,
-        // update its `enabled` field in place (preserving severity).
-        // Otherwise write the scalar form: lint.rules.RULE_ID = bool.
+        let lint_rules =
+            doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+
         if let Some(existing) = lint_rules.get_mut(rule_id)
             && (existing.is_table() || existing.is_inline_table())
         {
-            existing["enabled"] = toml_edit::value(b);
+            // Preserve existing table entry: drop severity (matches default)
+            // and set enabled.
+            if let Some(tbl) = existing.as_table_mut() {
+                tbl.remove("severity");
+            } else if let Some(inline) = existing.as_inline_table_mut() {
+                inline.remove("severity");
+            }
+            existing["enabled"] = toml_edit::value(target_enabled);
         } else {
-            lint_rules[rule_id] = toml_edit::value(b);
+            lint_rules[rule_id] = toml_edit::value(target_enabled);
         }
     }
+
+    // Prune empty parent tables so consecutive set/unset cycles don't leave
+    // orphan headers (`[lint.rules]` / `[lint]`) behind.
+    prune_empty_lint_tables(&mut doc);
 
     let new_contents = doc.to_string();
 
@@ -284,6 +304,10 @@ pub(crate) fn set_rule(
     let path_str = toml_path.display().to_string();
 
     if dry_run {
+        // Mirror the non-dry-run write decision so the text formatter can
+        // distinguish a tautological dry-run (no diff) from one that would
+        // mutate the file.
+        let would_write = new_contents != contents;
         let val = serde_json::json!({
             "action": "set",
             "rule_id": rule_id,
@@ -300,12 +324,21 @@ pub(crate) fn set_rule(
             },
             "config_path": path_str,
             "preview": new_contents,
+            "wrote": would_write,
         });
         return Ok(CommandOutcome::success(format_success(Format::Json, &val)));
     }
 
-    std::fs::write(&toml_path, &new_contents)
-        .with_context(|| format!("writing {}", toml_path.display()))?;
+    // Skip the write when the on-disk content would not change (BUG-2:
+    // setting a property to its current default value should be a true no-op,
+    // not "(no change)" + a redundant write).
+    let wrote = if new_contents == contents {
+        false
+    } else {
+        std::fs::write(&toml_path, &new_contents)
+            .with_context(|| format!("writing {}", toml_path.display()))?;
+        true
+    };
 
     let val = serde_json::json!({
         "action": "set",
@@ -322,8 +355,34 @@ pub(crate) fn set_rule(
             "severity": after_severity,
         },
         "config_path": path_str,
+        "wrote": wrote,
     });
     Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+}
+
+/// Remove `[lint.rules]` and `[lint]` from `doc` when they have no surviving
+/// keys, so that pruning an override doesn't leave an empty section header
+/// behind.
+fn prune_empty_lint_tables(doc: &mut toml_edit::DocumentMut) {
+    fn is_empty(item: &toml_edit::Item) -> bool {
+        match item {
+            toml_edit::Item::Table(t) => t.is_empty(),
+            toml_edit::Item::Value(toml_edit::Value::InlineTable(t)) => t.is_empty(),
+            _ => false,
+        }
+    }
+
+    if let Some(lint) = doc.get_mut("lint") {
+        if let Some(rules) = lint.get("rules")
+            && is_empty(rules)
+            && let Some(lint_tbl) = lint.as_table_mut()
+        {
+            lint_tbl.remove("rules");
+        }
+        if is_empty(lint) {
+            doc.as_table_mut().remove("lint");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -623,16 +682,21 @@ mod tests {
 
     #[test]
     fn set_severity_promotes_scalar_false_to_table() {
+        // Use MD011 (default_enabled = true, default_severity = error) so
+        // the existing `MD011 = false` is a meaningful override, and
+        // `--severity warn` likewise diverges from the default. After iter-131
+        // we prune redundant overrides, so this test must use a rule whose
+        // default differs from the requested values.
         let dir = tempdir().unwrap();
         let toml_path = dir.path().join(".hyalo.toml");
-        std::fs::write(&toml_path, "[lint.rules]\nMD013 = false\n").unwrap();
+        std::fs::write(&toml_path, "[lint.rules]\nMD011 = false\n").unwrap();
 
         let engine = make_engine();
         let md_lint = load_md_lint(dir.path());
 
         let _ = set_rule(
             dir.path(),
-            "MD013",
+            "MD011",
             None,
             Some("warn"),
             false,

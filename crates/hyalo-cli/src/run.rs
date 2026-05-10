@@ -422,8 +422,8 @@ fn run_inner() -> Result<(), AppError> {
             dunce::canonicalize(&cwd_config_resolved_dir),
         ) && a == b
         {
-            crate::warn::warn(format!(
-                "note: --dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
+            crate::warn::note(format!(
+                "--dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
             ));
         }
     }

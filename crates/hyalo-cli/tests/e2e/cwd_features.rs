@@ -229,6 +229,16 @@ fn redundant_dir_warning_when_same_as_config() {
         stderr.contains("--dir is redundant"),
         "expected redundant --dir warning; got stderr: {stderr}"
     );
+    // UX-1 (iter-131): the notice is prefixed with `note:` exactly once,
+    // never the legacy double `warning: note:` form.
+    assert!(
+        stderr.contains("note: --dir is redundant"),
+        "expected single `note:` prefix; got stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("warning: note:"),
+        "must not double-prefix `warning: note:`; got stderr: {stderr}"
+    );
 }
 
 #[test]

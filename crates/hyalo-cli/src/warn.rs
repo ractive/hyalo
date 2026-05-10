@@ -56,27 +56,43 @@ pub fn init(quiet: bool) {
 /// - If `init` has not been called yet the message is always printed and
 ///   dedup tracking is skipped (the dedup map is not yet initialised).
 pub fn warn(msg: impl AsRef<str>) {
+    emit_with_prefix("warning", msg.as_ref());
+}
+
+/// Emit an informational note to stderr (prefixed with `note:`).
+///
+/// Same dedup/quiet semantics as [`warn`], but uses the `note:` prefix so the
+/// message reads as advisory rather than a warning. Callers should pass the
+/// bare message text — do not include a leading `note:` (the function adds it).
+pub fn note(msg: impl AsRef<str>) {
+    emit_with_prefix("note", msg.as_ref());
+}
+
+/// Shared backend for [`warn`] and [`note`].
+///
+/// The dedup key combines `prefix` with `msg` so that a `warn("x")` does not
+/// suppress a later `note("x")` (and vice versa) — the surface forms differ
+/// and a user reading stderr expects to see both.
+fn emit_with_prefix(prefix: &str, msg: &str) {
     if QUIET.load(Ordering::Relaxed) {
         return;
     }
 
-    let msg = msg.as_ref();
-
-    // Try dedup tracking.
     if let Ok(mut guard) = SUPPRESSED.lock()
         && let Some(ref mut map) = *guard
     {
-        if let Some(count) = map.get_mut(msg) {
-            // Already printed once — suppress and increment counter.
+        // Use `\0` as a separator that cannot appear inside a normal message,
+        // so the prefix and message can never collide across different surface
+        // forms.
+        let key = format!("{prefix}\0{msg}");
+        if let Some(count) = map.get_mut(&key) {
             *count += 1;
             return;
         }
-        // First occurrence: insert with suppression count 0, fall through to print.
-        map.insert(msg.to_owned(), 0);
-        // guard.is_none() means init() hasn't been called yet — fall through to print.
+        map.insert(key, 0);
     }
 
-    eprintln!("warning: {msg}");
+    eprintln!("{prefix}: {msg}");
 }
 
 /// Reset the warning system to its initial state.
@@ -98,10 +114,11 @@ pub fn reset_for_test() {
 /// **For use in tests only.**
 #[cfg(test)]
 pub fn suppressed_count_for(msg: &str) -> usize {
+    let key = format!("warning\0{msg}");
     SUPPRESSED
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().and_then(|m| m.get(msg).copied()))
+        .and_then(|g| g.as_ref().and_then(|m| m.get(&key).copied()))
         .unwrap_or(0)
 }
 
@@ -111,10 +128,15 @@ pub fn suppressed_count_for(msg: &str) -> usize {
 /// **For use in tests only.**
 #[cfg(test)]
 pub fn was_emitted(msg: &str) -> bool {
+    let warn_key = format!("warning\0{msg}");
+    let note_key = format!("note\0{msg}");
     SUPPRESSED
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().map(|m| m.contains_key(msg)))
+        .and_then(|g| {
+            g.as_ref()
+                .map(|m| m.contains_key(&warn_key) || m.contains_key(&note_key))
+        })
         .unwrap_or(false)
 }
 
@@ -124,10 +146,20 @@ pub fn was_emitted(msg: &str) -> bool {
 /// **For use in tests only.**
 #[cfg(test)]
 pub fn any_tracked_starts_with(prefix: &str) -> bool {
+    // Strip the internal "<surface>\0" prefix before matching, so callers can
+    // search by user-facing message text without knowing whether it was
+    // emitted via warn() or note().
     SUPPRESSED
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().map(|m| m.keys().any(|k| k.starts_with(prefix))))
+        .and_then(|g| {
+            g.as_ref().map(|m| {
+                m.keys().any(|k| {
+                    k.split_once('\0')
+                        .is_some_and(|(_, body)| body.starts_with(prefix))
+                })
+            })
+        })
         .unwrap_or(false)
 }
 
