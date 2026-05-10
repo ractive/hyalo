@@ -616,3 +616,133 @@ fn views_work_when_dir_is_a_subdir() {
     let results = json["results"].as_array().unwrap();
     assert_eq!(results.len(), 1, "expected 1 result: {results:?}");
 }
+
+// ---------------------------------------------------------------------------
+// UX-D: `hyalo views run <name>` runs `find --view <name>`
+// ---------------------------------------------------------------------------
+
+/// `hyalo views run drafts` should match `hyalo find --view drafts`.
+#[test]
+fn views_run_by_name_matches_find_view() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "draft.md",
+        "---\ntitle: Draft\nstatus: draft\n---\n",
+    );
+    write_md(
+        tmp.path(),
+        "published.md",
+        "---\ntitle: Published\nstatus: published\n---\n",
+    );
+
+    // Save a view that filters by status=draft
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+
+    // Run the view via `views run drafts`
+    let out_views = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "run", "drafts", "--format", "json"])
+        .output()
+        .unwrap();
+
+    // Run the equivalent `find --view drafts`
+    let out_find = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "drafts", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        out_views.status.success(),
+        "views run drafts failed: {}",
+        String::from_utf8_lossy(&out_views.stderr)
+    );
+    assert!(out_find.status.success());
+
+    let json_views: Value = serde_json::from_slice(&out_views.stdout).expect("valid JSON");
+    let json_find: Value = serde_json::from_slice(&out_find.stdout).expect("valid JSON");
+
+    // Both should return the same total
+    assert_eq!(
+        json_views["total"], json_find["total"],
+        "views run and find --view should return the same total"
+    );
+    assert_eq!(json_views["total"], 1, "expected 1 draft file");
+}
+
+/// Extra flags passed to `views run <name>` extend the view filters.
+#[test]
+fn views_run_with_extra_flags() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "draft-a.md",
+        "---\ntitle: Draft A\nstatus: draft\ntags:\n  - important\n---\n",
+    );
+    write_md(
+        tmp.path(),
+        "draft-b.md",
+        "---\ntitle: Draft B\nstatus: draft\n---\n",
+    );
+
+    // Save a view that filters by status=draft
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+
+    // Run with extra --tag filter — should narrow results
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "views",
+            "run",
+            "drafts",
+            "--tag",
+            "important",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "views run with extra tag failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert_eq!(
+        json["total"], 1,
+        "expected 1 result with extra tag filter, got: {json}"
+    );
+}
+
+/// `hyalo views run unknown-view` should return an error.
+#[test]
+fn views_run_unknown_view_errors() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "run", "no-such-view"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "views run on unknown view should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown view"),
+        "expected 'unknown view' in error, stderr: {stderr}"
+    );
+}

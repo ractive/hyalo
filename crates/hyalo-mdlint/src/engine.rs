@@ -38,6 +38,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     // HYALO native
     ("HYALO001", DiagSeverity::Error),
     ("HYALO002", DiagSeverity::Error),
+    ("HYALO003", DiagSeverity::Warn),
 ];
 
 /// Rules that are **default-on** (cheap, structural, low false-positive).
@@ -45,7 +46,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
 static DEFAULT_ON: &[&str] = &[
     "MD001", "MD009", "MD010", "MD011", "MD012", "MD018", "MD019", "MD022", "MD023", "MD031",
     "MD034", "MD040", "MD042", "MD047", // HYALO rules are always default-on
-    "HYALO001", "HYALO002",
+    "HYALO001", "HYALO002", "HYALO003",
 ];
 
 // ---------------------------------------------------------------------------
@@ -127,6 +128,15 @@ impl HyaloLintEngine {
                 autofixable: false,
                 source: "hyalo-mdlint".to_owned(),
             },
+            RuleCatalogEntry {
+                id: "HYALO003".to_owned(),
+                name: "date-format".to_owned(),
+                description: "Date-typed frontmatter key has a value that is not a valid ISO 8601 date (YYYY-MM-DD)".to_owned(),
+                default_severity: DiagSeverity::Warn,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint".to_owned(),
+            },
         ];
         catalog.extend_from_slice(&hyalo_entries);
         catalog
@@ -156,6 +166,68 @@ impl HyaloLintEngine {
     /// Look up a single rule entry by ID.
     pub fn rule_entry(&self, id: &str) -> Option<&RuleCatalogEntry> {
         self.catalog.iter().find(|e| e.id == id)
+    }
+
+    /// Check HYALO003 (date-format) against the parsed frontmatter properties.
+    ///
+    /// Returns a `Vec<Diagnostic>` (zero or more) that can be merged with
+    /// the caller's violations.  Respects the user's rule config (enabled/severity).
+    pub fn lint_frontmatter_hyalo003(
+        &self,
+        _rel_path: &str,
+        properties: &indexmap::IndexMap<String, serde_json::Value>,
+        config: &LintConfig,
+        rule_filter: &[String],
+        strict: bool,
+    ) -> Vec<Diagnostic> {
+        use crate::rules::hyalo003::check_date_keys;
+
+        // Is the rule enabled?
+        let enabled = if let Some(ov) = config.rules.get("HYALO003")
+            && let Some(b) = ov.enabled()
+        {
+            b
+        } else {
+            DEFAULT_ON.contains(&"HYALO003")
+        };
+        if !enabled {
+            return vec![];
+        }
+
+        // Is it included in the rule filter?
+        if !rule_filter.is_empty() && !rule_filter.iter().any(|r| r == "HYALO003") {
+            return vec![];
+        }
+
+        // Effective severity: user override → strict promotion → SEVERITY_TABLE default.
+        let sev = if let Some(ov) = config.rules.get("HYALO003")
+            && let Some(sev_str) = ov.severity()
+        {
+            match sev_str {
+                "error" => DiagSeverity::Error,
+                _ => DiagSeverity::Warn,
+            }
+        } else if strict {
+            // --strict promotes HYALO003 warnings to errors.
+            DiagSeverity::Error
+        } else {
+            DiagSeverity::Warn
+        };
+
+        check_date_keys(properties)
+            .into_iter()
+            .map(|(key, bad_val)| Diagnostic {
+                rule_id: "HYALO003".to_owned(),
+                rule_name: "date-format".to_owned(),
+                message: format!(
+                    "property `{key}` has value {bad_val:?} which is not a valid ISO 8601 date (YYYY-MM-DD)"
+                ),
+                line: 1,
+                column: 1,
+                severity: sev,
+                fix: None,
+            })
+            .collect()
     }
 
     /// Lint the **body** portion of a file (content after frontmatter).
@@ -367,8 +439,7 @@ mod tests {
         // Should include HYALO rules
         assert!(rules.iter().any(|r| r.id == "HYALO001"));
         assert!(rules.iter().any(|r| r.id == "HYALO002"));
-        // Old HYALO003 was renamed to HYALO002 in iter-127.
-        assert!(!rules.iter().any(|r| r.id == "HYALO003"));
+        assert!(rules.iter().any(|r| r.id == "HYALO003"));
     }
 
     #[test]

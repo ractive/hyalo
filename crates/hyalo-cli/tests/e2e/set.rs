@@ -1119,3 +1119,101 @@ fn set_without_dry_run_has_dry_run_false() {
         "file was not written:\n{content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-B: date-typed property validation notes
+// ---------------------------------------------------------------------------
+
+/// `hyalo set --property date=<garbage>` should emit a `note` field in JSON
+/// warning that the value is not a valid ISO 8601 date.
+#[test]
+fn set_date_property_non_date_emits_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=not-a-date", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    // note field must be present and mention the bad value
+    let note = json["note"].as_str().expect("expected note field");
+    assert!(
+        note.contains("not-a-date"),
+        "expected bad value in note: {note}"
+    );
+    assert!(
+        note.contains("YYYY-MM-DD") || note.contains("ISO 8601"),
+        "expected format hint in note: {note}"
+    );
+}
+
+/// `hyalo set --property date=2026-05-10` (valid date) must NOT emit a note.
+#[test]
+fn set_date_property_valid_date_no_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &["--property", "date=2026-05-10", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert!(
+        json["note"].is_null(),
+        "unexpected note for valid date: {}",
+        json["note"]
+    );
+}
+
+/// Non-date-typed properties (e.g. `status=not-a-date`) must NOT emit a note.
+#[test]
+fn set_non_date_property_no_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) = set_json(
+        &tmp,
+        &["--property", "status=not-a-date", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    assert!(
+        json["note"].is_null(),
+        "unexpected note for non-date property: {}",
+        json["note"]
+    );
+}
+
+/// The `created` and `modified` keys are also date-typed.
+#[test]
+fn set_created_property_non_date_emits_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "created=oops", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let note = json["note"]
+        .as_str()
+        .expect("expected note field for created");
+    assert!(note.contains("oops"), "expected bad value in note: {note}");
+}
+
+#[test]
+fn set_modified_property_non_date_emits_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: x\n---\n");
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "modified=oops", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    let note = json["note"]
+        .as_str()
+        .expect("expected note field for modified");
+    assert!(note.contains("oops"), "expected bad value in note: {note}");
+}

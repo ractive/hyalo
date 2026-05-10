@@ -25,6 +25,8 @@ pub(crate) struct SetPropertyResult {
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 /// Result of a `set --tag T` operation across files.
@@ -36,6 +38,32 @@ pub(crate) struct SetTagResult {
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Date-typed property validation (BUG-B)
+// ---------------------------------------------------------------------------
+
+/// Property names that are treated as date-typed.
+///
+/// When a value is set for one of these properties and it does not parse as
+/// a valid ISO 8601 date (`YYYY-MM-DD`), a `note:` is emitted to inform the
+/// user that the value will sort lexicographically rather than chronologically.
+const DATE_TYPED_PROPERTIES: &[&str] = &["date", "created", "modified", "updated"];
+
+/// Returns `true` when `name` is a known date-typed property key.
+pub(crate) fn is_date_typed_property(name: &str) -> bool {
+    DATE_TYPED_PROPERTIES
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(name))
+}
+
+/// Returns `true` when `value` is exactly a YYYY-MM-DD ISO 8601 date.
+///
+/// Delegates to `hyalo_core::util::is_iso8601_date` so `set` and the
+/// HYALO003 lint rule agree on what counts as a date.
+pub(crate) fn looks_like_date(value: &str) -> bool {
+    hyalo_core::util::is_iso8601_date(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +395,17 @@ pub fn set(
 
     for ((name, raw_value, _), (modified, skipped)) in parsed_props.iter().zip(prop_results) {
         let total = modified.len() + skipped.len();
+        // BUG-B: emit a note when a date-typed property receives a non-date value.
+        let note =
+            if is_date_typed_property(name) && !raw_value.is_empty() && !looks_like_date(raw_value)
+            {
+                Some(format!(
+                    "value {raw_value:?} is not a valid ISO 8601 date (YYYY-MM-DD); \
+                 the property will sort lexicographically rather than chronologically"
+                ))
+            } else {
+                None
+            };
         let result = SetPropertyResult {
             property: (*name).to_owned(),
             value: (*raw_value).to_owned(),
@@ -375,6 +414,7 @@ pub fn set(
             total,
             scanned,
             dry_run,
+            note,
         };
         results
             .push(serde_json::to_value(&result).expect("derived Serialize impl should not fail"));

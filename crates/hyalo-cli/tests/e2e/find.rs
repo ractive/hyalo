@@ -3837,3 +3837,86 @@ fn find_without_format_flag_produces_json_when_piped() {
         "without --format, piped output should be JSON; got:\n{stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-F: --sort path alias and --desc alias for --reverse
+// ---------------------------------------------------------------------------
+
+/// `--sort path` should be accepted as an alias for `--sort file`.
+#[test]
+fn find_sort_path_alias_for_file() {
+    let tmp = setup_vault();
+
+    let out_file = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--sort", "file", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let out_path = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--sort", "path", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        out_file.status.success(),
+        "find --sort file failed: {}",
+        String::from_utf8_lossy(&out_file.stderr)
+    );
+    assert!(
+        out_path.status.success(),
+        "find --sort path failed: {}",
+        String::from_utf8_lossy(&out_path.stderr)
+    );
+
+    let json_file: serde_json::Value =
+        serde_json::from_slice(&out_file.stdout).expect("valid JSON");
+    let json_path: serde_json::Value =
+        serde_json::from_slice(&out_path.stdout).expect("valid JSON");
+
+    // Both should return the same files in the same order
+    assert_eq!(
+        json_file["results"], json_path["results"],
+        "--sort path and --sort file should return identical results"
+    );
+}
+
+/// `--desc` should behave identically to `--reverse`.
+#[test]
+fn find_desc_alias_for_reverse() {
+    let tmp = setup_vault();
+
+    let out_reverse = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--sort", "file", "--reverse", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let out_desc = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--sort", "file", "--desc", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        out_reverse.status.success(),
+        "find --reverse failed: {}",
+        String::from_utf8_lossy(&out_reverse.stderr)
+    );
+    assert!(
+        out_desc.status.success(),
+        "find --desc failed: {}",
+        String::from_utf8_lossy(&out_desc.stderr)
+    );
+
+    let json_reverse: serde_json::Value =
+        serde_json::from_slice(&out_reverse.stdout).expect("valid JSON");
+    let json_desc: serde_json::Value =
+        serde_json::from_slice(&out_desc.stdout).expect("valid JSON");
+
+    assert_eq!(
+        json_reverse["results"], json_desc["results"],
+        "--desc and --reverse should return identical results"
+    );
+}

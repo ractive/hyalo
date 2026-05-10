@@ -31,9 +31,14 @@ pub(crate) fn resolve_format_by_tty(is_tty: bool) -> Format {
 /// then delegates to `IndexFlags::effective_index_path`.
 /// Relative `--index-file` paths are resolved against the current working directory.
 /// Returns `None` for commands that do not carry `IndexFlags`.
+///
+/// `global_index_file` is the value of the top-level `--index-file` flag; it
+/// is used as a fallback when the subcommand does not specify its own path.
+/// The subcommand value always takes precedence.
 fn effective_index_path_for(
     cmd: &Commands,
     vault_dir: &std::path::Path,
+    global_index_file: Option<&std::path::Path>,
 ) -> Option<std::path::PathBuf> {
     use crate::cli::args::{LinksAction, PropertiesAction, TagsAction, TaskAction};
 
@@ -61,9 +66,10 @@ fn effective_index_path_for(
             None => None,
         },
         Commands::Links { action } => match action {
-            LinksAction::Fix { index_flags, .. } | LinksAction::Auto { index_flags, .. } => {
+            Some(LinksAction::Fix { index_flags, .. } | LinksAction::Auto { index_flags, .. }) => {
                 Some(index_flags)
             }
+            None => None,
         },
         Commands::Task { action } => match action {
             TaskAction::Read { index_flags, .. }
@@ -76,17 +82,35 @@ fn effective_index_path_for(
         | Commands::Deinit
         | Commands::Completion { .. }
         | Commands::Config
-        | Commands::Views { .. }
         | Commands::Types { .. }
         | Commands::LintRules { .. } => None,
+        Commands::Views { action } => match action {
+            Some(crate::cli::args::ViewsAction::Run { index_flags, .. }) => Some(index_flags),
+            _ => None,
+        },
     };
 
-    let raw = flags?.effective_index_path(vault_dir)?;
+    // Subcommand flags take precedence; fall back to global --index-file.
+    let (raw, came_from_index_file) = if let Some(flags) = flags {
+        if let Some(path) = flags.effective_index_path(vault_dir) {
+            let came_from_file = flags.index_file.is_some();
+            (path, came_from_file)
+        } else if let Some(global) = global_index_file {
+            (global.to_path_buf(), true)
+        } else {
+            return None;
+        }
+    } else if let Some(global) = global_index_file {
+        (global.to_path_buf(), true)
+    } else {
+        return None;
+    };
+
     // Relative --index-file paths are resolved against CWD.
     // Bare --index already returns an absolute-or-relative-to-vault path from
     // effective_index_path(), so only resolve when the path is still relative
     // and it came from --index-file (not bare --index).
-    let resolved = if raw.is_relative() && flags.and_then(|f| f.index_file.as_ref()).is_some() {
+    let resolved = if raw.is_relative() && came_from_index_file {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         cwd.join(&raw)
     } else {
@@ -822,26 +846,32 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Links { action } => match action {
-                crate::cli::args::LinksAction::Fix { apply, glob, .. } => {
+                Some(crate::cli::args::LinksAction::Fix { apply, glob, .. }) => {
                     let mut ctx = HintContext::from_common(HintSource::LinksFix, &common);
                     ctx.glob.clone_from(glob);
                     ctx.dry_run = !apply;
                     Some(ctx)
                 }
-                crate::cli::args::LinksAction::Auto {
+                Some(crate::cli::args::LinksAction::Auto {
                     apply,
                     glob,
                     file,
                     min_length,
                     exclude_title,
                     ..
-                } => {
+                }) => {
                     let mut ctx = HintContext::from_common(HintSource::LinksAuto, &common);
                     ctx.glob.clone_from(glob);
                     ctx.dry_run = !apply;
                     ctx.auto_link_file.clone_from(file);
                     ctx.auto_link_min_length = Some(*min_length);
                     ctx.auto_link_exclude_titles.clone_from(exclude_title);
+                    Some(ctx)
+                }
+                None => {
+                    // Default: dry-run fix
+                    let mut ctx = HintContext::from_common(HintSource::LinksFix, &common);
+                    ctx.dry_run = true;
                     Some(ctx)
                 }
             },
@@ -910,7 +940,8 @@ fn run_inner() -> Result<(), AppError> {
     // Extract the effective index path from the subcommand's IndexFlags.
     // --index-file PATH wins; bare --index resolves to vault_dir/.hyalo-index.
     // Relative --index-file paths are resolved against CWD (caller convention).
-    let index_path_buf: Option<std::path::PathBuf> = effective_index_path_for(&cli.command, &dir);
+    let index_path_buf: Option<std::path::PathBuf> =
+        effective_index_path_for(&cli.command, &dir, cli.index_file.as_deref());
 
     let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {
         match SnapshotIndex::load(p) {

@@ -7,9 +7,9 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mv_bare_wikilink_not_rewritten() {
-    // Bare wikilinks (no path separator) are left alone — they don't encode
-    // a location and will work once shortest-path resolution is implemented.
+fn mv_bare_wikilink_rewritten_unique_stem() {
+    // Bare wikilinks are now rewritten via case-insensitive stem lookup
+    // when the stem is unambiguous (exactly one file in the vault with that stem).
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -47,17 +47,55 @@ Content.
     assert_eq!(json["results"]["from"], "b.md");
     assert_eq!(json["results"]["to"], "archive/b.md");
     assert_eq!(json["results"]["dry_run"], false);
-    assert_eq!(json["results"]["total_links_updated"], 0);
+    assert_eq!(
+        json["results"]["total_links_updated"], 1,
+        "bare wikilink should be rewritten"
+    );
 
     // Verify file was moved
     assert!(!tmp.path().join("b.md").exists());
     assert!(tmp.path().join("archive/b.md").exists());
 
-    // Bare wikilink should be left untouched
+    // Bare wikilink should be updated to the new path
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[archive/b]]"),
+        "bare wikilink should be rewritten: {content}"
+    );
+    assert!(
+        !content.contains("[[b]]"),
+        "old bare wikilink should be gone: {content}"
+    );
+}
+
+#[test]
+fn mv_bare_wikilink_ambiguous_not_rewritten() {
+    // When two files share the same stem, the bare wikilink is ambiguous
+    // and must not be rewritten.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[b]] here.\n");
+    write_md(tmp.path(), "b.md", "Root B.\n");
+    write_md(tmp.path(), "sub/b.md", "Sub B.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "archive/b.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // a.md's [[b]] is ambiguous — not rewritten
+    assert_eq!(json["results"]["total_links_updated"], 0);
+
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(
         content.contains("[[b]]"),
-        "bare wikilink was modified: {content}"
+        "ambiguous bare wikilink should not be changed: {content}"
     );
 }
 
@@ -914,5 +952,180 @@ See [me](self.md) for details.
     assert!(
         !content.contains("[me](self.md)"),
         "old self-link must be gone after rename: {content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BUG-A: bare wikilink rewriting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_bare_wikilink_all_forms_rewritten() {
+    // All bare wikilink forms are rewritten when the stem is unambiguous.
+    // Covers [[b]], [[b|alias]], [[b#sec]], [[b#sec|alias]], [[B]] (case).
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "See [[b]] and [[b|alias]] and [[b#sec]] and [[b#sec|a]] and [[B]] here.\n",
+    );
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["total_links_updated"].as_u64().unwrap(),
+        5,
+        "all 5 wikilink forms should be rewritten: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(content.contains("[[sub/b]]"), "plain: {content}");
+    assert!(content.contains("[[sub/b|alias]]"), "alias: {content}");
+    assert!(content.contains("[[sub/b#sec]]"), "fragment: {content}");
+    assert!(
+        content.contains("[[sub/b#sec|a]]"),
+        "fragment+alias: {content}"
+    );
+    // The original `[[B]]` (uppercase) must no longer appear as a bare wikilink;
+    // it must have been rewritten to either `[[sub/b]]` or `[[sub/B]]`.
+    assert!(
+        !content.contains("[[B]]"),
+        "case-mismatched bare wikilink [[B]] was not rewritten: {content}"
+    );
+}
+
+#[test]
+fn mv_bare_wikilink_dry_run_shows_rewrites() {
+    // --dry-run should preview bare wikilink rewrites without writing.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[b]] and [[b|alias]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "archive/b.md", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"]["dry_run"], true);
+    assert_eq!(json["results"]["total_links_updated"].as_u64().unwrap(), 2);
+
+    // File was NOT moved
+    assert!(tmp.path().join("b.md").exists());
+    // Content was NOT changed
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[b]]"),
+        "dry-run must not modify: {content}"
+    );
+}
+
+#[test]
+fn mv_bare_wikilink_unrelated_left_alone() {
+    // [[c]] and [[bb]] must not be rewritten when b.md is moved.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[c]] and [[bb]] here.\n");
+    write_md(tmp.path(), "b.md", "B.\n");
+    write_md(tmp.path(), "c.md", "C.\n");
+    write_md(tmp.path(), "bb.md", "BB.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "archive/b.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["total_links_updated"], 0,
+        "no links updated: {json}"
+    );
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(content.contains("[[c]]"), "c link touched: {content}");
+    assert!(content.contains("[[bb]]"), "bb link touched: {content}");
+}
+
+#[test]
+fn mv_bare_wikilink_no_broken_links_after_move() {
+    // After mv rewrites bare wikilinks, find --broken-links should report 0.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[b]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    // Move b.md → archive/b.md (rewrites [[b]] → [[archive/b]])
+    let mv_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "archive/b.md"])
+        .output()
+        .unwrap();
+    assert!(
+        mv_out.status.success(),
+        "mv failed: {:?}",
+        String::from_utf8_lossy(&mv_out.stderr)
+    );
+
+    // Now check for broken links
+    let check_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--broken-links", "--fields", "links"])
+        .output()
+        .unwrap();
+    assert!(check_out.status.success(), "find failed");
+    let json: serde_json::Value = serde_json::from_slice(&check_out.stdout).unwrap();
+    assert_eq!(
+        json["total"], 0,
+        "no broken links expected after mv: {json}"
+    );
+}
+
+#[test]
+fn mv_bare_wikilink_backlinks_updated() {
+    // After mv rewrites bare wikilinks, backlinks on the new path should list a.md.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[b]] here.\n");
+    write_md(tmp.path(), "b.md", "Content.\n");
+
+    // Move b.md → sub/b.md
+    let mv_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
+        .output()
+        .unwrap();
+    assert!(mv_out.status.success(), "mv failed");
+
+    // Check backlinks on sub/b.md
+    let bl_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "sub/b.md"])
+        .output()
+        .unwrap();
+    assert!(bl_out.status.success(), "backlinks failed");
+    let json: serde_json::Value = serde_json::from_slice(&bl_out.stdout).unwrap();
+    let backlinks = json["results"]["backlinks"].as_array().unwrap();
+    assert!(
+        !backlinks.is_empty(),
+        "a.md should appear as backlink for sub/b.md"
     );
 }
