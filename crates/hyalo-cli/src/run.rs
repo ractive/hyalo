@@ -285,7 +285,7 @@ fn run_inner() -> Result<(), AppError> {
             if e.kind() == clap::error::ErrorKind::InvalidSubcommand {
                 use clap::error::{ContextKind, ContextValue};
                 let top_sub = crate::suggest::top_level_subcommand(&raw_args, &Cli::command());
-                let parent_is_properties = matches!(top_sub, Some("properties") | Some("property"));
+                let parent_is_properties = matches!(top_sub, Some("properties" | "property"));
                 let parent_is_views = top_sub == Some("views");
                 if let Some(invalid) = e.context().find_map(|(k, v)| {
                     if k == ContextKind::InvalidSubcommand {

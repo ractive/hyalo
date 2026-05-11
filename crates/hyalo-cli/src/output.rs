@@ -397,9 +397,9 @@ const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" en
 /// Empty case: `No backlinks found for "file"`.
 const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
 
-/// `LinksFix result`: `{applied, broken, case_mismatch_fixes, case_mismatches, fixable, fixes, ignored, unfixable, unfixable_links}`
-/// Format: summary line with fix status. Includes case-mismatch count when non-zero.
-const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)""#;
+/// `LinksFix result`: `{ambiguous, ambiguous_links, applied, broken, case_mismatch_fixes, case_mismatches, fixable, fixes, ignored, unfixable, unfixable_links}`
+/// Format: summary line with fix status. Includes case-mismatch and ambiguous counts when non-zero.
+const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(if .strategy == "ShortFormStemMismatch" then "short-form-stem-mismatch" else "link-case-mismatch" end)]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)""#;
 
 /// `LinksAuto result`: `{ambiguous_titles, applied, matches, scanned, total}`
 /// Format: summary line + per-match details.
@@ -479,7 +479,7 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result
-        "applied,broken,case_mismatch_fixes,case_mismatches,fixable,fixes,ignored,unfixable,unfixable_links" => {
+        "ambiguous,ambiguous_links,applied,broken,case_mismatch_fixes,case_mismatches,fixable,fixes,ignored,unfixable,unfixable_links" => {
             Some(LINKS_FIX_FILTER)
         }
         // LinksAuto result

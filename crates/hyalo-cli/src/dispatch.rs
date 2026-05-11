@@ -1046,6 +1046,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             threshold: 0.8,
             glob: vec![],
             ignore_target: vec![],
+            expand_short_form: false,
             index_flags: IndexFlags::default(),
         }) {
             LinksAction::Fix {
@@ -1054,6 +1055,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 threshold,
                 glob,
                 ignore_target,
+                expand_short_form,
                 index_flags: _, // consumed in run.rs before dispatch
             } => {
                 // Scope the immutable borrow of snapshot_index (via resolve_index)
@@ -1085,6 +1087,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             &ignore_target,
                             effective_format,
                             ci.as_ref(),
+                            expand_short_form,
                         )?
                     }
                     IndexResolution::Outcome(outcome) => (outcome, Vec::new()),

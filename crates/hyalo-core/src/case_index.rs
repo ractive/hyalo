@@ -122,6 +122,16 @@ impl CaseInsensitiveIndex {
         self.map.get(&key).map_or(&[], Vec::as_slice)
     }
 
+    /// Return all candidate paths for a bare filename stem (case-insensitive).
+    ///
+    /// Unlike [`lookup_stem`] (which returns `None` for ambiguous matches),
+    /// this method always returns all candidates — useful for detecting when a
+    /// short-form link is ambiguous rather than simply unresolvable.
+    pub fn lookup_stem_all(&self, stem: &str) -> &[String] {
+        let key = stem.to_ascii_lowercase();
+        self.stem_map.get(&key).map_or(&[], Vec::as_slice)
+    }
+
     /// Returns `true` if the index contains no entries.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()

@@ -21,6 +21,10 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 /// Case-mismatch fixes (rule `link-case-mismatch`) are included alongside
 /// ordinary broken-link fixes when `case_index` is provided.
 ///
+/// When `expand_short_form` is `true`, short-form wikilinks (no `/`) that
+/// resolve only via stem matching are expanded to their full vault path on
+/// `--apply`.  This is opt-in and documented as Obsidian-incompatible.
+///
 /// Returns `(CommandOutcome, modified_files)` where `modified_files` contains
 /// vault-relative paths of files that were rewritten on disk.  The caller is
 /// responsible for patching the snapshot index with these paths.
@@ -35,12 +39,16 @@ pub fn links_fix(
     ignore_target: &[String],
     format: Format,
     case_index: Option<&CaseInsensitiveIndex>,
+    expand_short_form: bool,
 ) -> Result<(CommandOutcome, Vec<String>)> {
-    let report = detect_broken_links_from_index(dir, index, site_prefix, case_index);
+    let report =
+        detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
 
-    // Filter broken links by glob, if any were provided.
-    let broken = if globs.is_empty() {
-        report.broken
+    // Compute the set of in-scope source files when --glob is provided.
+    // The same scope applies to broken, case_mismatches, and ambiguous so
+    // that --apply never rewrites files outside the requested scope.
+    let matched_owned: Option<Vec<String>> = if globs.is_empty() {
+        None
     } else {
         let all_files: Vec<std::path::PathBuf> = index
             .entries()
@@ -49,14 +57,21 @@ pub fn links_fix(
             .collect();
         let matched = discovery::match_globs(dir, &all_files, globs)?;
         crate::warn::warn_glob_dir_overlap(dir, globs, matched.len());
-        let matched_set: std::collections::HashSet<&str> =
-            matched.iter().map(|(_, rel)| rel.as_str()).collect();
-        report
-            .broken
-            .into_iter()
-            .filter(|b| matched_set.contains(b.source.as_str()))
-            .collect()
+        Some(matched.into_iter().map(|(_, rel)| rel).collect())
     };
+    let matched_set: Option<std::collections::HashSet<&str>> = matched_owned
+        .as_ref()
+        .map(|v| v.iter().map(String::as_str).collect());
+    let in_scope = |source: &str| match &matched_set {
+        Some(set) => set.contains(source),
+        None => true,
+    };
+
+    let broken: Vec<_> = report
+        .broken
+        .into_iter()
+        .filter(|b| in_scope(b.source.as_str()))
+        .collect();
 
     // Filter out ignored targets (--ignore-target substrings).
     let (broken, ignored_count) = if ignore_target.is_empty() {
@@ -80,8 +95,19 @@ pub fn links_fix(
 
     // Collect all fixes: broken-link fixes + case-mismatch fixes.
     // Case-mismatch fixes come from the detection phase (not from plan_fixes).
-    let case_mismatches = report.case_mismatches;
+    let case_mismatches: Vec<_> = report
+        .case_mismatches
+        .into_iter()
+        .filter(|f| in_scope(f.source.as_str()))
+        .collect();
     let case_mismatch_count = case_mismatches.len();
+    // Ambiguous short-form links — reported but never auto-fixed.
+    let ambiguous: Vec<_> = report
+        .ambiguous
+        .into_iter()
+        .filter(|b| in_scope(b.source.as_str()))
+        .collect();
+    let ambiguous_count = ambiguous.len();
 
     let mut modified_files = Vec::new();
 
@@ -112,6 +138,8 @@ pub fn links_fix(
         "applied": !dry_run,
         "case_mismatches": case_mismatch_count,
         "case_mismatch_fixes": case_mismatches,
+        "ambiguous": ambiguous_count,
+        "ambiguous_links": ambiguous,
     });
 
     let _ = format;
