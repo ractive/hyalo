@@ -2322,3 +2322,401 @@ fn links_no_subcommand_same_as_fix_dry_run() {
         "broken count should be the same"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 134: short-form wikilink handling (Obsidian compatibility)
+// ---------------------------------------------------------------------------
+
+/// A bare `[[Corina]]` that resolves (stem-match) to `sub/Corina.md` must NOT
+/// be reported as broken, case-mismatch, or ambiguous, and must not be rewritten.
+#[test]
+fn short_form_wikilink_valid_stem_not_flagged() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    write_md(
+        dir,
+        "sub/Corina.md",
+        md!(r"
+---
+title: Corina
+---
+# Corina
+"),
+    );
+    write_md(
+        dir,
+        "index.md",
+        md!(r"
+---
+title: Index
+---
+See [[Corina]] for details.
+"),
+    );
+
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+    assert!(
+        out.status.success(),
+        "links fix exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(
+        json["results"]["broken"].as_u64().unwrap_or(1),
+        0,
+        "[[Corina]] resolving to sub/Corina.md must not be broken: {json}"
+    );
+    assert_eq!(
+        json["results"]["case_mismatches"].as_u64().unwrap_or(1),
+        0,
+        "[[Corina]] resolving to sub/Corina.md must not be a case-mismatch: {json}"
+    );
+    assert_eq!(
+        json["results"]["ambiguous"].as_u64().unwrap_or(1),
+        0,
+        "[[Corina]] with one stem match must not be ambiguous: {json}"
+    );
+
+    // --apply must not rewrite the file
+    let apply_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply should run");
+    assert!(apply_out.status.success());
+
+    let content = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(
+        content.contains("[[Corina]]"),
+        "--apply must not rewrite valid short-form link; content: {content}"
+    );
+    assert!(
+        !content.contains("[[sub/Corina]]"),
+        "--apply must not expand short-form to full path; content: {content}"
+    );
+}
+
+/// A stem-case mismatch (`[[corina]]` for `Corina.md`) is rewritten to
+/// `[[Corina]]` — the short form is preserved, never expanded to a full path.
+#[test]
+fn short_form_stem_case_mismatch_rewrites_stem_only() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    write_md(
+        dir,
+        "sub/Corina.md",
+        md!(r"
+---
+title: Corina
+---
+# Corina
+"),
+    );
+    write_md(
+        dir,
+        "index.md",
+        md!(r"
+---
+title: Index
+---
+See [[corina]] for details.
+"),
+    );
+
+    // Dry-run: should report 1 case-mismatch (stem casing differs)
+    let dry_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+    assert!(dry_out.status.success());
+
+    let dry_json: serde_json::Value = serde_json::from_slice(&dry_out.stdout).expect("valid JSON");
+    assert_eq!(
+        dry_json["results"]["broken"].as_u64().unwrap_or(1),
+        0,
+        "stem-case-mismatch must not be reported as broken: {dry_json}"
+    );
+    assert_eq!(
+        dry_json["results"]["case_mismatches"].as_u64().unwrap_or(0),
+        1,
+        "stem-case-mismatch must appear in case_mismatches: {dry_json}"
+    );
+
+    // --apply: must rewrite [[corina]] to [[Corina]], not to [[sub/Corina]]
+    let apply_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply should run");
+    assert!(apply_out.status.success());
+
+    let content = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(
+        content.contains("[[Corina]]"),
+        "--apply must rewrite [[corina]] to [[Corina]]; content: {content}"
+    );
+    assert!(
+        !content.contains("[[sub/Corina]]"),
+        "--apply must never expand short-form to full path; content: {content}"
+    );
+    assert!(
+        !content.contains("[[corina]]"),
+        "--apply must have fixed the casing; content: {content}"
+    );
+}
+
+/// Two files sharing a stem produce an `ambiguous` report; `--apply` leaves
+/// both links untouched.
+#[test]
+fn short_form_ambiguous_not_auto_fixed() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    fs::create_dir_all(dir.join("a")).unwrap();
+    fs::create_dir_all(dir.join("b")).unwrap();
+    write_md(
+        dir,
+        "a/Corina.md",
+        md!(r"---
+title: Corina A
+---
+"),
+    );
+    write_md(
+        dir,
+        "b/Corina.md",
+        md!(r"---
+title: Corina B
+---
+"),
+    );
+    write_md(
+        dir,
+        "index.md",
+        md!(r"
+---
+title: Index
+---
+See [[Corina]] here.
+"),
+    );
+
+    let dry_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+    assert!(dry_out.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&dry_out.stdout).expect("valid JSON");
+    assert_eq!(
+        json["results"]["broken"].as_u64().unwrap_or(1),
+        0,
+        "ambiguous link must not be reported as broken: {json}"
+    );
+    assert_eq!(
+        json["results"]["ambiguous"].as_u64().unwrap_or(0),
+        1,
+        "expected 1 ambiguous link: {json}"
+    );
+
+    // --apply must not rewrite the ambiguous link
+    let apply_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply should run");
+    assert!(apply_out.status.success());
+
+    let content = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(
+        content.contains("[[Corina]]"),
+        "--apply must leave ambiguous link untouched; content: {content}"
+    );
+}
+
+/// Path-form case mismatches (target has `/`) are still detected and rewritten
+/// even in Obsidian-compatible mode.
+#[test]
+fn path_form_case_mismatch_still_rewritten() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    write_md(
+        dir,
+        "sub/corina.md",
+        md!(r"---
+title: corina
+---
+"),
+    );
+    write_md(
+        dir,
+        "index.md",
+        md!(r"
+---
+title: Index
+---
+See [[sub/Corina]] for details.
+"),
+    );
+
+    // Enable case_insensitive mode so path-form mismatches are detected.
+    fs::write(
+        dir.join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"true\"\n",
+    )
+    .unwrap();
+
+    let dry_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+    assert!(dry_out.status.success());
+
+    let json: serde_json::Value = serde_json::from_slice(&dry_out.stdout).expect("valid JSON");
+    assert_eq!(
+        json["results"]["broken"].as_u64().unwrap_or(1),
+        0,
+        "path-form link should not be broken: {json}"
+    );
+    assert_eq!(
+        json["results"]["case_mismatches"].as_u64().unwrap_or(0),
+        1,
+        "path-form case mismatch should be detected: {json}"
+    );
+}
+
+/// `--expand-short-form` opts into path expansion of short-form wikilinks.
+/// With it, [[Corina]] → sub/Corina.md is treated as broken/fixable and
+/// --apply rewrites it to [[sub/Corina]].
+#[test]
+fn expand_short_form_flag_opts_into_path_expansion() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    write_md(
+        dir,
+        "sub/Corina.md",
+        md!(r"
+---
+title: Corina
+---
+# Corina
+"),
+    );
+    write_md(
+        dir,
+        "index.md",
+        md!(r"
+---
+title: Index
+---
+See [[Corina]] for details.
+"),
+    );
+
+    // Without --expand-short-form: 0 broken
+    let no_expand = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+    assert!(no_expand.status.success());
+    let no_expand_json: serde_json::Value =
+        serde_json::from_slice(&no_expand.stdout).expect("valid JSON");
+    assert_eq!(
+        no_expand_json["results"]["broken"].as_u64().unwrap_or(1),
+        0,
+        "without --expand-short-form, [[Corina]] must be valid: {no_expand_json}"
+    );
+
+    // With --expand-short-form: [[Corina]] is treated as broken (stem not found at vault root)
+    // and fixable via strategy 3 (shortest-path) → links fix finds it
+    let with_expand = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--expand-short-form",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --expand-short-form should run");
+    assert!(with_expand.status.success());
+    let with_expand_json: serde_json::Value =
+        serde_json::from_slice(&with_expand.stdout).expect("valid JSON");
+    // With expansion enabled, [[Corina]] is not found at vault root → broken or fixable
+    let broken = with_expand_json["results"]["broken"].as_u64().unwrap_or(0);
+    let fixable = with_expand_json["results"]["fixable"].as_u64().unwrap_or(0);
+    assert!(
+        broken + fixable >= 1,
+        "--expand-short-form must expose [[Corina]] as broken or fixable: {with_expand_json}"
+    );
+}

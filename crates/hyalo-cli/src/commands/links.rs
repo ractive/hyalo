@@ -21,6 +21,10 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 /// Case-mismatch fixes (rule `link-case-mismatch`) are included alongside
 /// ordinary broken-link fixes when `case_index` is provided.
 ///
+/// When `expand_short_form` is `true`, short-form wikilinks (no `/`) that
+/// resolve only via stem matching are expanded to their full vault path on
+/// `--apply`.  This is opt-in and documented as Obsidian-incompatible.
+///
 /// Returns `(CommandOutcome, modified_files)` where `modified_files` contains
 /// vault-relative paths of files that were rewritten on disk.  The caller is
 /// responsible for patching the snapshot index with these paths.
@@ -35,8 +39,10 @@ pub fn links_fix(
     ignore_target: &[String],
     format: Format,
     case_index: Option<&CaseInsensitiveIndex>,
+    expand_short_form: bool,
 ) -> Result<(CommandOutcome, Vec<String>)> {
-    let report = detect_broken_links_from_index(dir, index, site_prefix, case_index);
+    let report =
+        detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
 
     // Filter broken links by glob, if any were provided.
     let broken = if globs.is_empty() {
@@ -82,6 +88,9 @@ pub fn links_fix(
     // Case-mismatch fixes come from the detection phase (not from plan_fixes).
     let case_mismatches = report.case_mismatches;
     let case_mismatch_count = case_mismatches.len();
+    // Ambiguous short-form links — reported but never auto-fixed.
+    let ambiguous = report.ambiguous;
+    let ambiguous_count = ambiguous.len();
 
     let mut modified_files = Vec::new();
 
@@ -112,6 +121,8 @@ pub fn links_fix(
         "applied": !dry_run,
         "case_mismatches": case_mismatch_count,
         "case_mismatch_fixes": case_mismatches,
+        "ambiguous": ambiguous_count,
+        "ambiguous_links": ambiguous,
     });
 
     let _ = format;

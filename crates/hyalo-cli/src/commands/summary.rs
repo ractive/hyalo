@@ -313,7 +313,8 @@ pub fn summary(
     // consistent with the disk-scan path and ensures the report is meaningful
     // (scoped results would produce misleadingly low counts).
     let link_health = {
-        let report = detect_broken_links_from_index(dir, index, site_prefix, case_index);
+        // Summary always uses Obsidian-compatible short-form handling (expand_short_form=false).
+        let report = detect_broken_links_from_index(dir, index, site_prefix, case_index, false);
         LinkHealthSummary {
             total: report.total_links,
             broken: report.broken.len(),

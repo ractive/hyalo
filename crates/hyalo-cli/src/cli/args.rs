@@ -1140,6 +1140,13 @@ pub(crate) enum LinksAction {
             3. Unique stem match anywhere in the vault (shortest-path)\n\
             4. Jaro-Winkler fuzzy match above --threshold\n\n\
             Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
+            SHORT-FORM WIKILINKS (Obsidian compatibility):\n\
+            A bare [[Note]] that resolves to some **/Note.md anywhere in the vault is NOT\n\
+            broken and is left untouched. Only a stem-casing mismatch ([[note]] for Note.md)\n\
+            triggers a case-mismatch fix — and the fix preserves the short form ([[Note]],\n\
+            never [[sub/Note]]). Links matching >=2 files are reported as ambiguous and\n\
+            never auto-fixed.\n\n\
+            Use --expand-short-form to opt into path expansion (Obsidian-incompatible).\n\n\
             Case-mismatch detection: when case-insensitive resolution is active (controlled by\n\
             `[links] case_insensitive` in .hyalo.toml — \"auto\", \"true\", or \"false\"), broken links\n\
             that differ only in casing from an on-disk file are reported as case_mismatches and\n\
@@ -1162,6 +1169,15 @@ pub(crate) enum LinksAction {
         /// Useful for skipping Hugo template links, external paths, etc.
         #[arg(long)]
         ignore_target: Vec<String>,
+        /// Expand short-form wikilinks ([[Name]]) to their full vault path when applying fixes.
+        ///
+        /// By default, hyalo treats bare stem wikilinks as valid Obsidian short-form links:
+        /// [[Corina]] that resolves to sub/Corina.md is left untouched. With this flag,
+        /// such links are expanded to [[sub/Corina]] on --apply. NOTE: this breaks
+        /// Obsidian compatibility — Obsidian resolves short-form links by stem across the
+        /// whole vault and does not require the full path.
+        #[arg(long)]
+        expand_short_form: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },

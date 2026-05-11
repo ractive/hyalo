@@ -56,6 +56,10 @@ pub struct BrokenLinkReport {
     /// Only populated when a [`CaseInsensitiveIndex`] is provided to the
     /// detection functions.
     pub case_mismatches: Vec<FixPlan>,
+    /// Short-form wikilinks (no `/`) whose stem matches ≥2 files in the vault.
+    /// These are left untouched by `--apply` because the correct target is
+    /// ambiguous and auto-picking would be wrong.
+    pub ambiguous: Vec<BrokenLinkInfo>,
 }
 
 /// A single actionable fix: rewrite `old_target` → `new_target` in `source`.
@@ -91,6 +95,10 @@ pub enum FixStrategy {
     /// Rule code: `link-case-mismatch`. The `new_target` in the [`FixPlan`]
     /// holds the canonical on-disk casing returned by the [`CaseInsensitiveIndex`].
     LinkCaseMismatch,
+    /// A short-form wikilink (no `/`) whose stem casing differs from the
+    /// on-disk filename — the `new_target` is the corrected short-form stem
+    /// (never a full path).
+    ShortFormStemMismatch,
 }
 
 /// Result of planning fixes for a set of broken links.
@@ -117,12 +125,91 @@ pub struct FixReport {
 ///   papered over a mismatch); caller should record as a case-mismatch.
 /// - `CaseMismatch(canonical)` — exact resolution failed but the case index
 ///   found a unique canonical path; caller should record as a case-mismatch.
+/// - `ShortFormValid` — a short-form wikilink whose stem resolves to exactly
+///   one file in the vault with matching casing; nothing to fix.
+/// - `ShortFormStemMismatch(correct_stem)` — a short-form wikilink whose stem
+///   resolves to exactly one file, but the written casing of the stem differs
+///   from the on-disk filename stem; `new_target` is the corrected stem
+///   (never a path — never expanded).
+/// - `ShortFormAmbiguous` — a short-form wikilink whose stem matches ≥2 files.
 /// - `Broken` — nothing resolves.
 #[derive(PartialEq)]
 enum LinkResolution {
     Resolved(Option<String>),
     CaseMismatch(String),
+    ShortFormValid,
+    ShortFormStemMismatch(String),
+    ShortFormAmbiguous,
     Broken,
+}
+
+/// Classify a short-form wikilink target (no `/`) against the vault's stem
+/// index.  Returns a `LinkResolution` that covers valid, stem-case-mismatch,
+/// ambiguous, and broken cases without ever producing a full path.
+///
+/// When `expand_short_form` is `true`, the caller has opted into path
+/// expansion — skip the short-form special handling and let the caller fall
+/// through to regular path-based classification.
+fn classify_short_form_wikilink(
+    target: &str,
+    vault_files: &[String],
+    case_index: Option<&CaseInsensitiveIndex>,
+    expand_short_form: bool,
+) -> Option<LinkResolution> {
+    if expand_short_form {
+        return None; // caller should use regular path-based classification
+    }
+
+    // Only apply to bare stems (no directory separator and no `.md` extension
+    // in the target, which is already fragment-stripped).
+    if target.contains('/') || target.contains('\\') {
+        return None;
+    }
+    // Don't touch markdown-style links (handled by caller kind check).
+    // This function is always called with wikilink targets only.
+
+    // Collect all vault files whose stem matches `target` (case-insensitively).
+    let target_lower = target.to_ascii_lowercase();
+
+    let matches: Vec<&str> = if let Some(idx) = case_index {
+        idx.lookup_stem_all(target)
+            .iter()
+            .map(String::as_str)
+            .collect()
+    } else {
+        // No index: scan vault_files by stem.
+        vault_files
+            .iter()
+            .filter(|p| {
+                let fname = p.rsplit('/').next().unwrap_or(p.as_str());
+                let stem = fname.strip_suffix(".md").unwrap_or(fname);
+                stem.to_ascii_lowercase() == target_lower
+            })
+            .map(String::as_str)
+            .collect()
+    };
+
+    match matches.len() {
+        0 => Some(LinkResolution::Broken),
+        1 => {
+            // Exactly one match — the link is valid. Check if the stem casing differs.
+            let canonical_path = matches[0];
+            let canonical_fname = canonical_path.rsplit('/').next().unwrap_or(canonical_path);
+            let canonical_stem = canonical_fname
+                .strip_suffix(".md")
+                .unwrap_or(canonical_fname);
+
+            if target == canonical_stem {
+                Some(LinkResolution::ShortFormValid)
+            } else {
+                // Stem casing differs — propose the canonical stem (not a full path).
+                Some(LinkResolution::ShortFormStemMismatch(
+                    canonical_stem.to_string(),
+                ))
+            }
+        }
+        _ => Some(LinkResolution::ShortFormAmbiguous),
+    }
 }
 
 fn classify_link(
@@ -173,15 +260,71 @@ fn classify_link(
 /// returned `LinkResolution` is the verdict for the *resolved* path so the
 /// caller doesn't need to invoke [`classify_link`] a second time (which would
 /// double the stat syscalls in the bare-basename path).
+///
+/// `vault_files` is the flat list of vault-relative paths (used for short-form
+/// stem resolution when `case_index` is `None`).
+///
+/// `expand_short_form` — when `true`, skip Obsidian short-form handling and
+/// fall through to regular path-based classification (old behavior, opt-in via
+/// `--expand-short-form`).
 fn resolve_and_classify_link(
     canonical: &Path,
     source_rel: &str,
     link: &crate::links::Link,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    vault_files: &[String],
+    expand_short_form: bool,
 ) -> (String, LinkResolution) {
     match link.kind {
         LinkKind::Wikilink => {
+            // For short-form wikilinks (no `/`), apply Obsidian stem resolution first.
+            // This prevents `resolve_target`'s internal stem lookup (inside classify_link)
+            // from misidentifying a valid short-form link as a CaseMismatch.
+            //
+            // Strategy (when !expand_short_form):
+            // 1. Try strict path-only check (no case_index) to catch vault-root exact files.
+            // 2. If path-only resolves → check for case mismatch via the full classify_link.
+            // 3. If path-only fails → use stem classification to determine the correct verdict.
+            //
+            // When expand_short_form=true: bypass stem classification entirely and use the
+            // regular classify_link path, which may expand short-form via stem resolution.
+            if !link.target.contains('/') && !link.target.contains('\\') {
+                if expand_short_form {
+                    // `--expand-short-form` opted into old path-expansion behavior.
+                    // Check path-only (no index) so that the internal stem lookup in
+                    // `resolve_target` cannot silently turn `[[Corina]]` into
+                    // `CaseMismatch("sub/Corina.md")` — we want it to be `Broken`
+                    // when `Corina.md` doesn't exist at the vault root, so that
+                    // `plan_fixes` can then suggest the full path `[[sub/Corina]]`.
+                    let res = classify_link(canonical, &link.target, site_prefix, None);
+                    return (link.target.clone(), res);
+                }
+                // Strategy (when !expand_short_form):
+                // 1. Try strict path-only check (no case_index) to catch vault-root exact files.
+                // 2. If path-only resolves → check for case mismatch via the full classify_link.
+                // 3. If path-only fails → use stem classification to determine the correct verdict.
+                let path_only = classify_link(canonical, &link.target, site_prefix, None);
+                if let LinkResolution::Resolved(_) = path_only {
+                    // File exists at the vault root (exact path). Re-run with full
+                    // case_index to detect root-file casing mismatches (e.g. [[corina]]
+                    // for vault-root Corina.md) and keep the short form.
+                    let full_res = classify_link(canonical, &link.target, site_prefix, case_index);
+                    return (link.target.clone(), full_res);
+                }
+                // Path-only failed → use stem classification.
+                if let Some(stem_res) = classify_short_form_wikilink(
+                    &link.target,
+                    vault_files,
+                    case_index,
+                    false, // expand_short_form already checked above
+                ) {
+                    return (link.target.clone(), stem_res);
+                }
+            }
+            // Path-form link or classify_short_form_wikilink returned None (shouldn't
+            // happen; it always returns Some when called with expand_short_form=false).
+            // Fall through to the regular path-based classification.
             let res = classify_link(canonical, &link.target, site_prefix, case_index);
             (link.target.clone(), res)
         }
@@ -221,24 +364,39 @@ fn resolve_and_classify_link(
 /// When `case_index` is provided, links that resolve only via the
 /// case-insensitive fallback are surfaced as [`FixStrategy::LinkCaseMismatch`]
 /// entries in [`BrokenLinkReport::case_mismatches`] rather than as broken.
+///
+/// When `expand_short_form` is `true`, short-form wikilinks (no `/`) are NOT
+/// given special Obsidian stem resolution — they fall through to path-based
+/// classification, which may expand them to full paths.  Default is `false`
+/// (Obsidian-compatible short-form handling).
 #[allow(dead_code)] // Used in tests only; CLI uses detect_broken_links_from_index
 pub(crate) fn detect_broken_links(
     dir: &Path,
     file_links: &[FileLinks],
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    expand_short_form: bool,
 ) -> BrokenLinkReport {
     let Ok(canonical) = canonicalize_vault_dir(dir) else {
         return BrokenLinkReport {
             total_links: 0,
             broken: Vec::new(),
             case_mismatches: Vec::new(),
+            ambiguous: Vec::new(),
         };
     };
+
+    // Build a flat list of vault-relative paths for short-form stem resolution
+    // when no case_index is provided.
+    let vault_files: Vec<String> = file_links
+        .iter()
+        .map(|fl| fl.source.to_string_lossy().replace('\\', "/"))
+        .collect();
 
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
     let mut case_mismatches: Vec<FixPlan> = Vec::new();
+    let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
 
     for fl in file_links {
         let source_str = fl.source.to_string_lossy().replace('\\', "/");
@@ -246,11 +404,18 @@ pub(crate) fn detect_broken_links(
         for (line, link) in &fl.links {
             total_links += 1;
 
-            let (_resolved_target, resolution) =
-                resolve_and_classify_link(&canonical, &source_str, link, site_prefix, case_index);
+            let (_resolved_target, resolution) = resolve_and_classify_link(
+                &canonical,
+                &source_str,
+                link,
+                site_prefix,
+                case_index,
+                &vault_files,
+                expand_short_form,
+            );
 
             match resolution {
-                LinkResolution::Resolved(None) => {}
+                LinkResolution::Resolved(None) | LinkResolution::ShortFormValid => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {
                     case_mismatches.push(FixPlan {
@@ -260,6 +425,23 @@ pub(crate) fn detect_broken_links(
                         new_target: canonical_str,
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
+                    });
+                }
+                LinkResolution::ShortFormStemMismatch(correct_stem) => {
+                    case_mismatches.push(FixPlan {
+                        source: source_str.clone(),
+                        line: *line,
+                        old_target: link.target.clone(),
+                        new_target: correct_stem,
+                        strategy: FixStrategy::ShortFormStemMismatch,
+                        confidence: 1.0,
+                    });
+                }
+                LinkResolution::ShortFormAmbiguous => {
+                    ambiguous.push(BrokenLinkInfo {
+                        source: source_str.clone(),
+                        line: *line,
+                        target: link.target.clone(),
                     });
                 }
                 LinkResolution::Broken => {
@@ -275,11 +457,13 @@ pub(crate) fn detect_broken_links(
 
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
     BrokenLinkReport {
         total_links,
         broken,
         case_mismatches,
+        ambiguous,
     }
 }
 
@@ -291,23 +475,35 @@ pub(crate) fn detect_broken_links(
 /// When `case_index` is provided, links that resolve only via the
 /// case-insensitive fallback are surfaced as [`FixStrategy::LinkCaseMismatch`]
 /// entries in [`BrokenLinkReport::case_mismatches`] rather than as broken.
+///
+/// When `expand_short_form` is `true`, short-form wikilinks (no `/`) are NOT
+/// given special Obsidian stem resolution — they fall through to path-based
+/// classification, which may expand them to full paths.  Default is `false`
+/// (Obsidian-compatible short-form handling).
 pub fn detect_broken_links_from_index(
     dir: &Path,
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    expand_short_form: bool,
 ) -> BrokenLinkReport {
     let Ok(canonical) = canonicalize_vault_dir(dir) else {
         return BrokenLinkReport {
             total_links: 0,
             broken: Vec::new(),
             case_mismatches: Vec::new(),
+            ambiguous: Vec::new(),
         };
     };
+
+    // Build a flat list of vault-relative paths for short-form stem resolution
+    // when no case_index is provided.
+    let vault_files: Vec<String> = index.entries().iter().map(|e| e.rel_path.clone()).collect();
 
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
     let mut case_mismatches: Vec<FixPlan> = Vec::new();
+    let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
@@ -319,10 +515,12 @@ pub fn detect_broken_links_from_index(
                 link,
                 site_prefix,
                 case_index,
+                &vault_files,
+                expand_short_form,
             );
 
             match resolution {
-                LinkResolution::Resolved(None) => {}
+                LinkResolution::Resolved(None) | LinkResolution::ShortFormValid => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {
                     case_mismatches.push(FixPlan {
@@ -332,6 +530,23 @@ pub fn detect_broken_links_from_index(
                         new_target: canonical_str,
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
+                    });
+                }
+                LinkResolution::ShortFormStemMismatch(correct_stem) => {
+                    case_mismatches.push(FixPlan {
+                        source: entry.rel_path.clone(),
+                        line: *line,
+                        old_target: link.target.clone(),
+                        new_target: correct_stem,
+                        strategy: FixStrategy::ShortFormStemMismatch,
+                        confidence: 1.0,
+                    });
+                }
+                LinkResolution::ShortFormAmbiguous => {
+                    ambiguous.push(BrokenLinkInfo {
+                        source: entry.rel_path.clone(),
+                        line: *line,
+                        target: link.target.clone(),
                     });
                 }
                 LinkResolution::Broken => {
@@ -347,11 +562,13 @@ pub fn detect_broken_links_from_index(
 
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
     BrokenLinkReport {
         total_links,
         broken,
         case_mismatches,
+        ambiguous,
     }
 }
 
@@ -1006,7 +1223,7 @@ mod tests {
             ],
         }];
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
 
         assert_eq!(report.total_links, 2);
         assert_eq!(report.broken.len(), 1);
@@ -1057,7 +1274,7 @@ mod tests {
             },
         ];
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
 
         assert_eq!(report.broken.len(), 3);
         // Sorted by (source, line)
@@ -1157,7 +1374,7 @@ mod tests {
         // Without index: case_mismatches is always empty regardless of FS type.
         // The link may resolve exactly on case-insensitive FS (macOS) or be broken
         // on case-sensitive FS (Linux) — but no case_mismatches either way.
-        let report_no_idx = detect_broken_links(tmp.path(), &file_links, None, None);
+        let report_no_idx = detect_broken_links(tmp.path(), &file_links, None, None, false);
         assert_eq!(report_no_idx.total_links, 1);
         assert!(
             report_no_idx.case_mismatches.is_empty(),
@@ -1167,7 +1384,7 @@ mod tests {
         // With index: total_links is still 1 and accounting is consistent.
         // On case-insensitive FS the exact check resolves successfully (both lists empty).
         // On case-sensitive FS the link is reported as a case_mismatch (not broken).
-        let report_with_idx = detect_broken_links(tmp.path(), &file_links, None, Some(&idx));
+        let report_with_idx = detect_broken_links(tmp.path(), &file_links, None, Some(&idx), false);
         assert_eq!(report_with_idx.total_links, 1);
         let total_classified = report_with_idx.broken.len() + report_with_idx.case_mismatches.len();
         assert!(
@@ -1200,7 +1417,7 @@ mod tests {
             )],
         }];
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, Some(&idx));
+        let report = detect_broken_links(tmp.path(), &file_links, None, Some(&idx), false);
 
         // Regardless of FS case sensitivity: if there are case_mismatches,
         // they must use the LinkCaseMismatch strategy and confidence 1.0.
@@ -1244,7 +1461,7 @@ mod tests {
             )],
         }];
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
 
         assert_eq!(
             report.case_mismatches.len(),
@@ -1284,7 +1501,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None);
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None, false);
 
         assert_eq!(
             report.case_mismatches.len(),
@@ -1318,10 +1535,205 @@ mod tests {
         }];
 
         // Without case index: case_mismatches must always be empty.
-        let report = detect_broken_links(tmp.path(), &file_links, None, None);
+        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
         assert!(
             report.case_mismatches.is_empty(),
             "case_mismatches must be empty when no index is provided"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Short-form wikilink resolution (iter-134)
+    // ---------------------------------------------------------------------------
+
+    /// `[[Corina]]` resolving to `sub/Corina.md` must NOT be broken or a case-mismatch.
+    #[test]
+    fn short_form_wikilink_in_subdir_is_valid() {
+        use crate::index::{ScanOptions, ScannedIndex};
+
+        let tmp = vault_with_files(&[
+            ("sub/Corina.md", "---\ntitle: Corina\n---\n"),
+            ("index.md", "---\ntitle: Index\n---\nSee [[Corina]] here.\n"),
+        ]);
+
+        let files = vec![
+            (
+                tmp.path().join("sub/Corina.md"),
+                "sub/Corina.md".to_string(),
+            ),
+            (tmp.path().join("index.md"), "index.md".to_string()),
+        ];
+        let built = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None, false);
+
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "[[Corina]] pointing to sub/Corina.md must not be broken; report: {report:?}"
+        );
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "[[Corina]] pointing to sub/Corina.md must not be a case-mismatch; report: {report:?}"
+        );
+        assert_eq!(
+            report.ambiguous.len(),
+            0,
+            "[[Corina]] with one stem match must not be ambiguous; report: {report:?}"
+        );
+    }
+
+    /// `[[corina]]` for `sub/Corina.md` is a stem-case mismatch — fix to `[[Corina]]`.
+    #[test]
+    fn short_form_stem_case_mismatch_detected_and_short_form_preserved() {
+        use crate::index::{ScanOptions, ScannedIndex};
+
+        let tmp = vault_with_files(&[
+            ("sub/Corina.md", "---\ntitle: Corina\n---\n"),
+            ("index.md", "---\ntitle: Index\n---\nSee [[corina]] here.\n"),
+        ]);
+
+        let files = vec![
+            (
+                tmp.path().join("sub/Corina.md"),
+                "sub/Corina.md".to_string(),
+            ),
+            (tmp.path().join("index.md"), "index.md".to_string()),
+        ];
+        let built = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None, false);
+
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "stem-case-mismatch must not be broken; report: {report:?}"
+        );
+        assert_eq!(
+            report.case_mismatches.len(),
+            1,
+            "stem-case-mismatch must appear in case_mismatches; report: {report:?}"
+        );
+        let fix = &report.case_mismatches[0];
+        assert_eq!(fix.old_target, "corina");
+        // new_target must be the short-form stem, not a full path
+        assert_eq!(
+            fix.new_target, "Corina",
+            "new_target must be the stem only, not a full path; fix: {fix:?}"
+        );
+        assert!(
+            !fix.new_target.contains('/'),
+            "new_target must not contain a path separator; fix: {fix:?}"
+        );
+    }
+
+    /// Two files with the same stem produce an `ambiguous` entry; nothing in broken/case_mismatches.
+    #[test]
+    fn short_form_ambiguous_detected() {
+        use crate::index::{ScanOptions, ScannedIndex};
+
+        let tmp = vault_with_files(&[
+            ("a/Corina.md", "---\ntitle: Corina A\n---\n"),
+            ("b/Corina.md", "---\ntitle: Corina B\n---\n"),
+            ("index.md", "---\ntitle: Index\n---\nSee [[Corina]] here.\n"),
+        ]);
+
+        let files = vec![
+            (tmp.path().join("a/Corina.md"), "a/Corina.md".to_string()),
+            (tmp.path().join("b/Corina.md"), "b/Corina.md".to_string()),
+            (tmp.path().join("index.md"), "index.md".to_string()),
+        ];
+        let built = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None, false);
+
+        assert_eq!(
+            report.broken.len(),
+            0,
+            "ambiguous short-form link must not be broken; report: {report:?}"
+        );
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "ambiguous short-form link must not be a case-mismatch; report: {report:?}"
+        );
+        assert_eq!(
+            report.ambiguous.len(),
+            1,
+            "ambiguous short-form link must appear in ambiguous; report: {report:?}"
+        );
+        assert_eq!(report.ambiguous[0].target, "Corina");
+    }
+
+    /// With `expand_short_form=true`, short-form wikilinks fall back to path-based
+    /// classification (old behavior), allowing plan_fixes to expand them.
+    #[test]
+    fn expand_short_form_flag_uses_path_based_classification() {
+        use crate::index::{ScanOptions, ScannedIndex};
+
+        let tmp = vault_with_files(&[
+            ("sub/Corina.md", "---\ntitle: Corina\n---\n"),
+            ("index.md", "---\ntitle: Index\n---\nSee [[Corina]] here.\n"),
+        ]);
+
+        let files = vec![
+            (
+                tmp.path().join("sub/Corina.md"),
+                "sub/Corina.md".to_string(),
+            ),
+            (tmp.path().join("index.md"), "index.md".to_string()),
+        ];
+        let built = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        // expand_short_form=true: [[Corina]] is not found at vault root → broken
+        let report = detect_broken_links_from_index(tmp.path(), &built.index, None, None, true);
+
+        assert_eq!(
+            report.broken.len(),
+            1,
+            "with expand_short_form, [[Corina]] not at vault root must be broken; report: {report:?}"
+        );
+        assert_eq!(report.broken[0].target, "Corina");
     }
 }
