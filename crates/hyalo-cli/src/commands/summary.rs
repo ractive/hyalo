@@ -315,9 +315,12 @@ pub fn summary(
     let link_health = {
         // Summary always uses Obsidian-compatible short-form handling (expand_short_form=false).
         let report = detect_broken_links_from_index(dir, index, site_prefix, case_index, false);
+        // Ambiguous short-form links are unresolvable without manual
+        // intervention, so include them in the broken count so the summary
+        // reflects the total number of links that need attention.
         LinkHealthSummary {
             total: report.total_links,
-            broken: report.broken.len(),
+            broken: report.broken.len() + report.ambiguous.len(),
         }
     };
 

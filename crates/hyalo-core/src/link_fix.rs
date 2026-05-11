@@ -50,11 +50,16 @@ pub struct BrokenLinkReport {
     pub broken: Vec<BrokenLinkInfo>,
     /// Links that resolve via case-insensitive fallback but whose written casing
     /// differs from the canonical on-disk path.  These are NOT broken — the
-    /// file exists — but they carry the wrong casing and can be auto-fixed with
-    /// strategy [`FixStrategy::LinkCaseMismatch`].
+    /// file exists — but they carry the wrong casing and can be auto-fixed.
     ///
-    /// Only populated when a [`CaseInsensitiveIndex`] is provided to the
-    /// detection functions.
+    /// Two kinds of fixes can appear here:
+    /// - [`FixStrategy::LinkCaseMismatch`] — path-form link whose casing differs
+    ///   from the on-disk file; only populated when a [`CaseInsensitiveIndex`]
+    ///   is provided to the detection functions.
+    /// - [`FixStrategy::ShortFormStemMismatch`] — short-form wikilink whose
+    ///   stem casing differs from the on-disk filename; populated regardless of
+    ///   whether a [`CaseInsensitiveIndex`] is provided (the stem index is
+    ///   built from the vault file list).
     pub case_mismatches: Vec<FixPlan>,
     /// Short-form wikilinks (no `/`) whose stem matches ≥2 files in the vault.
     /// These are left untouched by `--apply` because the correct target is
@@ -143,6 +148,34 @@ enum LinkResolution {
     Broken,
 }
 
+/// Precomputed case-insensitive stem → candidate paths map used to resolve
+/// short-form wikilinks when no [`CaseInsensitiveIndex`] is available.
+/// Built once per `detect_broken_links*` call so each lookup is O(1).
+struct StemIndex {
+    map: HashMap<String, Vec<String>>,
+}
+
+impl StemIndex {
+    fn build(vault_files: &[String]) -> Self {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for path in vault_files {
+            let fname = path.rsplit('/').next().unwrap_or(path.as_str());
+            let stem = fname.strip_suffix(".md").unwrap_or(fname);
+            map.entry(stem.to_ascii_lowercase())
+                .or_default()
+                .push(path.clone());
+        }
+        Self { map }
+    }
+
+    fn lookup(&self, stem: &str) -> Vec<&str> {
+        self.map
+            .get(&stem.to_ascii_lowercase())
+            .map(|v| v.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+}
+
 /// Classify a short-form wikilink target (no `/`) against the vault's stem
 /// index.  Returns a `LinkResolution` that covers valid, stem-case-mismatch,
 /// ambiguous, and broken cases without ever producing a full path.
@@ -152,7 +185,7 @@ enum LinkResolution {
 /// through to regular path-based classification.
 fn classify_short_form_wikilink(
     target: &str,
-    vault_files: &[String],
+    stem_index: &StemIndex,
     case_index: Option<&CaseInsensitiveIndex>,
     expand_short_form: bool,
 ) -> Option<LinkResolution> {
@@ -160,33 +193,32 @@ fn classify_short_form_wikilink(
         return None; // caller should use regular path-based classification
     }
 
-    // Only apply to bare stems (no directory separator and no `.md` extension
-    // in the target, which is already fragment-stripped).
+    // Only apply to bare stems (no directory separator). Wikilinks with an
+    // explicit `.md` extension (e.g. `[[Note.md]]`) are path-like targets;
+    // let the caller handle them via regular path-based classification rather
+    // than mismatching them as stem lookups against `"Note.md"`.
     if target.contains('/') || target.contains('\\') {
         return None;
     }
-    // Don't touch markdown-style links (handled by caller kind check).
-    // This function is always called with wikilink targets only.
+    // Skip wikilinks with an explicit `.md` extension (case-insensitive),
+    // which are path-like targets and should go through path-based handling.
+    if std::path::Path::new(target)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    {
+        return None;
+    }
 
-    // Collect all vault files whose stem matches `target` (case-insensitively).
-    let target_lower = target.to_ascii_lowercase();
-
+    // Look up the stem case-insensitively. Prefer the case_index when
+    // available (O(1) hash lookup); otherwise use the precomputed
+    // per-invocation stem index built from `vault_files`.
     let matches: Vec<&str> = if let Some(idx) = case_index {
         idx.lookup_stem_all(target)
             .iter()
             .map(String::as_str)
             .collect()
     } else {
-        // No index: scan vault_files by stem.
-        vault_files
-            .iter()
-            .filter(|p| {
-                let fname = p.rsplit('/').next().unwrap_or(p.as_str());
-                let stem = fname.strip_suffix(".md").unwrap_or(fname);
-                stem.to_ascii_lowercase() == target_lower
-            })
-            .map(String::as_str)
-            .collect()
+        stem_index.lookup(target)
     };
 
     match matches.len() {
@@ -273,7 +305,7 @@ fn resolve_and_classify_link(
     link: &crate::links::Link,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
-    vault_files: &[String],
+    stem_index: &StemIndex,
     expand_short_form: bool,
 ) -> (String, LinkResolution) {
     match link.kind {
@@ -315,7 +347,7 @@ fn resolve_and_classify_link(
                 // Path-only failed → use stem classification.
                 if let Some(stem_res) = classify_short_form_wikilink(
                     &link.target,
-                    vault_files,
+                    stem_index,
                     case_index,
                     false, // expand_short_form already checked above
                 ) {
@@ -386,12 +418,14 @@ pub(crate) fn detect_broken_links(
         };
     };
 
-    // Build a flat list of vault-relative paths for short-form stem resolution
-    // when no case_index is provided.
+    // Build a precomputed stem index for short-form stem resolution when no
+    // case_index is provided. Built once per call so each lookup is O(1)
+    // instead of a full linear scan of the vault per short-form link.
     let vault_files: Vec<String> = file_links
         .iter()
         .map(|fl| fl.source.to_string_lossy().replace('\\', "/"))
         .collect();
+    let stem_index = StemIndex::build(&vault_files);
 
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
@@ -410,7 +444,7 @@ pub(crate) fn detect_broken_links(
                 link,
                 site_prefix,
                 case_index,
-                &vault_files,
+                &stem_index,
                 expand_short_form,
             );
 
@@ -496,9 +530,11 @@ pub fn detect_broken_links_from_index(
         };
     };
 
-    // Build a flat list of vault-relative paths for short-form stem resolution
-    // when no case_index is provided.
+    // Build a precomputed stem index for short-form stem resolution when no
+    // case_index is provided. Built once per call so each lookup is O(1)
+    // instead of a full linear scan of the vault per short-form link.
     let vault_files: Vec<String> = index.entries().iter().map(|e| e.rel_path.clone()).collect();
+    let stem_index = StemIndex::build(&vault_files);
 
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
@@ -515,7 +551,7 @@ pub fn detect_broken_links_from_index(
                 link,
                 site_prefix,
                 case_index,
-                &vault_files,
+                &stem_index,
                 expand_short_form,
             );
 

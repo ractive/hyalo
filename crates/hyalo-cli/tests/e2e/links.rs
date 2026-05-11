@@ -2642,6 +2642,31 @@ See [[sub/Corina]] for details.
         1,
         "path-form case mismatch should be detected: {json}"
     );
+
+    // --apply must rewrite the path-form casing to match the on-disk file.
+    let apply_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply should run");
+    assert!(apply_out.status.success());
+
+    let content = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(
+        content.contains("[[sub/corina]]"),
+        "--apply must rewrite [[sub/Corina]] to [[sub/corina]]; content: {content}"
+    );
+    assert!(
+        !content.contains("[[sub/Corina]]"),
+        "--apply must have fixed the casing; content: {content}"
+    );
 }
 
 /// `--expand-short-form` opts into path expansion of short-form wikilinks.
@@ -2718,5 +2743,27 @@ See [[Corina]] for details.
     assert!(
         broken + fixable >= 1,
         "--expand-short-form must expose [[Corina]] as broken or fixable: {with_expand_json}"
+    );
+
+    // --apply with --expand-short-form must rewrite [[Corina]] to [[sub/Corina]].
+    let apply_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--expand-short-form",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply --expand-short-form should run");
+    assert!(apply_out.status.success());
+
+    let content = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(
+        content.contains("[[sub/Corina]]"),
+        "--apply --expand-short-form must rewrite [[Corina]] to [[sub/Corina]]; content: {content}"
     );
 }

@@ -44,9 +44,11 @@ pub fn links_fix(
     let report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
 
-    // Filter broken links by glob, if any were provided.
-    let broken = if globs.is_empty() {
-        report.broken
+    // Compute the set of in-scope source files when --glob is provided.
+    // The same scope applies to broken, case_mismatches, and ambiguous so
+    // that --apply never rewrites files outside the requested scope.
+    let matched_owned: Option<Vec<String>> = if globs.is_empty() {
+        None
     } else {
         let all_files: Vec<std::path::PathBuf> = index
             .entries()
@@ -55,14 +57,21 @@ pub fn links_fix(
             .collect();
         let matched = discovery::match_globs(dir, &all_files, globs)?;
         crate::warn::warn_glob_dir_overlap(dir, globs, matched.len());
-        let matched_set: std::collections::HashSet<&str> =
-            matched.iter().map(|(_, rel)| rel.as_str()).collect();
-        report
-            .broken
-            .into_iter()
-            .filter(|b| matched_set.contains(b.source.as_str()))
-            .collect()
+        Some(matched.into_iter().map(|(_, rel)| rel).collect())
     };
+    let matched_set: Option<std::collections::HashSet<&str>> = matched_owned
+        .as_ref()
+        .map(|v| v.iter().map(String::as_str).collect());
+    let in_scope = |source: &str| match &matched_set {
+        Some(set) => set.contains(source),
+        None => true,
+    };
+
+    let broken: Vec<_> = report
+        .broken
+        .into_iter()
+        .filter(|b| in_scope(b.source.as_str()))
+        .collect();
 
     // Filter out ignored targets (--ignore-target substrings).
     let (broken, ignored_count) = if ignore_target.is_empty() {
@@ -86,10 +95,18 @@ pub fn links_fix(
 
     // Collect all fixes: broken-link fixes + case-mismatch fixes.
     // Case-mismatch fixes come from the detection phase (not from plan_fixes).
-    let case_mismatches = report.case_mismatches;
+    let case_mismatches: Vec<_> = report
+        .case_mismatches
+        .into_iter()
+        .filter(|f| in_scope(f.source.as_str()))
+        .collect();
     let case_mismatch_count = case_mismatches.len();
     // Ambiguous short-form links — reported but never auto-fixed.
-    let ambiguous = report.ambiguous;
+    let ambiguous: Vec<_> = report
+        .ambiguous
+        .into_iter()
+        .filter(|b| in_scope(b.source.as_str()))
+        .collect();
     let ambiguous_count = ambiguous.len();
 
     let mut modified_files = Vec::new();
