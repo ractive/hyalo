@@ -358,6 +358,9 @@ fn build_rename_map(
         proposed.push((src.clone(), new_rel));
     }
 
+    // Drop no-op renames (source already at destination).
+    proposed.retain(|(old_rel, new_rel)| old_rel != new_rel);
+
     // Detect basename collisions (two sources mapping to the same dest).
     let mut dest_to_sources: HashMap<String, Vec<String>> = HashMap::new();
     for (src, dst) in &proposed {
@@ -467,16 +470,41 @@ fn build_rename_map(
 
 /// Execute a batch move: apply all renames, then write all rewrite plans.
 /// On failure of any rename, roll back already-applied renames.
+/// If link rewrite fails after renames succeeded, also rolls back renames.
 fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePlan]) -> Result<()> {
+    // Capture source mtimes upfront to detect concurrent modifications.
+    let mut src_mtimes: Vec<(String, String, (std::time::SystemTime, u64))> = Vec::new();
+    for (old_rel, new_rel) in renames {
+        let src = dir.join(old_rel);
+        let mtime = hyalo_core::frontmatter::read_mtime(&src)
+            .with_context(|| format!("failed to read mtime for {}", src.display()))?;
+        src_mtimes.push((old_rel.clone(), new_rel.clone(), mtime));
+    }
+
     let mut applied: Vec<(PathBuf, PathBuf)> = Vec::new();
 
-    for (old_rel, new_rel) in renames {
+    for (old_rel, new_rel, mtime) in &src_mtimes {
         let src = dir.join(old_rel);
         let dst = dir.join(new_rel);
 
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        }
+
+        // Check for concurrent modification before renaming.
+        if let Err(e) = hyalo_core::frontmatter::check_mtime(&src, *mtime) {
+            // Roll back already-applied renames.
+            for (was_dst, was_src) in applied.iter().rev() {
+                if let Err(rb_err) = fs::rename(was_dst, was_src) {
+                    eprintln!(
+                        "warning: rollback failed for {} -> {}: {rb_err}",
+                        was_dst.display(),
+                        was_src.display()
+                    );
+                }
+            }
+            return Err(e);
         }
 
         if let Err(e) = fs::rename(&src, &dst) {
@@ -501,7 +529,19 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
     }
 
     // All renames succeeded — apply link rewrites.
-    link_rewrite::execute_plans(dir, plans)?;
+    if let Err(e) = link_rewrite::execute_plans(dir, plans) {
+        // Roll back renames so the vault is left in a consistent state.
+        for (was_dst, was_src) in applied.iter().rev() {
+            if let Err(rb_err) = fs::rename(was_dst, was_src) {
+                eprintln!(
+                    "warning: rollback failed for {} -> {}: {rb_err}",
+                    was_dst.display(),
+                    was_src.display()
+                );
+            }
+        }
+        return Err(e);
+    }
 
     Ok(())
 }
@@ -615,6 +655,18 @@ fn validate_batch_target(
             "batch --to must be a directory path, not a .md file",
             Some(to_arg),
             Some("use a directory path (with or without trailing '/') for batch moves"),
+            None,
+        );
+        return Err(CommandOutcome::UserError(out));
+    }
+
+    // Reject empty path (e.g. `--to ./` or `--to /`).
+    if normalized.is_empty() {
+        let out = crate::output::format_error(
+            format,
+            "destination directory cannot be empty; use a relative subdirectory path",
+            Some(to_arg),
+            None,
             None,
         );
         return Err(CommandOutcome::UserError(out));

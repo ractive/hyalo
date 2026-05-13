@@ -533,8 +533,9 @@ pub(crate) enum Commands {
             1. Moves the file on disk.\n\
             2. Rewrites all [[wikilinks]] and [markdown](links) in other files that pointed to the old path.\n\
             3. Rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.\n\n\
-            SINGLE-FILE MODE (default):\n\
-            Provide a positional FILE or --file. --to must end with .md. No --apply required.\n\n\
+            SINGLE-FILE MODE:\n\
+            Provide a positional FILE or --file. --to accepts a .md path or an existing directory\n\
+            (basename of source is appended). Applied immediately unless --dry-run is passed.\n\n\
             BATCH MODE (when --glob, --property, --tag, or --type is given):\n\
             Resolves a set of source files via the given selectors (intersection). --to must be a\n\
             directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
@@ -549,12 +550,12 @@ pub(crate) enum Commands {
     )]
     Mv {
         /// Source file to move (relative to --dir) — positional form (single-file mode only)
-        #[arg(value_name = "FILE")]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "properties", "tag", "type", "file"])]
         file_positional: Option<String>,
         /// Source file to move (relative to --dir) — flag form (single-file mode only)
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type"])]
         file: Option<String>,
-        /// Destination path: file path ending with .md (single-file), or a directory for batch mode
+        /// Destination path: a .md path or an existing directory (basename appended) in single-file mode; a directory path in batch mode
         #[arg(long)]
         to: String,
         /// Glob pattern(s) to select source files, relative to --dir (repeatable); prefix '!' to negate
@@ -569,11 +570,11 @@ pub(crate) enum Commands {
         /// Type filter: match files where frontmatter 'type' equals TYPE. Repeatable (AND)
         #[arg(long = "type", value_name = "TYPE")]
         r#type: Vec<String>,
-        /// Preview changes without modifying any files (default in single-file mode)
+        /// Preview changes without modifying any files (default behavior in batch mode without --apply)
         #[arg(long)]
         dry_run: bool,
         /// Commit changes in batch mode (required when using --glob/--property/--tag/--type)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
         /// How to handle destination basename collisions: 'error' (default) or 'skip'
         #[arg(long = "on-conflict", value_name = "POLICY", default_value = "error")]

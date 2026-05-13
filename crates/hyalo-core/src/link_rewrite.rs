@@ -1247,7 +1247,9 @@ fn plan_frontmatter_wikilink_rewrites(
 
             if matches {
                 let old_text = format!("[[{target}]]");
-                let new_text = format!("[[{new_stem}]]");
+                // Preserve alias if present (e.g. `path|My Alias` → `new_stem|My Alias`).
+                let alias_suffix = target.find('|').map_or("", |i| &target[i..]);
+                let new_text = format!("[[{new_stem}{alias_suffix}]]");
                 if old_text != new_text {
                     replacements.push(Replacement {
                         line: line_num,

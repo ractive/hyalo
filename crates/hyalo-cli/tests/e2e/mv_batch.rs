@@ -414,10 +414,24 @@ B content.
     let skipped = results["skipped"].as_array().unwrap();
     assert_eq!(skipped.len(), 1, "exactly 1 should be skipped");
 
+    // The skipped entry must name the lexicographically-larger source (b/dup.md).
+    let skipped_paths: Vec<&str> = skipped.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(
+        skipped_paths.iter().any(|s| s.contains("b/dup.md")),
+        "b/dup.md must be in skipped list, got: {skipped_paths:?}"
+    );
+
     // archive/dup.md exists (the lexicographically first source, a/dup.md).
     assert!(
         tmp.path().join("archive/dup.md").exists(),
         "archive/dup.md must exist"
+    );
+
+    // The surviving destination content must match the lex-first source (a/dup.md → "A content.").
+    let dest_content = fs::read_to_string(tmp.path().join("archive/dup.md")).unwrap();
+    assert!(
+        dest_content.contains("A content."),
+        "archive/dup.md should contain a/dup.md's content, got: {dest_content}"
     );
 }
 
@@ -841,5 +855,145 @@ fn t14_single_graph_build_perf_smoke() {
     assert!(
         note0.contains("[[iterations/done/iteration-000]]"),
         "note-000 link must be updated: {note0}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T_NO_SELECTOR — mv with no FILE and no selectors is a UserError
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_no_selector_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().to_str().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["mv", "--to", "archive/"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit when no source is provided"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("no source selection provided"),
+        "error must mention 'no source selection provided', got: {combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T_TO_SLASH — mv --to ./ is rejected (empty dest after normalization)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_to_slash_rejected() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\nstatus: done\n---\nBody.\n");
+    let dir = tmp.path().to_str().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["mv", "--property", "status=done", "--to", "./"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for --to ./"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("destination directory cannot be empty"),
+        "error must mention 'destination directory cannot be empty', got: {combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T_CONFLICT_GLOB_FILE — positional FILE + --glob is rejected by clap
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_file_positional_and_glob_rejected() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "foo.md", "---\nstatus: x\n---\n");
+    let dir = tmp.path().to_str().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["mv", "foo.md", "--glob", "*.md", "--to", "archive/"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit when FILE and --glob both provided"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T_WIKILINK_ALIAS — batch mv preserves alias in wikilinks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_wikilink_alias_preserved_in_batch() {
+    let tmp = TempDir::new().unwrap();
+
+    // foo.md is referenced with an alias.
+    write_md(
+        tmp.path(),
+        "foo.md",
+        md!(r"
+---
+status: active
+---
+Content of foo.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "ref.md",
+        "---\nstatus: other\n---\nSee [[foo|My Alias]] for details.\n",
+    );
+    let dir = tmp.path().to_str().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args([
+            "mv",
+            "--property",
+            "status=active",
+            "--to",
+            "archive/",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // archive/foo.md must exist.
+    assert!(
+        tmp.path().join("archive/foo.md").exists(),
+        "archive/foo.md must exist after batch mv"
+    );
+
+    // ref.md must have the link updated with alias preserved.
+    let ref_content = fs::read_to_string(tmp.path().join("ref.md")).unwrap();
+    assert!(
+        ref_content.contains("[[archive/foo|My Alias]]"),
+        "alias must be preserved in updated link, got: {ref_content}"
     );
 }

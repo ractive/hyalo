@@ -1034,11 +1034,28 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let all_prop_filters: Vec<hyalo_core::filter::PropertyFilter> =
                 prop_filters.into_iter().chain(type_filters).collect();
 
-            let is_batch = !glob.is_empty()
-                || !all_prop_filters.is_empty()
-                || !tag.is_empty()
-                || file_positional.is_none() && file.is_none();
+            let has_selectors = !glob.is_empty() || !all_prop_filters.is_empty() || !tag.is_empty();
+            let has_file = file_positional.is_some() || file.is_some();
+
+            if !has_selectors && !has_file {
+                return Ok(CommandOutcome::UserError(
+                    "Error: no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)".to_string(),
+                ));
+            }
+
+            let is_batch = has_selectors;
+
             if is_batch {
+                // Validate tag filters.
+                for t in &tag {
+                    if let Err(msg) = crate::commands::tags::validate_tag(t) {
+                        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+                    }
+                }
+
+                // --dry-run and --apply are mutually exclusive (also enforced by clap).
+                let effective_apply = apply && !dry_run;
+
                 mv_commands::mv_batch(
                     dir,
                     file_positional.as_deref(),
@@ -1047,7 +1064,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &all_prop_filters,
                     &tag,
                     &to,
-                    apply,
+                    effective_apply,
                     &on_conflict,
                     effective_format,
                     site_prefix,
@@ -1059,7 +1076,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     Ok(f) => f,
                     Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
                 };
-                let effective_dry_run = dry_run && !apply;
+                let effective_dry_run = dry_run;
                 mv_commands::mv(
                     dir,
                     &file,
