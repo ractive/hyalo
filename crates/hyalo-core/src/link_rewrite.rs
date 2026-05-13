@@ -354,6 +354,63 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Link-form selection (short-form vs path-form)
+// ---------------------------------------------------------------------------
+
+/// Outcome of [`choose_wikilink_form`]: what form should an emitted wikilink use?
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WikilinkForm {
+    /// Emit `[[stem]]` — the basename stem is unique vault-wide after the move.
+    Short(String),
+    /// Emit `[[path/stem]]` — disambiguation needed; no `.md` suffix.
+    Path(String),
+}
+
+/// Decide whether to emit a wikilink in short-form (`[[stem]]`) or path-form
+/// (`[[dir/stem]]`) based on the basename uniqueness of `new_rel` in the
+/// vault **after** the move.
+///
+/// `old_rel` is the pre-move path (used to simulate the post-move vault state:
+/// the moved file is removed from `old_rel` and added at `new_rel`).
+///
+/// When `case_index` is `None`, falls back to path-form (safe default).
+pub(crate) fn choose_wikilink_form(
+    new_rel: &str,
+    old_rel: &str,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> WikilinkForm {
+    let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
+    // Stem is the basename only (no directory).
+    let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
+
+    let Some(idx) = case_index else {
+        return WikilinkForm::Path(new_stem.to_string());
+    };
+
+    // Count how many vault files have the same basename stem after the move.
+    // The pre-move index includes `old_rel` (which will be removed) and does
+    // NOT include `new_rel` (which will be added). Adjust accordingly.
+    let pre_move_candidates = idx.lookup_stem_all(new_basename_stem);
+
+    // Count: remove old_rel if present, add new_rel if not already present.
+    let had_old = pre_move_candidates
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(old_rel));
+    let has_new = pre_move_candidates
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(new_rel));
+
+    let post_count =
+        pre_move_candidates.len().cast_signed() - isize::from(had_old) + isize::from(!has_new);
+
+    if post_count == 1 {
+        WikilinkForm::Short(new_basename_stem.to_string())
+    } else {
+        WikilinkForm::Path(new_stem.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Inbound rewrite planning
 // ---------------------------------------------------------------------------
 
@@ -371,10 +428,16 @@ fn plan_inbound_rewrites(
     old_rel: &str,
     old_stem: &str,
     new_rel: &str,
-    new_stem: &str,
+    _new_stem: &str,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Vec<Replacement> {
+    // Decide once whether to use short-form for wikilinks pointing at new_rel.
+    let wikilink_target = match choose_wikilink_form(new_rel, old_rel, case_index) {
+        WikilinkForm::Short(stem) => stem,
+        WikilinkForm::Path(path) => path,
+    };
+
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
     let mut in_comment_fence = false;
@@ -525,12 +588,15 @@ fn plan_inbound_rewrites(
 
             // Compute the new target text.
             let new_target = match span.kind {
-                LinkKind::Wikilink => new_stem.to_string(),
+                // Prefer short-form (`[[stem]]`) when the new basename is unique
+                // vault-wide, path-form (`[[dir/stem]]`) otherwise.
+                LinkKind::Wikilink => wikilink_target.clone(),
                 LinkKind::Markdown => {
                     // If the original link was absolute-path style, preserve that
                     // style by re-prepending the site_prefix (or just `/`).
                     if span.link.target.starts_with('/') {
                         // Preserve whether the original used .md or stem style.
+                        let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
                         let target = if std::path::Path::new(&span.link.target)
                             .extension()
                             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
@@ -1025,6 +1091,12 @@ fn plan_inbound_rewrites_with_fm(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Vec<Replacement> {
+    // Decide once whether to use short-form for wikilinks pointing at new_rel.
+    let wikilink_target = match choose_wikilink_form(new_rel, old_rel, case_index) {
+        WikilinkForm::Short(stem) => stem,
+        WikilinkForm::Path(path) => path,
+    };
+
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
     let mut in_comment_fence = false;
@@ -1155,16 +1227,18 @@ fn plan_inbound_rewrites_with_fm(
             }
 
             let new_target = match span.kind {
-                LinkKind::Wikilink => new_stem.to_string(),
+                // Prefer short-form (`[[stem]]`) when new basename is unique.
+                LinkKind::Wikilink => wikilink_target.clone(),
                 LinkKind::Markdown => {
                     if span.link.target.starts_with('/') {
+                        let new_stem_local = new_rel.strip_suffix(".md").unwrap_or(new_rel);
                         let target = if std::path::Path::new(&span.link.target)
                             .extension()
                             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
                         {
                             new_rel
                         } else {
-                            new_stem
+                            new_stem_local
                         };
                         match site_prefix {
                             Some(prefix) => format!("/{prefix}/{target}"),
@@ -1208,10 +1282,16 @@ fn plan_frontmatter_wikilink_rewrites(
     line_num: usize,
     old_rel: &str,
     old_stem: &str,
-    _new_rel: &str,
-    new_stem: &str,
+    new_rel: &str,
+    _new_stem: &str,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Vec<Replacement> {
+    // Decide once whether to use short-form for this move's wikilinks.
+    let wikilink_target = match choose_wikilink_form(new_rel, old_rel, case_index) {
+        WikilinkForm::Short(stem) => stem,
+        WikilinkForm::Path(path) => path,
+    };
+
     let mut replacements = Vec::new();
 
     // Find all [[...]] occurrences in the line (may appear in quoted strings).
@@ -1247,9 +1327,9 @@ fn plan_frontmatter_wikilink_rewrites(
 
             if matches {
                 let old_text = format!("[[{target}]]");
-                // Preserve alias if present (e.g. `path|My Alias` → `new_stem|My Alias`).
+                // Preserve alias if present (e.g. `path|My Alias` → `new_target|My Alias`).
                 let alias_suffix = target.find('|').map_or("", |i| &target[i..]);
-                let new_text = format!("[[{new_stem}{alias_suffix}]]");
+                let new_text = format!("[[{wikilink_target}{alias_suffix}]]");
                 if old_text != new_text {
                     replacements.push(Replacement {
                         line: line_num,
@@ -1414,17 +1494,39 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_rewritten_when_stem_unique() {
-        // Bare wikilinks are now rewritten via case-insensitive stem lookup
-        // when the stem is unambiguous (unique file in the vault).
+    fn plan_mv_bare_wikilink_stays_short_form_when_stem_unique() {
+        // When the moved file's stem is unique vault-wide, bare wikilinks
+        // already use short-form and do not need rewriting — they continue
+        // to resolve correctly at the new location.
         let vault = create_vault(&[
             ("a.md", "---\ntitle: A\n---\nSee [[b]] for details\n"),
             ("b.md", "---\ntitle: B\n---\nContent\n"),
         ]);
         let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
-        assert_eq!(plans.len(), 1, "bare wikilink [[b]] should be rewritten");
-        assert_eq!(plans[0].replacements[0].old_text, "[[b]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+        // [[b]] is already correct short-form — no replacement needed.
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_none(),
+            "short-form [[b]] needs no rewrite when stem is unique: {plans:?}"
+        );
+    }
+
+    #[test]
+    fn plan_mv_path_wikilink_rewritten_to_short_form_when_stem_unique() {
+        // A path-form wikilink [[sub/b]] should be rewritten to short-form
+        // [[b]] when the stem `b` is unique vault-wide after the move.
+        let vault = create_vault(&[
+            ("a.md", "---\ntitle: A\n---\nSee [[sub/b]] for details\n"),
+            ("sub/b.md", "---\ntitle: B\n---\nContent\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        assert_eq!(
+            plans.len(),
+            1,
+            "path wikilink [[sub/b]] should be rewritten"
+        );
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
     }
 
     #[test]
@@ -1446,34 +1548,59 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_with_alias_rewritten() {
+    fn plan_mv_bare_wikilink_with_alias_stays_short_form_when_unique() {
+        // [[b|my note]] with unique stem: already short-form, no rewrite needed.
         let vault = create_vault(&[("a.md", "See [[b|my note]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
-        assert_eq!(
-            plans.len(),
-            1,
-            "bare wikilink with alias should be rewritten"
+        // Already short-form and stem is unique — no replacement.
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_none(),
+            "short-form alias wikilink needs no rewrite when stem is unique: {plans:?}"
         );
-        assert_eq!(plans[0].replacements[0].old_text, "[[b|my note]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b|my note]]");
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_with_fragment_rewritten() {
+    fn plan_mv_path_wikilink_with_alias_rewritten_to_short_form() {
+        // [[sub/b|my note]] should become [[b|my note]] when stem is unique.
+        let vault = create_vault(&[
+            ("a.md", "See [[sub/b|my note]] here\n"),
+            ("sub/b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b|my note]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[b|my note]]");
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_with_fragment_stays_short_form_when_unique() {
+        // [[b#section]] with unique stem: already short-form, no rewrite needed.
         let vault = create_vault(&[("a.md", "See [[b#section]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
-        assert_eq!(
-            plans.len(),
-            1,
-            "bare wikilink with fragment should be rewritten"
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_none(),
+            "short-form fragment wikilink needs no rewrite when stem is unique: {plans:?}"
         );
-        assert_eq!(plans[0].replacements[0].old_text, "[[b#section]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#section]]");
     }
 
     #[test]
-    fn plan_mv_bare_wikilink_case_mismatch_rewritten() {
-        // [[B]] matches b.md case-insensitively and is rewritten.
+    fn plan_mv_path_wikilink_with_fragment_rewritten_to_short_form() {
+        // [[sub/b#section]] should become [[b#section]] when stem is unique.
+        let vault = create_vault(&[
+            ("a.md", "See [[sub/b#section]] here\n"),
+            ("sub/b.md", "Content\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements[0].old_text, "[[sub/b#section]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[b#section]]");
+    }
+
+    #[test]
+    fn plan_mv_bare_wikilink_case_mismatch_rewritten_to_short_form() {
+        // [[B]] matches b.md case-insensitively; stem is unique → short-form.
         let vault = create_vault(&[("a.md", "See [[B]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
         assert_eq!(
@@ -1482,7 +1609,8 @@ mod tests {
             "case-mismatched bare wikilink should be rewritten"
         );
         assert_eq!(plans[0].replacements[0].old_text, "[[B]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+        // stem "b" is unique → short-form "b"
+        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
     }
 
     #[test]
@@ -1523,8 +1651,9 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "a.md");
         assert_eq!(plans[0].replacements.len(), 1);
+        // stem "item" is unique → short-form
         assert_eq!(plans[0].replacements[0].old_text, "[[backlog/item]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[backlog/done/item]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[item]]");
     }
 
     #[test]
@@ -1536,7 +1665,8 @@ mod tests {
         let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b|my note]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b|my note]]");
+        // stem "b" is unique → short-form, alias preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[b|my note]]");
     }
 
     #[test]
@@ -1548,7 +1678,8 @@ mod tests {
         let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b#section]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b#section]]");
+        // stem "b" is unique → short-form, fragment preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[b#section]]");
     }
 
     #[test]
@@ -1633,7 +1764,8 @@ mod tests {
         let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         execute_plans(vault.path(), &plans).unwrap();
         let content = fs::read_to_string(vault.path().join("a.md")).unwrap();
-        assert!(content.contains("[[archive/b]]"));
+        // stem "b" is unique → short-form [[b]]
+        assert!(content.contains("[[b]]"), "content: {content}");
         assert!(!content.contains("[[sub/b]]"));
     }
 
@@ -1720,24 +1852,21 @@ mod tests {
 
     #[test]
     fn plan_mv_bare_wikilink_with_md_extension_rewritten() {
-        // [[b.md]] is a bare wikilink — stem lookup finds the unique "b" → b.md,
-        // so it IS rewritten when b.md moves (same resolution as [[b]]).
-        // The rewritten link uses the stem form without .md extension.
+        // [[b.md]] is a bare wikilink (after .md strip) — stem "b" is unique,
+        // so we rewrite it. Since stem is already short-form and unique,
+        // the new target is [[b]] (short-form, .md stripped).
         let vault = create_vault(&[("a.md", "See [[b.md]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert_eq!(plans.len(), 1, "[[b.md]] should be rewritten: {plans:?}");
         assert_eq!(plans[0].replacements[0].old_text, "[[b.md]]");
-        // The new wikilink uses the new relative path stem (with sub/ prefix).
-        assert!(
-            plans[0].replacements[0].new_text.starts_with("[[sub/"),
-            "expected sub/ prefix: {:?}",
-            plans[0].replacements[0].new_text
-        );
+        // stem "b" is unique → short-form [[b]] (no .md, no sub/ prefix)
+        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
     }
 
     #[test]
     fn plan_mv_wikilink_with_path_and_md_extension() {
         // [[sub/b.md]] has a path separator — should be rewritten.
+        // stem "b" is unique → short-form [[b]].
         let vault = create_vault(&[
             ("a.md", "See [[sub/b.md]] here\n"),
             ("sub/b.md", "Content\n"),
@@ -1745,7 +1874,8 @@ mod tests {
         let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b.md]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+        // stem "b" is unique → short-form
+        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
     }
 
     // ---- Absolute-path inbound link tests ----
@@ -2158,7 +2288,8 @@ mod tests {
             a_plan.replacements
         );
         assert_eq!(a_plan.replacements[0].old_text, "[[sub/target]]");
-        assert_eq!(a_plan.replacements[0].new_text, "[[archive/target]]");
+        // stem "target" is unique → short-form
+        assert_eq!(a_plan.replacements[0].new_text, "[[target]]");
     }
 
     #[test]
@@ -2206,7 +2337,8 @@ mod tests {
         let a_plan = a_plan.unwrap();
         assert_eq!(a_plan.replacements.len(), 1);
         assert_eq!(a_plan.replacements[0].old_text, "[[sub/target]]");
-        assert_eq!(a_plan.replacements[0].new_text, "[[archive/target]]");
+        // stem "target" is unique → short-form
+        assert_eq!(a_plan.replacements[0].new_text, "[[target]]");
     }
 
     #[test]
@@ -2233,15 +2365,16 @@ mod tests {
 
     #[test]
     fn plan_mv_inbound_wikilink_dot_slash_plain() {
-        // `[[./b]]` in a.md should rewrite to `[[sub/b]]` after mv b.md → sub/b.md.
+        // `[[./b]]` in a.md should rewrite to short-form `[[b]]` after mv b.md →
+        // sub/b.md because stem "b" is unique vault-wide.
         let vault = create_vault(&[("a.md", "See [[./b]] here\n"), ("b.md", "Content\n")]);
         let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "a.md");
         assert_eq!(plans[0].replacements.len(), 1);
-        // The `./`-relative link should be rewritten to the new stem.
         assert_eq!(plans[0].replacements[0].old_text, "[[./b]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b]]");
+        // stem "b" is unique → short-form
+        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
     }
 
     #[test]
@@ -2254,7 +2387,8 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b|my note]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b|my note]]");
+        // stem "b" is unique → short-form, alias preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[b|my note]]");
     }
 
     #[test]
@@ -2264,7 +2398,8 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b#sec]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#sec]]");
+        // stem "b" is unique → short-form, fragment preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[b#sec]]");
     }
 
     #[test]
@@ -2277,7 +2412,8 @@ mod tests {
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b#sec|note]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#sec|note]]");
+        // stem "b" is unique → short-form, fragment+alias preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[b#sec|note]]");
     }
 
     #[test]
