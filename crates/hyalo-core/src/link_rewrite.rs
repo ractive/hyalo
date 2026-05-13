@@ -400,9 +400,8 @@ pub(crate) fn choose_wikilink_form(
         .iter()
         .any(|c| c.eq_ignore_ascii_case(new_rel));
 
-    let post_count = pre_move_candidates.len().cast_signed()
-        - isize::from(had_old)
-        + isize::from(!has_new);
+    let post_count =
+        pre_move_candidates.len().cast_signed() - isize::from(had_old) + isize::from(!has_new);
 
     if post_count == 1 {
         WikilinkForm::Short(new_basename_stem.to_string())
