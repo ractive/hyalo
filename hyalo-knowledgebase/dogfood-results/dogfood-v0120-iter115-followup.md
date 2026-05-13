@@ -8,7 +8,7 @@ tags:
   - verification
   - bug-fix
 related:
-  - "[[iterations/iteration-115-dogfood-v0120-iter114-followup]]"
+  - "[[iterations/done/iteration-115-dogfood-v0120-iter114-followup]]"
   - "[[dogfood-results/dogfood-v0120-iter114-followup]]"
 ---
 
@@ -371,4 +371,4 @@ parallel scan.
 **New issues**: 1 LOW addressed in iter-116 (dry-run format), 1 LOW carry-forward (MDN absolute links — root cause is link case-sensitivity, deferred).
 **Previously open**: 2 still open (link case-sensitivity, MDN absolute URLs — same root cause), 1 addressed (UX-6 via lint ignore).
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

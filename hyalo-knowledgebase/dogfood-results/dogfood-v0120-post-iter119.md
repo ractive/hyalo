@@ -9,7 +9,7 @@ tags:
   - multi-kb
 related:
   - "[[dogfood-results/dogfood-v0120-post-iter118]]"
-  - "[[iterations/iteration-118-split-index-flag]]"
+  - "[[iterations/done/iteration-118-split-index-flag]]"
 ---
 
 # Dogfood v0.12.0 — Post Iteration 119 (Multi-KB Session)

@@ -2,7 +2,7 @@
 title: Iteration 135 — Batch `hyalo mv` with `--glob` and frontmatter filters
 type: iteration
 date: 2026-05-13
-status: planned
+status: completed
 branch: iter-135/batch-mv
 tags:
   - iteration
@@ -10,7 +10,7 @@ tags:
   - mv
   - bulk-ops
 related:
-  - "[[iterations/iteration-134-links-fix-short-form-wikilinks]]"
+  - "[[iterations/done/iteration-134-links-fix-short-form-wikilinks]]"
 ---
 
 ## Goal
@@ -87,35 +87,35 @@ Out of scope:
 
 ## Tasks
 
-- [ ] Refactor `hyalo mv` source resolution into a helper that returns
+- [x] Refactor `hyalo mv` source resolution into a helper that returns
   `Vec<PathBuf>` given (positional, `--file`, `--glob`, `--property`,
   `--tag`, `--type`). Reuse the existing find/filter pipeline.
-- [ ] Decide batch vs single-file mode from the resolved source set
+- [x] Decide batch vs single-file mode from the resolved source set
   (>1 file, or any selector flag present → batch).
-- [ ] Validate `--to`: in batch mode require directory shape; in
+- [x] Validate `--to`: in batch mode require directory shape; in
   single-file mode keep current behavior (file or directory).
-- [ ] Add `--on-conflict={error,skip}` flag (default `error`).
-- [ ] Add `--apply` flag; in batch mode default to dry-run unless
+- [x] Add `--on-conflict={error,skip}` flag (default `error`).
+- [x] Add `--apply` flag; in batch mode default to dry-run unless
   `--apply` is given. Keep single-file behavior unchanged.
-- [ ] Build link graph once; compute the full rename map (old → new
+- [x] Build link graph once; compute the full rename map (old → new
   for every source); apply all on-disk renames; then run a single
   rewrite pass over every file containing any matching link.
-- [ ] Per-moved-file relative-link rewrite stays correct — reuse the
+- [x] Per-moved-file relative-link rewrite stays correct — reuse the
   existing helper, fed the full rename map so a link from moved file A
   to moved file B resolves to B's new path.
-- [ ] Atomicity: stage all destination writes; if any rename fails,
+- [x] Atomicity: stage all destination writes; if any rename fails,
   roll back the renames already applied (best-effort, log clearly).
-- [ ] JSON output: `{moves: [{from, to}], updated_files: [{file,
+- [x] JSON output: `{moves: [{from, to}], updated_files: [{file,
   replacements: [...]}], totals: {moves, files_changed,
   replacements}, conflicts: [...]}`.
-- [ ] Text output: one line per move, summary at the end.
-- [ ] Update `hyalo mv --help` long-form text with batch examples and
+- [x] Text output: one line per move, summary at the end.
+- [x] Update `hyalo mv --help` long-form text with batch examples and
   the `--apply` requirement.
-- [ ] Add e2e tests covering the matrix in the "Test plan" section
+- [x] Add e2e tests covering the matrix in the "Test plan" section
   below. Each test uses a fresh tempdir vault, asserts both the
   filesystem state (which files exist where) and the link state
   (which files contain which links) after the command runs.
-- [ ] Update README and `crates/hyalo-cli/templates/rule-knowledgebase.md`
+- [x] Update README and `crates/hyalo-cli/templates/rule-knowledgebase.md`
   with batch-mv examples.
 
 ## Test plan
@@ -351,22 +351,22 @@ files containing random `[[iteration-*]]` links pointing at the 50.
 
 ## Acceptance criteria
 
-- [ ] `hyalo mv --glob 'iterations/*.md' --property status=completed
+- [x] `hyalo mv --glob 'iterations/*.md' --property status=completed
   --property type=iteration --to iterations/done/` lists the matching
   files and does not write anything (dry-run default).
-- [ ] Same command with `--apply` moves all matching files and rewrites
+- [x] Same command with `--apply` moves all matching files and rewrites
   every wikilink/markdown-link pointing at any of them in one vault
   pass.
-- [ ] A link from one moved file to another moved file resolves to the
+- [x] A link from one moved file to another moved file resolves to the
   other file's *new* path after the batch, with no manual second pass.
-- [ ] Two sources colliding on the same destination basename errors
+- [x] Two sources colliding on the same destination basename errors
   out before any write; `--on-conflict=skip` skips the colliding one.
-- [ ] Single-file `hyalo mv old.md --to new.md` behaves exactly as
+- [x] Single-file `hyalo mv old.md --to new.md` behaves exactly as
   before (no `--apply` required, file-form `--to` allowed).
-- [ ] Empty source set exits non-zero with a hint about the filters.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Empty source set exits non-zero with a hint about the filters.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace -q` all pass.
-- [ ] Dogfood: archive all `status=completed` iteration files into
+- [x] Dogfood: archive all `status=completed` iteration files into
   `iterations/done/` in the hyalo KB with one command, and confirm
   cross-references (e.g. `related:` frontmatter wikilinks) are
   rewritten.

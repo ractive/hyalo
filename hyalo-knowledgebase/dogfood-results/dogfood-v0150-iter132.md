@@ -7,7 +7,7 @@ tags:
   - dogfood
   - iter-132
 related:
-  - "[[iterations/iteration-132-dogfood-v0150-iter131-fixes]]"
+  - "[[iterations/done/iteration-132-dogfood-v0150-iter131-fixes]]"
 ---
 
 ## Session

@@ -15,9 +15,9 @@ tags:
   - ci
 related:
   - "[[dogfood-results/dogfood-v0150-iter132-followup]]"
-  - "[[iterations/iteration-132-dogfood-v0150-iter131-fixes]]"
-  - "[[iterations/iteration-129-tidy-report-followup]]"
-  - "[[iterations/iteration-126-markdown-linter]]"
+  - "[[iterations/done/iteration-132-dogfood-v0150-iter131-fixes]]"
+  - "[[iterations/done/iteration-129-tidy-report-followup]]"
+  - "[[iterations/done/iteration-126-markdown-linter]]"
 ---
 
 ## Goal
@@ -296,9 +296,9 @@ as "no pattern" (with a one-shot `note:` for interactive callers).
 ## References
 
 - [[dogfood-results/dogfood-v0150-iter132-followup]] — source report
-- [[iterations/iteration-132-dogfood-v0150-iter131-fixes]] — previous
+- [[iterations/done/iteration-132-dogfood-v0150-iter131-fixes]] — previous
   follow-up; BUG-1, BUG-2, UX-1 here close gaps it left open
-- [[iterations/iteration-129-tidy-report-followup]] — introduced
+- [[iterations/done/iteration-129-tidy-report-followup]] — introduced
   `lint --strict`; BUG-3 restores its exit-code promise
-- [[iterations/iteration-126-markdown-linter]] — base linter
+- [[iterations/done/iteration-126-markdown-linter]] — base linter
   implementation; HYALO001 lives here

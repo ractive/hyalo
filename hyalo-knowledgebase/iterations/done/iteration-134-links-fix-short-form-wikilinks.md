@@ -10,8 +10,8 @@ tags:
   - links
   - obsidian-compat
 related:
-  - "[[iterations/iteration-123-auto-link]]"
-  - "[[iterations/iteration-124-auto-link-refinements]]"
+  - "[[iterations/done/iteration-123-auto-link]]"
+  - "[[iterations/done/iteration-124-auto-link-refinements]]"
 ---
 
 ## Goal

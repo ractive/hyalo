@@ -8,7 +8,7 @@ tags:
   - security
 related:
   - "[[dogfood-results/dogfood-v0120-post-iter120]]"
-  - "[[iterations/iteration-122-security-audit-findings]]"
+  - "[[iterations/done/iteration-122-security-audit-findings]]"
 ---
 
 # Dogfood v0.12.0 — Post Iteration 122 (Security Hardening)

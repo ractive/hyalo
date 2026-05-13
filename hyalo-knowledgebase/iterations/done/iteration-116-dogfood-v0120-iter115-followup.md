@@ -11,7 +11,7 @@ tags:
   - task
 related:
   - "[[dogfood-results/dogfood-v0120-iter115-followup]]"
-  - "[[iterations/iteration-115-dogfood-v0120-iter114-followup]]"
+  - "[[iterations/done/iteration-115-dogfood-v0120-iter114-followup]]"
 ---
 
 # Iteration 116 — Dogfood v0.12.0 iter-115 Follow-up Fixes

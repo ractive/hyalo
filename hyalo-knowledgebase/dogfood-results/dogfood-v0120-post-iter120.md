@@ -6,7 +6,7 @@ status: active
 tags: [dogfooding, verification, multi-kb]
 related:
   - "[[dogfood-results/dogfood-v0120-post-iter119]]"
-  - "[[iterations/iteration-120-dogfood-v0120-post-iter119-fixes]]"
+  - "[[iterations/done/iteration-120-dogfood-v0120-post-iter119-fixes]]"
 ---
 
 # Dogfood v0.12.0 — Post Iteration 120

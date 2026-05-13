@@ -533,23 +533,52 @@ pub(crate) enum Commands {
             1. Moves the file on disk.\n\
             2. Rewrites all [[wikilinks]] and [markdown](links) in other files that pointed to the old path.\n\
             3. Rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.\n\n\
-            Use --dry-run to preview changes without writing.\n\n\
-            OUTPUT: JSON object with from, to, updated_files (with per-file replacements), and totals.\n\
-            SIDE EFFECTS: Moves the file and modifies files containing links (unless --dry-run)."
+            SINGLE-FILE MODE:\n\
+            Provide a positional FILE or --file. --to accepts a .md path or an existing directory\n\
+            (basename of source is appended). Applied immediately unless --dry-run is passed.\n\n\
+            BATCH MODE (when --glob, --property, --tag, or --type is given):\n\
+            Resolves a set of source files via the given selectors (intersection). --to must be a\n\
+            directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
+            to commit changes. A single link-graph build covers all files.\n\n\
+            Examples:\n\
+              hyalo mv old.md --to new.md\n\
+              hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
+              hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
+              hyalo mv --tag archive --to archive/ --apply\n\n\
+            OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, and applied flag.\n\
+            SIDE EFFECTS: Moves files and modifies files containing links (unless dry-run)."
     )]
     Mv {
-        /// Source file to move (relative to --dir) — positional form
-        #[arg(value_name = "FILE")]
+        /// Source file to move (relative to --dir) — positional form (single-file mode only)
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "properties", "tag", "type", "file"])]
         file_positional: Option<String>,
-        /// Source file to move (relative to --dir) — flag form
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
+        /// Source file to move (relative to --dir) — flag form (single-file mode only)
+        #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type"])]
         file: Option<String>,
-        /// Destination path (relative to --dir, must end with .md)
+        /// Destination path: a .md path or an existing directory (basename appended) in single-file mode; a directory path in batch mode
         #[arg(long)]
         to: String,
-        /// Preview changes without modifying any files
+        /// Glob pattern(s) to select source files, relative to --dir (repeatable); prefix '!' to negate
+        #[arg(short, long, value_name = "GLOB")]
+        glob: Vec<String>,
+        /// Property filter for source selection: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists). Repeatable (AND)
+        #[arg(short, long = "property", value_name = "FILTER")]
+        properties: Vec<String>,
+        /// Tag filter: exact or prefix match. Repeatable (AND)
+        #[arg(short, long, value_name = "TAG")]
+        tag: Vec<String>,
+        /// Type filter: match files where frontmatter 'type' equals TYPE. Repeatable (AND)
+        #[arg(long = "type", value_name = "TYPE")]
+        r#type: Vec<String>,
+        /// Preview changes without modifying any files (default behavior in batch mode without --apply)
         #[arg(long)]
         dry_run: bool,
+        /// Commit changes in batch mode (required when using --glob/--property/--tag/--type)
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// How to handle destination basename collisions: 'error' (default) or 'skip'
+        #[arg(long = "on-conflict", value_name = "POLICY", default_value = "error")]
+        on_conflict: String,
         #[command(flatten)]
         index_flags: IndexFlags,
     },

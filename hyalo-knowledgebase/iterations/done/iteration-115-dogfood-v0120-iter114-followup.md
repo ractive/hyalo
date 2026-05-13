@@ -13,7 +13,7 @@ tags:
   - schema
 related:
   - "[[dogfood-results/dogfood-v0120-iter114-followup]]"
-  - "[[iterations/iteration-114-dogfood-v0120-followup-fixes]]"
+  - "[[iterations/done/iteration-114-dogfood-v0120-followup-fixes]]"
 ---
 
 # Iteration 115 — Dogfood v0.12.0 iter-114 Follow-up Fixes
@@ -166,4 +166,4 @@ silence the known case without hiding genuine new breakage.
 - [x] All tests pass: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q`
 - [x] README / CLAUDE.md / skill templates updated with any new flags
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

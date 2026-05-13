@@ -818,13 +818,14 @@ fn run_inner() -> Result<(), AppError> {
                 file_positional,
                 file,
                 dry_run,
+                apply,
                 ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Mv, &common);
                 if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
                     ctx.file_targets = vec![f.clone()];
                 }
-                ctx.dry_run = *dry_run;
+                ctx.dry_run = *dry_run || !apply;
                 Some(ctx)
             }
             Commands::Task { action } => {

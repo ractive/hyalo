@@ -9,7 +9,7 @@ tags:
   - bug-fix
 related:
   - "[[dogfood-results/dogfood-v0120-multi-kb]]"
-  - "[[iterations/iteration-113-dogfood-v0120-fixes]]"
+  - "[[iterations/done/iteration-113-dogfood-v0120-fixes]]"
 ---
 
 # Dogfood v0.12.0 — Post Iteration 113 Verification
@@ -138,4 +138,4 @@ argument for other commands to *use* a pre-built index. The dogfood report used 
 
 All critical bugs from iter-113 have been addressed in iter-113b.
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

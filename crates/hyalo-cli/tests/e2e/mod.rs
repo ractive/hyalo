@@ -21,6 +21,7 @@ mod lint;
 mod lint_rules;
 mod llm_misuse;
 mod mv;
+mod mv_batch;
 mod positional_file;
 mod properties;
 mod quiet;

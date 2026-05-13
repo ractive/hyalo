@@ -7,8 +7,8 @@ tags: [dogfooding, lint, ux, mv, links, performance, exit-code]
 related:
   - "[[dogfood-results/dogfood-v0150-iter131-followup]]"
   - "[[dogfood-results/dogfood-v0150-iter132]]"
-  - "[[iterations/iteration-132-dogfood-v0150-iter131-fixes]]"
-  - "[[iterations/iteration-126-markdown-linter]]"
+  - "[[iterations/done/iteration-132-dogfood-v0150-iter131-fixes]]"
+  - "[[iterations/done/iteration-126-markdown-linter]]"
 ---
 
 # Dogfood v0.15.0 — iter-132 follow-up

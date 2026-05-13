@@ -8,8 +8,8 @@ tags:
   - verification
 related:
   - "[[dogfood-results/dogfood-v0120-iter115-followup]]"
-  - "[[iterations/iteration-117-case-insensitive-link-resolution]]"
-  - "[[iterations/iteration-118-split-index-flag]]"
+  - "[[iterations/done/iteration-117-case-insensitive-link-resolution]]"
+  - "[[iterations/done/iteration-118-split-index-flag]]"
 ---
 
 # Dogfood v0.12.0 — Post Iteration 118 Verification

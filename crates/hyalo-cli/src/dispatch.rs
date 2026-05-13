@@ -1002,23 +1002,92 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             file,
             to,
+            glob,
+            properties,
+            tag,
+            r#type,
             dry_run,
+            apply,
+            on_conflict,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            let file = match resolve_single_file(file_positional, file) {
+            // Parse property filters for batch mode
+            let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties
+                .iter()
+                .map(|s| hyalo_core::filter::parse_property_filter(s))
+                .collect::<Result<Vec<_>, _>>()
+            {
                 Ok(f) => f,
-                Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+                Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
             };
-            mv_commands::mv(
-                dir,
-                &file,
-                &to,
-                dry_run,
-                effective_format,
-                site_prefix,
-                snapshot_index,
-                index_path,
-            )
+            // Build type filters as additional property filters (type=<value>)
+            let type_filters: Vec<hyalo_core::filter::PropertyFilter> = {
+                let mut tf = Vec::new();
+                for t in &r#type {
+                    match hyalo_core::filter::parse_property_filter(&format!("type={t}")) {
+                        Ok(f) => tf.push(f),
+                        Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+                    }
+                }
+                tf
+            };
+            let all_prop_filters: Vec<hyalo_core::filter::PropertyFilter> =
+                prop_filters.into_iter().chain(type_filters).collect();
+
+            let has_selectors = !glob.is_empty() || !all_prop_filters.is_empty() || !tag.is_empty();
+            let has_file = file_positional.is_some() || file.is_some();
+
+            if !has_selectors && !has_file {
+                return Ok(CommandOutcome::UserError(
+                    "Error: no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)".to_string(),
+                ));
+            }
+
+            let is_batch = has_selectors;
+
+            if is_batch {
+                // Validate tag filters.
+                for t in &tag {
+                    if let Err(msg) = crate::commands::tags::validate_tag(t) {
+                        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+                    }
+                }
+
+                // --dry-run and --apply are mutually exclusive (also enforced by clap).
+                let effective_apply = apply && !dry_run;
+
+                mv_commands::mv_batch(
+                    dir,
+                    file_positional.as_deref(),
+                    file.as_deref(),
+                    &glob,
+                    &all_prop_filters,
+                    &tag,
+                    &to,
+                    effective_apply,
+                    &on_conflict,
+                    effective_format,
+                    site_prefix,
+                    snapshot_index,
+                    index_path,
+                )
+            } else {
+                let file = match resolve_single_file(file_positional, file) {
+                    Ok(f) => f,
+                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+                };
+                let effective_dry_run = dry_run;
+                mv_commands::mv(
+                    dir,
+                    &file,
+                    &to,
+                    effective_dry_run,
+                    effective_format,
+                    site_prefix,
+                    snapshot_index,
+                    index_path,
+                )
+            }
         }
         Commands::CreateIndex {
             output,
