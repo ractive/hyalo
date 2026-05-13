@@ -6,10 +6,10 @@ status: active
 tags: [dogfooding, lint, ux, llm, cli, links]
 related:
   - "[[dogfood-results/dogfood-v0140-iter126-markdown-linter]]"
-  - "[[iterations/iteration-127-lint-followup]]"
-  - "[[iterations/iteration-128-llm-misuse-warning]]"
-  - "[[iterations/iteration-129-tidy-report-followup]]"
-  - "[[iterations/iteration-130-cwd-aware-help-and-config]]"
+  - "[[iterations/done/iteration-127-lint-followup]]"
+  - "[[iterations/done/iteration-128-llm-misuse-warning]]"
+  - "[[iterations/done/iteration-129-tidy-report-followup]]"
+  - "[[iterations/done/iteration-130-cwd-aware-help-and-config]]"
 ---
 
 # Dogfood v0.15.0 — iter-127/128/129/130

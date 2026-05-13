@@ -16,7 +16,7 @@ related:
   - "[[dogfood-results/dogfood-v0120-iter114-followup]]"
   - "[[dogfood-results/dogfood-v0120-followup-iter113b]]"
   - "[[dogfood-results/dogfood-v0120-multi-kb]]"
-  - "[[iterations/iteration-116-dogfood-v0120-iter115-followup]]"
+  - "[[iterations/done/iteration-116-dogfood-v0120-iter115-followup]]"
 ---
 
 # Iteration 117 — Case-insensitive link resolution

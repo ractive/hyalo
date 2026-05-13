@@ -127,4 +127,4 @@ main() decides based on --index flag:
 - `--index=auto` with env var for transparent session-scoped caching
 - SQLite backend behind `VaultIndex` trait
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

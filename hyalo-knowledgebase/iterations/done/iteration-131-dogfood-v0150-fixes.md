@@ -14,8 +14,8 @@ tags:
   - find
 related:
   - "[[dogfood-results/dogfood-v0150-iter127-130]]"
-  - "[[iterations/iteration-128-llm-misuse-warning]]"
-  - "[[iterations/iteration-130-cwd-aware-help-and-config]]"
+  - "[[iterations/done/iteration-128-llm-misuse-warning]]"
+  - "[[iterations/done/iteration-130-cwd-aware-help-and-config]]"
 ---
 
 ## Goal

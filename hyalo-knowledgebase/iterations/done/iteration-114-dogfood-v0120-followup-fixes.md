@@ -13,7 +13,7 @@ tags:
   - links
 related:
   - "[[dogfood-results/dogfood-v0120-followup-iter113b]]"
-  - "[[iterations/iteration-113-dogfood-v0120-fixes]]"
+  - "[[iterations/done/iteration-113-dogfood-v0120-fixes]]"
 ---
 
 # Iteration 114 — Dogfood v0.12.0 Follow-up Fixes

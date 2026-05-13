@@ -775,6 +775,609 @@ pub(crate) fn apply_replacements(content: &str, replacements: &[Replacement]) ->
 }
 
 // ---------------------------------------------------------------------------
+// Batch mv planning
+// ---------------------------------------------------------------------------
+
+/// Plan all file rewrites for a batch move: multiple `(old_rel, new_rel)` pairs.
+///
+/// Builds the link graph **once**, then:
+/// 1. Collects all inbound backlinks for every source file, merging by the
+///    linking file so each external file gets a single [`RewritePlan`] with
+///    combined replacements.  Also rewrites wikilinks found in frontmatter
+///    `related`/`depends-on`/`supersedes`/`superseded-by` properties.
+/// 2. Rewrites outbound relative markdown links inside each moved file,
+///    using the full rename map so a link from moved file A to moved file B
+///    resolves to B's **new** location.
+///
+/// The returned plans must be applied after all physical renames have been
+/// completed by the caller.
+pub fn plan_batch_mv(
+    dir: &Path,
+    renames: &[(String, String)],
+    site_prefix: Option<&str>,
+) -> Result<Vec<RewritePlan>> {
+    if renames.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build the link graph once.
+    let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
+    for (path, msg) in &build.warnings {
+        eprintln!("warning: skipping {}: {msg}", path.display());
+    }
+    let graph = build.graph;
+    let case_index = build.case_index;
+
+    // Build a full rename map: old_stem/old_rel → new_rel for fast lookups.
+    // Stored as (old_rel, old_stem, new_rel, new_stem, old_dir, new_dir).
+    let rename_info: Vec<(String, String, String, String, String, String)> = renames
+        .iter()
+        .map(|(old, new)| {
+            let old_stem = old.strip_suffix(".md").unwrap_or(old.as_str()).to_string();
+            let new_stem = new.strip_suffix(".md").unwrap_or(new.as_str()).to_string();
+            let old_dir = parent_dir(old).to_string();
+            let new_dir = parent_dir(new).to_string();
+            (
+                old.clone(),
+                old_stem,
+                new.clone(),
+                new_stem,
+                old_dir,
+                new_dir,
+            )
+        })
+        .collect();
+
+    // Map from old_rel to new_rel for outbound rewriting.
+    let rename_map: HashMap<String, String> = renames
+        .iter()
+        .map(|(o, n)| (o.clone(), n.clone()))
+        .collect();
+
+    // plans keyed by the FILE THAT WILL BE MODIFIED (its new path if it is
+    // itself being moved, its current path otherwise).
+    let mut plans: HashMap<PathBuf, RewritePlan> = HashMap::new();
+
+    // --- Step 1: inbound rewrites ---
+    // Build a map from source_file → Vec<(old_rel, old_stem, new_rel, new_stem)>
+    // to process each source file exactly once.
+    let mut source_to_renames: HashMap<String, Vec<(String, String, String, String)>> =
+        HashMap::new();
+
+    for (old_rel, old_stem, new_rel, new_stem, _, _) in &rename_info {
+        let backlinks = graph.backlinks_case_insensitive(old_rel);
+        let old_rel_norm = old_rel.replace('\\', "/");
+        for entry in backlinks {
+            let source_norm = entry.source.to_string_lossy().replace('\\', "/");
+            if source_norm == old_rel_norm {
+                continue; // skip self
+            }
+            source_to_renames
+                .entry(source_norm.clone())
+                .or_default()
+                .push((
+                    old_rel.clone(),
+                    old_stem.clone(),
+                    new_rel.clone(),
+                    new_stem.clone(),
+                ));
+        }
+    }
+
+    // Now process each source file once, computing all its inbound replacements.
+    for (source_rel, move_pairs) in &source_to_renames {
+        let abs_path = dir.join(source_rel);
+        let meta = std::fs::metadata(&abs_path)
+            .with_context(|| format!("failed to stat {}", abs_path.display()))?;
+        let file_size = meta.len();
+        if file_size > MAX_FILE_SIZE {
+            eprintln!(
+                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+                abs_path.display(),
+                file_size / (1024 * 1024),
+                MAX_FILE_SIZE / (1024 * 1024)
+            );
+            continue;
+        }
+        let file_mtime = meta
+            .modified()
+            .with_context(|| format!("failed to read mtime for {}", abs_path.display()))
+            .map(|t| (t, file_size))?;
+        let content = std::fs::read_to_string(&abs_path)
+            .with_context(|| format!("reading {}", abs_path.display()))?;
+
+        let mut all_replacements = Vec::new();
+        for (old_rel, old_stem, new_rel, new_stem) in move_pairs {
+            let repls = plan_inbound_rewrites_with_fm(
+                &content,
+                source_rel,
+                old_rel,
+                old_stem,
+                new_rel,
+                new_stem,
+                site_prefix,
+                Some(&case_index),
+            );
+            all_replacements.extend(repls);
+        }
+
+        // Deduplicate replacements: same line + old_text (multiple passes
+        // may generate the same replacement if glob and property match the
+        // same file).
+        all_replacements.sort_by_key(|r| (r.line, r.byte_offset, r.old_text.clone()));
+        all_replacements.dedup_by(|a, b| {
+            a.line == b.line && a.byte_offset == b.byte_offset && a.old_text == b.old_text
+        });
+
+        if all_replacements.is_empty() {
+            continue;
+        }
+
+        let rewritten_content = apply_replacements(&content, &all_replacements);
+
+        // Determine the plan key: if this source file is itself being moved,
+        // its rewritten content goes to the new path.
+        let plan_key = if let Some(new_source) = rename_map.get(source_rel.as_str()) {
+            dir.join(new_source)
+        } else {
+            abs_path.clone()
+        };
+        let plan_rel = if let Some(new_source) = rename_map.get(source_rel.as_str()) {
+            new_source.clone()
+        } else {
+            source_rel.clone()
+        };
+
+        plans.insert(
+            plan_key.clone(),
+            RewritePlan {
+                path: plan_key,
+                rel_path: plan_rel,
+                replacements: all_replacements,
+                rewritten_content,
+                mtime: Some(file_mtime),
+            },
+        );
+    }
+
+    // --- Step 2: outbound rewrites for each moved file ---
+    for (old_rel, _, new_rel, _, old_dir, new_dir) in &rename_info {
+        let dir_changed = old_dir != new_dir;
+        let old_abs = dir.join(old_rel);
+        let meta = std::fs::metadata(&old_abs)
+            .with_context(|| format!("failed to stat {}", old_abs.display()))?;
+        let file_size = meta.len();
+        if file_size > MAX_FILE_SIZE {
+            eprintln!(
+                "warning: skipping outbound rewrite for {} ({} MiB exceeds {} MiB limit)",
+                old_abs.display(),
+                file_size / (1024 * 1024),
+                MAX_FILE_SIZE / (1024 * 1024)
+            );
+            continue;
+        }
+        let old_file_mtime = meta
+            .modified()
+            .with_context(|| format!("failed to read mtime for {}", old_abs.display()))
+            .map(|t| (t, file_size))?;
+        let content = std::fs::read_to_string(&old_abs)
+            .with_context(|| format!("reading {}", old_abs.display()))?;
+
+        // Outbound: rewrite relative markdown links using the FULL rename map.
+        let outbound_repls =
+            plan_outbound_rewrites_batch(&content, old_rel, new_rel, &rename_map, dir_changed);
+
+        if outbound_repls.is_empty() {
+            // Even if no outbound rewrites, if the inbound pass already
+            // created a plan for the new path (because another file links to
+            // this one), no action needed here.
+            continue;
+        }
+
+        let new_abs = dir.join(new_rel);
+        let plan_key = new_abs.clone();
+
+        match plans.entry(plan_key.clone()) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                // Merge outbound into the existing inbound plan.
+                let existing = e.get_mut();
+                // The existing plan was computed from the original content.
+                // Re-read content for merged application.
+                let existing_content = std::fs::read_to_string(&old_abs)
+                    .with_context(|| format!("reading {}", old_abs.display()))?;
+                existing.replacements.extend(outbound_repls);
+                existing.rewritten_content =
+                    apply_replacements(&existing_content, &existing.replacements);
+                existing.path = new_abs;
+                existing.rel_path.clone_from(new_rel);
+                existing.mtime = Some(old_file_mtime);
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let rewritten_content = apply_replacements(&content, &outbound_repls);
+                e.insert(RewritePlan {
+                    path: new_abs,
+                    rel_path: new_rel.clone(),
+                    replacements: outbound_repls,
+                    rewritten_content,
+                    mtime: Some(old_file_mtime),
+                });
+            }
+        }
+    }
+
+    Ok(plans.into_values().collect())
+}
+
+/// Walk every line (including frontmatter) in `content` and return
+/// [`Replacement`]s for links targeting the moved file.
+///
+/// Unlike `plan_inbound_rewrites`, this function also rewrites wikilinks
+/// found inside YAML frontmatter values for the configured link properties
+/// (`related`, `depends-on`, `supersedes`, `superseded-by`).
+#[allow(clippy::too_many_arguments)]
+fn plan_inbound_rewrites_with_fm(
+    content: &str,
+    source_rel: &str,
+    old_rel: &str,
+    old_stem: &str,
+    new_rel: &str,
+    new_stem: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+    let mut fence = FenceTracker::new();
+    let mut in_comment_fence = false;
+    let mut in_frontmatter = false;
+    let mut frontmatter_done = false;
+    let mut line_num = 0usize;
+
+    for line in content.split('\n') {
+        line_num += 1;
+
+        // ---- Frontmatter handling ----
+        if !frontmatter_done {
+            if line_num == 1 && line.trim() == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+            if in_frontmatter {
+                if line.trim() == "---" {
+                    in_frontmatter = false;
+                    frontmatter_done = true;
+                    continue;
+                }
+                // Scan for wikilinks inside frontmatter link properties.
+                // Matches lines like:   - "[[some/path]]"  or  - [[some/path]]
+                // We detect list-item wikilinks regardless of the YAML key —
+                // the link_graph already validated these are wikilink entries.
+                // For safety, only rewrite if the target matches.
+                let fm_repls = plan_frontmatter_wikilink_rewrites(
+                    line, line_num, old_rel, old_stem, new_rel, new_stem, case_index,
+                );
+                replacements.extend(fm_repls);
+                continue;
+            }
+            frontmatter_done = true;
+        }
+
+        // ---- Comment fence ----
+        if in_comment_fence {
+            if is_comment_fence(line) {
+                in_comment_fence = false;
+            }
+            continue;
+        }
+
+        // ---- Fenced code block ----
+        if fence.process_line(line) {
+            continue;
+        }
+
+        // ---- Comment fence opening ----
+        if is_comment_fence(line) {
+            in_comment_fence = true;
+            continue;
+        }
+
+        // ---- Body links ----
+        let stripped_code = strip_inline_code(line);
+        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        let spans = extract_link_spans_with_original(&cleaned, line);
+
+        for span in spans {
+            let matches = match span.kind {
+                LinkKind::Wikilink => {
+                    let t = &span.link.target;
+                    let t_resolved: std::borrow::Cow<str> =
+                        if let Some(without_dot_slash) = t.strip_prefix("./") {
+                            std::borrow::Cow::Owned(normalize_target(
+                                Path::new(source_rel),
+                                without_dot_slash,
+                            ))
+                        } else {
+                            std::borrow::Cow::Borrowed(t.as_str())
+                        };
+                    let t = t_resolved.as_ref();
+                    let is_bare = !(t.contains('/') || t.contains('\\'));
+                    if is_bare {
+                        if let Some(idx) = case_index {
+                            let t_norm = t.to_ascii_lowercase();
+                            let stem = if std::path::Path::new(&t_norm)
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                            {
+                                &t_norm[..t_norm.len() - 3]
+                            } else {
+                                &t_norm
+                            };
+                            let canonical = idx.lookup_stem(stem);
+                            canonical == Some(old_rel) || canonical == Some(old_stem)
+                        } else {
+                            false
+                        }
+                    } else if t == old_stem || t == old_rel {
+                        true
+                    } else if let Some(idx) = case_index {
+                        let t_norm = t.replace('\\', "/").to_ascii_lowercase();
+                        let canonical = idx.lookup_unique(&t_norm).or_else(|| {
+                            let with_md = format!("{t_norm}.md");
+                            idx.lookup_unique(&with_md)
+                        });
+                        canonical == Some(old_rel) || canonical == Some(old_stem)
+                    } else {
+                        false
+                    }
+                }
+                LinkKind::Markdown => {
+                    let norm = if span.link.target.starts_with('/') {
+                        strip_site_prefix(&span.link.target, site_prefix)
+                    } else {
+                        normalize_target(Path::new(source_rel), &span.link.target)
+                    };
+                    if norm == old_rel || norm == old_stem {
+                        true
+                    } else if let Some(idx) = case_index {
+                        let norm_lower = norm.to_ascii_lowercase();
+                        let canonical = idx.lookup_unique(&norm_lower).or_else(|| {
+                            let with_md = format!("{norm_lower}.md");
+                            idx.lookup_unique(&with_md)
+                        });
+                        canonical == Some(old_rel) || canonical == Some(old_stem)
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if !matches {
+                continue;
+            }
+
+            let new_target = match span.kind {
+                LinkKind::Wikilink => new_stem.to_string(),
+                LinkKind::Markdown => {
+                    if span.link.target.starts_with('/') {
+                        let target = if std::path::Path::new(&span.link.target)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                        {
+                            new_rel
+                        } else {
+                            new_stem
+                        };
+                        match site_prefix {
+                            Some(prefix) => format!("/{prefix}/{target}"),
+                            None => format!("/{target}"),
+                        }
+                    } else {
+                        relative_path_between(source_rel, new_rel)
+                    }
+                }
+            };
+
+            let old_text = line[span.full_start..span.full_end].to_string();
+            let new_text = format!(
+                "{}{}{}",
+                &line[span.full_start..span.target_start],
+                new_target,
+                &line[span.target_end..span.full_end]
+            );
+
+            if old_text != new_text {
+                replacements.push(Replacement {
+                    line: line_num,
+                    byte_offset: span.full_start,
+                    old_text,
+                    new_text,
+                });
+            }
+        }
+    }
+
+    replacements
+}
+
+/// Find and plan wikilink replacements inside a single frontmatter YAML line.
+///
+/// Matches patterns like `  - "[[path/to/file]]"` or `  - [[path/to/file]]`
+/// (YAML list items containing Obsidian wikilinks).  Only replaces when the
+/// target normalizes to `old_rel` or `old_stem`.
+fn plan_frontmatter_wikilink_rewrites(
+    line: &str,
+    line_num: usize,
+    old_rel: &str,
+    old_stem: &str,
+    _new_rel: &str,
+    new_stem: &str,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+
+    // Find all [[...]] occurrences in the line (may appear in quoted strings).
+    let mut search = line;
+    let mut base_offset = 0usize;
+    while let Some(open) = search.find("[[") {
+        let after_open = open + 2;
+        if after_open >= search.len() {
+            break;
+        }
+        if let Some(close) = search[after_open..].find("]]") {
+            let target_start = after_open;
+            let target_end = after_open + close;
+            let full_start = open;
+            let full_end = target_end + 2;
+
+            let target = &search[target_start..target_end];
+            // Strip alias suffix (e.g. `path|alias` → `path`)
+            let target_path = target.split('|').next().unwrap_or(target).trim();
+
+            let matches = if target_path == old_stem || target_path == old_rel {
+                true
+            } else if let Some(idx) = case_index {
+                let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
+                let canonical = idx.lookup_unique(&t_norm).or_else(|| {
+                    let with_md = format!("{t_norm}.md");
+                    idx.lookup_unique(&with_md)
+                });
+                canonical == Some(old_rel) || canonical == Some(old_stem)
+            } else {
+                false
+            };
+
+            if matches {
+                let old_text = format!("[[{target}]]");
+                let new_text = format!("[[{new_stem}]]");
+                if old_text != new_text {
+                    replacements.push(Replacement {
+                        line: line_num,
+                        byte_offset: base_offset + full_start,
+                        old_text,
+                        new_text,
+                    });
+                }
+            }
+
+            // Advance past this `]]`
+            let advance = full_end;
+            base_offset += advance;
+            search = &search[advance..];
+        } else {
+            break;
+        }
+    }
+
+    replacements
+}
+
+/// Outbound rewrite for batch mode: like `plan_outbound_rewrites` but uses the
+/// full rename map so that a link from moved file A to moved file B is rewritten
+/// to B's new path (not left dangling at B's old path).
+fn plan_outbound_rewrites_batch(
+    content: &str,
+    old_rel: &str,
+    new_rel: &str,
+    rename_map: &HashMap<String, String>,
+    dir_changed: bool,
+) -> Vec<Replacement> {
+    let mut replacements = Vec::new();
+    let mut fence = FenceTracker::new();
+    let mut in_comment_fence = false;
+    let mut in_frontmatter = false;
+    let mut frontmatter_done = false;
+    let mut line_num = 0usize;
+
+    for line in content.split('\n') {
+        line_num += 1;
+
+        // Frontmatter
+        if !frontmatter_done {
+            if line_num == 1 && line.trim() == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+            if in_frontmatter {
+                if line.trim() == "---" {
+                    in_frontmatter = false;
+                    frontmatter_done = true;
+                }
+                continue;
+            }
+            frontmatter_done = true;
+        }
+
+        if in_comment_fence {
+            if is_comment_fence(line) {
+                in_comment_fence = false;
+            }
+            continue;
+        }
+        if fence.process_line(line) {
+            continue;
+        }
+        if is_comment_fence(line) {
+            in_comment_fence = true;
+            continue;
+        }
+
+        let stripped_code = strip_inline_code(line);
+        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        let spans = extract_link_spans_with_original(&cleaned, line);
+
+        for span in spans {
+            if span.kind != LinkKind::Markdown {
+                continue;
+            }
+            if !should_rewrite_outbound_target(&span.link.target) {
+                continue;
+            }
+
+            let (target_path, target_fragment) = split_target_fragment(&span.link.target);
+            let resolved = normalize_target(Path::new(old_rel), target_path);
+
+            // Check if the target is itself being moved.
+            let target_after_move = if let Some(new_target_rel) = rename_map.get(&resolved) {
+                new_target_rel.clone()
+            } else if resolved == old_rel {
+                new_rel.to_string()
+            } else if !dir_changed {
+                continue;
+            } else {
+                resolved
+            };
+
+            let new_target = format!(
+                "{}{}",
+                relative_path_between(new_rel, &target_after_move),
+                target_fragment
+            );
+
+            let original_target = &line[span.target_start..span.target_end];
+            if new_target == original_target {
+                continue;
+            }
+
+            let old_text = line[span.full_start..span.full_end].to_string();
+            let new_text = format!(
+                "{}{}{}",
+                &line[span.full_start..span.target_start],
+                new_target,
+                &line[span.target_end..span.full_end]
+            );
+
+            replacements.push(Replacement {
+                line: line_num,
+                byte_offset: span.full_start,
+                old_text,
+                new_text,
+            });
+        }
+    }
+
+    replacements
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

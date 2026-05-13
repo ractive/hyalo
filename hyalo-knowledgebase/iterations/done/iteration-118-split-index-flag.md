@@ -9,7 +9,7 @@ tags:
   - cli
   - ergonomics
 related:
-  - "[[iterations/iteration-105-summary-redesign]]"
+  - "[[iterations/done/iteration-105-summary-redesign]]"
   - "[[iterations/done/iteration-47-snapshot-index]]"
 ---
 
@@ -372,7 +372,7 @@ KB uses the default location everywhere. Do not mechanically rewrite to
 ## References
 
 - Original `require_equals` rationale: commit `b20d1f9` during iter-105
-- [[iterations/iteration-105-summary-redesign]]
+- [[iterations/done/iteration-105-summary-redesign]]
 - [[iterations/done/iteration-47-snapshot-index]] — the snapshot index itself
 - `.claude/skills/hyalo-tidy/SKILL.md` — primary (broken) consumer of the space form
 - `.claude/skills/hyalo/SKILL.md` — secondary consumer

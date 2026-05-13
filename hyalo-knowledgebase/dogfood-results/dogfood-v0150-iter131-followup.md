@@ -6,8 +6,8 @@ status: active
 tags: [dogfooding, lint, ux, mv, links, performance]
 related:
   - "[[dogfood-results/dogfood-v0150-iter127-130]]"
-  - "[[iterations/iteration-131-dogfood-v0150-fixes]]"
-  - "[[iterations/iteration-126-markdown-linter]]"
+  - "[[iterations/done/iteration-131-dogfood-v0150-fixes]]"
+  - "[[iterations/done/iteration-126-markdown-linter]]"
 ---
 
 # Dogfood v0.15.0 — iter-131 follow-up

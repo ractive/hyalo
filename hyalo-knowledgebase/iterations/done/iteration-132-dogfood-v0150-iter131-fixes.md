@@ -15,9 +15,9 @@ tags:
   - find
 related:
   - "[[dogfood-results/dogfood-v0150-iter131-followup]]"
-  - "[[iterations/iteration-131-dogfood-v0150-fixes]]"
-  - "[[iterations/iteration-128-llm-misuse-warning]]"
-  - "[[iterations/iteration-130-cwd-aware-help-and-config]]"
+  - "[[iterations/done/iteration-131-dogfood-v0150-fixes]]"
+  - "[[iterations/done/iteration-128-llm-misuse-warning]]"
+  - "[[iterations/done/iteration-130-cwd-aware-help-and-config]]"
 ---
 
 ## Goal
@@ -251,10 +251,10 @@ aliases is a one-line change with no downside.
 
 - [[dogfood-results/dogfood-v0150-iter131-followup]] — source report (all
   bugs and UX items above)
-- [[iterations/iteration-131-dogfood-v0150-fixes]] — previous follow-up
-- [[iterations/iteration-128-llm-misuse-warning]] — fuzzy-suggestion
+- [[iterations/done/iteration-131-dogfood-v0150-fixes]] — previous follow-up
+- [[iterations/done/iteration-128-llm-misuse-warning]] — fuzzy-suggestion
   infrastructure to reuse for BUG-C
-- [[iterations/iteration-117-case-insensitive-link-resolution]] — wikilink
+- [[iterations/done/iteration-117-case-insensitive-link-resolution]] — wikilink
   resolver to reuse for BUG-A
-- [[iterations/iteration-130-cwd-aware-help-and-config]] — `--dir` global
+- [[iterations/done/iteration-130-cwd-aware-help-and-config]] — `--dir` global
   precedent for UX-C

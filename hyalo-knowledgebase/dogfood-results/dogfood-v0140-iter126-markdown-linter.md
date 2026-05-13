@@ -11,7 +11,7 @@ tags:
   - skills
 related:
   - "[[dogfood-results/dogfood-v0120-post-iter122]]"
-  - "[[iterations/iteration-126-markdown-linter]]"
+  - "[[iterations/done/iteration-126-markdown-linter]]"
 ---
 
 # Dogfood v0.14.0 — iter-126 markdown linter + agent ergonomics

@@ -131,4 +131,4 @@ All other mutation commands support `--dry-run`. Add it to `task toggle` for con
 - [x] `hyalo lint` warns about tags containing commas
 - [x] `hyalo task toggle file.md --line 5 --dry-run` previews without writing
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

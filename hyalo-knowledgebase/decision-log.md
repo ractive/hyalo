@@ -467,7 +467,7 @@ Research across tools:
 
 ## DEC-041: Markdown Linter — Embed mdbook-lint-core + HYALO Native Rules (2026-05-04)
 
-**Context:** [[iterations/iteration-126-markdown-linter]] extends `hyalo lint` from frontmatter-only validation into a full markdown rule engine. Two design framings were considered: (A) hand-roll a small set of HYALO-specific rules only, or (B) embed `mdbook-lint-core` for stock markdownlint coverage (MD001..MD059) and add HYALO native rules on top.
+**Context:** [[iterations/done/iteration-126-markdown-linter]] extends `hyalo lint` from frontmatter-only validation into a full markdown rule engine. Two design framings were considered: (A) hand-roll a small set of HYALO-specific rules only, or (B) embed `mdbook-lint-core` for stock markdownlint coverage (MD001..MD059) and add HYALO native rules on top.
 
 **Decision:** Adopt framing (B). Bundle `mdbook-lint-core` + `mdbook-lint-rulesets` via a new `crates/hyalo-mdlint` crate, and add three HYALO native cross-cutting rules — HYALO001 (bare `[]` checkbox), HYALO002 (frontmatter `title` ↔ first H1 agreement), HYALO003 (`status: completed` requires all task checkboxes ticked). Severity is hyalo-controlled via a static override table; user overrides land last. Curate a default-on set (~14 stock rules) and default-off set (noisy/stylistic). Output is shaped for AI agents — per-rule caps, summary mode, hint chains.
 

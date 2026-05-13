@@ -14,7 +14,7 @@ related:
   - "[[dogfood-results/dogfood-v0120-followup-iter113b]]"
   - "[[dogfood-results/dogfood-v0120-post-iter113]]"
   - "[[dogfood-results/dogfood-v0120-multi-kb]]"
-  - "[[iterations/iteration-114-dogfood-v0120-followup-fixes]]"
+  - "[[iterations/done/iteration-114-dogfood-v0120-followup-fixes]]"
 ---
 
 # Dogfood v0.12.0 — Post Iteration 114 Follow-up
@@ -218,7 +218,7 @@ works end-to-end and ranks sensibly.
 
 ## Iter-115 Verification (2026-04-15)
 
-All issues resolved in [[iterations/iteration-115-dogfood-v0120-iter114-followup]]. Verified:
+All issues resolved in [[iterations/done/iteration-115-dogfood-v0120-iter114-followup]]. Verified:
 
 - **BUG-A**: `hyalo --index=./rel.hyalo-index find` resolves `./rel.hyalo-index` against CWD
   (not vault). Bare `--index` with a file-path positional emits a warning suggesting `--index=PATH`.
@@ -238,4 +238,4 @@ All issues resolved in [[iterations/iteration-115-dogfood-v0120-iter114-followup
 - **UX-5**: `[lint] ignore = ["path/glob"]` in `.hyalo.toml` skips matched files from lint output
   and suppresses their parse-error warnings in read-only commands.
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.

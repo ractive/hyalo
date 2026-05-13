@@ -149,7 +149,7 @@ GitHub Docs' `code-security/concepts/index.md` has unclosed frontmatter and trig
 - BUG-1 (`--dir` config lookup) was reported in v0.11.0 dogfood, iter-108 partially fixed it
 - BUG-6 (absolute link rewriting) was reported in v0.4.0 dogfood
 
-**Superseded by [[iterations/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
+**Superseded by [[iterations/done/iteration-118-split-index-flag]]:** `--index=PATH` is now `--index-file=PATH`; bare `--index` is a boolean flag.
 
 ## Suggested Iteration Priority
 
