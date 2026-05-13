@@ -430,11 +430,16 @@ fn t10_path_form_becomes_short_form_when_unique_after_rename() {
 }
 
 // ---------------------------------------------------------------------------
-// T_LINKS_FIX_APPLY — links fix --apply rewrites .md-suffix wikilinks to no .md
+// T_LINKS_FIX_MD_SUFFIX_NOT_BROKEN — resolver treats [[foo.md]] as valid
+//
+// Iter-136 scope (T1) only requires the resolver to accept `.md`-suffix
+// wikilinks; matching-case `[[foo.md]]` does not produce a `case_mismatch`
+// finding, so `links fix --apply` has nothing to rewrite. Case-mismatch
+// rewriting is covered separately (iter-134, T2 in the iter-136 plan).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn t_links_fix_apply_rewrites_md_suffix_wikilink() {
+fn t_links_fix_treats_md_suffix_wikilink_as_valid() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "notes/foo.md", "Content.\n");
     // [[foo.md]] is valid (resolves to notes/foo.md via stem) but has .md suffix

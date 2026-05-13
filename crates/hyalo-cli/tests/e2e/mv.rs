@@ -1153,17 +1153,19 @@ fn mv_bare_wikilink_no_broken_links_after_move() {
 }
 
 #[test]
-fn mv_bare_wikilink_backlinks_updated() {
-    // After mv, a.md's [[b]] stays as short-form (stem unique).
-    // backlinks("sub/b.md") resolves the full path, but short-form links are
-    // stored under the stem key "b" in the index. The link still resolves
-    // correctly via stem resolution, which is verified by the no-broken-links test.
-    // Here we just verify the backlinks query on the stem "b" finds a.md.
+fn mv_bare_wikilink_short_form_resolves_after_move() {
+    // After mv, a.md's [[b]] stays as short-form (stem unique). Verify the
+    // file is at its new location, a.md's body still uses [[b]], and a
+    // `links fix` pass reports no broken/case-mismatch/ambiguous findings —
+    // the short-form link resolves to the new path via stem lookup.
+    //
+    // Note: `hyalo backlinks <path>` currently keys on exact relative path
+    // and does not stem-resolve short-form references, so it is not
+    // asserted here. Stem-resolving backlinks is tracked separately.
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[b]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
 
-    // Move b.md → sub/b.md
     let mv_out = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args(["mv", "--file", "b.md", "--to", "sub/b.md"])
@@ -1171,15 +1173,6 @@ fn mv_bare_wikilink_backlinks_updated() {
         .unwrap();
     assert!(mv_out.status.success(), "mv failed");
 
-    // Check backlinks on sub/b.md (the full-path form)
-    let bl_out = hyalo_no_hints()
-        .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["backlinks", "sub/b.md"])
-        .output()
-        .unwrap();
-    assert!(bl_out.status.success(), "backlinks failed");
-
-    // Verify the move completed successfully and a.md still has [[b]]
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
     assert!(
         content.contains("[[b]]"),
@@ -1192,6 +1185,29 @@ fn mv_bare_wikilink_backlinks_updated() {
     assert!(
         tmp.path().join("sub/b.md").exists(),
         "sub/b.md should exist after move"
+    );
+
+    let fix_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["links", "fix"])
+        .output()
+        .unwrap();
+    assert!(fix_out.status.success(), "links fix failed");
+    let json: serde_json::Value = serde_json::from_slice(&fix_out.stdout).unwrap();
+    assert_eq!(
+        json["broken"].as_array().map_or(0, Vec::len),
+        0,
+        "short-form [[b]] should resolve to sub/b.md after move: {json}"
+    );
+    assert_eq!(
+        json["case_mismatches"].as_array().map_or(0, Vec::len),
+        0,
+        "no case_mismatches expected: {json}"
+    );
+    assert_eq!(
+        json["ambiguous"].as_array().map_or(0, Vec::len),
+        0,
+        "no ambiguous expected: {json}"
     );
 }
 
@@ -1250,7 +1266,7 @@ fn mv_dot_slash_wikilink_with_alias_rewritten() {
 
 #[test]
 fn mv_dot_slash_wikilink_with_section_rewritten() {
-    // [[./b#section]] should be rewritten to [[b#intro]] (short-form, stem unique).
+    // [[./b#intro]] should be rewritten to [[b#intro]] (short-form, stem unique).
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b#intro]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");

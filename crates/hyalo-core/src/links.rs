@@ -346,9 +346,15 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
 /// Markdown link targets are intentionally excluded — they require `.md`.
 pub(crate) fn strip_wikilink_md_suffix(target: &str) -> &str {
     if target.len() > 3 {
-        let suffix = &target[target.len() - 3..];
-        if suffix.eq_ignore_ascii_case(".md") {
-            return &target[..target.len() - 3];
+        let split_at = target.len() - 3;
+        // The last three bytes form `.md` (case-insensitive) only when they
+        // are all ASCII. Slicing the string with `&target[split_at..]` can
+        // panic for non-ASCII targets when `split_at` falls inside a
+        // multi-byte char, so compare bytes first.
+        let last3 = &target.as_bytes()[split_at..];
+        if last3.eq_ignore_ascii_case(b".md") {
+            // ASCII `.md` bytes imply a char boundary at `split_at`.
+            return &target[..split_at];
         }
     }
     target
@@ -469,6 +475,17 @@ mod tests {
         assert_eq!(strip_wikilink_md_suffix(".md"), ".md");
         // "x.md" is 4 chars, should be stripped
         assert_eq!(strip_wikilink_md_suffix("x.md"), "x");
+    }
+
+    #[test]
+    fn strip_wikilink_md_suffix_non_ascii_no_panic() {
+        // Multi-byte chars whose bytes straddle `len-3` must not panic.
+        // "ab🎉" is 6 bytes; len-3 = 3 falls inside the emoji.
+        assert_eq!(strip_wikilink_md_suffix("ab🎉"), "ab🎉");
+        // Likewise for a trailing 2-byte char without .md.
+        assert_eq!(strip_wikilink_md_suffix("café"), "café");
+        // Non-ASCII followed by a real .md suffix still strips correctly.
+        assert_eq!(strip_wikilink_md_suffix("café.md"), "café");
     }
 
     #[test]
