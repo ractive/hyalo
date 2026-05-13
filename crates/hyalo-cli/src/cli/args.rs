@@ -533,6 +533,10 @@ pub(crate) enum Commands {
             1. Moves the file on disk.\n\
             2. Rewrites all [[wikilinks]] and [markdown](links) in other files that pointed to the old path.\n\
             3. Rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.\n\n\
+            WIKILINK FORM PREFERENCE:\n\
+            When the new basename is unique vault-wide (case-insensitively), rewritten [[wikilinks]] use\n\
+            short-form [[stem]] (Obsidian-compatible). When the basename is ambiguous (multiple files share\n\
+            the same stem), path-form [[new/path/stem]] is used for disambiguation.\n\n\
             SINGLE-FILE MODE:\n\
             Provide a positional FILE or --file. --to accepts a .md path or an existing directory\n\
             (basename of source is appended). Applied immediately unless --dry-run is passed.\n\n\
@@ -828,6 +832,10 @@ Repeatable (AND).\n\
             Scans the vault for links that cannot be resolved to an existing file, \
             then uses fuzzy matching (case-insensitive, extension mismatch, shortest-path, \
             Jaro-Winkler) to find the best candidate replacement.\n\n\
+            WIKILINK RESOLUTION:\n\
+            Wikilinks accept an optional .md suffix — [[foo.md]], [[foo.md#heading]], and [[foo.md|alias]]\n\
+            are treated identically to [[foo]], [[foo#heading]], and [[foo|alias]] respectively.\n\
+            This matches Obsidian's behavior when copy-pasting note names that include the extension.\n\n\
             Default behavior (no subcommand): dry-run of `links fix` — shows what would be\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
             OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \

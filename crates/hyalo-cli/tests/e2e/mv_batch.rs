@@ -143,11 +143,11 @@ fn t2_glob_and_property_filter_apply() {
     // Planned-status file stays.
     assert!(tmp.path().join("iterations/iteration-12-c.md").exists());
 
-    // Link in notes/index.md updated.
+    // Link in notes/index.md updated: stem "iteration-10-a" is unique → short-form.
     let notes = fs::read_to_string(tmp.path().join("notes/index.md")).unwrap();
     assert!(
-        notes.contains("[[iterations/done/iteration-10-a]]"),
-        "moved file link must be rewritten: {notes}"
+        notes.contains("[[iteration-10-a]]"),
+        "moved file link must be rewritten to short-form: {notes}"
     );
     // Link to unmoved file unchanged.
     assert!(
@@ -279,9 +279,10 @@ Back: [[iterations/iteration-20-foo]]
 
     let foo_content =
         fs::read_to_string(tmp.path().join("iterations/done/iteration-20-foo.md")).unwrap();
+    // stems "iteration-21-bar" and "iteration-20-foo" are unique vault-wide → short-form
     assert!(
-        foo_content.contains("[[iterations/done/iteration-21-bar]]"),
-        "cross-batch link from foo to bar must be updated: {foo_content}"
+        foo_content.contains("[[iteration-21-bar]]"),
+        "cross-batch link from foo to bar must be updated to short-form: {foo_content}"
     );
     assert!(
         !foo_content.contains("[[iterations/iteration-21-bar]]"),
@@ -291,8 +292,8 @@ Back: [[iterations/iteration-20-foo]]
     let bar_content =
         fs::read_to_string(tmp.path().join("iterations/done/iteration-21-bar.md")).unwrap();
     assert!(
-        bar_content.contains("[[iterations/done/iteration-20-foo]]"),
-        "cross-batch link from bar to foo must be updated: {bar_content}"
+        bar_content.contains("[[iteration-20-foo]]"),
+        "cross-batch link from bar to foo must be updated to short-form: {bar_content}"
     );
     assert!(
         !bar_content.contains("[[iterations/iteration-20-foo]]"),
@@ -720,11 +721,12 @@ Dep body.
     assert!(tmp.path().join("iterations/iteration-40-host.md").exists());
 
     // Host's frontmatter `related:` wikilink must be updated.
+    // stem "iteration-41-dep" is unique vault-wide → short-form.
     let host_content =
         fs::read_to_string(tmp.path().join("iterations/iteration-40-host.md")).unwrap();
     assert!(
-        host_content.contains("[[iterations/done/iteration-41-dep]]"),
-        "frontmatter wikilink must be rewritten: {host_content}"
+        host_content.contains("[[iteration-41-dep]]"),
+        "frontmatter wikilink must be rewritten to short-form: {host_content}"
     );
     assert!(
         !host_content.contains("[[iterations/iteration-41-dep]]"),
@@ -851,9 +853,10 @@ fn t14_single_graph_build_perf_smoke() {
     assert!(tmp.path().join("iterations/done/iteration-049.md").exists());
 
     // Spot-check: referencing notes updated.
+    // stem "iteration-000" is unique vault-wide → short-form
     let note0 = fs::read_to_string(tmp.path().join("notes/note-000.md")).unwrap();
     assert!(
-        note0.contains("[[iterations/done/iteration-000]]"),
+        note0.contains("[[iteration-000]]"),
         "note-000 link must be updated: {note0}"
     );
 }
@@ -990,10 +993,11 @@ Content of foo.
         "archive/foo.md must exist after batch mv"
     );
 
-    // ref.md must have the link updated with alias preserved.
+    // ref.md: [[foo|My Alias]] is already short-form (stem "foo" is unique)
+    // so no rewrite is needed — the link stays as [[foo|My Alias]].
     let ref_content = fs::read_to_string(tmp.path().join("ref.md")).unwrap();
     assert!(
-        ref_content.contains("[[archive/foo|My Alias]]"),
-        "alias must be preserved in updated link, got: {ref_content}"
+        ref_content.contains("[[foo|My Alias]]"),
+        "alias must be preserved in short-form link, got: {ref_content}"
     );
 }

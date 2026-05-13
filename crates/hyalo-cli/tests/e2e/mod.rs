@@ -17,6 +17,7 @@ mod index;
 mod init;
 mod jq;
 mod links;
+mod links_iter136;
 mod lint;
 mod lint_rules;
 mod llm_misuse;

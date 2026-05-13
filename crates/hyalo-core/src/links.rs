@@ -326,11 +326,32 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
         return None;
     }
 
+    // Obsidian compatibility: strip a trailing `.md` (case-insensitive) from
+    // wikilink targets so that `[[foo.md]]` resolves identically to `[[foo]]`.
+    // Obsidian itself allows but ignores the `.md` suffix; without this strip
+    // hyalo would flag links written with the suffix as broken.
+    let target = strip_wikilink_md_suffix(target);
+
     Some(Link {
         target: target.to_string(),
         label,
         kind: LinkKind::Wikilink,
     })
+}
+
+/// Strip a trailing `.md` (case-insensitive) from a wikilink target.
+///
+/// Only removes the suffix when it is preceded by at least one character
+/// (prevents turning `.md` alone into an empty string).
+/// Markdown link targets are intentionally excluded — they require `.md`.
+pub(crate) fn strip_wikilink_md_suffix(target: &str) -> &str {
+    if target.len() > 3 {
+        let suffix = &target[target.len() - 3..];
+        if suffix.eq_ignore_ascii_case(".md") {
+            return &target[..target.len() - 3];
+        }
+    }
+    target
 }
 
 /// Try to parse a markdown-style link [text](target) at position `start`.
@@ -420,6 +441,78 @@ fn strip_fragment(target: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- .md suffix stripping (Obsidian compatibility) ---
+
+    #[test]
+    fn strip_wikilink_md_suffix_plain() {
+        assert_eq!(strip_wikilink_md_suffix("foo.md"), "foo");
+        assert_eq!(strip_wikilink_md_suffix("foo.MD"), "foo");
+        assert_eq!(strip_wikilink_md_suffix("foo.Md"), "foo");
+    }
+
+    #[test]
+    fn strip_wikilink_md_suffix_path() {
+        assert_eq!(strip_wikilink_md_suffix("path/foo.md"), "path/foo");
+        assert_eq!(strip_wikilink_md_suffix("a/b/c.md"), "a/b/c");
+    }
+
+    #[test]
+    fn strip_wikilink_md_suffix_no_suffix() {
+        assert_eq!(strip_wikilink_md_suffix("foo"), "foo");
+        assert_eq!(strip_wikilink_md_suffix("foo.txt"), "foo.txt");
+    }
+
+    #[test]
+    fn strip_wikilink_md_suffix_too_short() {
+        // ".md" alone (3 chars) should not be stripped
+        assert_eq!(strip_wikilink_md_suffix(".md"), ".md");
+        // "x.md" is 4 chars, should be stripped
+        assert_eq!(strip_wikilink_md_suffix("x.md"), "x");
+    }
+
+    #[test]
+    fn parse_wikilink_with_md_suffix() {
+        // [[foo.md]] resolves identically to [[foo]]
+        let link = parse_wikilink("foo.md").unwrap();
+        assert_eq!(link.target, "foo");
+        assert_eq!(link.label, None);
+    }
+
+    #[test]
+    fn parse_wikilink_path_with_md_suffix() {
+        // [[path/foo.md]] resolves identically to [[path/foo]]
+        let link = parse_wikilink("path/foo.md").unwrap();
+        assert_eq!(link.target, "path/foo");
+    }
+
+    #[test]
+    fn parse_wikilink_md_suffix_with_fragment() {
+        // [[foo.md#heading]] — .md stripped, heading preserved
+        let link = parse_wikilink("foo.md#heading").unwrap();
+        assert_eq!(link.target, "foo");
+    }
+
+    #[test]
+    fn parse_wikilink_md_suffix_with_alias() {
+        // [[foo.md|alias]] — .md stripped, alias preserved
+        let link = parse_wikilink("foo.md|my alias").unwrap();
+        assert_eq!(link.target, "foo");
+        assert_eq!(link.label.as_deref(), Some("my alias"));
+    }
+
+    #[test]
+    fn parse_wikilink_md_suffix_in_full_text() {
+        // Verify extract_links_from_text handles [[foo.md]] correctly
+        let text = "See [[foo.md]] and [[bar.md#sec]] and [[baz.md|title]] here.";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 3);
+        assert_eq!(links[0].target, "foo");
+        assert_eq!(links[1].target, "bar");
+        assert_eq!(links[2].target, "baz");
+        assert_eq!(links[2].label.as_deref(), Some("title"));
+    }
 
     #[test]
     fn parse_simple_wikilink() {

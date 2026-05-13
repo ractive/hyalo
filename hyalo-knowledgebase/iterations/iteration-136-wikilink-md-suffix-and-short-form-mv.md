@@ -1,8 +1,10 @@
 ---
-title: Iteration 136 — Accept `.md` suffix in wikilinks; prefer short-form on `hyalo mv` rewrite
+title: >-
+  Iteration 136 — Accept `.md` suffix in wikilinks; prefer short-form on `hyalo
+  mv` rewrite
 type: iteration
 date: 2026-05-13
-status: planned
+status: completed
 branch: iter-136/wikilink-md-suffix-and-short-form-mv
 tags:
   - iteration
@@ -87,25 +89,25 @@ Out of scope:
 
 ## Tasks
 
-- [ ] Audit wikilink parsing in `links.rs` and locate the resolver
+- [x] Audit wikilink parsing in `links.rs` and locate the resolver
   entry point used by both `links fix` and `link_graph` (for `mv`).
-- [ ] Strip a single trailing `.md` from the target portion of a
+- [x] Strip a single trailing `.md` from the target portion of a
   parsed wikilink before resolution. Document the rule in code
   comments and in `hyalo links fix --help` long-form text.
-- [ ] Add a `choose_link_form(new_path, vault_index, original_form)`
+- [x] Add a `choose_link_form(new_path, vault_index, original_form)`
   helper that returns either `Short(stem)` or `Path(rel_path)` based
   on basename uniqueness in the vault and the original link form.
-- [ ] Wire `choose_link_form` into the `mv` rewriter so every emitted
+- [x] Wire `choose_link_form` into the `mv` rewriter so every emitted
   wikilink uses the chosen form. Markdown `[](.md)` links stay
   path-form.
-- [ ] Make sure relative-link rewrites inside the moved file follow
+- [x] Make sure relative-link rewrites inside the moved file follow
   the same policy (a wikilink from the moved file to a sibling that
   is still uniquely named becomes short-form, not a long relative
   path).
-- [ ] Update `hyalo mv --help` long-form text to describe the
+- [x] Update `hyalo mv --help` long-form text to describe the
   short-form preference and the disambiguation fallback.
-- [ ] Add e2e tests covering the matrix in "Test plan" below.
-- [ ] Dogfood: re-run the iter-135 batch-mv scenario against a real
+- [x] Add e2e tests covering the matrix in "Test plan" below.
+- [x] Dogfood: re-run the iter-135 batch-mv scenario against a real
   Obsidian vault, then `hyalo links fix` — expect zero broken /
   case-mismatch / ambiguous findings.
 
@@ -247,18 +249,18 @@ across the vault, including frontmatter `related:` lists.
 
 ## Acceptance criteria
 
-- [ ] `[[foo.md]]`, `[[path/foo.md]]`, `[[foo.md#heading]]`, and
+- [x] `[[foo.md]]`, `[[path/foo.md]]`, `[[foo.md#heading]]`, and
   `[[foo.md|alias]]` all resolve identically to their `.md`-less
   counterparts.
-- [ ] `hyalo mv` rewriter emits short-form wikilinks when the new
+- [x] `hyalo mv` rewriter emits short-form wikilinks when the new
   basename is unique vault-wide, vault-absolute path-form otherwise.
   Never emits `.md` suffix on wikilinks.
-- [ ] Round-trip `hyalo mv` → `hyalo links fix` produces zero
+- [x] Round-trip `hyalo mv` → `hyalo links fix` produces zero
   findings and zero file changes on a vault that was clean before
   `mv`.
-- [ ] Markdown `[](.md)` links keep their spec-correct form.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Markdown `[](.md)` links keep their spec-correct form.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace -q` all pass.
-- [ ] Dogfood: against the user's Obsidian vault, the post-mv
+- [x] Dogfood: against the user's Obsidian vault, the post-mv
   `hyalo links fix` reports zero false positives (regression
   acceptance for the original report).
