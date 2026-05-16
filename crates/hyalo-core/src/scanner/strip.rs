@@ -3,13 +3,6 @@ use std::borrow::Cow;
 /// Strip inline code spans from a line, replacing their content with spaces
 /// to preserve byte positions for link parsing.
 /// Returns a borrowed reference when no backticks are present (zero allocation).
-///
-/// # Safety constraint
-///
-/// The `unsafe` block at the end of this function relies on the fact that
-/// backtick (0x60) and space (0x20) are both single-byte ASCII characters.
-/// Any future change to the delimiter or replacement byte must preserve this
-/// single-byte-ASCII invariant to keep the UTF-8 validity proof sound.
 pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     if !line.contains('`') {
         return Cow::Borrowed(line);
@@ -62,16 +55,8 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
         }
     }
 
-    // SAFETY: `result` starts as an exact byte-for-byte copy of the valid UTF-8
-    // input `line`. We only mutate `result` by overwriting contiguous spans
-    // `start..i` with ASCII space bytes (0x20). Both `start` and `i` are
-    // indices of backtick delimiters (0x60), which are single-byte ASCII
-    // characters and therefore always lie on UTF-8 code-point boundaries.
-    // Each modified span is completely replaced by a run of ASCII bytes (valid
-    // single-byte UTF-8 code points), while the prefix and suffix outside the
-    // span remain unchanged valid UTF-8. Concatenating unchanged valid UTF-8
-    // segments with runs of ASCII bytes yields valid UTF-8 overall.
-    Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
+    // ASCII-only substitutions preserve UTF-8 validity; re-validate to avoid unsafe.
+    Cow::Owned(String::from_utf8(result).expect("ASCII substitution preserves UTF-8"))
 }
 
 /// Check if a line is an Obsidian comment fence (`%%` on its own line).
@@ -89,13 +74,6 @@ pub(crate) fn is_comment_fence(line: &str) -> bool {
 ///
 /// Returns a borrowed reference when no `%%` is present (zero allocation).
 /// Unmatched opening `%%` is treated as literal text.
-///
-/// # Safety constraint
-///
-/// The `unsafe` block at the end of this function relies on the fact that
-/// percent (0x25) and space (0x20) are both single-byte ASCII characters.
-/// Any future change to the delimiter or replacement byte must preserve this
-/// single-byte-ASCII invariant to keep the UTF-8 validity proof sound.
 pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     if !line.contains("%%") {
         return Cow::Borrowed(line);
@@ -143,16 +121,7 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
     if result == bytes {
         Cow::Borrowed(line)
     } else {
-        // SAFETY: `result` starts as an exact byte-for-byte copy of the valid
-        // UTF-8 input `line`. We only mutate `result` by overwriting contiguous
-        // spans `open..i+2` with ASCII space bytes (0x20). Both `open` and the
-        // closing `%%` position are indices of percent-sign delimiters (0x25),
-        // which are single-byte ASCII characters and therefore always lie on
-        // UTF-8 code-point boundaries. Each modified span is completely replaced
-        // by a run of ASCII bytes (valid single-byte UTF-8 code points), while
-        // the prefix and suffix outside the span remain unchanged valid UTF-8.
-        // Concatenating unchanged valid UTF-8 segments with runs of ASCII bytes
-        // yields valid UTF-8 overall.
-        Cow::Owned(unsafe { String::from_utf8_unchecked(result) })
+        // ASCII-only substitutions preserve UTF-8 validity; re-validate to avoid unsafe.
+        Cow::Owned(String::from_utf8(result).expect("ASCII substitution preserves UTF-8"))
     }
 }

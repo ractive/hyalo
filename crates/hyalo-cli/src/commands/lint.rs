@@ -1168,6 +1168,7 @@ pub fn lint_files_extended(
     md_lint_config: &hyalo_mdlint::LintConfig,
     opts: &mut ExtLintOptions<'_>,
 ) -> Result<(CommandOutcome, LintCounts)> {
+    #[cfg(not(miri))]
     use rayon::prelude::*;
 
     // Build rule filter list
@@ -1188,24 +1189,25 @@ pub fn lint_files_extended(
     let strict = opts.strict;
 
     // Process files in parallel. Each worker lints one file.
-    let per_file: Vec<Result<PerFileLintResult>> = files
-        .par_iter()
-        .map(|(full_path, rel_path)| {
-            lint_one_file_extended(
-                full_path,
-                rel_path,
-                schema,
-                md_lint_engine,
-                md_lint_config,
-                &rule_filter,
-                schema_has_completed,
-                opts.fix,
-                opts.fix_rules,
-                opts.max_per_rule,
-                strict,
-            )
-        })
-        .collect();
+    let lint_file = |(full_path, rel_path): &(std::path::PathBuf, String)| {
+        lint_one_file_extended(
+            full_path,
+            rel_path,
+            schema,
+            md_lint_engine,
+            md_lint_config,
+            &rule_filter,
+            schema_has_completed,
+            opts.fix,
+            opts.fix_rules,
+            opts.max_per_rule,
+            strict,
+        )
+    };
+    #[cfg(not(miri))]
+    let per_file: Vec<Result<PerFileLintResult>> = files.par_iter().map(lint_file).collect();
+    #[cfg(miri)]
+    let per_file: Vec<Result<PerFileLintResult>> = files.iter().map(lint_file).collect();
 
     // Merge results serially.
     let mut all_results: Vec<PerFileLintResult> = Vec::with_capacity(files.len());
