@@ -56,7 +56,10 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     }
 
     // ASCII-only substitutions preserve UTF-8 validity; re-validate to avoid unsafe.
-    Cow::Owned(String::from_utf8(result).expect("ASCII substitution preserves UTF-8"))
+    Cow::Owned(
+        String::from_utf8(result)
+            .expect("strip_inline_code: ASCII backtick→space substitution must preserve UTF-8"),
+    )
 }
 
 /// Check if a line is an Obsidian comment fence (`%%` on its own line).
@@ -122,6 +125,9 @@ pub fn strip_inline_comments(line: &str) -> Cow<'_, str> {
         Cow::Borrowed(line)
     } else {
         // ASCII-only substitutions preserve UTF-8 validity; re-validate to avoid unsafe.
-        Cow::Owned(String::from_utf8(result).expect("ASCII substitution preserves UTF-8"))
+        Cow::Owned(
+            String::from_utf8(result)
+                .expect("strip_inline_comments: ASCII %%→space substitution must preserve UTF-8"),
+        )
     }
 }

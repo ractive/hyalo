@@ -12,10 +12,10 @@ check:
 fmt:
     cargo fmt --all
 
-# Run Miri against the parsing + unsafe surface of hyalo-core.
+# Run Miri against the parsing surface of hyalo-core to detect UB.
 # Targets modules that don't touch the filesystem (Miri can't shim chmod/symlinks
-# on macOS, which breaks tempfile-based tests). Covers the four `unsafe` blocks
-# in scanner/strip.rs and the YAML/markdown parsers.
+# on macOS, which breaks tempfile-based tests). Covers the scanner, YAML
+# frontmatter, BM25, link extraction, and other pure-logic parsers.
 # Requires: rustup component add --toolchain nightly miri
 miri:
     cargo +nightly miri setup
