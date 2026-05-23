@@ -100,12 +100,16 @@ impl LinkGraph {
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
         let mut case_index = CaseInsensitiveIndex::new();
 
-        for (full_path, rel) in files {
-            // Insert each discovered path into the case-insensitive index using
-            // forward-slash form so lookups are platform-independent.
+        // First pass: fully populate the case index so that bare-basename
+        // wikilink resolution in `insert_file_links` can see every vault file
+        // regardless of scan order.
+        for (_full_path, rel) in files {
             let rel_fwd = rel.to_string_lossy().replace('\\', "/");
             case_index.insert(&rel_fwd);
+        }
 
+        // Second pass: scan files and insert resolved links.
+        for (full_path, rel) in files {
             let mut visitor =
                 LinkGraphVisitor::with_frontmatter_props(rel.clone(), fm_props.clone());
             match scanner::scan_file_multi(full_path, &mut [&mut visitor]) {
@@ -116,7 +120,12 @@ impl LinkGraph {
                 }
                 Err(e) => return Err(e),
             }
-            insert_file_links(&mut index, visitor.into_file_links(), site_prefix);
+            insert_file_links(
+                &mut index,
+                visitor.into_file_links(),
+                site_prefix,
+                &case_index,
+            );
         }
 
         Ok(LinkGraphBuild {
@@ -146,7 +155,7 @@ impl LinkGraph {
             case_index.insert(&rel_fwd);
         }
         for fl in file_links {
-            insert_file_links(&mut index, fl, site_prefix);
+            insert_file_links(&mut index, fl, site_prefix, &case_index);
         }
         LinkGraphBuild {
             graph: Self { index },
@@ -326,6 +335,7 @@ fn insert_file_links(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
     file_links: FileLinks,
     site_prefix: Option<&str>,
+    case_index: &CaseInsensitiveIndex,
 ) {
     for (line, mut link) in file_links.links {
         // Normalize markdown link targets that contain path separators
@@ -353,14 +363,44 @@ fn insert_file_links(
                 link.target = normalize_target(&file_links.source, &link.target);
             }
         }
+
+        // Compute an extra storage key for bare-basename wikilinks that
+        // unambiguously resolve to a known vault file, so
+        // `backlinks("rdp/resources/reflow.md")` finds `[[reflow]]` written
+        // anywhere in the vault. We store under BOTH the raw written target
+        // and the resolved path key so the original `link.target` round-trips
+        // in serialized output unchanged.
+        let resolved_key = (link.kind == LinkKind::Wikilink
+            && !link.target.contains('/')
+            && !link.target.contains('\\'))
+        .then(|| {
+            let stem = link
+                .target
+                .strip_suffix(".md")
+                .or_else(|| link.target.strip_suffix(".MD"))
+                .unwrap_or(&link.target);
+            case_index.lookup_stem(stem).and_then(|canon| {
+                canon
+                    .strip_suffix(".md")
+                    .or_else(|| canon.strip_suffix(".MD"))
+                    .map(str::to_owned)
+            })
+        })
+        .flatten()
+        .filter(|resolved| *resolved != link.target);
+
+        let entry = BacklinkEntry {
+            source: file_links.source.clone(),
+            line,
+            link: link.clone(),
+        };
         index
             .entry(link.target.clone())
             .or_default()
-            .push(BacklinkEntry {
-                source: file_links.source.clone(),
-                line,
-                link,
-            });
+            .push(entry.clone());
+        if let Some(key) = resolved_key {
+            index.entry(key).or_default().push(entry);
+        }
     }
 }
 
@@ -1262,6 +1302,65 @@ mod tests {
             bl_skipped.len(),
             0,
             "non-configured property should not be indexed when custom list is set"
+        );
+    }
+
+    #[test]
+    fn backlinks_resolves_short_form_wikilink_to_deep_path() {
+        // Regression: hyalo backlinks must find short-form `[[basename]]`
+        // wikilinks that resolve unambiguously to a deep vault path. All three
+        // wikilink forms (short bare, long-form with label, short with label)
+        // pointing at the same file should appear in the backlinks list.
+        let vault = create_vault(&[
+            ("rdp/resources/reflow.md", "Content\n"),
+            (
+                "_quirk-test.md",
+                "Line 6: [[reflow]]\n\
+                 Line 7: [[rdp/resources/reflow|reflow]]\n\
+                 Line 8: [[reflow|reflow]]\n",
+            ),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let graph = build.graph;
+
+        let bl = graph.backlinks("rdp/resources/reflow.md");
+        assert_eq!(
+            bl.len(),
+            3,
+            "all three wikilink forms should be found as backlinks; got: {:?}",
+            bl.iter().map(|e| &e.link.target).collect::<Vec<_>>()
+        );
+        for entry in &bl {
+            assert_eq!(entry.source, PathBuf::from("_quirk-test.md"));
+        }
+
+        // Same query without the .md suffix must yield the same result.
+        let bl_no_md = graph.backlinks("rdp/resources/reflow");
+        assert_eq!(bl_no_md.len(), 3, "query without .md must match too");
+    }
+
+    #[test]
+    fn backlinks_ambiguous_basename_not_resolved() {
+        // When two files share the same basename, `[[reflow]]` is ambiguous —
+        // it must NOT be attributed as a backlink to either file (avoids
+        // false-positive over-matching). Path-form wikilinks still work.
+        let vault = create_vault(&[
+            ("a/reflow.md", "A\n"),
+            ("b/reflow.md", "B\n"),
+            ("src.md", "[[reflow]] and [[a/reflow]]\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let graph = build.graph;
+
+        // Path-form wikilink is found unambiguously.
+        let bl_a = graph.backlinks("a/reflow.md");
+        assert_eq!(bl_a.len(), 1, "path-form [[a/reflow]] resolves to a/");
+        // Ambiguous short form is not attributed to either file.
+        let bl_b = graph.backlinks("b/reflow.md");
+        assert_eq!(
+            bl_b.len(),
+            0,
+            "ambiguous short form must not match b/reflow.md"
         );
     }
 
