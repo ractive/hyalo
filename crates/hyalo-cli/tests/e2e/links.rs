@@ -1085,10 +1085,13 @@ fn case_insensitive_links_fix_apply_rewrites_casing() {
 fn case_insensitive_off_treats_wrong_casing_as_unresolved() {
     let tmp = TempDir::new().expect("tempdir");
 
-    // Target file — all lowercase
+    // Target file — all lowercase, inside a subdirectory so the link below
+    // must use a path-form (with `/`) and cannot resolve via the Obsidian
+    // short-form stem fallback. That fallback is intentionally NOT gated on
+    // `case_insensitive` (it's an Obsidian convention).
     write_md(
         tmp.path(),
-        "iteration_protocols.md",
+        "docs/iteration_protocols.md",
         md!(r"
 ---
 title: Iteration protocols
@@ -1097,7 +1100,7 @@ Content.
 "),
     );
 
-    // Source — wikilink with different casing from on-disk name
+    // Source — path-form wikilink with different casing from on-disk path.
     write_md(
         tmp.path(),
         "promise_any.md",
@@ -1105,11 +1108,11 @@ Content.
 ---
 title: Promise.any
 ---
-See [[Iteration_Protocols]] for details.
+See [[Docs/Iteration_Protocols]] for details.
 "),
     );
 
-    // case_insensitive = "false" — strict mode, no fallback
+    // case_insensitive = "false" — strict mode, no path fallback
     fs::write(
         tmp.path().join(".hyalo.toml"),
         "[links]\ncase_insensitive = \"false\"\n",

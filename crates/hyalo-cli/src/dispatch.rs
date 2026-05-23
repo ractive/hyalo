@@ -48,18 +48,20 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
     idx
 }
 
-/// Resolve whether case-insensitive mode is active and, if so, build the
-/// index from a full vault directory scan. Returns `Some(index)` when
-/// enabled, `None` when disabled.
+/// Build a [`CaseInsensitiveIndex`] from a full vault directory scan and set
+/// case-insensitive path lookups according to `mode`. Always returns
+/// `Some(index)` — the stem map (used for Obsidian short-form wikilink
+/// resolution) is needed regardless of case-insensitive path mode, and the
+/// index is cheap to build. The `Option` return type is kept for API
+/// compatibility with the many call sites that historically expected `None`.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn maybe_case_index(
     mode: CaseInsensitiveMode,
     dir: &std::path::Path,
 ) -> Option<CaseInsensitiveIndex> {
-    if mode_enabled(mode, dir) {
-        Some(build_case_index_from_dir(dir))
-    } else {
-        None
-    }
+    let mut idx = build_case_index_from_dir(dir);
+    idx.set_case_insensitive_paths(mode_enabled(mode, dir));
+    Some(idx)
 }
 
 /// Shared context for command dispatch.

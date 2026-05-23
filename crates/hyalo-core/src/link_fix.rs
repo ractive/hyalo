@@ -52,14 +52,15 @@ pub struct BrokenLinkReport {
     /// differs from the canonical on-disk path.  These are NOT broken — the
     /// file exists — but they carry the wrong casing and can be auto-fixed.
     ///
-    /// Two kinds of fixes can appear here:
-    /// - [`FixStrategy::LinkCaseMismatch`] — path-form link whose casing differs
-    ///   from the on-disk file; only populated when a [`CaseInsensitiveIndex`]
-    ///   is provided to the detection functions.
-    /// - [`FixStrategy::ShortFormStemMismatch`] — short-form wikilink whose
-    ///   stem casing differs from the on-disk filename; populated regardless of
-    ///   whether a [`CaseInsensitiveIndex`] is provided (the stem index is
-    ///   built from the vault file list).
+    /// All entries use [`FixStrategy::LinkCaseMismatch`]. Two scenarios are
+    /// covered:
+    /// - Path-form link whose casing differs from the on-disk file — the
+    ///   `new_target` is the canonical path. Only detected when the
+    ///   [`CaseInsensitiveIndex`] has case-insensitive path lookups enabled.
+    /// - Short-form bare wikilink whose stem casing differs from the on-disk
+    ///   filename — the `new_target` is the corrected short-form stem (never
+    ///   a full path). Detected via the stem index, which is always active
+    ///   regardless of case-insensitive-path mode.
     pub case_mismatches: Vec<FixPlan>,
     /// Short-form wikilinks (no `/`) whose stem matches ≥2 files in the vault.
     /// These are left untouched by `--apply` because the correct target is
@@ -98,11 +99,16 @@ pub enum FixStrategy {
     /// The target resolves to an existing file but with different casing.
     ///
     /// Rule code: `link-case-mismatch`. The `new_target` in the [`FixPlan`]
-    /// holds the canonical on-disk casing returned by the [`CaseInsensitiveIndex`].
+    /// holds either the canonical on-disk path (for path-form links and
+    /// markdown links) or the canonical short-form stem (for bare wikilinks
+    /// whose stem lookup succeeded with a case-only difference).
     LinkCaseMismatch,
-    /// A short-form wikilink (no `/`) whose stem casing differs from the
-    /// on-disk filename — the `new_target` is the corrected short-form stem
-    /// (never a full path).
+    /// Reserved for future use; no current code path emits this. Previously
+    /// emitted for short-form wikilink stem casing mismatches, but those are
+    /// now reported as [`LinkCaseMismatch`] for consistency with path-form
+    /// case mismatches — they represent the same user intent (fix the
+    /// casing).
+    #[doc(hidden)]
     ShortFormStemMismatch,
 }
 
@@ -467,7 +473,7 @@ pub(crate) fn detect_broken_links(
                         line: *line,
                         old_target: link.target.clone(),
                         new_target: correct_stem,
-                        strategy: FixStrategy::ShortFormStemMismatch,
+                        strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
                     });
                 }
@@ -574,7 +580,7 @@ pub fn detect_broken_links_from_index(
                         line: *line,
                         old_target: link.target.clone(),
                         new_target: correct_stem,
-                        strategy: FixStrategy::ShortFormStemMismatch,
+                        strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
                     });
                 }
@@ -1472,6 +1478,67 @@ mod tests {
                 "old_target should preserve original casing"
             );
         }
+    }
+
+    #[test]
+    fn short_form_wikilink_with_stem_case_mismatch_reports_link_case_mismatch() {
+        // Regression for iter-137: a short-form wikilink whose stem casing
+        // differs from the on-disk file must classify as `LinkCaseMismatch`,
+        // not the legacy `ShortFormStemMismatch`. macOS APFS hid this on
+        // local dev runs (the early `is_file()` resolution succeeded
+        // case-insensitively), but on case-sensitive filesystems the stem
+        // path was taken and emitted the wrong strategy label.
+        use crate::case_index::CaseInsensitiveIndex;
+        use crate::link_graph::FileLinks;
+        use crate::links::{Link, LinkKind};
+
+        let tmp = vault_with_files(&[("iteration_protocols.md", ""), ("source.md", "")]);
+
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        idx.insert("iteration_protocols.md");
+        idx.insert("source.md");
+
+        let file_links = vec![FileLinks {
+            source: PathBuf::from("source.md"),
+            links: vec![(
+                1,
+                Link {
+                    target: "Iteration_Protocols".to_string(),
+                    label: None,
+                    kind: LinkKind::Wikilink,
+                },
+            )],
+        }];
+
+        let report = detect_broken_links(tmp.path(), &file_links, None, Some(&idx), false);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            1,
+            "expected one case-mismatch fix; report: {report:#?}"
+        );
+        let fix = &report.case_mismatches[0];
+        assert!(
+            matches!(fix.strategy, FixStrategy::LinkCaseMismatch),
+            "strategy must be LinkCaseMismatch (was: {:?})",
+            fix.strategy
+        );
+        assert_eq!(fix.old_target, "Iteration_Protocols");
+        // `new_target` may be either the canonical short-form stem
+        // (`iteration_protocols`) on case-sensitive filesystems or the
+        // canonical path (`iteration_protocols.md`) on case-insensitive
+        // ones — both are valid case-fix proposals. The invariant under
+        // test is the *strategy label*, which must be `LinkCaseMismatch`
+        // either way.
+        assert!(
+            fix.new_target.eq_ignore_ascii_case("iteration_protocols")
+                || fix
+                    .new_target
+                    .eq_ignore_ascii_case("iteration_protocols.md"),
+            "new_target should canonicalize to iteration_protocols[.md]; got: {:?}",
+            fix.new_target
+        );
     }
 
     // --- Finding 1: bare-basename intra-folder links not flagged as case-mismatches ---
