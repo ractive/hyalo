@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0 — 2026-05-23
+
 ### Breaking changes
 
 - The hybrid `--index [=PATH]` flag has been split into two orthogonal flags:
