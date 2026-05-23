@@ -1501,7 +1501,21 @@ mod tests {
         let after = restored.score("rust", &stemmer);
         assert_eq!(before.len(), after.len());
         assert_eq!(before[0].rel_path, after[0].rel_path);
-        assert!((before[0].score - after[0].score).abs() < f64::EPSILON);
+        // Use a relative tolerance — BM25 scores are sums of multiple f64
+        // contributions, and HashMap iteration order (which differs between
+        // runtimes — notably Miri vs. native) changes summation order,
+        // introducing rounding differences around 1e-15. `f64::EPSILON`
+        // (~2.22e-16) is too tight for summed scores; 1e-9 is well within
+        // any meaningful score change and survives reordering.
+        let rel_diff =
+            (before[0].score - after[0].score).abs() / before[0].score.abs().max(f64::MIN_POSITIVE);
+        assert!(
+            rel_diff < 1e-9,
+            "scores diverged: before={}, after={}, rel_diff={}",
+            before[0].score,
+            after[0].score,
+            rel_diff
+        );
     }
 
     #[test]
