@@ -28,7 +28,7 @@ Address the low-hanging performance issues and the one bug found in the codebase
 
 - [x] `filter_index_entries`: convert `files_arg` to `HashSet<&str>` for O(1) lookup — see [[backlog/done/filter-index-entries-hashset]]
 - [x] `write_snapshot`: have `SnapshotData` borrow `&[IndexEntry]` instead of cloning — see [[backlog/done/write-snapshot-clone]]
-- [x] `tasks.rs:473,513`: rewrite task mutation to avoid N string allocations — see [[backlog/tasks-vec-string-allocation]]
+- [x] `tasks.rs:473,513`: rewrite task mutation to avoid N string allocations — see [[tasks-vec-string-allocation]]
 
 ### Quality gate
 

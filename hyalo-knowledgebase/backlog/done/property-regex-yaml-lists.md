@@ -6,7 +6,7 @@ tags:
   - frontmatter
   - regex
   - dogfooding
-status: planned
+status: completed
 date: 2026-03-30
 priority: medium
 ---

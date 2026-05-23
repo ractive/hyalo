@@ -1,8 +1,8 @@
 ---
-title: "Task mutation allocates N strings to modify one line"
+title: Task mutation allocates N strings to modify one line
 type: backlog
 date: 2026-03-29
-status: planned
+status: completed
 origin: codebase review 2026-03-29
 priority: low
 tags:
