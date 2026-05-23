@@ -330,6 +330,18 @@ pub(crate) struct FileLinks {
     pub(crate) links: Vec<(usize, Link)>,
 }
 
+/// Strip a trailing `.md` extension from `s`, matching any ASCII casing
+/// (e.g. `.md`, `.MD`, `.Md`, `.mD`). Returns the input unchanged when no
+/// `.md` suffix is present. Used to derive a basename stem for case_index
+/// lookups, keeping behavior consistent with `discovery::resolve_target`.
+fn strip_md_extension(s: &str) -> &str {
+    if s.len() >= 3 && s.as_bytes()[s.len() - 3..].eq_ignore_ascii_case(b".md") {
+        &s[..s.len() - 3]
+    } else {
+        s
+    }
+}
+
 /// Normalize and insert one file's links into the shared index.
 fn insert_file_links(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
@@ -367,24 +379,20 @@ fn insert_file_links(
         // Compute an extra storage key for bare-basename wikilinks that
         // unambiguously resolve to a known vault file, so
         // `backlinks("rdp/resources/reflow.md")` finds `[[reflow]]` written
-        // anywhere in the vault. We store under BOTH the raw written target
-        // and the resolved path key so the original `link.target` round-trips
-        // in serialized output unchanged.
+        // anywhere in the vault. The canonical path is stored with the `.md`
+        // suffix stripped — matching how path-form wikilinks (`[[a/b]]`) are
+        // stored — so that `backlinks()`'s built-in `.md` toggle handles both
+        // query forms naturally. We skip insertion when the resolved key would
+        // equal the raw target (only `.md`-suffix difference) to avoid
+        // double-counting via the toggle.
         let resolved_key = (link.kind == LinkKind::Wikilink
             && !link.target.contains('/')
             && !link.target.contains('\\'))
         .then(|| {
-            let stem = link
-                .target
-                .strip_suffix(".md")
-                .or_else(|| link.target.strip_suffix(".MD"))
-                .unwrap_or(&link.target);
-            case_index.lookup_stem(stem).and_then(|canon| {
-                canon
-                    .strip_suffix(".md")
-                    .or_else(|| canon.strip_suffix(".MD"))
-                    .map(str::to_owned)
-            })
+            let stem = strip_md_extension(&link.target);
+            case_index
+                .lookup_stem(stem)
+                .map(|canon| strip_md_extension(canon).to_owned())
         })
         .flatten()
         .filter(|resolved| *resolved != link.target);
@@ -1337,6 +1345,26 @@ mod tests {
         // Same query without the .md suffix must yield the same result.
         let bl_no_md = graph.backlinks("rdp/resources/reflow");
         assert_eq!(bl_no_md.len(), 3, "query without .md must match too");
+    }
+
+    #[test]
+    fn backlinks_short_form_with_mixed_case_md_extension() {
+        // `[[reflow.Md]]` (mixed-case .md) must resolve the same as `[[reflow]]`,
+        // consistent with `discovery::resolve_target` which is case-insensitive
+        // on the .md extension.
+        let vault = create_vault(&[
+            ("rdp/resources/reflow.md", "Content\n"),
+            ("src.md", "[[reflow]] and [[reflow.Md]] and [[reflow.MD]]\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let graph = build.graph;
+
+        let bl = graph.backlinks("rdp/resources/reflow.md");
+        assert_eq!(
+            bl.len(),
+            3,
+            "all three .md casings must resolve as backlinks"
+        );
     }
 
     #[test]
