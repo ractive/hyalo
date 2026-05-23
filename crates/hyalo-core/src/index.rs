@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
+#[cfg(not(miri))]
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -173,19 +174,22 @@ impl ScannedIndex {
             },
             <[String]>::to_vec,
         );
-        let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> = files
-            .par_iter()
-            .map(|(full_path, rel_path)| {
-                scan_one_file(
-                    full_path,
-                    rel_path,
-                    options.scan_body,
-                    options.bm25_tokenize,
-                    default_language,
-                    &fm_link_props,
-                )
-            })
-            .collect();
+        let scan = |(full_path, rel_path): &(std::path::PathBuf, String)| {
+            scan_one_file(
+                full_path,
+                rel_path,
+                options.scan_body,
+                options.bm25_tokenize,
+                default_language,
+                &fm_link_props,
+            )
+        };
+        #[cfg(not(miri))]
+        let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> =
+            files.par_iter().map(scan).collect();
+        #[cfg(miri)]
+        let results: Vec<Result<(IndexEntry, Option<FileLinks>)>> =
+            files.iter().map(scan).collect();
 
         for (i, result) in results.into_iter().enumerate() {
             match result {

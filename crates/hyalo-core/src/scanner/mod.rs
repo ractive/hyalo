@@ -91,18 +91,19 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
         return Ok(());
     }
 
-    // Validate UTF-8 upfront; if valid we can slice zero-copy.
+    // Validate UTF-8 upfront; if valid we slice zero-copy.
     // If invalid, replace bad bytes with U+FFFD (lossy) so scanning continues.
-    let is_valid_utf8 = std::str::from_utf8(data).is_ok();
+    let utf8 = std::str::from_utf8(data);
+    let is_valid_utf8 = utf8.is_ok();
     let owned_text = if is_valid_utf8 {
         None
     } else {
         Some(String::from_utf8_lossy(data).into_owned())
     };
-    let text: &str = match &owned_text {
-        Some(s) => s,
-        // SAFETY: we just validated UTF-8 above.
-        None => unsafe { std::str::from_utf8_unchecked(data) },
+    let text: &str = match (&owned_text, utf8) {
+        (Some(s), _) => s,
+        (None, Ok(s)) => s,
+        (None, Err(_)) => unreachable!("is_valid_utf8 implies Ok"),
     };
 
     let mut active: Vec<bool> = vec![true; num];
@@ -885,6 +886,7 @@ Line 6
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "tempfile chmod unsupported under Miri")]
     fn non_utf8_file_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("bad.md");
