@@ -1,0 +1,11 @@
+# Windows MSVC defaults to a 1 MB main-thread stack — much smaller than the
+# 8 MB Linux/macOS provide. The YAML frontmatter parser (saphyr) and the
+# markdown link-graph builder both make deep recursive calls on real-world
+# vault contents and overflow the 1 MB default. Bump to 8 MB to match the
+# other platforms.
+#
+# Applies to all binaries built with the MSVC toolchain (the default on
+# the GitHub Actions `windows-latest` runner). MinGW Windows builds are
+# unaffected (their gcc-style linker uses a different flag).
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:8388608"]
