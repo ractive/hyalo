@@ -55,3 +55,22 @@
 
 - `--index` semantics: bare `--index` now unambiguously uses `.hyalo-index`
   in the vault directory. Use `--index-file <PATH>` for a non-default path.
+- Removed three `unsafe { from_utf8_unchecked }` blocks in the scanner; the
+  ASCII-only mutation paths now go through safe `String::from_utf8`. Only
+  `unsafe` left in the codebase is `libc::kill(pid, 0)` for PID-liveness in
+  the snapshot index. See [decision-log DEC-042] and
+  `research/miri-unsafe-audit.md`.
+
+### Fixed
+
+- `hyalo backlinks <target.md>` now finds incoming short-form `[[basename]]`
+  wikilinks that unambiguously resolve to the target — previously they were
+  silently dropped while `find --fields links` resolved them correctly. The
+  two commands now share resolver semantics. `find --orphan` / `--dead-end`
+  inherit the fix.
+
+### Internal
+
+- Miri scaffolding: `justfile` recipes (`just miri`, `just miri-filter`,
+  `just miri-all`) and `#[cfg(not(miri))]` gates around `rayon::par_iter`
+  with serial fallback. Manual gate only, not in CI.
