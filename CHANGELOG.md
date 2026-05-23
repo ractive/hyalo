@@ -68,6 +68,14 @@
   silently dropped while `find --fields links` resolved them correctly. The
   two commands now share resolver semantics. `find --orphan` / `--dead-end`
   inherit the fix.
+- **Cross-platform link resolution.** Obsidian short-form bare wikilink
+  resolution (`[[note]]` → `sub/note.md` when unique) now works on
+  case-sensitive filesystems (Linux, Windows) even when
+  `[links] case_insensitive` is off or auto-detects off. Previously the
+  short-form stem fallback was incorrectly gated on case-insensitive mode.
+- `links fix` reports a short-form wikilink whose stem casing differs from
+  the on-disk filename as `LinkCaseMismatch` (was `ShortFormStemMismatch`).
+  Same user intent — fix the casing — and now consistent across platforms.
 
 ### Internal
 

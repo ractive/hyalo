@@ -1149,6 +1149,29 @@ mod tests {
     }
 
     #[test]
+    fn resolve_target_bare_stem_works_when_case_insensitive_paths_disabled() {
+        // Regression for iter-137: the bare-basename stem fallback must work
+        // even when `case_insensitive_paths` is disabled. Stem lookup is an
+        // Obsidian short-form convention, independent of case-sensitivity
+        // mode. Previously broke on Linux when no `.hyalo.toml` was present
+        // because `maybe_case_index` returned None when mode was off, and the
+        // stem-fallback inside `resolve_target` was gated on `case_index`
+        // being Some.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["archive/b.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        // Note: case-insensitive paths intentionally NOT enabled — emulates
+        // Linux with `case_insensitive = "auto"` and a case-sensitive FS.
+        idx.insert("archive/b.md");
+        assert_eq!(
+            resolve_target(&canonical, "b", None, Some(&idx)),
+            Some("archive/b.md".to_owned()),
+            "bare-stem fallback must work without case-insensitive paths"
+        );
+    }
+
+    #[test]
     fn resolve_target_bare_stem_ambiguous_returns_none() {
         // Two files with the same stem → ambiguous → None.
         let tmp = tempfile::tempdir().unwrap();
@@ -1650,8 +1673,10 @@ mod tests {
             "expected None without index on case-sensitive fs"
         );
 
-        // Build an index with the real path.
+        // Build an index with the real path. Enable case-insensitive paths
+        // so `lookup_unique` will fire (default-off as of iter-137).
         let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
         idx.insert("web/foo/index.md");
 
         // With index, wrong-cased input resolves to the canonical path.

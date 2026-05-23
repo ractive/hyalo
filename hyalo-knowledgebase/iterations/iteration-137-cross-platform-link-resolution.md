@@ -1,9 +1,8 @@
 ---
-title: >-
-  Iteration 137 — Fix cross-platform link-resolution test failures
+title: Iteration 137 — Fix cross-platform link-resolution test failures
 type: iteration
 date: 2026-05-23
-status: planned
+status: in-progress
 branch: iter-137/cross-platform-link-resolution
 tags:
   - iteration

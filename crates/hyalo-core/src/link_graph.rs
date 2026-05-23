@@ -99,6 +99,13 @@ impl LinkGraph {
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::with_capacity(files.len());
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
         let mut case_index = CaseInsensitiveIndex::new();
+        // `LinkGraph::build` returns a comprehensive case index spanning the
+        // whole vault. Enable case-insensitive path lookups by default so
+        // downstream consumers (e.g. `hyalo mv` link rewriting) can use
+        // `lookup_unique` to canonicalize casing. CLI commands that should
+        // gate on the user's `[links] case_insensitive` setting build their
+        // own index via `maybe_case_index` instead.
+        case_index.set_case_insensitive_paths(true);
 
         // First pass: fully populate the case index so that bare-basename
         // wikilink resolution in `insert_file_links` can see every vault file
@@ -150,6 +157,7 @@ impl LinkGraph {
         let mut index: HashMap<String, Vec<BacklinkEntry>> =
             HashMap::with_capacity(file_links.len());
         let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_case_insensitive_paths(true);
         for fl in &file_links {
             let rel_fwd = fl.source.to_string_lossy().replace('\\', "/");
             case_index.insert(&rel_fwd);

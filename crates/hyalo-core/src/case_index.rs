@@ -41,12 +41,18 @@ impl CaseInsensitiveMode {
 
 /// Lowercased-relative-path → list of real relative paths (forward-slash form).
 ///
-/// Used for case-insensitive link resolution: insert all known paths at
-/// index build time, then look up by lowercased target at resolution time.
+/// Hosts two independent lookups that callers can mix and match:
 ///
-/// Also indexes by lowercased filename stem (without `.md` extension and
-/// directory path) for Obsidian-style bare wikilink resolution — e.g.
-/// `[[note]]` resolving to `sub/note.md` when that stem is unique.
+/// 1. **Path lookup** ([`lookup_unique`], [`lookup_all`]) — case-insensitive
+///    full-path matching. Gated on [`enable_case_insensitive_paths`] so a vault
+///    configured with `case_insensitive = "false"` won't accidentally resolve
+///    `[[Foo]]` to `foo.md`. Defaults to *disabled* — opt in via
+///    [`set_case_insensitive_paths`].
+/// 2. **Stem lookup** ([`lookup_stem`], [`lookup_stem_all`]) — bare-basename
+///    matching for Obsidian-style short-form wikilinks (`[[note]]` →
+///    `sub/note.md` when that stem is unique). Always active regardless of
+///    case-insensitive-path mode — short-form is an Obsidian convention, not
+///    a case-sensitivity feature.
 #[derive(Debug, Default, Clone)]
 pub struct CaseInsensitiveIndex {
     /// Map from lowercased path → list of real (original-casing) paths.
@@ -54,12 +60,29 @@ pub struct CaseInsensitiveIndex {
     /// Map from lowercased filename stem → list of real (original-casing) paths.
     /// Used for Obsidian-style bare wikilink resolution.
     stem_map: HashMap<String, Vec<String>>,
+    /// When `false`, [`lookup_unique`] and [`lookup_all`] return empty results.
+    /// Stem lookups are unaffected. Set by [`set_case_insensitive_paths`] from
+    /// the resolved `[links] case_insensitive` mode.
+    case_insensitive_paths: bool,
 }
 
 impl CaseInsensitiveIndex {
-    /// Create an empty index.
+    /// Create an empty index with case-insensitive path lookups disabled.
+    /// Stem lookups are always active.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable or disable case-insensitive path lookups.
+    /// Has no effect on stem lookups, which are always active.
+    pub fn set_case_insensitive_paths(&mut self, enabled: bool) {
+        self.case_insensitive_paths = enabled;
+    }
+
+    /// Whether case-insensitive path lookups are enabled on this index.
+    #[must_use]
+    pub fn case_insensitive_paths_enabled(&self) -> bool {
+        self.case_insensitive_paths
     }
 
     /// Insert a real relative path (forward-slash form). Stores a lowercase key.
@@ -90,7 +113,13 @@ impl CaseInsensitiveIndex {
 
     /// Look up a relative path (any casing). Returns the canonical real path
     /// only when exactly one candidate exists (unambiguous match).
+    ///
+    /// Returns `None` when case-insensitive path lookups are disabled on this
+    /// index (see [`set_case_insensitive_paths`]).
     pub fn lookup_unique(&self, rel_path: &str) -> Option<&str> {
+        if !self.case_insensitive_paths {
+            return None;
+        }
         let key = rel_path.to_ascii_lowercase();
         let candidates = self.map.get(&key)?;
         if candidates.len() == 1 {
@@ -117,7 +146,12 @@ impl CaseInsensitiveIndex {
     }
 
     /// Return all candidates for a given path (any casing). Useful for diagnostics.
+    ///
+    /// Returns an empty slice when case-insensitive path lookups are disabled.
     pub fn lookup_all(&self, rel_path: &str) -> &[String] {
+        if !self.case_insensitive_paths {
+            return &[];
+        }
         let key = rel_path.to_ascii_lowercase();
         self.map.get(&key).map_or(&[], Vec::as_slice)
     }
@@ -229,6 +263,7 @@ mod tests {
     #[test]
     fn insert_and_lookup_unique() {
         let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
         idx.insert("Foo/Bar.md");
         idx.insert("foo/baz.md");
 
@@ -239,8 +274,22 @@ mod tests {
     }
 
     #[test]
+    fn lookup_unique_disabled_returns_none() {
+        // Default-constructed index has case-insensitive path lookups OFF;
+        // lookup_unique returns None even when a match exists.
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("Foo/Bar.md");
+        assert!(idx.lookup_unique("foo/bar.md").is_none());
+        assert!(idx.lookup_all("foo/bar.md").is_empty());
+
+        // Stem lookup, however, is always active.
+        assert_eq!(idx.lookup_stem("Bar"), Some("Foo/Bar.md"));
+    }
+
+    #[test]
     fn ambiguous_returns_none() {
         let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
         idx.insert("Foo.md");
         idx.insert("foo.md");
 
@@ -290,6 +339,7 @@ mod tests {
     #[test]
     fn deduplication() {
         let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
         idx.insert("Foo/Bar.md");
         idx.insert("Foo/Bar.md"); // duplicate
         // Should still be unique (one candidate)

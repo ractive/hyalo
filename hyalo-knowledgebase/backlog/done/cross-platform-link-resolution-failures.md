@@ -2,9 +2,9 @@
 title: Cross-platform link-resolution tests fail on Linux + Windows
 type: backlog
 date: 2026-05-23
-status: planned
+status: completed
 priority: high
-origin: PR #158 CI 2026-05-23 (also reproducible on PR #157)
+origin: PR
 tags:
   - links
   - cross-platform
