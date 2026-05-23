@@ -492,3 +492,31 @@ Research across tools:
 - New flags on `hyalo lint`: `--detailed`, `--rule`, `--rule-prefix`, `--max-per-rule`, `--fix-rule`
 - Body autofix runs after frontmatter autofix; conflicts deferred and reported
 - Snapshot index does not accelerate body lint (body bytes aren't indexed) — documented in `lint --help`
+
+## DEC-042: Remove `unsafe` UTF-8 Shortcuts; Gate Parallelism for Miri (2026-05-23)
+
+**Context:** hyalo had four `unsafe` blocks — three `String::from_utf8_unchecked` / `str::from_utf8_unchecked` in the scanner hot path, and one `libc::kill(pid, 0)` for PID liveness. The UTF-8 unchecks dated from when the scanner was written to maximise throughput on large vaults (MDN-scale, 250 MB). They were safe by inspection (ASCII-only mutations) but fragile across refactors. See [[research/miri-unsafe-audit]] for the full audit.
+
+**Decision:** Remove the three UTF-8 `unsafe` blocks. Keep `libc::kill`. Add Miri as a manual-only gate via `justfile` recipes.
+
+**Why these tradeoffs:**
+
+1. **Perf cost is invisible.** Microbench shows +5 ns per call when backticks/comments are present in a line, +0 ns on the fast path. MDN 250 MB end-to-end: ~1.1 s before and after — change is lost in measurement noise.
+
+2. **Safety burden was real.** Each `unsafe { from_utf8_unchecked }` carried a multi-paragraph SAFETY block establishing an invariant about ASCII byte substitution. Any future refactor that touched the strip logic had to re-prove the invariant or risk UB. Re-validation is one line and obvious.
+
+3. **`scanner/mod.rs` was a free win.** That call site was `is_ok()` + `from_utf8_unchecked` on the same bytes — a redundant validation. Refactored to reuse the original `Result::Ok(s)`. Zero re-validation, zero perf cost.
+
+4. **`libc::kill` stays.** No portable std equivalent for "is PID alive?"; the `sysinfo` crate is a heavy dep for one check. The call is one line with a documented SAFETY block.
+
+5. **Miri is a manual gate.** Consistent with the existing convention that Miri + cargo-fuzz run manually rather than in CI (their interpreter overhead would push CI runtime past acceptable thresholds, and the modules that bring in `regex`/`aho-corasick` are pathologically slow under interpretation).
+
+6. **`rayon::par_iter` doesn't run under Miri.** Gated with `#[cfg(not(miri))]` + serial fallback in `index.rs` and `lint.rs` so the parsing modules can still be exercised. No effect on non-Miri builds.
+
+**Consequences:**
+- `unsafe` count: 4 → 1 (only `libc::kill`)
+- ~30 lines of SAFETY documentation deleted
+- New `justfile` with `miri`, `miri-filter`, `miri-all`, `check`, `fmt` recipes
+- Nightly toolchain + miri component required for `just miri`
+- Miri pass on `scanner::`, `bm25::`, `links::`, `heading::`, `frontmatter::` — 262 tests, no UB
+- Pre-existing brittle test surfaced: `bm25::test_bm25_serde_round_trip` uses `f64::EPSILON` tolerance for summed scores; failing under Miri due to HashMap iteration order. Not UB; widen tolerance when convenient.
