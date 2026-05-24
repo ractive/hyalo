@@ -81,7 +81,7 @@ impl FilesFromCounters {
             && self.files_missing == total_inputs as u64
         {
             Some(
-                "hint: all --files-from entries were missing; \
+                "all --files-from entries were missing; \
                  if paths include the vault dir prefix (e.g. kb/notes/foo.md with --dir kb), \
                  hyalo strips it automatically — check that the vault dir name matches"
                     .to_owned(),
@@ -130,20 +130,20 @@ pub fn resolve(dir: &Path, entries: &[String]) -> Result<FilesFromResolved> {
 
             // Strip vault-dir prefix when git outputs repo-relative paths.
             // E.g. if dir = /repo/kb, entry = "kb/notes/foo.md" → "notes/foo.md".
-            // Strategy: if entry starts with "<vault_name>/", try vault-relative first
-            // (A = entry as-is); if A doesn't exist on disk, use stripped form (B).
-            // When both or neither exist, prefer B (the stripped form is the intent).
+            // Strategy: if entry starts with "<vault_name>/" and the stripped form
+            // (B) exists on disk, prefer B — that's the intent for git-style inputs.
+            // Otherwise fall back to the entry as-is (A), so existing vault-relative
+            // paths that happen to start with the vault name still work.
             let vault_name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if vault_name.is_empty() {
                 entry.clone()
             } else {
                 let prefix = format!("{vault_name}/");
                 if let Some(stripped) = entry.strip_prefix(prefix.as_str()) {
-                    let a_exists = dir.join(entry.as_str()).is_file();
-                    if a_exists {
-                        entry.clone()
-                    } else {
+                    if dir.join(stripped).is_file() {
                         stripped.to_owned()
+                    } else {
+                        entry.clone()
                     }
                 } else {
                     entry.clone()

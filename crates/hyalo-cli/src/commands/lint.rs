@@ -1932,6 +1932,13 @@ fn lint_one_file_extended(
     let mut body_modified = false;
     let mut fix_actions: Vec<FixAction> = Vec::new();
     let mut post_fix_schema_remaining: Option<Vec<InternalViolation>> = None;
+    // Post-fix type (used for required_sections validation below). Defaults to the
+    // type in the unfixed frontmatter; apply_fixes may infer/insert a type via
+    // FRONTMATTER003, in which case we want to validate against that.
+    let mut post_fix_doc_type: Option<String> = properties
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
     if matches!(fix, FixMode::Apply | FixMode::DryRun) {
         let fix_all_rules = fix_rules.is_empty();
         let should_fix_frontmatter = fix_all_rules
@@ -1975,13 +1982,17 @@ fn lint_one_file_extended(
                     .collect();
                 post_fix_schema_remaining = Some(remaining);
             }
+            // Update post_fix_doc_type from the (possibly-inferred) mutable properties.
+            post_fix_doc_type = mutable
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
         }
     }
 
     // Required-sections pass — only when rule_filter is empty or includes SCHEMA.
     if should_include_frontmatter {
-        let doc_type: Option<&str> = properties.get("type").and_then(|v| v.as_str());
-        let effective_schema = match doc_type {
+        let effective_schema = match post_fix_doc_type.as_deref() {
             Some(t) => schema.merged_schema_for_type(t),
             None => schema.default_schema().clone(),
         };

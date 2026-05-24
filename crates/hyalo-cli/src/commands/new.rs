@@ -82,9 +82,8 @@ pub(crate) fn create_new(
     if let Some(parent) = full_path.parent()
         && !parent.is_dir()
     {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("creating parent directories for {}", full_path.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent directories for {}", full_path.display()))?;
     }
 
     // ------------------------------------------------------------------

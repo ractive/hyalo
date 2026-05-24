@@ -227,6 +227,24 @@ fn parse_case_insensitive_mode(raw: Option<&str>) -> anyhow::Result<CaseInsensit
 
 /// Load configuration from `.hyalo.toml` inside `dir`.
 ///
+/// Walks `[schema.types.*]` tables in a parsed `.hyalo.toml` looking for a real
+/// `required-sections` key (the deprecated kebab-case alias). Used to gate the
+/// deprecation warning so we don't false-positive on the string appearing in a
+/// comment, doc string, or unrelated value.
+fn schema_table_has_required_sections_key(raw: &toml::Value) -> bool {
+    let Some(types) = raw
+        .get("schema")
+        .and_then(|s| s.get("types"))
+        .and_then(toml::Value::as_table)
+    else {
+        return false;
+    };
+    types.values().any(|t| {
+        t.as_table()
+            .is_some_and(|tbl| tbl.contains_key("required-sections"))
+    })
+}
+
 /// This variant accepts an explicit directory to make it testable without
 /// relying on the process working directory.
 pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
@@ -245,7 +263,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
 
     // Deprecation: warn when the kebab-case `required-sections` key is used.
     // The canonical key is `required_sections`; the alias is kept for one release.
-    if contents.contains("required-sections") {
+    // Parse as generic TOML so a string value or comment containing the literal
+    // text "required-sections" doesn't trigger a false positive.
+    if let Ok(raw) = toml::from_str::<toml::Value>(&contents)
+        && schema_table_has_required_sections_key(&raw)
+    {
         crate::warn::warn(
             "deprecated: 'required-sections' in .hyalo.toml — rename to 'required_sections'",
         );

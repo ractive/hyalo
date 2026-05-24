@@ -217,7 +217,7 @@ fn resolve_files_from_for_command(
             .counters
             .all_missing_hint(rel_paths.len(), total_inputs)
         {
-            crate::warn::warn(hint);
+            crate::warn::note(hint);
         }
         Ok((rel_paths, resolved.counters))
     };
