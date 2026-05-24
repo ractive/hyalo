@@ -10,6 +10,7 @@ mod count;
 mod cwd_features;
 mod errors;
 mod examples_contract;
+mod feature_matrix;
 mod files_from;
 mod find;
 mod help;

@@ -42,6 +42,8 @@
 
 ### Added
 
+- **Quality-gate xtask** (`cargo run -p xtask -- check-ac-fidelity | check-feature-fanout | check-help-drift`): three PR-time guards that catch partial implementations (AC-fidelity), cross-command flag inconsistency (feature-fanout matrix), and help-text drift before merge. Wired into a new `quality-gates.yml` CI workflow.
+
 - **`EXAMPLES:` blocks on every subcommand `--help`** (`find`, `set`, `task`, `summary`,
   `read`, `links`, `create-index`, `types`, `properties`, `tags`, `backlinks`, `remove`,
   `append`, `views`, `init`, `lint-rules`) — LLM-ergonomics fix so agents don't need to

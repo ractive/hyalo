@@ -1,0 +1,11 @@
+[[patterns]]
+pattern = "parent must exist"
+reason = "iter-140 fixed via create_dir_all"
+
+[[patterns]]
+pattern = "parent directory does not exist"
+reason = "iter-140 fixed via create_dir_all"
+
+[[patterns]]
+pattern = "parent does not exist"
+reason = "iter-140 fixed via create_dir_all"
