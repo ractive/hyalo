@@ -181,7 +181,8 @@ that accepts `--files-from`.
 - [x] BUG-2: auto-strip vault-dir prefix for repo-relative paths
 - [x] BUG-2: hint when all inputs were treated as missing
 - [x] BUG-2: README + help-text example confirmed against subdir
-      vault layout
+      vault layout (README updated with comment + corrected jq envelope
+      shape; help.rs example already uses the canonical form)
 - [x] BUG-2: e2e test for repo-relative input with subdir vault
 - [x] BUG-3: decide snake-vs-kebab convention + apply
 - [x] BUG-3: decide on deprecation alias; if yes, wire warning
