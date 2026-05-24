@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`--files-from <PATH>`** flag on `find`, `lint`, `mv`, `set`, `remove`, and `append`:
+  supply a newline-separated list of file paths (or `-` to read from stdin) and the command
+  operates on exactly that set, bypassing the directory walk. Non-`.md` paths, paths outside
+  the vault, and missing files are silently skipped; counters appear in the JSON envelope as
+  `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`. Enables
+  diff-aware CI workflows: `git diff --name-only origin/main | hyalo lint --files-from -`.
+  Mutually exclusive with `--glob` and `--file`.
 - **`item_pattern`** on `string-list` properties: per-item regex validation
   at `hyalo lint` time. Declare `type = "string-list"` and `item_pattern = "^..."` in
   `[schema.types.X.properties.Y]`. Each list item is matched against the regex;

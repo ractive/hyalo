@@ -9,6 +9,7 @@ mod config_dir;
 mod count;
 mod cwd_features;
 mod errors;
+mod files_from;
 mod find;
 mod help;
 mod hints;

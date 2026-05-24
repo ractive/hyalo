@@ -222,6 +222,25 @@ hyalo find --view drafts                          # recall
 hyalo find --view drafts --tag rust               # extend with additional filters
 ```
 
+### CI diff-aware lint
+
+`--files-from <PATH>` (or `-` for stdin) scopes any command to a caller-supplied file list,
+bypassing the directory walk entirely. This is ideal for linting only changed files in CI:
+
+```sh
+# Lint only the markdown files touched on this branch
+git diff --name-only origin/main -- '**/*.md' | hyalo lint --files-from -
+
+# Non-.md paths (build artifacts, source files) are silently skipped —
+# no need to pre-filter git diff output.
+# Counters in the JSON envelope show what was skipped:
+git diff --name-only origin/main | hyalo lint --files-from - --format json \
+  | jq '{missing: .files_missing, non_md: .files_skipped_non_md}'
+```
+
+`--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, and `append`.
+It is mutually exclusive with `--glob` and `--file`.
+
 ### Snapshot index
 
 For workflows that run many queries in a short window (CI, automation, LLM tool loops):

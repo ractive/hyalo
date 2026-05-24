@@ -1,9 +1,8 @@
 use anyhow::Result;
 
+use crate::commands::files_from::FilesFromCounters;
 use crate::hints::{HintContext, generate_hints};
-use crate::output::{
-    CommandOutcome, Format, apply_jq_filter_result, build_envelope_value, format_envelope,
-};
+use crate::output::{CommandOutcome, Format, apply_jq_filter_result, build_envelope_value};
 
 /// Error message for `--count` on non-list commands (shared across match arms).
 pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks, lint)";
@@ -19,6 +18,33 @@ pub(crate) struct OutputPipeline<'a> {
     pub hint_ctx: Option<&'a HintContext>,
     /// Print only the total count as a bare integer.
     pub count: bool,
+    /// When `--files-from` was used, inject skip counters into the envelope.
+    pub files_from_counters: Option<FilesFromCounters>,
+}
+
+/// Inject `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`
+/// counters into an already-built envelope JSON object when `--files-from` was used.
+///
+/// All three fields are always written (as `0`) so consumers can reliably check for them.
+fn inject_files_from_counters(
+    envelope: &mut serde_json::Value,
+    counters: Option<&FilesFromCounters>,
+) {
+    let Some(c) = counters else { return };
+    if let Some(obj) = envelope.as_object_mut() {
+        obj.insert(
+            "files_missing".to_owned(),
+            serde_json::json!(c.files_missing),
+        );
+        obj.insert(
+            "files_skipped_non_md".to_owned(),
+            serde_json::json!(c.files_skipped_non_md),
+        );
+        obj.insert(
+            "files_skipped_outside_vault".to_owned(),
+            serde_json::json!(c.files_skipped_outside_vault),
+        );
+    }
 }
 
 impl OutputPipeline<'_> {
@@ -62,7 +88,8 @@ impl OutputPipeline<'_> {
 
                 if let Some(filter) = self.jq_filter {
                     // Build the full envelope first so jq can address any field.
-                    let envelope = build_envelope_value(&value, total, &hints);
+                    let mut envelope = build_envelope_value(&value, total, &hints);
+                    inject_files_from_counters(&mut envelope, self.files_from_counters.as_ref());
                     match apply_jq_filter_result(filter, &envelope) {
                         Ok(filtered) => println!("{filtered}"),
                         Err(e) => {
@@ -78,7 +105,15 @@ impl OutputPipeline<'_> {
                         }
                     }
                 } else {
-                    let formatted = format_envelope(self.user_format, &value, total, &hints);
+                    let mut envelope = build_envelope_value(&value, total, &hints);
+                    inject_files_from_counters(&mut envelope, self.files_from_counters.as_ref());
+                    let formatted = crate::output::format_prebuilt_envelope(
+                        self.user_format,
+                        &envelope,
+                        total,
+                        &hints,
+                        &value,
+                    );
                     println!("{formatted}");
                     // In text mode, when a list command returns zero results, emit a
                     // notice on stderr so the user knows the command ran successfully.

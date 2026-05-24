@@ -214,6 +214,40 @@ pub fn format_envelope(
     }
 }
 
+/// Format an already-built envelope JSON value.
+///
+/// Unlike [`format_envelope`], this variant accepts a pre-built envelope (e.g. one that
+/// has had `--files-from` counters injected). In JSON mode, the envelope is serialized
+/// directly. In text mode, `results_value` (the raw results payload, before envelope
+/// wrapping) is used for human-readable formatting.
+#[must_use]
+pub fn format_prebuilt_envelope(
+    format: Format,
+    envelope: &serde_json::Value,
+    total: Option<u64>,
+    hints: &[crate::hints::Hint],
+    results_value: &serde_json::Value,
+) -> String {
+    match format {
+        Format::Json => serde_json::to_string_pretty(envelope)
+            .expect("serializing serde_json::Value is infallible"),
+        Format::Text => {
+            let mut cache = JaqFilterCache::new();
+            let mut text = format_results_as_text(results_value, total, &mut cache);
+            if !hints.is_empty() {
+                text.push('\n');
+                for hint in hints {
+                    text.push_str("\n  -> ");
+                    text.push_str(&hint.cmd);
+                    text.push_str("  # ");
+                    text.push_str(&hint.description);
+                }
+            }
+            sanitize_control_chars(&text)
+        }
+    }
+}
+
 /// Format results for text output, applying pagination notice and tag-summary header.
 ///
 /// Called by [`format_envelope`] when producing text output. The `total` is the

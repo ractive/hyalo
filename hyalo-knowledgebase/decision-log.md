@@ -544,3 +544,33 @@ Research across tools:
 - Agents using `hyalo new` must handle `lint` output to know what to fill in — the feedback loop is explicit
 - Bulk creation (`--batch`) deferred; single-file is the unit for now
 - `item_pattern` and `required-sections` schema extensions ship in the same iteration, making the lint pass immediately useful after `hyalo new`
+
+## DEC-044: VCS-Agnostic Scoping via `--files-from` (2026-05-24)
+
+**Context:** Consumer repos (ff-rdp and similar, see [[research/ff-rdp-discipline-consumer-notes]]) wanted to scope `hyalo lint` to only the files touched on a branch — "diff-aware lint in CI". The first instinct was a `--since <git-ref>` flag that would shell out to `git diff --name-only`. See [[research/ff-rdp-discipline-consumer-notes#B]] for the full discussion.
+
+**Decision:** No git integration. Add `--files-from <PATH>` (or `-` for stdin) instead. The caller supplies the file list via any tool that fits their VCS: `git diff --name-only`, `hg status -n`, `make .changed`, a script. Hyalo accepts a flat newline-separated list and operates on exactly that set.
+
+**Why these tradeoffs:**
+
+1. **VCS-agnostic by design.** A `--since` flag would make hyalo depend on `git` being available, on the vault being a git repository, and on a specific ref format. Callers using Mercurial, Jujutsu, or no VCS at all would be excluded. `--files-from` lets every caller provide the file set via whatever tool fits.
+
+2. **No git coupling in the binary.** Adding `git` as a shell-out dependency is risky: it may not be on `$PATH` in CI containers, the output format varies by version, and error handling is fragile. We reject this complexity.
+
+3. **Silent skip for non-.md and out-of-vault paths.** CI diff output includes build artifacts, source files, deleted files — everything. Requiring callers to pre-filter with `grep -E '\.md$'` and `--diff-filter=AMR` defeats the ergonomic goal. Silent skips with JSON envelope counters (`files_missing`, `files_skipped_non_md`, `files_skipped_outside_vault`) give callers visibility without forcing them to wrap hyalo in a shell pipeline.
+
+4. **`--files-from` is strictly a source of paths**, equivalent to `--glob` and `--file`. All three feed the same downstream path-handling pipeline. Mutual exclusion keeps the source of truth obvious.
+
+5. **`--index` semantics preserved.** When `--index` is given, the snapshot is the source of truth — `--files-from` filters into it, never past it. A path in `--files-from` not present in the index counts as `files_missing`. This matches what `--index` already means and avoids a hidden disk-rescan fallback.
+
+**Rejected alternatives:**
+- `--since <git-ref>` with built-in `git` integration — rejected because it ties hyalo to git specifically
+- `hyalo diff <revA>..<revB>` as a first-class command — `git diff` + `--files-from` covers the case with no extra command surface
+- `--files-from0` (NUL-separated) — deferred; newline covers 99% of cases
+- Combining `--files-from` with `--glob` (intersection or union) — rejected as confusing; mutual exclusion is enforced
+
+**Consequences:**
+- `git diff --name-only origin/main | hyalo lint --files-from -` works out of the box
+- Callers don't need to filter git diff output — non-.md paths are skipped silently
+- No git binary required; works in any CI environment with hyalo on PATH
+- `--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, and `append` — the commands that already accept `--glob`

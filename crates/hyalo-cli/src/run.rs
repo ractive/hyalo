@@ -1,11 +1,16 @@
 use std::io::IsTerminal as _;
+use std::path::Path;
 use std::process;
 
+use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches};
 
 use crate::cli::args::{Cli, Commands, FindFilters, IndexFlags};
 use crate::cli::banner::cwd_help_banner;
 use crate::cli::help::{filter_examples, filter_long_help};
+use crate::commands::files_from::{
+    FilesFromCounters, load as files_from_load, resolve as files_from_resolve,
+};
 use crate::commands::init as init_commands;
 use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
@@ -130,6 +135,192 @@ fn task_selector(line: &[usize], section: Option<&String>, all: bool) -> Option<
         Some("lines".to_owned())
     } else {
         None
+    }
+}
+
+/// Resolve `--files-from` for commands that accept it.
+///
+/// When a command carries a `files_from` source, this function:
+/// 1. Loads the raw path lines (from a file path or stdin `-`).
+/// 2. Resolves them against the vault `dir` (filtering `.md`, missing, outside-vault).
+/// 3. Injects the resolved vault-relative paths into the command's `file` Vec.
+/// 4. Returns `Some(FilesFromCounters)` for the output pipeline to include in the envelope.
+///
+/// Returns `Ok(None)` when the command does not carry `--files-from`.
+/// Returns `Err(...)` only for I/O failures reading the source.
+///
+/// When the resolved file list is empty (all lines filtered/missing), the command
+/// will proceed with an empty `file` Vec — each subcommand handles the empty-list
+/// case naturally (zero results, exit 0).
+/// Check whether the command's injected `file` list is empty after `--files-from` resolution.
+#[allow(clippy::match_same_arms)]
+fn files_from_command_file_list_is_empty(cmd: &Commands) -> bool {
+    match cmd {
+        Commands::Find {
+            filters: FindFilters { file, .. },
+            ..
+        } => file.is_empty(),
+        Commands::Lint { file, .. } => file.is_empty(),
+        Commands::Set { file, .. } => file.is_empty(),
+        Commands::Remove { file, .. } => file.is_empty(),
+        Commands::Append { file, .. } => file.is_empty(),
+        Commands::Mv { glob, .. } => glob.is_empty(),
+        _ => false,
+    }
+}
+
+/// Produce an empty successful `CommandOutcome` for a command when `--files-from`
+/// resolved to zero files.  The payload is the command's natural "zero results" shape.
+fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
+    // For find: empty array with total=0.
+    // For lint: empty lint output.
+    // For mutation commands (set/remove/append/mv): empty array.
+    match cmd {
+        Commands::Find { .. } => {
+            CommandOutcome::success_with_total(serde_json::json!([]).to_string(), 0)
+        }
+        Commands::Lint { .. } => {
+            let payload = serde_json::json!({
+                "files": [],
+                "total": 0,
+                "rules_fired": 0,
+                "files_with_violations": 0,
+                "files_truncated": false,
+                "errors": 0,
+                "warnings": 0
+            });
+            CommandOutcome::success_with_total(payload.to_string(), 0)
+        }
+        // Mutation commands: empty array
+        _ => CommandOutcome::success_with_total(serde_json::json!([]).to_string(), 0),
+    }
+}
+
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
+fn resolve_files_from_for_command(
+    cmd: &mut Commands,
+    dir: &Path,
+) -> Result<Option<FilesFromCounters>> {
+    // Helper: load + resolve a files_from source, returning (rel_paths, counters)
+    let resolve_source = |source: &str| -> Result<(Vec<String>, FilesFromCounters)> {
+        let entries = files_from_load(source)?;
+        let resolved = files_from_resolve(dir, &entries)?;
+        let rel_paths: Vec<String> = resolved.files.into_iter().map(|(_full, rel)| rel).collect();
+        Ok((rel_paths, resolved.counters))
+    };
+
+    match cmd {
+        Commands::Find {
+            filters:
+                FindFilters {
+                    files_from,
+                    file,
+                    glob,
+                    ..
+                },
+            ..
+        } => {
+            let Some(source) = files_from.take() else {
+                return Ok(None);
+            };
+            let (paths, counters) = resolve_source(&source)?;
+            *file = paths;
+            glob.clear();
+            Ok(Some(counters))
+        }
+        Commands::Lint {
+            files_from,
+            file,
+            file_positional,
+            glob,
+            ..
+        } => {
+            let Some(source) = files_from.take() else {
+                return Ok(None);
+            };
+            let (paths, counters) = resolve_source(&source)?;
+            *file = paths;
+            *file_positional = None;
+            glob.clear();
+            Ok(Some(counters))
+        }
+        Commands::Set {
+            files_from,
+            file,
+            file_positional,
+            glob,
+            ..
+        } => {
+            let Some(source) = files_from.take() else {
+                return Ok(None);
+            };
+            let (paths, counters) = resolve_source(&source)?;
+            *file = paths;
+            file_positional.clear();
+            glob.clear();
+            Ok(Some(counters))
+        }
+        Commands::Remove {
+            files_from,
+            file,
+            file_positional,
+            glob,
+            ..
+        } => {
+            let Some(source) = files_from.take() else {
+                return Ok(None);
+            };
+            let (paths, counters) = resolve_source(&source)?;
+            *file = paths;
+            file_positional.clear();
+            glob.clear();
+            Ok(Some(counters))
+        }
+        Commands::Append {
+            files_from,
+            file,
+            file_positional,
+            glob,
+            ..
+        } => {
+            let Some(source) = files_from.take() else {
+                return Ok(None);
+            };
+            let (paths, counters) = resolve_source(&source)?;
+            *file = paths;
+            file_positional.clear();
+            glob.clear();
+            Ok(Some(counters))
+        }
+        Commands::Mv {
+            files_from,
+            glob,
+            file,
+            file_positional,
+            ..
+        } => {
+            let Some(source) = files_from.take() else {
+                return Ok(None);
+            };
+            let (paths, counters) = resolve_source(&source)?;
+            // Mv batch mode: populate glob with the resolved paths as fake--globs
+            // isn't right; we need to use the files as batch targets.
+            // For Mv, inject resolved paths into glob using exact-path patterns.
+            // Since filter_index_entries matches exact rel_path equality when
+            // only files_arg is provided, inject into glob as exact-match patterns.
+            // Actually, Mv batch mode only checks glob/properties/tag.
+            // The cleanest wiring: put paths into glob as explicit literal globs.
+            // But discovery::match_globs uses globset which won't match unless
+            // the pattern matches. For exact paths, use the path directly.
+            // Solution: put the paths as the glob list (each is a literal path,
+            // and since they are exact vault-relative paths, they will match via
+            // glob semantics when the pattern has no wildcards and equals the path).
+            *glob = paths;
+            *file = None;
+            *file_positional = None;
+            Ok(Some(counters))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -1047,7 +1238,28 @@ fn run_inner() -> Result<(), AppError> {
         programmatic_output: jq_filter.is_some() || cli.count,
         lint_strict: lint_strict_from_config,
     };
-    let result = dispatch(cli.command, &mut ctx);
+    // Resolve --files-from before dispatch. This converts the files_from source
+    // into the command's `file` list and returns skip counters for the envelope.
+    let (files_from_counters, files_from_empty) =
+        match resolve_files_from_for_command(&mut cli.command, &dir) {
+            Ok(Some(c)) => {
+                let empty = files_from_command_file_list_is_empty(&cli.command);
+                (Some(c), empty)
+            }
+            Ok(None) => (None, false),
+            Err(e) => {
+                return Err(AppError::Internal(e));
+            }
+        };
+
+    // When --files-from resolved to zero files (all entries filtered/missing),
+    // short-circuit with an empty result rather than falling through to "scan all".
+    let result = if files_from_empty {
+        // Produce the appropriate empty payload for the command type.
+        Ok(empty_result_for_command(&cli.command))
+    } else {
+        dispatch(cli.command, &mut ctx)
+    };
     let exit_code_override = ctx.exit_code_override;
 
     let pipeline = OutputPipeline {
@@ -1055,6 +1267,7 @@ fn run_inner() -> Result<(), AppError> {
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
         count: cli.count,
+        files_from_counters,
     };
     let code = pipeline.finalize(result);
     // Commands like `lint` may override the exit code even on success output.

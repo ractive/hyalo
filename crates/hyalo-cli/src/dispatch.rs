@@ -390,6 +390,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 dead_end,
                 title,
                 language,
+                files_from: _, // resolved in run.rs before dispatch
             } = filters_raw;
             if orphan && dead_end {
                 crate::warn::warn(
@@ -863,6 +864,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             tag,
             mut file,
             glob,
+            files_from: _, // resolved in run.rs before dispatch
             where_properties,
             where_tags,
             dry_run,
@@ -901,6 +903,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             tag,
             mut file,
             glob,
+            files_from: _, // resolved in run.rs before dispatch
             where_properties,
             where_tags,
             dry_run,
@@ -934,6 +937,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             properties,
             mut file,
             glob,
+            files_from: _, // resolved in run.rs before dispatch
             where_properties,
             where_tags,
             dry_run,
@@ -1005,6 +1009,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file,
             to,
             glob,
+            files_from: _, // resolved in run.rs before dispatch
             properties,
             tag,
             r#type,
@@ -1216,6 +1221,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file,
             glob,
             r#type: lint_type,
+            files_from: _, // resolved in run.rs before dispatch
             fix,
             dry_run,
             limit: cli_limit,
