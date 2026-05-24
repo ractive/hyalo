@@ -246,6 +246,9 @@ pub(crate) struct FindFilters {
     /// Read file paths from PATH (one per line); use '-' to read from stdin.
     /// Mutually exclusive with --file and --glob.
     /// Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
+    /// Repo-relative paths with the configured vault dir prefix (e.g. files/en-us/x.md with --dir files/en-us)
+    /// are resolved by trying vault-relative first, then stripping the full dir prefix and retrying.
+    /// Input is deduplicated; results follow first-seen order.
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"])]
     #[serde(skip)]
     pub files_from: Option<String>,
@@ -403,7 +406,14 @@ pub(crate) enum Commands {
             POSITIONAL ARGUMENTS: The first positional argument is always PATTERN (body text search), not a file path. \
             Subsequent positional arguments are treated as FILE targets. \
             To filter by file without a body search, use --file instead of a positional argument.\n\
-            SIDE EFFECTS: None (read-only).")]
+            SIDE EFFECTS: None (read-only).\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo find 'error handling'\n\
+            \u{00a0} hyalo find --property status=draft --tag project\n\
+            \u{00a0} hyalo find --property 'title~=/^Design/i'\n\
+            \u{00a0} hyalo find --section 'Tasks' --task todo\n\
+            \u{00a0} hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'\n\
+            \u{00a0} git diff --name-only origin/main | hyalo find --files-from -")]
     Find {
         /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran"); results sorted by relevance
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
@@ -431,7 +441,12 @@ pub(crate) enum Commands {
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
             Pass --format json to get {\"results\": {\"file\": \"...\", \"content\": \"...\"}, \"hints\": [...]}.\n\
-            SIDE EFFECTS: None (read-only)."
+            SIDE EFFECTS: None (read-only).\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo read notes/todo.md\n\
+            \u{00a0} hyalo read --file notes/todo.md --section Tasks\n\
+            \u{00a0} hyalo read --file notes/todo.md --lines 1:20\n\
+            \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json"
     )]
     Read {
         /// Target file (relative to --dir) — positional form
@@ -459,7 +474,11 @@ pub(crate) enum Commands {
     #[command(long_about = "Property operations across matched files.\n\n\
         Subcommands:\n\
         - summary: Unique property names, types, and file counts (read-only).\n\
-        - rename: Rename a property key across files (mutates files).")]
+        - rename: Rename a property key across files (mutates files).\n\n\
+        EXAMPLES:\n\
+        \u{00a0} hyalo properties summary\n\
+        \u{00a0} hyalo properties summary --glob 'research/**/*.md'\n\
+        \u{00a0} hyalo properties rename --from old-key --to new-key")]
     Properties {
         #[command(subcommand)]
         action: Option<PropertiesAction>,
@@ -468,7 +487,11 @@ pub(crate) enum Commands {
     #[command(long_about = "Tag operations across matched files.\n\n\
         Subcommands:\n\
         - summary: Unique tags with file counts (read-only).\n\
-        - rename: Rename a tag across files (mutates files).")]
+        - rename: Rename a tag across files (mutates files).\n\n\
+        EXAMPLES:\n\
+        \u{00a0} hyalo tags summary\n\
+        \u{00a0} hyalo tags summary --glob 'research/**/*.md'\n\
+        \u{00a0} hyalo tags rename --from old-tag --to new-tag")]
     Tags {
         #[command(subcommand)]
         action: Option<TagsAction>,
@@ -481,7 +504,13 @@ pub(crate) enum Commands {
             - set: Set an arbitrary single-character status.\n\n\
             INPUT: FILE (positional or --file) and one of: --line (repeatable/comma-separated), --section <heading>, or --all.\n\
             SCOPE: Single file only.\n\
-            SIDE EFFECTS: 'toggle' and 'set' modify the file on disk. 'read' is read-only.")]
+            SIDE EFFECTS: 'toggle' and 'set' modify the file on disk. 'read' is read-only.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo task toggle todo.md --all\n\
+            \u{00a0} hyalo task toggle todo.md --section Tasks\n\
+            \u{00a0} hyalo task toggle todo.md --line 5,7,9\n\
+            \u{00a0} hyalo task read todo.md --line 5\n\
+            \u{00a0} hyalo task set todo.md --line 5 --status '-'")]
     Task {
         #[command(subcommand)]
         action: TaskAction,
@@ -497,7 +526,12 @@ pub(crate) enum Commands {
             Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need a quick overview of a vault's metadata landscape."
+            USE WHEN: You need a quick overview of a vault's metadata landscape.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo summary\n\
+            \u{00a0} hyalo summary --format text\n\
+            \u{00a0} hyalo summary --jq '.results.tasks.total'\n\
+            \u{00a0} hyalo summary --jq '.results.links.broken'"
     )]
     Summary {
         /// Glob pattern(s) to filter which files to include, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
@@ -519,7 +553,11 @@ pub(crate) enum Commands {
             then returns every file that contains a [[wikilink]] or [markdown](link) \
             pointing to the target file.\n\n\
             OUTPUT: JSON object with file, backlinks array (source, line, target, label), and total count.\n\
-            SIDE EFFECTS: None (read-only)."
+            SIDE EFFECTS: None (read-only).\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo backlinks decision-log.md\n\
+            \u{00a0} hyalo backlinks --file notes/design.md\n\
+            \u{00a0} hyalo backlinks --file notes/design.md --limit 20"
     )]
     Backlinks {
         /// Target file to find backlinks for (relative to --dir) — positional form
@@ -553,11 +591,11 @@ pub(crate) enum Commands {
             Resolves a set of source files via the given selectors (intersection). --to must be a\n\
             directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
             to commit changes. A single link-graph build covers all files.\n\n\
-            Examples:\n\
-              hyalo mv old.md --to new.md\n\
-              hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
-              hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
-              hyalo mv --tag archive --to archive/ --apply\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo mv old.md --to new.md\n\
+            \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
+            \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
+            \u{00a0} hyalo mv --tag archive --to archive/ --apply\n\n\
             OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, and applied flag.\n\
             SIDE EFFECTS: Moves files and modifies files containing links (unless dry-run)."
     )]
@@ -576,6 +614,8 @@ pub(crate) enum Commands {
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin (batch mode).
         /// Mutually exclusive with --file, positional FILE, and --glob.
+        /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
+        /// Input is deduplicated; results follow first-seen order.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
         files_from: Option<String>,
         /// Property filter for source selection: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists). Repeatable (AND)
@@ -622,7 +662,14 @@ element matches. Repeatable (AND).\n\
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             USE WHEN: You need to create or overwrite frontmatter properties or add tags, \
-            possibly across many files at once."
+            possibly across many files at once.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo set --property status=completed --file notes/todo.md\n\
+            \u{00a0} hyalo set --property priority=3 --property reviewed=true --file notes/todo.md\n\
+            \u{00a0} hyalo set --property tags=[a,b,c] --file notes/todo.md\n\
+            \u{00a0} hyalo set --tag reviewed --glob 'research/**/*.md'\n\
+            \u{00a0} hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\
+            \u{00a0} hyalo set --property due=2026-12-31 --validate --file notes/todo.md"
     )]
     Set {
         /// Target file(s) as positional argument(s) — alternative to --file
@@ -682,7 +729,12 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
-            USE WHEN: You need to delete properties or remove tags from one or more files."
+            USE WHEN: You need to delete properties or remove tags from one or more files.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo remove --property status --file notes/todo.md\n\
+            \u{00a0} hyalo remove --property aliases=old-name --file notes/todo.md\n\
+            \u{00a0} hyalo remove --tag draft --glob '**/*.md'\n\
+            \u{00a0} hyalo remove --property status --where-tag archive --glob '**/*.md'"
     )]
     Remove {
         /// Target file(s) as positional argument(s) — alternative to --file
@@ -721,7 +773,11 @@ Repeatable (AND).\n\
         long_about = "Create .hyalo.toml and optionally set up Claude Code integration.\n\n\
             Without flags, creates a .hyalo.toml config file.\n\
             With --claude, also installs the hyalo skill for Claude Code.\n\n\
-            Use the global --dir flag to specify the markdown directory to record in .hyalo.toml."
+            Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo init\n\
+            \u{00a0} hyalo --dir kb init\n\
+            \u{00a0} hyalo --dir kb init --claude"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
@@ -748,10 +804,18 @@ Repeatable (AND).\n\
             mutation — keeping it current for subsequent queries. This is safe as\n\
             long as no external tool modifies vault files while the index is active.\n\n\
             OUTPUT: JSON object with `path`, `files_indexed`, and `warnings`.\n\
-            SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir)."
+            SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir).\n\n\
+            FLAG ALIASES: on this subcommand, `--index-file PATH` (the global flag) is\n\
+            accepted as a synonym for `-o / --output PATH`. If both are provided and\n\
+            differ, create-index returns an error.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo create-index\n\
+            \u{00a0} hyalo create-index -o /tmp/my-index\n\
+            \u{00a0} hyalo find --property status=draft --index"
     )]
     CreateIndex {
-        /// Output path for the index file (default: .hyalo-index in --dir)
+        /// Output path for the index file (default: .hyalo-index in --dir).
+        /// Equivalent to the global --index-file flag on this subcommand.
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Allow writing the index file outside the vault directory
@@ -799,7 +863,11 @@ element matches. Repeatable (AND).\n\
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \
-            without overwriting the existing list."
+            without overwriting the existing list.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo append --property aliases='My Note' --file note.md\n\
+            \u{00a0} hyalo append --property authors=alice --glob 'research/**/*.md'\n\
+            \u{00a0} hyalo append --property related=other.md --where-tag project --glob '**/*.md'"
     )]
     Append {
         /// Target file(s) as positional argument(s) — alternative to --file
@@ -845,7 +913,12 @@ Repeatable (AND).\n\
             - list: Show all saved views and their filters (default).\n\
             - set: Create or update a view.\n\
             - remove: Delete a view.\n\n\
-            SIDE EFFECTS: 'set' and 'remove' modify .hyalo.toml. 'list' is read-only."
+            SIDE EFFECTS: 'set' and 'remove' modify .hyalo.toml. 'list' is read-only.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo views list\n\
+            \u{00a0} hyalo views set drafts --property status=draft --tag project\n\
+            \u{00a0} hyalo find --view drafts --limit 5\n\
+            \u{00a0} hyalo views remove drafts"
     )]
     Views {
         #[command(subcommand)]
@@ -868,7 +941,12 @@ Repeatable (AND).\n\
             the list of links that could not be matched.\n\
             SIDE EFFECTS: None unless `links fix --apply` is passed.\n\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
-            or 'hyalo find --broken-links' (list files with unresolved links)."
+            or 'hyalo find --broken-links' (list files with unresolved links).\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo links fix\n\
+            \u{00a0} hyalo links fix --apply\n\
+            \u{00a0} hyalo links auto --first-only --apply\n\
+            \u{00a0} hyalo links auto --min-length 5 --exclude-target-glob 'templates/*' --apply"
     )]
     Links {
         #[command(subcommand)]
@@ -941,6 +1019,8 @@ Repeatable (AND).\n\
         r#type: Option<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin.
         /// Mutually exclusive with --file, positional FILE, --glob, and --type.
+        /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
+        /// Input is deduplicated; results follow first-seen order.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob", "type"])]
         files_from: Option<String>,
         /// Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
@@ -993,7 +1073,13 @@ Repeatable (AND).\n\
             - show:   Show full details for a single rule.\n\
             - set:    Enable/disable a rule or change its severity.\n\
             - remove: Remove a rule override (revert to default).\n\n\
-            SIDE EFFECTS: set/remove modify .hyalo.toml. list and show are read-only."
+            SIDE EFFECTS: set/remove modify .hyalo.toml. list and show are read-only.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo lint-rules list\n\
+            \u{00a0} hyalo lint-rules show MD013\n\
+            \u{00a0} hyalo lint-rules set MD013 --enabled false\n\
+            \u{00a0} hyalo lint-rules set HYALO002 --severity error\n\
+            \u{00a0} hyalo lint-rules remove MD013"
     )]
     LintRules {
         #[command(subcommand)]
@@ -1001,7 +1087,7 @@ Repeatable (AND).\n\
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
-        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only."
+        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\n            EXAMPLES:\n            \u{00a0} hyalo types list\n            \u{00a0} hyalo types show iteration\n            \u{00a0} hyalo types set note --required title,date\n            \u{00a0} hyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\n            \u{00a0} hyalo types remove draft"
     )]
     Types {
         #[command(subcommand)]
@@ -1018,7 +1104,6 @@ Repeatable (AND).\n\
             `hyalo lint`, driving the agent fill-in loop.\n\n\
             CONSTRAINTS:\n\
             - Refuses with an error if the target file already exists\n\
-            - Refuses with an error if the parent directory does not exist\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo new --type iteration --file iterations/iter-99-example.md\n\
@@ -1031,7 +1116,7 @@ Repeatable (AND).\n\
         /// Document type to scaffold (must exist in `[schema.types.*]`)
         #[arg(long, value_name = "TYPE", required = true)]
         r#type: String,
-        /// Vault-relative path for the new file (must not exist; parent must exist)
+        /// Vault-relative path for the new file (must not exist; parent dirs created if missing)
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
     },

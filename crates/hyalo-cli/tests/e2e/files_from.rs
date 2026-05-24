@@ -541,3 +541,236 @@ fn find_files_from_strips_leading_dot_slash() {
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(envelope["total"].as_u64().unwrap(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// NEW-2: multi-segment --dir prefix stripping
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_files_from_multi_segment_dir_prefix_stripped() {
+    // Setup: vault lives at files/en-us/ inside a tempdir.
+    // Git outputs paths like "files/en-us/x.md" (repo-relative).
+    // --dir files/en-us should strip the full prefix and resolve "x.md".
+    let root = tempfile::tempdir().unwrap();
+    let vault = root.path().join("files").join("en-us");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(vault.join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+    write_md(&vault, "x.md", "---\ntitle: X\n---\n\nBody.\n");
+
+    // Repo-relative path (as git would output it).
+    let list = write_list_file(&["files/en-us/x.md"]);
+
+    // Pass --dir as the relative string "files/en-us" so resolve() can derive
+    // the multi-segment prefix. We construct this relative to root.
+    // In CLI invocation we use the relative path from cwd=root.
+    // Drop a root-level .hyalo.toml that sets `dir = "files/en-us"`. The CLI is
+    // invoked from `root` with no explicit --dir, so it picks up that config —
+    // configured_dir then becomes the relative multi-segment string, which is
+    // what resolve() needs to derive the prefix.
+    std::fs::write(root.path().join(".hyalo.toml"), "dir = \"files/en-us\"\n").unwrap();
+    let mut cmd = hyalo_no_hints();
+    cmd.current_dir(root.path());
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint with multi-segment dir prefix should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["results"]["files_missing"].as_u64().unwrap_or(1),
+        0,
+        "expected files_missing=0 with multi-segment dir, envelope: {envelope}"
+    );
+}
+
+#[test]
+fn lint_files_from_single_segment_dir_prefix_still_works() {
+    // Regression: single-segment vault (kb) still works after NEW-2.
+    // Replicates the iter-140 BUG-2 test with an explicit configured dir.
+    let root = tempfile::tempdir().unwrap();
+    let vault = root.path().join("kb");
+    std::fs::create_dir_all(vault.join("notes")).unwrap();
+    std::fs::write(vault.join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+    write_md(&vault, "notes/foo.md", "---\ntitle: Foo\n---\n\nBody.\n");
+    std::fs::write(root.path().join(".hyalo.toml"), "dir = \"kb\"\n").unwrap();
+
+    let list = write_list_file(&["kb/notes/foo.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.current_dir(root.path());
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint with single-segment dir prefix (kb) should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["results"]["files_missing"].as_u64().unwrap_or(1),
+        0,
+        "expected files_missing=0 with single-segment dir, envelope: {envelope}"
+    );
+}
+
+#[test]
+fn lint_files_from_ambiguity_vault_relative_literal_wins() {
+    // Ambiguity: configured_dir = "vault", vault contains "vault/bar.md".
+    // Input "vault/vault/bar.md" does NOT match a vault-relative literal (A),
+    // so strip-and-retry (B) gives "vault/bar.md" which DOES exist.
+    //
+    // Then: vault also contains "sub/page.md".
+    // Input "vault/sub/page.md" — vault-relative literal "vault/sub/page.md"
+    // does NOT exist, stripped "sub/page.md" DOES exist → uses (B).
+    //
+    // The precedence (A) is separately verified in the unit test.
+    // This E2E test verifies the strip path works correctly end-to-end.
+    let root = tempfile::tempdir().unwrap();
+    let vault = root.path().join("vault");
+    std::fs::create_dir_all(vault.join("sub")).unwrap();
+    // No nested .hyalo.toml inside vault to avoid shadowing warnings.
+    write_md(&vault, "sub/page.md", "---\ntitle: Page\n---\n\nBody.\n");
+    std::fs::write(root.path().join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
+
+    // Input as git would output: repo-relative "vault/sub/page.md"
+    let list = write_list_file(&["vault/sub/page.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.current_dir(root.path());
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint with ambiguity precedence test should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["results"]["files_missing"].as_u64().unwrap_or(1),
+        0,
+        "expected files_missing=0, strip-and-retry should resolve; envelope: {envelope}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NEW-4: whitespace trimming
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_files_from_whitespace_padded_paths_resolve() {
+    let tmp = setup_vault();
+    // Paths with leading/trailing spaces and tabs should still resolve.
+    let list = write_list_file(&["  alpha.md", "beta.md  ", "\tsub/gamma.md\t"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "find with whitespace-padded paths should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["total"].as_u64().unwrap(),
+        3,
+        "all 3 whitespace-padded paths should resolve; envelope: {envelope}"
+    );
+}
+
+#[test]
+fn lint_files_from_whitespace_padded_path_resolves() {
+    let tmp = setup_vault();
+    let list = write_list_file(&["  alpha.md  "]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint with whitespace-padded path should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["results"]["files_missing"].as_u64().unwrap_or(1),
+        0,
+        "whitespace-padded path should resolve; envelope: {envelope}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NEW-6: deduplication
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_files_from_deduplicates_same_path() {
+    let tmp = setup_vault();
+    // Same path 3×, should produce only 1 result.
+    let list = write_list_file(&["alpha.md", "alpha.md", "alpha.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["find", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "find with duplicate paths should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["total"].as_u64().unwrap(),
+        1,
+        "duplicate paths should produce a single result; envelope: {envelope}"
+    );
+}
+
+#[test]
+fn lint_files_from_deduplicates_and_preserves_order() {
+    let tmp = setup_vault();
+    // Paths repeated, first-seen order: alpha, beta, sub/gamma.
+    let list = write_list_file(&["alpha.md", "beta.md", "sub/gamma.md", "alpha.md", "beta.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint with duplicate paths should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // 3 unique files linted (not 5). Lint uses "files_checked" for the count.
+    assert_eq!(
+        envelope["results"]["files_checked"].as_u64().unwrap_or(0),
+        3,
+        "should lint 3 unique files; envelope: {envelope}"
+    );
+}

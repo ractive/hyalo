@@ -8,6 +8,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
+use indexmap::IndexSet;
 
 // ---------------------------------------------------------------------------
 // Line loading
@@ -20,6 +21,7 @@ use anyhow::{Context, Result};
 /// Handles:
 /// - Optional UTF-8 BOM on the first byte (stripped silently).
 /// - CRLF line endings (stripped).
+/// - Leading/trailing whitespace trimmed from each line (NEW-4).
 /// - Empty / whitespace-only lines (skipped silently).
 /// - Leading `./` stripped from each path.
 /// - Backslashes normalized to forward slashes (Windows-friendly).
@@ -43,6 +45,8 @@ pub fn load(source: &str) -> Result<Vec<String>> {
     let entries: Vec<String> = raw
         .lines()
         .map(|line| {
+            // Trim leading/trailing whitespace (spaces, tabs, etc.).
+            let line = line.trim();
             // Normalize backslashes → forward slashes.
             let line = line.replace('\\', "/");
             // Strip leading `./`.
@@ -52,7 +56,7 @@ pub fn load(source: &str) -> Result<Vec<String>> {
                 line
             }
         })
-        .filter(|line| !line.trim().is_empty())
+        .filter(|line| !line.is_empty())
         .collect();
 
     Ok(entries)
@@ -74,18 +78,35 @@ impl FilesFromCounters {
     /// Returns a hint string when every entry was missing (suggesting the vault
     /// dir prefix may need stripping). Only fires when at least one entry was
     /// provided and every entry ended up in `files_missing`.
-    pub fn all_missing_hint(&self, files_resolved: usize, total_inputs: usize) -> Option<String> {
+    ///
+    /// `vault_dir_display` is the human-readable form of the configured `--dir`
+    /// (e.g. `"files/en-us"`) so the hint can quote the actual prefix in use.
+    pub fn all_missing_hint(
+        &self,
+        files_resolved: usize,
+        total_inputs: usize,
+        vault_dir_display: &str,
+    ) -> Option<String> {
         if files_resolved == 0
             && self.files_missing > 0
             && total_inputs > 0
             && self.files_missing == total_inputs as u64
         {
-            Some(
+            let example_path = if vault_dir_display == "." {
+                "notes/foo.md".to_owned()
+            } else {
+                format!("{vault_dir_display}/notes/foo.md")
+            };
+            let dir_clause = if vault_dir_display == "." {
+                String::new()
+            } else {
+                format!(" with --dir {vault_dir_display}")
+            };
+            Some(format!(
                 "all --files-from entries were missing; \
-                 if paths include the vault dir prefix (e.g. kb/notes/foo.md with --dir kb), \
-                 hyalo strips it automatically — check that the vault dir name matches"
-                    .to_owned(),
-            )
+                 if paths include the vault dir prefix (e.g. {example_path}{dir_clause}), \
+                 hyalo strips it automatically — check that the vault dir matches"
+            ))
         } else {
             None
         }
@@ -101,15 +122,51 @@ pub struct FilesFromResolved {
 
 /// Resolve raw path strings into vault-relative `(PathBuf, String)` pairs.
 ///
+/// `dir` is the absolute path to the vault directory.
+/// `configured_dir` is the configured `dir` value as written in `.hyalo.toml` or
+/// passed via `--dir` (e.g. `"files/en-us"` or `"kb"`). It is used to strip the
+/// configured vault dir prefix from repo-relative input paths (NEW-2). Pass `"."` when
+/// the vault is at the repo root; no prefix stripping occurs in that case.
+///
 /// Rules applied in order per entry:
 /// 1. Absolute paths: rewrite via `strip_absolute_vault_prefix`; outside-vault → counter.
 /// 2. Relative paths: treat as vault-relative; reject `..` components → outside-vault counter.
-/// 3. Non-`.md` extension → `files_skipped_non_md` counter (silent).
-/// 4. Path does not exist on disk → `files_missing` counter (silent).
-/// 5. Accept: push `(dir.join(rel), rel)` to output.
-pub fn resolve(dir: &Path, entries: &[String]) -> Result<FilesFromResolved> {
+/// 3. Dir-prefix stripping (NEW-2): if the entry starts with `configured_dir/` and the
+///    vault-relative literal does NOT exist on disk, strip the prefix and retry.
+///    Precedence: vault-relative literal first (A), strip-and-retry only if (A) misses (B).
+///    When `configured_dir` is `"."`, no prefix to strip.
+/// 4. Non-`.md` extension → `files_skipped_non_md` counter (silent).
+/// 5. Path does not exist on disk → `files_missing` counter (silent).
+/// 6. Duplicate resolved paths are silently dropped; first-seen order is preserved (NEW-6).
+/// 7. Accept: push `(dir.join(rel), rel)` to output.
+pub fn resolve(dir: &Path, entries: &[String], configured_dir: &str) -> Result<FilesFromResolved> {
     let mut files = Vec::with_capacity(entries.len());
     let mut counters = FilesFromCounters::default();
+    // Deduplicate resolved vault-relative paths, preserving first-seen order (NEW-6).
+    let mut seen: IndexSet<String> = IndexSet::with_capacity(entries.len());
+
+    // Compute the dir prefix for stripping (NEW-2).
+    //
+    // Use `configured_dir` when it is a relative path with content (e.g. "files/en-us"
+    // or "kb"). If it is absolute (the caller passed an absolute --dir path) or ".",
+    // fall back to the single-segment `dir.file_name()` approach (iter-140 BUG-2).
+    //
+    // This ensures backward compatibility: an absolute --dir still strips the vault
+    // basename, while a relative multi-segment --dir strips the full prefix.
+    let dir_prefix: Option<String> = {
+        let normalized = configured_dir.replace('\\', "/");
+        let trimmed = normalized.trim_end_matches('/');
+        if trimmed == "." || trimmed.is_empty() || Path::new(trimmed).is_absolute() {
+            // Fall back to single-segment (vault directory's last component).
+            dir.file_name()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("{s}/"))
+        } else {
+            // Relative configured dir: use full prefix (single or multi-segment).
+            Some(format!("{trimmed}/"))
+        }
+    };
 
     for entry in entries {
         let rel: String = if Path::new(entry).is_absolute() {
@@ -128,27 +185,9 @@ pub fn resolve(dir: &Path, entries: &[String]) -> Result<FilesFromResolved> {
                 continue;
             }
 
-            // Strip vault-dir prefix when git outputs repo-relative paths.
-            // E.g. if dir = /repo/kb, entry = "kb/notes/foo.md" → "notes/foo.md".
-            // Strategy: if entry starts with "<vault_name>/" and the stripped form
-            // (B) exists on disk, prefer B — that's the intent for git-style inputs.
-            // Otherwise fall back to the entry as-is (A), so existing vault-relative
-            // paths that happen to start with the vault name still work.
-            let vault_name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if vault_name.is_empty() {
-                entry.clone()
-            } else {
-                let prefix = format!("{vault_name}/");
-                if let Some(stripped) = entry.strip_prefix(prefix.as_str()) {
-                    if dir.join(stripped).is_file() {
-                        stripped.to_owned()
-                    } else {
-                        entry.clone()
-                    }
-                } else {
-                    entry.clone()
-                }
-            }
+            // Default to the entry as-is; prefix-strip is attempted lazily below
+            // only if the vault-relative literal does not exist on disk (NEW-2).
+            entry.clone()
         };
 
         // Filter to `.md` only (case-insensitive).
@@ -157,11 +196,39 @@ pub fn resolve(dir: &Path, entries: &[String]) -> Result<FilesFromResolved> {
             continue;
         }
 
-        let full = dir.join(&rel);
+        let mut full = dir.join(&rel);
 
-        // Check existence.
+        // Check existence; on miss, lazily try the prefix-stripped form (NEW-2).
+        //
+        // Precedence (from iter-140 BUG-2, preserved here):
+        //   (A) Vault-relative literal exists → use it.
+        //   (B) Otherwise, if `entry` starts with the configured dir prefix and the
+        //       stripped form exists, use the stripped form.
+        //   (C) Neither exists → counted as missing.
+        //
+        // This handles the ambiguity case: configured_dir = "notes",
+        // entry = "notes/notes/foo.md". If the literal exists (A), we use it
+        // (single stat). Only on miss do we pay a second stat for (B).
+        let mut rel = rel;
+        if !full.is_file()
+            && let Some(prefix) = &dir_prefix
+            && Path::new(entry).is_relative()
+            && let Some(stripped) = entry.strip_prefix(prefix.as_str())
+        {
+            let stripped_full = dir.join(stripped);
+            if stripped_full.is_file() {
+                stripped.clone_into(&mut rel);
+                full = stripped_full;
+            }
+        }
+
         if !full.is_file() {
             counters.files_missing += 1;
+            continue;
+        }
+
+        // Deduplicate: skip if this resolved path was already seen (NEW-6).
+        if !seen.insert(rel.clone()) {
             continue;
         }
 
@@ -257,7 +324,7 @@ mod tests {
         let path = tmp.path().join("note.md");
         std::fs::write(&path, "").unwrap();
 
-        let r = resolve(tmp.path(), &["note.md".to_owned()]).unwrap();
+        let r = resolve(tmp.path(), &["note.md".to_owned()], ".").unwrap();
         assert_eq!(r.files.len(), 1);
         assert_eq!(r.files[0].1, "note.md");
         assert_eq!(r.counters.files_missing, 0);
@@ -268,7 +335,7 @@ mod tests {
     #[test]
     fn resolve_missing_file_counts() {
         let tmp = tempfile::tempdir().unwrap();
-        let r = resolve(tmp.path(), &["nonexistent.md".to_owned()]).unwrap();
+        let r = resolve(tmp.path(), &["nonexistent.md".to_owned()], ".").unwrap();
         assert!(r.files.is_empty());
         assert_eq!(r.counters.files_missing, 1);
     }
@@ -279,7 +346,7 @@ mod tests {
         let path = tmp.path().join("readme.txt");
         std::fs::write(path, "").unwrap();
 
-        let r = resolve(tmp.path(), &["readme.txt".to_owned()]).unwrap();
+        let r = resolve(tmp.path(), &["readme.txt".to_owned()], ".").unwrap();
         assert!(r.files.is_empty());
         assert_eq!(r.counters.files_skipped_non_md, 1);
     }
@@ -287,7 +354,7 @@ mod tests {
     #[test]
     fn resolve_parent_traversal_counts_as_outside_vault() {
         let tmp = tempfile::tempdir().unwrap();
-        let r = resolve(tmp.path(), &["../outside.md".to_owned()]).unwrap();
+        let r = resolve(tmp.path(), &["../outside.md".to_owned()], ".").unwrap();
         assert!(r.files.is_empty());
         assert_eq!(r.counters.files_skipped_outside_vault, 1);
     }
@@ -299,7 +366,7 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let abs = path.to_str().unwrap().to_owned();
 
-        let r = resolve(tmp.path(), &[abs]).unwrap();
+        let r = resolve(tmp.path(), &[abs], ".").unwrap();
         assert_eq!(r.files.len(), 1);
         assert_eq!(r.files[0].1, "note.md");
     }
@@ -310,7 +377,7 @@ mod tests {
         // /tmp itself is outside the tmp subdir vault.
         let outside = std::env::temp_dir().to_str().unwrap().to_owned() + "/some_file.md";
         // Whether it exists or not — it's outside the vault.
-        let r = resolve(tmp.path(), &[outside]).unwrap();
+        let r = resolve(tmp.path(), &[outside], ".").unwrap();
         // Either outside-vault OR missing; absolute outside-vault is always skipped first.
         assert!(r.counters.files_skipped_outside_vault > 0 || r.counters.files_missing > 0);
         assert!(r.files.is_empty());
@@ -327,10 +394,159 @@ mod tests {
             "config.toml".to_owned(),   // non-md
             "../outside.md".to_owned(), // outside vault
         ];
-        let r = resolve(tmp.path(), &entries).unwrap();
+        let r = resolve(tmp.path(), &entries, ".").unwrap();
         assert_eq!(r.files.len(), 1);
         assert_eq!(r.counters.files_missing, 1);
         assert_eq!(r.counters.files_skipped_non_md, 1);
         assert_eq!(r.counters.files_skipped_outside_vault, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // NEW-4 — whitespace trimming in load()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn load_trims_leading_spaces() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "  note.md").unwrap();
+        let result = load(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(result, vec!["note.md"]);
+    }
+
+    #[test]
+    fn load_trims_trailing_spaces() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "note.md   ").unwrap();
+        let result = load(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(result, vec!["note.md"]);
+    }
+
+    #[test]
+    fn load_trims_tabs() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "\tnote.md\t").unwrap();
+        let result = load(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(result, vec!["note.md"]);
+    }
+
+    #[test]
+    fn load_trims_mixed_whitespace() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"  a.md  \n\t b.md \t\n").unwrap();
+        let result = load(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(result, vec!["a.md", "b.md"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // NEW-2 — multi-segment --dir prefix stripping
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_strips_multi_segment_dir_prefix() {
+        // Simulate: configured_dir = "files/en-us", git outputs "files/en-us/x.md".
+        // The vault dir is an absolute path; configured_dir is the relative string.
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("x.md"), "").unwrap();
+
+        // Entry as git would output it (repo-relative): "files/en-us/x.md".
+        // configured_dir = "files/en-us" so prefix = "files/en-us/".
+        // Vault-relative literal "files/en-us/x.md" does NOT exist in vault.
+        // Stripped form "x.md" DOES exist → should resolve.
+        let r = resolve(
+            vault.path(),
+            &["files/en-us/x.md".to_owned()],
+            "files/en-us",
+        )
+        .unwrap();
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].1, "x.md");
+        assert_eq!(r.counters.files_missing, 0);
+    }
+
+    #[test]
+    fn resolve_strips_single_segment_dir_prefix_unchanged() {
+        // Regression: single-segment vault (kb) still works after NEW-2.
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("note.md"), "").unwrap();
+
+        // Git outputs "kb/note.md"; configured_dir = "kb"; stripped = "note.md".
+        let r = resolve(vault.path(), &["kb/note.md".to_owned()], "kb").unwrap();
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].1, "note.md");
+    }
+
+    #[test]
+    fn resolve_vault_relative_literal_takes_precedence_over_strip() {
+        // Ambiguity: configured_dir = "notes", entry = "notes/notes/foo.md".
+        // The vault contains "notes/notes/foo.md" (vault-relative literal exists).
+        // Even though the prefix "notes/" matches, (A) vault-relative literal wins.
+        let vault = tempfile::tempdir().unwrap();
+        // Create vault/notes/notes/foo.md (two nested levels).
+        let nested = vault.path().join("notes").join("notes");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("foo.md"), "").unwrap();
+
+        let r = resolve(vault.path(), &["notes/notes/foo.md".to_owned()], "notes").unwrap();
+        // Vault-relative literal "notes/notes/foo.md" exists → kept as-is.
+        assert_eq!(r.files.len(), 1);
+        assert_eq!(r.files[0].1, "notes/notes/foo.md");
+    }
+
+    #[test]
+    fn resolve_no_prefix_strip_when_configured_dir_is_dot() {
+        // When configured_dir = ".", no stripping occurs.
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("note.md"), "").unwrap();
+
+        // Entry "kb/note.md" with configured_dir "." — no stripping, counts as missing.
+        let r = resolve(vault.path(), &["kb/note.md".to_owned()], ".").unwrap();
+        assert!(r.files.is_empty());
+        assert_eq!(r.counters.files_missing, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // NEW-6 — deduplicate resolved paths, first-seen order preserved
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_deduplicates_same_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "").unwrap();
+
+        let entries = vec![
+            "a.md".to_owned(),
+            "b.md".to_owned(),
+            "a.md".to_owned(), // duplicate
+            "a.md".to_owned(), // duplicate again
+        ];
+        let r = resolve(tmp.path(), &entries, ".").unwrap();
+        // Only 2 unique files, a.md first then b.md.
+        assert_eq!(r.files.len(), 2);
+        assert_eq!(r.files[0].1, "a.md");
+        assert_eq!(r.files[1].1, "b.md");
+        // Counters do not inflate for deduped entries.
+        assert_eq!(r.counters.files_missing, 0);
+    }
+
+    #[test]
+    fn resolve_dedup_preserves_first_seen_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["c.md", "a.md", "b.md"] {
+            std::fs::write(tmp.path().join(name), "").unwrap();
+        }
+
+        let entries = vec![
+            "c.md".to_owned(),
+            "a.md".to_owned(),
+            "b.md".to_owned(),
+            "c.md".to_owned(), // dup
+            "a.md".to_owned(), // dup
+        ];
+        let r = resolve(tmp.path(), &entries, ".").unwrap();
+        assert_eq!(r.files.len(), 3);
+        assert_eq!(r.files[0].1, "c.md");
+        assert_eq!(r.files[1].1, "a.md");
+        assert_eq!(r.files[2].1, "b.md");
     }
 }

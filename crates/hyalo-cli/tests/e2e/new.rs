@@ -212,7 +212,7 @@ fn new_rejects_existing_file() {
 }
 
 // ---------------------------------------------------------------------------
-// new refuses if parent directory does not exist
+// new creates parent directories automatically (iter-140 BUG-4)
 // ---------------------------------------------------------------------------
 
 #[test]

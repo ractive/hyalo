@@ -81,8 +81,11 @@ fn effective_index_path_for(
             | TaskAction::Toggle { index_flags, .. }
             | TaskAction::Set { index_flags, .. } => Some(index_flags),
         },
-        Commands::CreateIndex { .. }
-        | Commands::DropIndex { .. }
+        // CreateIndex never *reads* an index — the global --index-file is an
+        // output-path synonym there (merged into --output in run_inner). Return
+        // early so we don't attempt to load a non-existent target as an input.
+        Commands::CreateIndex { .. } => return None,
+        Commands::DropIndex { .. }
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }
@@ -204,18 +207,31 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
 fn resolve_files_from_for_command(
     cmd: &mut Commands,
     dir: &Path,
+    configured_dir: &str,
 ) -> Result<Option<FilesFromCounters>> {
     // Helper: load + resolve a files_from source, returning (rel_paths, counters)
     let resolve_source = |source: &str| -> Result<(Vec<String>, FilesFromCounters)> {
         let entries = files_from_load(source)?;
         let total_inputs = entries.len();
-        let resolved = files_from_resolve(dir, &entries)?;
+        let resolved = files_from_resolve(dir, &entries, configured_dir)?;
         let files = resolved.files;
         let rel_paths: Vec<String> = files.into_iter().map(|(_full, rel)| rel).collect();
         // Emit an actionable hint to stderr when every entry was missing.
-        if let Some(hint) = resolved
-            .counters
-            .all_missing_hint(rel_paths.len(), total_inputs)
+        // Use the configured_dir string (relative, e.g. "files/en-us") in the hint
+        // so the example paths are meaningful to the user.
+        let vault_dir_display = {
+            let normalized = configured_dir.replace('\\', "/");
+            let trimmed = normalized.trim_end_matches('/');
+            if trimmed.is_empty() {
+                ".".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        };
+        if let Some(hint) =
+            resolved
+                .counters
+                .all_missing_hint(rel_paths.len(), total_inputs, &vault_dir_display)
         {
             crate::warn::note(hint);
         }
@@ -1243,10 +1259,57 @@ fn run_inner() -> Result<(), AppError> {
         programmatic_output: jq_filter.is_some() || cli.count,
         lint_strict: lint_strict_from_config,
     };
+    // For `create-index`, merge the global `--index-file` flag into the
+    // subcommand's `-o / --output` field.  Both are synonyms on this subcommand.
+    // If both are provided and differ, return a clear user error.
+    if let Commands::CreateIndex {
+        ref mut output,
+        allow_outside_vault: _,
+    } = cli.command
+        && let Some(global_path) = cli.index_file.as_ref()
+    {
+        match output.as_ref() {
+            // `--output` already set to the same value — no-op.
+            Some(local) if local == global_path => {}
+            // Both flags given with different values — conflict.
+            Some(local) => {
+                let out = crate::output::format_error(
+                    effective_format,
+                    "conflicting output paths for create-index",
+                    None,
+                    Some("pass either -o/--output or --index-file, not both with different paths"),
+                    Some(&format!(
+                        "--output = {}, --index-file = {}",
+                        local.display(),
+                        global_path.display()
+                    )),
+                );
+                let pipeline = OutputPipeline {
+                    user_format: format,
+                    jq_filter,
+                    hint_ctx: hint_ctx.as_ref(),
+                    count: cli.count,
+                    files_from_counters: None,
+                };
+                let code = pipeline.finalize(Ok(CommandOutcome::UserError(out)));
+                return if code == 0 {
+                    Ok(())
+                } else {
+                    Err(AppError::Exit(code))
+                };
+            }
+            // Only `--index-file` provided — promote to `--output`.
+            None => {
+                *output = Some(global_path.clone());
+            }
+        }
+    }
+
     // Resolve --files-from before dispatch. This converts the files_from source
     // into the command's `file` list and returns skip counters for the envelope.
+    let configured_dir_str = config.dir.to_string_lossy();
     let (files_from_counters, files_from_empty) =
-        match resolve_files_from_for_command(&mut cli.command, &dir) {
+        match resolve_files_from_for_command(&mut cli.command, &dir, &configured_dir_str) {
             Ok(Some(c)) => {
                 let empty = files_from_command_file_list_is_empty(&cli.command);
                 (Some(c), empty)
