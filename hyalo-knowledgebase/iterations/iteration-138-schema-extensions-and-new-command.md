@@ -45,60 +45,60 @@ Companion to [[research/ff-rdp-discipline-consumer-notes]].
 
 ## Steps
 
-### `item_pattern` — per-item regex on string-list properties
+### `item_pattern` — per-item regex on string-list properties [7/7]
 
-- [ ] Extend `[schema.types.X.properties.Y]` to accept `item_pattern`
+- [x] Extend `[schema.types.X.properties.Y]` to accept `item_pattern`
       when `type = "string-list"`.
-- [ ] Schema-load error if `pattern` and `item_pattern` are both set on
+- [x] Schema-load error if `pattern` and `item_pattern` are both set on
       the same property, or if `item_pattern` appears on a non-list
       property.
-- [ ] Compile regex at schema load (cache per pattern, mirror the
+- [x] Compile regex at schema load (cache per pattern, mirror the
       existing scalar `pattern` machinery).
-- [ ] Validation at lint time: iterate each list item, regex-match
+- [x] Validation at lint time: iterate each list item, regex-match
       against `item_pattern`. Empty list = vacuous pass.
-- [ ] Non-string items in the list → hard error
+- [x] Non-string items in the list → hard error
       ("`item N`: expected string, found <kind>").
-- [ ] Error report shape: file, property name, 0-based item index, the
+- [x] Error report shape: file, property name, 0-based item index, the
       value, the pattern. Point at the property's frontmatter line range
       (parser already exposes this).
-- [ ] `hyalo find --property X~=regex` is already supported on lists
+- [x] `hyalo find --property X~=regex` is already supported on lists
       (verified in `backlog/done/property-regex-yaml-lists.md`) — no CLI
       changes needed.
 
-### `required_sections` — declared body outline
+### `required_sections` — declared body outline [7/7]
 
-- [ ] Extend `[schema.types.X]` to accept `required_sections`: an
+- [x] Extend `[schema.types.X]` to accept `required_sections`: an
       ordered list of strings, each `"<hashes> <text>"`, e.g.
       `["# Title", "## Themes", "### Subtasks"]`.
-- [ ] Validation: walk the document body's normalized ATX heading
+- [x] Validation: walk the document body's normalized ATX heading
       sequence (setext is already normalized in `heading.rs`), match
       each `required_sections` entry against the next-or-later heading
       with the same level and trimmed text. Order-significant: an entry
       cannot match a heading earlier than the previous entry matched.
-- [ ] Extras allowed — headings not in `required_sections` are silently
+- [x] Extras allowed — headings not in `required_sections` are silently
       tolerated.
-- [ ] Trim trailing whitespace after the hashes when comparing
+- [x] Trim trailing whitespace after the hashes when comparing
       (`"##  Tasks"` matches `"## Tasks"`).
-- [ ] Exact-text match. No case-insensitivity, no regex, no emoji
+- [x] Exact-text match. No case-insensitivity, no regex, no emoji
       stripping.
-- [ ] No level-hierarchy validation (no "`###` must be under `##`") —
+- [x] No level-hierarchy validation (no "`###` must be under `##`") —
       defer to markdownlint MD001.
-- [ ] Error report per missing section: file, expected level + text,
+- [x] Error report per missing section: file, expected level + text,
       where in the outline it should have appeared.
 
-### `hyalo new --type=<name> --file=<path>`
+### `hyalo new --type=<name> --file=<path>` [9/9]
 
-- [ ] New subcommand under `cli::args::Command::New`.
-- [ ] Mandatory args:
+- [x] New subcommand under `cli::args::Command::New`.
+- [x] Mandatory args:
       `--type <name>` (must match a `[schema.types.X]`),
       `--file <vault-relative-path>`.
-- [ ] **No `--force`.** Refuse with a clear error if the target file
+- [x] **No `--force`.** Refuse with a clear error if the target file
       exists ("file already exists at <path>; remove it first if you
       mean to re-create").
-- [ ] **No `mkdir -p`.** Refuse with a clear error if the parent dir
+- [x] **No `mkdir -p`.** Refuse with a clear error if the parent dir
       doesn't exist ("parent directory <path> does not exist; create it
       first").
-- [ ] Synthesise the file from schema:
+- [x] Synthesise the file from schema:
   - Frontmatter: `type: <name>` (always); each `required` property
     with a type-appropriate placeholder:
     - string → `"TBD"`
@@ -110,41 +110,46 @@ Companion to [[research/ff-rdp-discipline-consumer-notes]].
   - Body: if `required_sections` is set on the type, emit each heading
     at its declared level with a `TBD` paragraph and a blank-line
     separator. If unset, emit just frontmatter.
-- [ ] Unknown `--type`: error with the list of available types from
+- [x] Unknown `--type`: error with the list of available types from
       `[schema.types.*]`.
-- [ ] Missing `--type` or `--file` with `hyalo new`: error with usage
+- [x] Missing `--type` or `--file` with `hyalo new`: error with usage
       hint.
-- [ ] Output (JSON envelope): `{type, file, created: true}`. Text mode:
+- [x] Output (JSON envelope): `{type, file, created: true}`. Text mode:
       one-line `created kb/iterations/iter-XX-slug.md`.
-- [ ] Hint after success: "Run `hyalo lint --file <path>` to see
+- [x] Hint after success: "Run `hyalo lint --file <path>` to see
       placeholder violations".
 
-### Docs + UX surfaces
+### Docs + UX surfaces [8/8]
 
-- [ ] `hyalo new --help` text with examples (the help must show the
+- [x] `hyalo new --help` text with examples (the help must show the
       exact flag shape the agent will copy).
-- [ ] `hyalo lint --help`: mention `item_pattern` and `required_sections`
+- [x] `hyalo lint --help`: mention `item_pattern` and `required_sections`
       as the new schema features it enforces.
-- [ ] `hyalo types show <name> --help`: ensure the output includes any
+- [x] `hyalo types show <name> --help`: ensure the output includes any
       `item_pattern` / `required_sections` declared on the type.
-- [ ] `README.md`: add `hyalo new` to the command summary table; add a
+- [x] `README.md`: add `hyalo new` to the command summary table; add a
       one-paragraph example showing the agent loop
       (`new` → edit → `lint`).
-- [ ] `crates/hyalo-cli/templates/rule-knowledgebase.md`: add the
+- [x] `crates/hyalo-cli/templates/rule-knowledgebase.md`: add the
       `hyalo new` line under the existing skill conventions so agents
       reading the rule pick it up automatically.
-- [ ] `.claude/CLAUDE.md` and the root `CLAUDE.md` references to the
+- [x] `.claude/CLAUDE.md` and the root `CLAUDE.md` references to the
       rule template (none direct — it's symlinked, so the template
       update covers both).
-- [ ] CHANGELOG `Unreleased` entry under Added (item_pattern,
+- [x] CHANGELOG `Unreleased` entry under Added (item_pattern,
       required_sections, `hyalo new`).
-- [ ] Decision-log: add DEC-043 for the schema-as-source-of-truth +
+- [x] Decision-log: add DEC-043 for the schema-as-source-of-truth +
       no-templating-engine call. Reference
       [[research/ff-rdp-discipline-consumer-notes]].
 
-### Hints
+### Hints [1/5]
 
-- [ ] `HintSource::New` variant. After a successful `hyalo new`:
+> Only the base `HintSource::New` (suggest `hyalo lint --file <path>` after success)
+> shipped. The four follow-up hint integrations below were deferred from this PR —
+> the core schema features and `hyalo new` agent loop work without them; they are
+> follow-up polish.
+
+- [x] `HintSource::New` variant. After a successful `hyalo new`:
       suggest `hyalo lint --file <path>`. After a failed
       `--file <existing-path>`: suggest `rm <path>` (only if the agent
       is in destructive-allowed mode? probably just plain text). After
@@ -159,38 +164,42 @@ Companion to [[research/ff-rdp-discipline-consumer-notes]].
 - [ ] Lint hint for `item_pattern` violation: include the pattern in
       the hint description ("expected pattern: `<pattern>`").
 
-## Tasks
+## Tasks [11/12]
 
-- [ ] Implement `item_pattern` schema field + validation
-- [ ] Implement `required_sections` schema field + validation
-- [ ] Implement `hyalo new` subcommand
+> One unchecked: `Wire HintSource::New + per-rule lint hints` is only partially
+> done (base success hint shipped; per-rule lint hints for missing
+> `required_sections` and `item_pattern` violations deferred — see Hints section).
+
+- [x] Implement `item_pattern` schema field + validation
+- [x] Implement `required_sections` schema field + validation
+- [x] Implement `hyalo new` subcommand
 - [ ] Wire `HintSource::New` + per-rule lint hints
-- [ ] Update all help texts (CLI args, subcommand descriptions, examples)
-- [ ] Update README.md command table and add `hyalo new` example
-- [ ] Update `templates/rule-knowledgebase.md`
-- [ ] Add CHANGELOG `Unreleased` entry
-- [ ] Add decision-log DEC-043
-- [ ] Unit tests: each schema feature (positive + negative cases)
-- [ ] E2E tests: `hyalo new` happy path, file-exists, parent-dir-missing,
+- [x] Update all help texts (CLI args, subcommand descriptions, examples)
+- [x] Update README.md command table and add `hyalo new` example
+- [x] Update `templates/rule-knowledgebase.md`
+- [x] Add CHANGELOG `Unreleased` entry
+- [x] Add decision-log DEC-043
+- [x] Unit tests: each schema feature (positive + negative cases)
+- [x] E2E tests: `hyalo new` happy path, file-exists, parent-dir-missing,
       unknown-type, missing-args, validate that `hyalo lint` immediately
       surfaces `TBD` violations on the produced file
-- [ ] Cross-platform CI verification (macOS + Ubuntu + Windows) — must
+- [x] Cross-platform CI verification (macOS + Ubuntu + Windows) — must
       stay green after iter-137
 
-## Acceptance criteria
+## Acceptance criteria [7/7]
 
-- [ ] `hyalo lint` flags `item_pattern` violations per item with index
+- [x] `hyalo lint` flags `item_pattern` violations per item with index
       and pattern in the message
-- [ ] `hyalo lint` flags missing `required_sections` with level and text
-- [ ] `hyalo new --type=iteration --file=iterations/iter-99-foo.md`
+- [x] `hyalo lint` flags missing `required_sections` with level and text
+- [x] `hyalo new --type=iteration --file=iterations/iter-99-foo.md`
       creates a skeleton; `hyalo lint --file iterations/iter-99-foo.md`
       reports the `TBD` placeholder violations
-- [ ] `hyalo new` refuses (with clear error) when the file exists OR
+- [x] `hyalo new` refuses (with clear error) when the file exists OR
       when the parent dir doesn't exist
-- [ ] README, help texts, rule template, CHANGELOG, decision-log all
+- [x] README, help texts, rule template, CHANGELOG, decision-log all
       updated in the same PR
-- [ ] All three CI platforms green
-- [ ] `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
+- [x] All three CI platforms green
+- [x] `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
       green
 
 ## Design notes
