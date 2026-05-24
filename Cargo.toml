@@ -42,6 +42,7 @@ tempfile = "3"
 toml = "1"
 toml_edit = "0.25"
 rust-stemmers = "1.2.0"
+walkdir = "2"
 
 [workspace.lints.clippy]
 # Enable the full pedantic group, then allow lints we intentionally skip.

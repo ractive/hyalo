@@ -1,10 +1,8 @@
 ---
-title: >-
-  Iteration 142 — Quality gates: AC-fidelity, feature-fanout matrix,
-  help-code drift
+title: "Iteration 142 — Quality gates: AC-fidelity, feature-fanout matrix, help-code drift"
 type: iteration
 date: 2026-05-24
-status: planned
+status: completed
 branch: iter-142/quality-gates
 tags:
   - iteration
@@ -61,15 +59,15 @@ exist in the current repo**; the SKILL.md is aspirational. iter-142
 also stands up the xtask infrastructure so future quality-gate work
 can land in the same place.
 
-- [ ] Add `crates/xtask/` workspace member with `Cargo.toml`,
+- [x] Add `crates/xtask/` workspace member with `Cargo.toml`,
       `src/main.rs`, and a `cargo run -p xtask -- <subcommand>` entry
       point.
-- [ ] Subcommand stubs (no-op exit-0) for the historic SKILL.md names:
+- [x] Subcommand stubs (no-op exit-0) for the historic SKILL.md names:
       `check-dead-primitives`, `check-todo-annotations`. Implementing
       these is **out of scope** for iter-142; the stubs let the
       ralph-loop skill stop warning about missing checks. Add a
       `// allow-todo: iter-142b` comment in each stub.
-- [ ] CI workflow file `.github/workflows/quality-gates.yml` that runs
+- [x] CI workflow file `.github/workflows/quality-gates.yml` that runs
       the three new checks below on every PR. Reuses the existing
       Rust toolchain matrix.
 
@@ -93,21 +91,21 @@ For each iteration plan file (`hyalo-knowledgebase/iterations/**/*.md`):
      is the contract).
 3. Exit 1 if any ticked AC has no evidence and no deferral.
 
-- [ ] Parser for `## Acceptance criteria` (reuse the existing markdown
+- [x] Parser for `## Acceptance criteria` (reuse the existing markdown
       machinery in `hyalo-core`; this is the same kind of section walk
       that iter-138's `validate_required_sections` does).
-- [ ] Evidence-search via `git diff --name-only origin/main..HEAD` +
+- [x] Evidence-search via `git diff --name-only origin/main..HEAD` +
       file content scan. Avoid loading whole files when possible —
       grep-style line-by-line.
-- [ ] Deferral grammar: a child bullet `[deferred — new plan: iter-NNN]`
+- [x] Deferral grammar: a child bullet `[deferred — new plan: iter-NNN]`
       where `iter-NNN` must match an existing plan file (or `iter-???`
       for a placeholder slot to be created).
-- [ ] Friendly error: which AC, which plan, what was searched for,
+- [x] Friendly error: which AC, which plan, what was searched for,
       and the deferral grammar reminder.
-- [ ] E2E test: synthetic plan with ticked AC and matching test
+- [x] E2E test: synthetic plan with ticked AC and matching test
       keyword → exit 0. Same without the test → exit 1. With a
       deferral annotation → exit 0.
-- [ ] **Self-check**: run on iter-138/139/140/141 retrospectively;
+- [x] **Self-check**: run on iter-138/139/140/141 retrospectively;
       document which historic ACs would have tripped. (Don't fail CI
       for historic plans; gate fires on iter-142+.)
 
@@ -151,17 +149,17 @@ single `--files-from -` invocation per cell with a fixture vault and
 asserts the JSON envelope has the expected counter keys under
 `.results` (no top-level escape, no array shape).
 
-- [ ] `crates/xtask/feature-matrix.toml` with the cells listed above
+- [x] `crates/xtask/feature-matrix.toml` with the cells listed above
       + any others the team identifies during review.
-- [ ] `check-feature-fanout` xtask: parse the matrix, parse `--help`,
+- [x] `check-feature-fanout` xtask: parse the matrix, parse `--help`,
       diff and report.
-- [ ] `feature_matrix.rs` e2e test in `hyalo-cli/tests/e2e/` that
+- [x] `feature_matrix.rs` e2e test in `hyalo-cli/tests/e2e/` that
       walks the runtime side of the matrix.
-- [ ] Fixture vault: a tiny `tests/fixtures/feature-matrix-vault/`
+- [x] Fixture vault: a tiny `tests/fixtures/feature-matrix-vault/`
       with one note file per type so each cell has something real to
       operate on. **Reuse if a similar fixture already exists**;
       don't grow the test corpus needlessly.
-- [ ] When CI fails on a missing cell, the error must say exactly
+- [x] When CI fails on a missing cell, the error must say exactly
       which flag, which command, and what the matrix file says — so
       the fix is obvious from the failure message alone.
 
@@ -177,11 +175,11 @@ in its `long_about` containing at least two example invocations
 (lines starting with `  hyalo ` or `  $ hyalo `, or fenced shell
 blocks containing the same).
 
-- [ ] Walk `clap::Command::get_subcommands()` recursively.
-- [ ] Parse `long_about` for an EXAMPLES section.
-- [ ] Count examples; require ≥2 per command. Fail with the offending
+- [x] Walk `clap::Command::get_subcommands()` recursively.
+- [x] Parse `long_about` for an EXAMPLES section.
+- [x] Count examples; require ≥2 per command. Fail with the offending
       command name(s).
-- [ ] Allowlist for genuinely no-op commands (`help`, `completion`):
+- [x] Allowlist for genuinely no-op commands (`help`, `completion`):
       explicit list, not a regex.
 
 **3b. Stale-wording grep.** Maintain a small file
@@ -201,62 +199,62 @@ Each entry has an explicit reason. When a real change reintroduces
 the wording, the fix is either to update the code, update the help,
 or remove the pattern from the file with a justification.
 
-- [ ] Implement the grep over every clap `long_about` and `help`
+- [x] Implement the grep over every clap `long_about` and `help`
       string.
-- [ ] Fail with line-and-command pointing to the offending phrase and
+- [x] Fail with line-and-command pointing to the offending phrase and
       its recorded reason.
-- [ ] Seed the file with the three known iter-140/141 phrases.
+- [x] Seed the file with the three known iter-140/141 phrases.
 
 ## Tasks
 
-- [ ] Pre-work: stand up `crates/xtask/` + workspace + Cargo.toml
-- [ ] Pre-work: stub `check-dead-primitives`, `check-todo-annotations`
-- [ ] Pre-work: `.github/workflows/quality-gates.yml`
-- [ ] Gate 1: AC-section parser
-- [ ] Gate 1: evidence-search via `git diff --name-only` + content scan
-- [ ] Gate 1: deferral grammar + plan-file cross-ref
-- [ ] Gate 1: friendly errors
-- [ ] Gate 1: e2e tests (ticked + evidence; ticked + no evidence;
+- [x] Pre-work: stand up `crates/xtask/` + workspace + Cargo.toml
+- [x] Pre-work: stub `check-dead-primitives`, `check-todo-annotations`
+- [x] Pre-work: `.github/workflows/quality-gates.yml`
+- [x] Gate 1: AC-section parser
+- [x] Gate 1: evidence-search via `git diff --name-only` + content scan
+- [x] Gate 1: deferral grammar + plan-file cross-ref
+- [x] Gate 1: friendly errors
+- [x] Gate 1: e2e tests (ticked + evidence; ticked + no evidence;
   ticked + deferral)
-- [ ] Gate 1: retrospective self-check on iter-138..141 documented in
+- [x] Gate 1: retrospective self-check on iter-138..141 documented in
   the PR description
-- [ ] Gate 2: `feature-matrix.toml` with documented cells
-- [ ] Gate 2: `check-feature-fanout` xtask
-- [ ] Gate 2: `feature_matrix.rs` e2e walker
-- [ ] Gate 2: fixture vault (reuse if available)
-- [ ] Gate 2: failure-message clarity
-- [ ] Gate 3a: `long_about` walk + EXAMPLES counter
-- [ ] Gate 3a: allowlist for no-op commands
-- [ ] Gate 3b: `stale-help-patterns.toml` with iter-140/141 seed
-- [ ] Gate 3b: grep + line-pointing errors
-- [ ] All three gates wired into `.github/workflows/quality-gates.yml`
-- [ ] CHANGELOG `Unreleased` entry under Added
-- [ ] Update ralph-loop SKILL.md notes about the new gates (the file
+- [x] Gate 2: `feature-matrix.toml` with documented cells
+- [x] Gate 2: `check-feature-fanout` xtask
+- [x] Gate 2: `feature_matrix.rs` e2e walker
+- [x] Gate 2: fixture vault (reuse if available)
+- [x] Gate 2: failure-message clarity
+- [x] Gate 3a: `long_about` walk + EXAMPLES counter
+- [x] Gate 3a: allowlist for no-op commands
+- [x] Gate 3b: `stale-help-patterns.toml` with iter-140/141 seed
+- [x] Gate 3b: grep + line-pointing errors
+- [x] All three gates wired into `.github/workflows/quality-gates.yml`
+- [x] CHANGELOG `Unreleased` entry under Added
+- [x] Update ralph-loop SKILL.md notes about the new gates (the file
   is in `~/.claude/skills/ralph-loop/` not the repo, so this is a
   callout in the PR description rather than a file change)
 
 ## Acceptance criteria
 
-- [ ] `cargo run -p xtask -- check-ac-fidelity --plan
+- [x] `cargo run -p xtask -- check-ac-fidelity --plan
       hyalo-knowledgebase/iterations/iteration-142-quality-gates.md`
       runs cleanly against this iteration's own plan (recursive
       self-check)
-- [ ] A synthetic plan with a ticked AC that has no test evidence and
+- [x] A synthetic plan with a ticked AC that has no test evidence and
       no deferral causes `check-ac-fidelity` to exit 1 with a clear
       message
-- [ ] `cargo run -p xtask -- check-feature-fanout` is green on the
+- [x] `cargo run -p xtask -- check-feature-fanout` is green on the
       current `main` (since iter-140/141 already brought `--files-from`
       into consistency); removing one of the cells (e.g. deleting the
       `--files-from` arg from `find`) makes it exit 1
-- [ ] `cargo run -p xtask -- check-help-drift` is green on current
+- [x] `cargo run -p xtask -- check-help-drift` is green on current
       `main` after iter-141's EXAMPLES sweep; reintroducing "parent
       must exist" anywhere in `args.rs` makes it exit 1
-- [ ] All three checks run in CI on every PR and block merge on
+- [x] All three checks run in CI on every PR and block merge on
       failure
-- [ ] Each gate's failure message tells you what to fix without
+- [x] Each gate's failure message tells you what to fix without
       reading the xtask source
-- [ ] CHANGELOG `Unreleased` updated under Added
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] CHANGELOG `Unreleased` updated under Added
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace` green on all three CI platforms
 
 ## Design notes

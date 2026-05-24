@@ -1,0 +1,26 @@
+# Feature-fanout matrix for hyalo flags.
+#
+# Each entry under [flags."--X"] declares which subcommands MUST expose --X.
+# check-feature-fanout asserts each cell passes `hyalo <cmd> --help | grep --X`.
+#
+# When adding a new cross-cutting flag, add it here and ensure all listed
+# subcommands implement it before merging.
+
+[flags."--files-from"]
+required_in = ["find", "lint", "mv", "set", "remove", "append"]
+shape = "selector"
+
+[flags."--glob"]
+required_in = ["find", "lint", "mv", "set", "remove", "append"]
+shape = "selector"
+
+[flags."--index-file"]
+required_in = ["find", "lint", "summary", "backlinks", "links", "tags", "properties"]
+shape = "read-source"
+
+# Envelope-shape contracts.
+# Commands listed under files_from_counters MUST surface
+# files_missing / files_skipped_non_md / files_skipped_outside_vault
+# under .results when --files-from is in effect.
+[envelopes]
+files_from_counters = ["find", "lint", "mv", "set", "remove", "append"]
