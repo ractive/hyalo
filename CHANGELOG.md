@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **NEW-1**: `item_pattern` lint validation now reports every offending item in a
+  `string-list` property (with its index) instead of short-circuiting after the first.
+  Same fix for the per-item "expected string, got <kind>" branch.
+- **NEW-2**: `--files-from` now strips the full configured `--dir` prefix (multi-segment
+  paths like `files/en-us/x.md` with `--dir files/en-us`), not just the last component.
+  Forward-slash normalisation handles Windows-flavoured input. Vault-relative literal
+  paths still win over strip-and-retry. The all-missing stderr hint quotes the actual
+  configured `dir`.
+- **NEW-3**: `hyalo new --help` no longer claims it errors when the parent directory is
+  missing (iter-140 BUG-4 made it `create_dir_all`). Help text scrubbed.
+- **NEW-4**: `--files-from` trims leading/trailing whitespace per line before resolving,
+  so `printf '  edge.md\n'` no longer reports the path as missing.
+- **NEW-5**: `create-index` accepts `--index-file PATH` as a synonym for `-o/--output`.
+  Conflicting values (`-o A --index-file B`) produce a clear error. The stale-index
+  warning no longer fires when output was redirected away from the default location.
+- **NEW-6**: `--files-from` input is deduplicated by resolved vault-relative path,
+  preserving first-seen order (uses `IndexSet`). Pipelines like `git log --name-only`
+  no longer cause `lint` to re-lint or `find` to return duplicates.
 - **BUG-1**: `required_sections` schema enforcement was dead code in the grouped lint
   path (`lint_one_file_extended`). It now calls `validate_required_sections` and reports
   missing or out-of-order sections as `SCHEMA` errors.
@@ -24,6 +42,11 @@
 
 ### Added
 
+- **`EXAMPLES:` blocks on every subcommand `--help`** (`find`, `set`, `task`, `summary`,
+  `read`, `links`, `create-index`, `types`, `properties`, `tags`, `backlinks`, `remove`,
+  `append`, `views`, `init`, `lint-rules`) — LLM-ergonomics fix so agents don't need to
+  escalate to top-level `hyalo help` to find idiomatic patterns. An integration test
+  guards against future regressions.
 - **`--files-from <PATH>`** flag on `find`, `lint`, `mv`, `set`, `remove`, and `append`:
   supply a newline-separated list of file paths (or `-` to read from stdin) and the command
   operates on exactly that set, bypassing the directory walk. Non-`.md` paths, paths outside

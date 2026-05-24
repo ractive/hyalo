@@ -413,6 +413,57 @@ pattern = "^iter-\\d+/"
     assert_eq!(exit, 1, "pattern mismatch should produce error");
 }
 
+#[test]
+fn lint_item_pattern_reports_all_violations() {
+    // A string-list property with item_pattern should report one violation per
+    // failing item — not just the first — so users fix everything in one pass.
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.doc.properties.tags]
+type = "string-list"
+item_pattern = "^[a-z][a-z0-9-]*$"
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: doc\ntags:\n  - Foo\n  - 1bad\n  - Bar\n---\nBody\n",
+    );
+
+    // Use a large --max-per-rule so all three violations are shown (not truncated).
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--max-per-rule", "100", "a.md"])
+        .output()
+        .unwrap();
+
+    let exit = output.status.code().unwrap();
+    assert_eq!(exit, 1, "item_pattern violations should produce exit 1");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // All three bad items must be reported in a single run.
+    assert!(
+        stdout.contains("item 0"),
+        "expected violation for item 0 (Foo), got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("item 1"),
+        "expected violation for item 1 (1bad), got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("item 2"),
+        "expected violation for item 2 (Bar), got:\n{stdout}"
+    );
+    // Verify the count: exactly 3 pattern-mismatch violations from one file.
+    let pattern_count = stdout.matches("does not match pattern").count();
+    assert_eq!(
+        pattern_count, 3,
+        "expected 3 pattern-mismatch violations, got {pattern_count}:\n{stdout}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Summary integration
 // ---------------------------------------------------------------------------

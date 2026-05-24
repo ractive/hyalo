@@ -1831,3 +1831,147 @@ fn subcommand_index_file_takes_precedence_over_global() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ---------------------------------------------------------------------------
+// NEW-5: create-index --index-file as synonym for -o / --output
+// ---------------------------------------------------------------------------
+
+/// `create-index --index-file <path>` writes to `<path>` (Option A synonym).
+#[test]
+fn create_index_index_file_flag_writes_to_custom_path() {
+    let tmp = setup_vault();
+    let custom_path = tmp.path().join("custom.hyalo-index");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--index-file", custom_path.to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "create-index --index-file should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        custom_path.exists(),
+        "index should exist at custom path after create-index --index-file"
+    );
+
+    // No stale-index warning should appear (we redirected output).
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("stale index"),
+        "should not warn about stale index when --index-file redirected output; got: {stderr}"
+    );
+
+    // Default location should NOT exist.
+    let default_path = tmp.path().join(".hyalo-index");
+    assert!(
+        !default_path.exists(),
+        "default .hyalo-index should NOT exist when --index-file is used"
+    );
+}
+
+/// Passing both `-o` and `--index-file` with the same path is a no-op.
+#[test]
+fn create_index_output_and_index_file_same_path_is_ok() {
+    let tmp = setup_vault();
+    let custom_path = tmp.path().join("same.hyalo-index");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--index-file", custom_path.to_str().unwrap()])
+        .args(["create-index", "--output", custom_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "create-index with same -o and --index-file should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(custom_path.exists(), "index should exist at the path");
+}
+
+/// Passing both `-o A` and `--index-file B` with different paths returns an error.
+#[test]
+fn create_index_output_and_index_file_conflict_returns_error() {
+    let tmp = setup_vault();
+    let path_a = tmp.path().join("a.hyalo-index");
+    let path_b = tmp.path().join("b.hyalo-index");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--index-file", path_b.to_str().unwrap()])
+        .args(["create-index", "--output", path_a.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "create-index with conflicting -o and --index-file should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}{stdout}");
+    assert!(
+        combined.contains("conflicting") || combined.contains("different paths"),
+        "error should mention conflict; combined output: {combined}"
+    );
+    // Neither file should have been written.
+    assert!(
+        !path_a.exists() && !path_b.exists(),
+        "neither output path should exist after conflict error"
+    );
+}
+
+/// Existing `-o / --output` behaviour is unchanged by the new synonym.
+#[test]
+fn create_index_output_flag_unchanged_after_new5() {
+    let tmp = setup_vault();
+    let custom_path = tmp.path().join("via-output.hyalo-index");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--output", custom_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "create-index -o should still work; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(custom_path.exists(), "index should exist via -o path");
+}
+
+/// No stale-index warning when -o redirects the write target.
+#[test]
+fn create_index_no_stale_warning_when_output_redirected() {
+    let tmp = setup_vault();
+
+    // First write to the default location (simulates a leftover index from a
+    // prior session whose PID is no longer alive).
+    let _default_index = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+
+    // Now write to a custom path — should not warn about the default-location index.
+    let custom_path = tmp.path().join("redirected.hyalo-index");
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--output", custom_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "redirected create-index should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("stale index"),
+        "should not warn about stale default index when -o redirected; stderr: {stderr}"
+    );
+}

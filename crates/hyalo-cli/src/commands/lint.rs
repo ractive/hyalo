@@ -918,10 +918,13 @@ fn validate_properties(
         // never emit an "undeclared property" warning for it (it has its own
         // "no tags defined" warning above).
         if name == "tags" {
-            if let Some(constraint) = effective_schema.properties.get(name.as_str())
-                && let Some(v) = validate_constraint(name, value, constraint, &mut regex_cache)
-            {
-                violations.push(v);
+            if let Some(constraint) = effective_schema.properties.get(name.as_str()) {
+                violations.extend(validate_constraint(
+                    name,
+                    value,
+                    constraint,
+                    &mut regex_cache,
+                ));
             }
             // Check for comma-joined tags (e.g. "cli,ux" instead of ["cli", "ux"]).
             if let Value::Array(items) = value {
@@ -946,9 +949,12 @@ fn validate_properties(
         let implicitly_accepted = name == "type" || effective_schema.required.contains(name);
 
         if let Some(constraint) = effective_schema.properties.get(name.as_str()) {
-            if let Some(v) = validate_constraint(name, value, constraint, &mut regex_cache) {
-                violations.push(v);
-            }
+            violations.extend(validate_constraint(
+                name,
+                value,
+                constraint,
+                &mut regex_cache,
+            ));
         } else if !effective_schema.properties.is_empty() && !implicitly_accepted {
             // Property not declared in schema — warn only when the schema declares
             // some properties. Schemas that only specify `required` remain
@@ -973,15 +979,15 @@ fn validate_constraint(
     value: &Value,
     constraint: &PropertyConstraint,
     regex_cache: &mut HashMap<String, Result<Regex, String>>,
-) -> Option<Violation> {
+) -> Vec<Violation> {
     match constraint {
         PropertyConstraint::String { pattern } => {
             let Some(s) = value_as_str(value) else {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected string, got {value}"),
-                });
+                }];
             };
             if let Some(pat) = pattern {
                 // Compile (or look up) the regex once per pattern per call.
@@ -991,86 +997,86 @@ fn validate_constraint(
                 match entry {
                     Ok(re) => {
                         if !re.is_match(s) {
-                            return Some(Violation {
+                            return vec![Violation {
                                 severity: Severity::Error,
                                 kind: None,
                                 message: format!(
                                     "property \"{name}\" value {s:?} does not match pattern {pat:?}"
                                 ),
-                            });
+                            }];
                         }
                     }
                     Err(e) => {
-                        return Some(Violation {
+                        return vec![Violation {
                             severity: Severity::Error,
                             kind: None,
                             message: format!("property \"{name}\": invalid pattern {pat:?}: {e}"),
-                        });
+                        }];
                     }
                 }
             }
-            None
+            vec![]
         }
         PropertyConstraint::Date => {
             let Some(s) = value_as_str(value) else {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected date (YYYY-MM-DD), got {value}"),
-                });
+                }];
             };
             if !is_iso8601_date(s) {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected date (YYYY-MM-DD), got \"{s}\""),
-                });
+                }];
             }
-            None
+            vec![]
         }
         PropertyConstraint::Number => {
             if !matches!(value, Value::Number(_)) {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected number, got {value}"),
-                });
+                }];
             }
-            None
+            vec![]
         }
         PropertyConstraint::Boolean => {
             if !matches!(value, Value::Bool(_)) {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected boolean, got {value}"),
-                });
+                }];
             }
-            None
+            vec![]
         }
         PropertyConstraint::List => {
             if !matches!(value, Value::Array(_)) {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected list, got {value}"),
-                });
+                }];
             }
-            None
+            vec![]
         }
         PropertyConstraint::Enum { values } => {
             let Some(s) = value_as_str(value) else {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!(
                         "property \"{name}\" expected one of [{}], got {value}",
                         values.join(", ")
                     ),
-                });
+                }];
             };
             if values.contains(&s.to_owned()) {
-                return None;
+                return vec![];
             }
             // Find nearest suggestion via Levenshtein.
             let suggestion = values
@@ -1078,37 +1084,37 @@ fn validate_constraint(
                 .min_by_key(|v| strsim::levenshtein(s, v.as_str()))
                 .map(|v| format!(" (did you mean \"{v}\"?)"))
                 .unwrap_or_default();
-            Some(Violation {
+            vec![Violation {
                 severity: Severity::Error,
                 kind: None,
                 message: format!(
                     "property \"{name}\" value \"{s}\" not in [{}]{suggestion}",
                     values.join(", ")
                 ),
-            })
+            }]
         }
         PropertyConstraint::StringList { item_pattern } => {
             let Value::Array(items) = value else {
-                return Some(Violation {
+                return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected string-list, got {value}"),
-                });
+                }];
             };
             let Some(pat) = item_pattern else {
-                // No per-item pattern — just ensure every item is a string.
-                for (i, item) in items.iter().enumerate() {
-                    if !matches!(item, Value::String(_)) {
-                        return Some(Violation {
-                            severity: Severity::Error,
-                            kind: None,
-                            message: format!(
-                                "property \"{name}\" item {i}: expected string, got {item}"
-                            ),
-                        });
-                    }
-                }
-                return None;
+                // No per-item pattern — collect a violation for every non-string item.
+                return items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| !matches!(item, Value::String(_)))
+                    .map(|(i, item)| Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" item {i}: expected string, got {item}"
+                        ),
+                    })
+                    .collect();
             };
             // Compile (or look up) the regex once per pattern per call.
             let entry = regex_cache
@@ -1116,35 +1122,41 @@ fn validate_constraint(
                 .or_insert_with(|| Regex::new(pat).map_err(|e| e.to_string()));
             let re = match entry {
                 Err(e) => {
-                    return Some(Violation {
+                    return vec![Violation {
                         severity: Severity::Error,
                         kind: None,
                         message: format!("property \"{name}\": invalid item_pattern {pat:?}: {e}"),
-                    });
+                    }];
                 }
                 Ok(re) => re,
             };
-            for (i, item) in items.iter().enumerate() {
-                let Value::String(s) = item else {
-                    return Some(Violation {
-                        severity: Severity::Error,
-                        kind: None,
-                        message: format!(
-                            "property \"{name}\" item {i}: expected string, got {item}"
-                        ),
-                    });
-                };
-                if !re.is_match(s) {
-                    return Some(Violation {
-                        severity: Severity::Error,
-                        kind: None,
-                        message: format!(
-                            "property \"{name}\" item {i}: value {s:?} does not match pattern {pat:?}"
-                        ),
-                    });
-                }
-            }
-            None
+            // Collect a violation for every item that is not a string or fails the pattern.
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(i, item)| {
+                    let Value::String(s) = item else {
+                        return Some(Violation {
+                            severity: Severity::Error,
+                            kind: None,
+                            message: format!(
+                                "property \"{name}\" item {i}: expected string, got {item}"
+                            ),
+                        });
+                    };
+                    if re.is_match(s) {
+                        None
+                    } else {
+                        Some(Violation {
+                            severity: Severity::Error,
+                            kind: None,
+                            message: format!(
+                                "property \"{name}\" item {i}: value {s:?} does not match pattern {pat:?}"
+                            ),
+                        })
+                    }
+                })
+                .collect()
         }
     }
 }
@@ -1173,7 +1185,10 @@ pub fn validate_constraint_simple(
     constraint: &PropertyConstraint,
 ) -> Option<String> {
     let mut cache = HashMap::new();
-    validate_constraint(name, value, constraint, &mut cache).map(|v| v.message)
+    validate_constraint(name, value, constraint, &mut cache)
+        .into_iter()
+        .next()
+        .map(|v| v.message)
 }
 
 // ---------------------------------------------------------------------------
@@ -2308,7 +2323,16 @@ mod tests {
     }
 
     // Test helper: wraps `validate_constraint` with a throwaway regex cache.
+    // Returns the first violation (or None) for constraints that produce at most one.
     fn vc(name: &str, value: &Value, c: &PropertyConstraint) -> Option<Violation> {
+        let mut cache = HashMap::new();
+        validate_constraint(name, value, c, &mut cache)
+            .into_iter()
+            .next()
+    }
+
+    // Test helper: returns all violations from `validate_constraint`.
+    fn vc_all(name: &str, value: &Value, c: &PropertyConstraint) -> Vec<Violation> {
         let mut cache = HashMap::new();
         validate_constraint(name, value, c, &mut cache)
     }
@@ -2767,6 +2791,69 @@ mod tests {
             "expected type error message, got: {}",
             viol.message
         );
+    }
+
+    #[test]
+    fn item_pattern_reports_all_violations() {
+        // Three items: first valid, second and third fail the pattern.
+        let constraint = PropertyConstraint::StringList {
+            item_pattern: Some(r"^[a-z][a-z0-9-]*$".to_owned()),
+        };
+        let violations = vc_all(
+            "tags",
+            &Value::Array(vec![
+                Value::String("good-tag".into()),
+                Value::String("Bad".into()),  // uppercase start — fails
+                Value::String("1bad".into()), // digit start — fails
+                Value::String("also-good".into()),
+                Value::String("Bar".into()), // uppercase start — fails
+            ]),
+            &constraint,
+        );
+        assert_eq!(
+            violations.len(),
+            3,
+            "expected 3 violations, got: {:?}",
+            violations.iter().map(|v| &v.message).collect::<Vec<_>>()
+        );
+        assert!(
+            violations[0].message.contains("item 1"),
+            "first violation should reference item 1"
+        );
+        assert!(
+            violations[1].message.contains("item 2"),
+            "second violation should reference item 2"
+        );
+        assert!(
+            violations[2].message.contains("item 4"),
+            "third violation should reference item 4"
+        );
+        for v in &violations {
+            assert_eq!(v.severity, Severity::Error);
+        }
+    }
+
+    #[test]
+    fn item_pattern_multiple_non_string_items_all_reported() {
+        // Without item_pattern, multiple non-string items should all be reported.
+        let constraint = PropertyConstraint::StringList { item_pattern: None };
+        let violations = vc_all(
+            "tags",
+            &Value::Array(vec![
+                Value::String("ok".into()),
+                Value::Number(1.into()),
+                Value::Bool(true),
+            ]),
+            &constraint,
+        );
+        assert_eq!(
+            violations.len(),
+            2,
+            "expected 2 violations for the two non-string items, got: {:?}",
+            violations.iter().map(|v| &v.message).collect::<Vec<_>>()
+        );
+        assert!(violations[0].message.contains("item 1"));
+        assert!(violations[1].message.contains("item 2"));
     }
 
     // ---------------------------------------------------------------------------

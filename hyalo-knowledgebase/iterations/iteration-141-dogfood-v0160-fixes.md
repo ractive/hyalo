@@ -2,7 +2,7 @@
 title: Iteration 141 — Dogfood v0.16.0 fixes (seven findings)
 type: iteration
 date: 2026-05-24
-status: planned
+status: completed
 branch: iter-141/dogfood-v0160-fixes
 tags:
   - iteration
@@ -187,8 +187,8 @@ to top-level `hyalo help` to find idiomatic patterns.
 - [ ] NEW-2: update all-missing stderr hint to quote actual `dir`
 - [ ] NEW-2: e2e tests (multi-segment, single-segment unchanged,
   ambiguity precedence)
-- [ ] NEW-3: scrub stale "parent must exist" wording in args.rs
-- [ ] NEW-3: grep audit for any other occurrences
+- [x] NEW-3: scrub stale "parent must exist" wording in args.rs
+- [x] NEW-3: grep audit for any other occurrences
 - [ ] NEW-4: trim whitespace per `--files-from` line
 - [ ] NEW-4: unit + e2e tests
 - [ ] NEW-5: decide A or B; apply
@@ -198,9 +198,9 @@ to top-level `hyalo help` to find idiomatic patterns.
 - [ ] NEW-6: dedupe `--files-from` input via `IndexSet`
 - [ ] NEW-6: document in help text
 - [ ] NEW-6: unit + e2e tests
-- [ ] NEW-7: add `EXAMPLES:` blocks to all 16 missing subcommands
-- [ ] NEW-7: prioritise quality on `find`, `set`, `task`, `read`
-- [ ] NEW-7: lint/integration test requiring `EXAMPLES:` on every
+- [x] NEW-7: add `EXAMPLES:` blocks to all 16 missing subcommands
+- [x] NEW-7: prioritise quality on `find`, `set`, `task`, `read`
+- [x] NEW-7: lint/integration test requiring `EXAMPLES:` on every
   command
 - [ ] CHANGELOG `Unreleased` entries under Fixed and Added
 - [ ] Cross-platform CI verification (macOS + Ubuntu + Windows)
