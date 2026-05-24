@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Fixed
+
+- **BUG-1**: `required_sections` schema enforcement was dead code in the grouped lint
+  path (`lint_one_file_extended`). It now calls `validate_required_sections` and reports
+  missing or out-of-order sections as `SCHEMA` errors.
+- **BUG-2**: `--files-from` now strips the vault-dir basename prefix from repo-relative
+  paths (e.g. `kb/notes/foo.md` with `--dir kb` resolves to `notes/foo.md`). Emits a
+  hint to stderr when every entry was missing.
+- **BUG-3**: Canonical TOML key for required body sections is now `required_sections`
+  (snake_case). The old `required-sections` (kebab) is accepted as a deprecated alias and
+  emits a warning on load.
+- **BUG-4**: `hyalo new` now creates parent directories automatically (`create_dir_all`)
+  instead of returning an error when they are missing.
+- **BUG-5**: `hyalo new` scaffold no longer emits a double trailing newline; output ends
+  with exactly one `\n`, eliminating MD047 false positives.
+- **BUG-6/7**: `--files-from` counters (`files_missing`, `files_skipped_non_md`,
+  `files_skipped_outside_vault`) are now under `.results` in the JSON envelope. For `lint`
+  (results is an object) they are inserted directly; for `find` (results was a bare array)
+  the array is promoted to `{"files": [...], "files_missing": N, ...}`.
+
 ### Added
 
 - **`--files-from <PATH>`** flag on `find`, `lint`, `mv`, `set`, `remove`, and `append`:

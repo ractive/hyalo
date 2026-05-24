@@ -1978,6 +1978,39 @@ fn lint_one_file_extended(
         }
     }
 
+    // Required-sections pass — only when rule_filter is empty or includes SCHEMA.
+    if should_include_frontmatter {
+        let doc_type: Option<&str> = properties.get("type").and_then(|v| v.as_str());
+        let effective_schema = match doc_type {
+            Some(t) => schema.merged_schema_for_type(t),
+            None => schema.default_schema().clone(),
+        };
+        if !effective_schema.required_sections.is_empty() {
+            let section_violations = validate_required_sections(
+                full_path,
+                rel_path,
+                &effective_schema.required_sections,
+            )?;
+            for v in section_violations {
+                let sev = match v.severity {
+                    Severity::Error => "error",
+                    Severity::Warn => "warn",
+                };
+                violations_by_rule
+                    .entry("SCHEMA".to_owned())
+                    .or_default()
+                    .push(InternalViolation {
+                        line: 1,
+                        column: 1,
+                        message: v.message,
+                        severity: sev.to_owned(),
+                        fix: None,
+                        fixed: false,
+                    });
+            }
+        }
+    }
+
     // Body pass — extract frontmatter fields needed for HYALO rules.
     let frontmatter_status = properties
         .get("status")

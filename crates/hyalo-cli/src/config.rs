@@ -243,6 +243,14 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         }
     };
 
+    // Deprecation: warn when the kebab-case `required-sections` key is used.
+    // The canonical key is `required_sections`; the alias is kept for one release.
+    if contents.contains("required-sections") {
+        crate::warn::warn(
+            "deprecated: 'required-sections' in .hyalo.toml — rename to 'required_sections'",
+        );
+    }
+
     let cfg: ConfigFile = match toml::from_str(&contents) {
         Ok(c) => c,
         Err(e) => {

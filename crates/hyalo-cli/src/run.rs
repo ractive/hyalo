@@ -208,8 +208,17 @@ fn resolve_files_from_for_command(
     // Helper: load + resolve a files_from source, returning (rel_paths, counters)
     let resolve_source = |source: &str| -> Result<(Vec<String>, FilesFromCounters)> {
         let entries = files_from_load(source)?;
+        let total_inputs = entries.len();
         let resolved = files_from_resolve(dir, &entries)?;
-        let rel_paths: Vec<String> = resolved.files.into_iter().map(|(_full, rel)| rel).collect();
+        let files = resolved.files;
+        let rel_paths: Vec<String> = files.into_iter().map(|(_full, rel)| rel).collect();
+        // Emit an actionable hint to stderr when every entry was missing.
+        if let Some(hint) = resolved
+            .counters
+            .all_missing_hint(rel_paths.len(), total_inputs)
+        {
+            crate::warn::warn(hint);
+        }
         Ok((rel_paths, resolved.counters))
     };
 

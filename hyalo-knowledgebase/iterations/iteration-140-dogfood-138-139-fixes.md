@@ -1,10 +1,10 @@
 ---
 title: >-
-  Iteration 140 — Dogfood fixes for iter-138 (schema extensions, `hyalo new`)
-  and iter-139 (`--files-from`)
+  Iteration 140 — Dogfood fixes for iter-138 (schema extensions, `hyalo new`) and
+  iter-139 (`--files-from`)
 type: iteration
 date: 2026-05-24
-status: planned
+status: completed
 branch: iter-140/dogfood-138-139-fixes
 tags:
   - iteration
@@ -39,17 +39,17 @@ the user-facing `hyalo lint` command goes through
 A `note`-typed file missing a declared `## Details` section produces
 zero violations.
 
-- [ ] Call `validate_required_sections` from
+- [x] Call `validate_required_sections` from
       `lint_file_with_fix_grouped` (route violations into the `SCHEMA`
       rule group with `severity = error`, matching the unit-test
       expectations).
-- [ ] Add an e2e test in `crates/hyalo-cli/tests/e2e/lint.rs`: vault
+- [x] Add an e2e test in `crates/hyalo-cli/tests/e2e/lint.rs`: vault
       with `required-sections = ["## Summary", "## Details"]`, file
       missing `## Details` → expect a `SCHEMA` error containing
       `"missing required section"`.
-- [ ] Add an e2e test for the happy path (all sections present, in
+- [x] Add an e2e test for the happy path (all sections present, in
       order → zero violations).
-- [ ] Add an e2e test for order-significant detection (sections present
+- [x] Add an e2e test for order-significant detection (sections present
       but reversed → violation on the out-of-order entry).
 
 #### BUG-2 — Canonical git pipeline broken when vault is a repo subdir
@@ -68,21 +68,21 @@ git diff --name-only HEAD~3 -- 'hyalo-knowledgebase/**/*.md' \
 # → files_missing: 2, total: 0
 ```
 
-- [ ] In `--files-from` path resolution: when an input path starts
+- [x] In `--files-from` path resolution: when an input path starts
       with the configured vault `dir` (e.g. `hyalo-knowledgebase/...`),
       strip that prefix before treating the remainder as
       vault-relative. Same auto-strip behaviour for both relative and
       absolute paths (the absolute case already works via
       `strip_absolute_vault_prefix`; this is the relative analogue).
-- [ ] Emit a hint when **every** path in the input was skipped (e.g.
+- [x] Emit a hint when **every** path in the input was skipped (e.g.
       "all 5 input paths were treated as missing — if these are
       repo-relative paths, the vault dir prefix may need stripping").
       Surface this even when `total > 0` overall is impossible.
-- [ ] Update the canonical example in `README.md` and
+- [x] Update the canonical example in `README.md` and
       `crates/hyalo-cli/src/cli/help.rs` to confirm it works against a
       vault that is a subdir of the repo — add a comment to that
       effect.
-- [ ] E2E test: vault at `kb/`, pipe `kb/notes/foo.md` (repo-relative)
+- [x] E2E test: vault at `kb/`, pipe `kb/notes/foo.md` (repo-relative)
       into `hyalo lint --files-from -` from the repo root → linted
       successfully.
 
@@ -97,14 +97,14 @@ snake_case. The wider project mixes conventions
 (`filename-template` kebab, `item_pattern` snake), but a *single
 iteration* introducing two new keys should not split the convention.
 
-- [ ] Decide: keep both snake (matches plan + `item_pattern`) or both
+- [x] Decide: keep both snake (matches plan + `item_pattern`) or both
       kebab (matches `filename-template`). Recommend snake to match
       the iter-138 plan.
-- [ ] Apply the chosen convention to `RawTypeSchema` and
+- [x] Apply the chosen convention to `RawTypeSchema` and
       `RawPropertyConstraint` for the new keys.
-- [ ] Update the iter-138 plan, README, and any decision-log entry
+- [x] Update the iter-138 plan, README, and any decision-log entry
       that names the key.
-- [ ] Decide whether to support the other form as a deprecation
+- [x] Decide whether to support the other form as a deprecation
       alias for one release (likely yes, since iter-138 is already
       cut). If yes: accept the alias, emit a deprecation warning at
       schema load, and document the cutover.
@@ -116,9 +116,9 @@ iteration* introducing two new keys should not split the convention.
 doesn't exist. Every other CLI scaffolder (`cargo new`, `git init`,
 etc.) creates parent dirs.
 
-- [ ] In `commands/new.rs`: `std::fs::create_dir_all(parent)?` before
+- [x] In `commands/new.rs`: `std::fs::create_dir_all(parent)?` before
       writing the file. Still reject `..` traversal.
-- [ ] E2E test: `hyalo new --type note --file deep/nested/notes/foo.md`
+- [x] E2E test: `hyalo new --type note --file deep/nested/notes/foo.md`
       against a fresh vault → directories created, file written.
 
 #### BUG-5 — `hyalo new` scaffold trips MD047
@@ -128,9 +128,9 @@ MD047 ("File has 2 trailing newlines, expected 1") fires on a
 freshly-scaffolded file. Self-inconsistent — the tool writes output
 that the tool then warns about.
 
-- [ ] In `commands/new.rs`: ensure the rendered body ends with exactly
+- [x] In `commands/new.rs`: ensure the rendered body ends with exactly
       one `\n`.
-- [ ] E2E test: `hyalo new --type X --file Y.md` then
+- [x] E2E test: `hyalo new --type X --file Y.md` then
       `hyalo lint --file Y.md` reports zero MD047 violations.
 
 #### BUG-6 — `--files-from` envelope counters at the wrong nesting level
@@ -152,11 +152,11 @@ $ ... | hyalo lint --files-from - --format json | jq 'keys'
   "hints", "results", "total" ]
 ```
 
-- [ ] Move `files_missing`, `files_skipped_non_md`,
+- [x] Move `files_missing`, `files_skipped_non_md`,
       `files_skipped_outside_vault` from the envelope root into
       `.results.files_missing` etc. (Same shape as `files_checked`.)
-- [ ] Update e2e snapshot tests accordingly.
-- [ ] Update README/help-text envelope-shape examples if any.
+- [x] Update e2e snapshot tests accordingly.
+- [x] Update README/help-text envelope-shape examples if any.
 
 #### BUG-7 — `find --files-from` exposes no envelope counters
 
@@ -165,59 +165,59 @@ $ ... | hyalo lint --files-from - --format json | jq 'keys'
 iter-139 AC said counters should be consistent across every command
 that accepts `--files-from`.
 
-- [ ] Wrap `find` output in an envelope shape that includes the
+- [x] Wrap `find` output in an envelope shape that includes the
       files-from counters, same as `lint` (after BUG-6 lands).
       Preserve the existing `results` array for backwards
       compatibility.
-- [ ] Confirm `mv`, `set`, `remove`, `append`, `task toggle`,
+- [x] Confirm `mv`, `set`, `remove`, `append`, `task toggle`,
       `task set` also emit the counters; add e2e coverage for at
       least one mutating command.
 
 ## Tasks
 
-- [ ] BUG-1: route `validate_required_sections` through the grouped
+- [x] BUG-1: route `validate_required_sections` through the grouped
       path
-- [ ] BUG-1: three e2e tests (missing, happy, out-of-order)
-- [ ] BUG-2: auto-strip vault-dir prefix for repo-relative paths
-- [ ] BUG-2: hint when all inputs were treated as missing
-- [ ] BUG-2: README + help-text example confirmed against subdir
+- [x] BUG-1: three e2e tests (missing, happy, out-of-order)
+- [x] BUG-2: auto-strip vault-dir prefix for repo-relative paths
+- [x] BUG-2: hint when all inputs were treated as missing
+- [x] BUG-2: README + help-text example confirmed against subdir
       vault layout
-- [ ] BUG-2: e2e test for repo-relative input with subdir vault
-- [ ] BUG-3: decide snake-vs-kebab convention + apply
-- [ ] BUG-3: decide on deprecation alias; if yes, wire warning
-- [ ] BUG-3: update iter-138 plan + README + decision-log
-- [ ] BUG-4: `create_dir_all` in `hyalo new`
-- [ ] BUG-4: e2e test for nested target path
-- [ ] BUG-5: trim trailing newline in scaffold output
-- [ ] BUG-5: e2e test: scaffolded file lints clean
-- [ ] BUG-6: relocate envelope counters under `.results`
-- [ ] BUG-6: update e2e snapshots
-- [ ] BUG-7: add envelope counters to `find` output
-- [ ] BUG-7: e2e coverage for at least one mutating command
-- [ ] CHANGELOG `Unreleased` entry under Fixed
-- [ ] Cross-platform CI verification (macOS + Ubuntu + Windows)
+- [x] BUG-2: e2e test for repo-relative input with subdir vault
+- [x] BUG-3: decide snake-vs-kebab convention + apply
+- [x] BUG-3: decide on deprecation alias; if yes, wire warning
+- [x] BUG-3: update iter-138 plan + README + decision-log
+- [x] BUG-4: `create_dir_all` in `hyalo new`
+- [x] BUG-4: e2e test for nested target path
+- [x] BUG-5: trim trailing newline in scaffold output
+- [x] BUG-5: e2e test: scaffolded file lints clean
+- [x] BUG-6: relocate envelope counters under `.results`
+- [x] BUG-6: update e2e snapshots
+- [x] BUG-7: add envelope counters to `find` output
+- [x] BUG-7: e2e coverage for at least one mutating command
+- [x] CHANGELOG `Unreleased` entry under Fixed
+- [x] Cross-platform CI verification (macOS + Ubuntu + Windows)
 
 ## Acceptance criteria
 
-- [ ] A vault with `required-sections` declared, plus a file missing
+- [x] A vault with `required-sections` declared, plus a file missing
       one of those sections, surfaces a `SCHEMA` error from
       `hyalo lint` (BUG-1)
-- [ ] `git diff --name-only origin/main | hyalo lint --files-from -`
+- [x] `git diff --name-only origin/main | hyalo lint --files-from -`
       works against this repo's own subdir vault (BUG-2)
-- [ ] When **every** input path was treated as missing, a hint
+- [x] When **every** input path was treated as missing, a hint
       explaining the likely cause is shown (BUG-2)
-- [ ] `required-sections` and `item_pattern` use a consistent
+- [x] `required-sections` and `item_pattern` use a consistent
       convention; iter-138 plan + README + decision-log all reflect
       it (BUG-3)
-- [ ] `hyalo new --type X --file deep/nested/Y.md` succeeds against a
+- [x] `hyalo new --type X --file deep/nested/Y.md` succeeds against a
       fresh vault (BUG-4)
-- [ ] `hyalo new --type X --file Y.md && hyalo lint --file Y.md` is
+- [x] `hyalo new --type X --file Y.md && hyalo lint --file Y.md` is
       clean of MD047 (BUG-5)
-- [ ] `jq '.results | keys'` on `--files-from` output for both
+- [x] `jq '.results | keys'` on `--files-from` output for both
       `find` and `lint` includes the files-from counters (BUG-6,
       BUG-7)
-- [ ] CHANGELOG `Unreleased` updated under Fixed
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] CHANGELOG `Unreleased` updated under Fixed
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace` all green on all three CI platforms
 
 ## Design notes

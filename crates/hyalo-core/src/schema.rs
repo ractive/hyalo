@@ -383,7 +383,8 @@ pub struct RawTypeSchema {
     #[serde(default)]
     pub properties: HashMap<String, RawPropertyConstraint>,
     /// Required body sections (ordered). Each entry is `"<hashes> <text>"`, e.g. `"## Tasks"`.
-    #[serde(rename = "required-sections", default)]
+    /// Canonical key is `required_sections`; `required-sections` is accepted as a deprecated alias.
+    #[serde(alias = "required-sections", default)]
     pub required_sections: Vec<String>,
 }
 
