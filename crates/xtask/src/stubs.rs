@@ -4,6 +4,17 @@
 //! warnings about missing checks. Real implementations land in iter-142b.
 
 use anyhow::Result;
+use clap::Args;
+
+/// Shared arg shape for stubs. Accepts (and ignores) `--since <REF>` so the
+/// ralph-loop harness can call these uniformly alongside the real gates.
+#[derive(Args)]
+pub struct StubArgs {
+    /// Compare against this git ref. Accepted for compatibility; ignored by stubs.
+    #[arg(long, value_name = "REF")]
+    #[allow(dead_code)]
+    pub since: Option<String>,
+}
 
 /// Stub for `check-dead-primitives`.
 ///

@@ -25,9 +25,9 @@ enum Commands {
     /// Gate 3: verify help text has EXAMPLES blocks and no stale wording.
     CheckHelpDrift,
     /// Stub — not yet implemented (iter-142b).
-    CheckDeadPrimitives,
+    CheckDeadPrimitives(stubs::StubArgs),
     /// Stub — not yet implemented (iter-142b).
-    CheckTodoAnnotations,
+    CheckTodoAnnotations(stubs::StubArgs),
 }
 
 fn main() {
@@ -36,8 +36,8 @@ fn main() {
         Commands::CheckAcFidelity(args) => ac_fidelity::run(args),
         Commands::CheckFeatureFanout => feature_fanout::run(),
         Commands::CheckHelpDrift => help_drift::run(),
-        Commands::CheckDeadPrimitives => stubs::check_dead_primitives(),
-        Commands::CheckTodoAnnotations => stubs::check_todo_annotations(),
+        Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
+        Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
     };
     match result {
         Ok(true) => {}
