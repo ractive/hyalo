@@ -278,6 +278,33 @@ pub fn check_plan(
     Ok(misses)
 }
 
+/// Return iteration plan files changed since `since_ref` (e.g. `origin/main`).
+/// Used by CI to scope the gate to plans introduced or modified in a PR rather
+/// than re-validating the entire historic corpus on every run.
+fn changed_plans(since_ref: &str, workspace_root: &Path) -> Vec<PathBuf> {
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--name-only",
+            "--diff-filter=AM",
+            &format!("{since_ref}..HEAD"),
+            "--",
+            "hyalo-knowledgebase/iterations/",
+        ])
+        .current_dir(workspace_root)
+        .output();
+    let Ok(out) = output else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.ends_with(".md"))
+        .map(|l| workspace_root.join(l))
+        .filter(|p| p.exists())
+        .collect()
+}
+
 /// Discover all iteration plan files under `hyalo-knowledgebase/iterations/`.
 fn discover_plans(workspace_root: &Path) -> Vec<PathBuf> {
     let kb = workspace_root
@@ -302,6 +329,11 @@ pub fn run(args: AcFidelityArgs) -> Result<bool> {
     let workspace_root = workspace_root()?;
     let plans = if let Some(p) = args.plan {
         vec![p]
+    } else if let Some(since) = args.since.as_deref() {
+        // When --since is given without --plan, only check plans changed since
+        // <since>. This is the canonical CI use: "gate the plans this PR
+        // introduces or modifies", not the entire historic corpus.
+        changed_plans(since, &workspace_root)
     } else {
         discover_plans(&workspace_root)
     };
