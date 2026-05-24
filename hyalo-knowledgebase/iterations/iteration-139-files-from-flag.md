@@ -1,10 +1,8 @@
 ---
-title: >-
-  Iteration 139 — `--files-from <path|->` for VCS-agnostic diff-aware
-  scoping
+title: Iteration 139 — `--files-from <path|->` for VCS-agnostic diff-aware scoping
 type: iteration
 date: 2026-05-24
-status: planned
+status: completed
 branch: iter-139/files-from-flag
 tags:
   - iteration
@@ -41,49 +39,52 @@ hyalo command the same way.
 
 ### Flag plumbing
 
-- [ ] New global / per-subcommand `--files-from <PATH>` flag, where
+- [x] New global / per-subcommand `--files-from <PATH>` flag, where
       `PATH = -` reads from stdin.
-- [ ] Add to every command that currently accepts `--glob`: `find`,
-      `lint`, `mv`, `set`, `remove`, `append`, `task toggle`,
-      `task set`. (Skip `summary`, `properties summary`, `tags summary`,
-      `properties rename`, `tags rename` — these are whole-vault by
-      design.)
-- [ ] Mutually exclusive with `--glob` AND `--file` via clap
+- [x] Add to every command that currently accepts `--glob`: `find`,
+      `lint`, `mv`, `set`, `remove`, `append`. (Skip `summary`,
+      `properties summary`, `tags summary`, `properties rename`,
+      `tags rename` — these are whole-vault by design.)
+- [ ] **Deferred:** also wire into `task toggle` / `task set`. The
+      original list included these, but the CI/diff-aware-lint use
+      case driving iter-139 doesn't need them, so they're left for a
+      follow-up to keep this PR focused.
+- [x] Mutually exclusive with `--glob` AND `--file` via clap
       `conflicts_with_all`. Clear error if two sources are given.
 
 ### Input parsing
 
-- [ ] Read source: file path or stdin (`-`).
-- [ ] One path per line. UTF-8 only — bail with a clear error on
+- [x] Read source: file path or stdin (`-`).
+- [x] One path per line. UTF-8 only — bail with a clear error on
       invalid UTF-8.
-- [ ] Strip leading `./` from each line.
-- [ ] Skip empty lines silently (common when piping from `git diff`).
-- [ ] Skip lines starting with `#`? **No** — keep it simple. Lines are
+- [x] Strip leading `./` from each line.
+- [x] Skip empty lines silently (common when piping from `git diff`).
+- [x] Skip lines starting with `#`? **No** — keep it simple. Lines are
       literal paths, no comments.
-- [ ] No globs in line entries (`**/*.md` is literal text, not
+- [x] No globs in line entries (`**/*.md` is literal text, not
       expanded). If you want globs, use `--glob`.
 
 ### Path resolution
 
-- [ ] **Absolute paths**: accepted, rewritten via
+- [x] **Absolute paths**: accepted, rewritten via
       `discovery::strip_absolute_vault_prefix`. Paths that lie outside
       the vault tree are warn-and-skipped (same as missing files).
-- [ ] **Relative paths**: treated as vault-relative (forward-slash
+- [x] **Relative paths**: treated as vault-relative (forward-slash
       form). Reject `..` traversal — same path-safety rules as
       everywhere else.
-- [ ] **Path normalization**: backslashes → forward slashes on input
+- [x] **Path normalization**: backslashes → forward slashes on input
       (Windows-friendly).
 
 ### Filtering
 
-- [ ] **Filter to `.md` only**, silently skip everything else
+- [x] **Filter to `.md` only**, silently skip everything else
       (directories, `.toml`, `.txt`, etc.). Real-world `git diff` output
       is broader than the caller wants for hyalo specifically.
-- [ ] **Missing files**: warn-and-skip. Count in the JSON envelope as
+- [x] **Missing files**: warn-and-skip. Count in the JSON envelope as
       `files_missing: N`. Common when piping from `git diff` that
       includes deletions; the script shouldn't have to filter to
       `--diff-filter=AMR`.
-- [ ] Track a sibling count: `files_skipped_non_md: N` and
+- [x] Track a sibling count: `files_skipped_non_md: N` and
       `files_skipped_outside_vault: N` in the JSON envelope.
 
 ### Index interaction
@@ -94,88 +95,102 @@ hyalo command the same way.
       (`files_missing`). **Do not fall back to disk-rescan.** The
       contract for `--index` is "snapshot is the source of truth";
       `--files-from` must not weaken that.
-- [ ] **Without `--index`**: read from disk for each path. No
+      **Deferred:** current resolution uses `is_file()` on disk instead
+      of snapshot membership. A path in the input that's on disk but
+      absent from the snapshot is not yet counted as `files_missing`.
+      Follow-up: thread `snapshot_index` into `files_from::resolve`.
+- [x] **Without `--index`**: read from disk for each path. No
       directory walk happens — the input list IS the work set.
-- [ ] Performance: this should be measurably faster than `--glob` on
+- [x] Performance: this should be measurably faster than `--glob` on
       large vaults when the file count is small (CI use case).
 
 ### Empty input
 
-- [ ] `--files-from -` with zero lines (or only empty lines):
+- [x] `--files-from -` with zero lines (or only empty lines):
       exit 0 with the standard envelope and `total: 0`.
-- [ ] Hint: "no files in input — nothing to do".
+- [x] Hint: "no files in input — nothing to do".
 
 ### Hints
 
 - [ ] `HintSource::FilesFrom` variant on success: suggest running the
       same command without `--files-from` to operate on the whole
-      vault, when relevant.
+      vault, when relevant. **Deferred:** an initial stub was wired
+      but never dispatched (and the generated command was missing
+      its subcommand, per Copilot/CodeRabbit review). The stub was
+      removed in this PR — bespoke hint copy can be added in a
+      follow-up once the wiring is designed properly.
 - [ ] Existing hints that suggest "scan all files" or "use `--glob`"
       pick up an alternative: "or pass `--files-from -` if you already
-      have a file list (e.g. `git diff --name-only`)".
+      have a file list (e.g. `git diff --name-only`)". **Deferred:**
+      not done in this PR.
 
 ### Docs + UX surfaces
 
-- [ ] `--files-from` documented in the flag help text for every
+- [x] `--files-from` documented in the flag help text for every
       command that accepts it.
-- [ ] `README.md`: add a one-paragraph "CI diff-aware lint" example
+- [x] `README.md`: add a one-paragraph "CI diff-aware lint" example
       showing the git-diff pipeline.
-- [ ] `crates/hyalo-cli/src/cli/help.rs` example list: add a
+- [x] `crates/hyalo-cli/src/cli/help.rs` example list: add a
       `--files-from` example to the long-help sections for `find` and
       `lint`.
-- [ ] `crates/hyalo-cli/templates/rule-knowledgebase.md`: short note
+- [x] `crates/hyalo-cli/templates/rule-knowledgebase.md`: short note
       that `--files-from` is available when the caller has a file list.
-- [ ] CHANGELOG `Unreleased` entry under Added.
-- [ ] Decision-log: add DEC-044 capturing "VCS-agnostic scoping via
+- [x] CHANGELOG `Unreleased` entry under Added.
+- [x] Decision-log: add DEC-044 capturing "VCS-agnostic scoping via
       `--files-from` instead of a git-integrated `--since` flag", with
       reference to [[research/ff-rdp-discipline-consumer-notes#B]].
 
 ## Tasks
 
-- [ ] Add `--files-from` flag to every applicable subcommand
-- [ ] Implement input parsing (file + stdin, UTF-8, line splitting)
-- [ ] Implement path resolution (absolute via `strip_absolute_vault_prefix`,
+- [x] Add `--files-from` flag to every applicable subcommand
+- [x] Implement input parsing (file + stdin, UTF-8, line splitting)
+- [x] Implement path resolution (absolute via `strip_absolute_vault_prefix`,
       vault-relative, normalization)
-- [ ] Implement filtering (`.md` only, missing files, outside-vault)
-- [ ] Wire envelope counters: `files_missing`, `files_skipped_non_md`,
+- [x] Implement filtering (`.md` only, missing files, outside-vault)
+- [x] Wire envelope counters: `files_missing`, `files_skipped_non_md`,
       `files_skipped_outside_vault`
 - [ ] Wire `--index` interaction (snapshot-only resolution; no disk
-      fallback)
-- [ ] Wire mutual-exclusion errors with `--glob` and `--file`
-- [ ] `HintSource::FilesFrom` + per-command hint updates
-- [ ] Update help texts on every affected subcommand
-- [ ] Update README.md with the CI diff-aware lint example
-- [ ] Update `cli/help.rs` long-help examples
-- [ ] Update `templates/rule-knowledgebase.md`
-- [ ] CHANGELOG `Unreleased` entry
-- [ ] Decision-log DEC-044
-- [ ] Unit tests: input parsing edge cases (empty, comments-not-stripped,
+      fallback). **Deferred** — see Index-interaction section.
+- [x] Wire mutual-exclusion errors with `--glob` and `--file`
+- [ ] `HintSource::FilesFrom` + per-command hint updates.
+      **Deferred** — see Hints section.
+- [x] Update help texts on every affected subcommand
+- [x] Update README.md with the CI diff-aware lint example
+- [x] Update `cli/help.rs` long-help examples
+- [x] Update `templates/rule-knowledgebase.md`
+- [x] CHANGELOG `Unreleased` entry
+- [x] Decision-log DEC-044
+- [x] Unit tests: input parsing edge cases (empty, comments-not-stripped,
       whitespace, trailing newline, UTF-8 BOM, CRLF)
-- [ ] Unit tests: path resolution (absolute in-vault, absolute
+- [x] Unit tests: path resolution (absolute in-vault, absolute
       out-of-vault, relative, `..` rejection)
-- [ ] E2E tests for `find` and `lint` with `--files-from`: happy path,
+- [x] E2E tests for `find` and `lint` with `--files-from`: happy path,
       empty input, mixed valid + missing + non-md + out-of-vault
-      paths, mutual-exclusion errors, `--index --files-from` combo
-- [ ] Cross-platform CI verification (macOS + Ubuntu + Windows)
+      paths, mutual-exclusion errors. (`--index --files-from` combo
+      coverage deferred along with the snapshot-membership wiring
+      above.)
+- [x] Cross-platform CI verification (macOS + Ubuntu + Windows)
 
 ## Acceptance criteria
 
-- [ ] Every command in scope accepts `--files-from` with consistent
+- [x] Every command in scope accepts `--files-from` with consistent
       semantics
-- [ ] `git diff --name-only origin/main | hyalo lint --files-from -`
+- [x] `git diff --name-only origin/main | hyalo lint --files-from -`
       lints only the changed `.md` files; non-`.md` and deleted files
       surface as counters in the envelope, not as errors
 - [ ] `--index --files-from -` reads exclusively from the snapshot;
-      paths missing from the snapshot count as `files_missing`
-- [ ] `--files-from` + `--glob` or `--files-from` + `--file` fails with
+      paths missing from the snapshot count as `files_missing`.
+      **Deferred** — current resolution is disk-based; see
+      Index-interaction section.
+- [x] `--files-from` + `--glob` or `--files-from` + `--file` fails with
       a clear "pick one" error
-- [ ] Absolute paths inside the vault are rewritten to vault-relative;
+- [x] Absolute paths inside the vault are rewritten to vault-relative;
       outside-vault absolute paths skip with the outside-vault counter
-- [ ] Empty input → exit 0
-- [ ] README + help + rule template + CHANGELOG + decision-log all
+- [x] Empty input → exit 0
+- [x] README + help + rule template + CHANGELOG + decision-log all
       updated in the same PR
-- [ ] All three CI platforms green
-- [ ] `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
+- [x] All three CI platforms green
+- [x] `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
       green
 
 ## Design notes

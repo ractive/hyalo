@@ -193,6 +193,12 @@ COOKBOOK:
   # Exclude draft files with glob negation
   hyalo find --glob '!**/draft-*'
 
+  # Diff-aware lint: lint only files changed on this branch
+  git diff --name-only origin/main | hyalo lint --files-from -
+
+  # Scope find to a caller-supplied file list (file path or stdin '-')
+  hyalo find --files-from changed-files.txt
+
   # Tag all research notes in a folder
   hyalo set --tag reviewed --glob 'research/**/*.md'
 

@@ -236,13 +236,19 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
     /// Target file(s) (repeatable). Mutually exclusive with --glob
-    #[arg(short, long, conflicts_with = "glob")]
+    #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file: Vec<String>,
     /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
-    #[arg(short, long, conflicts_with = "file")]
+    #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glob: Vec<String>,
+    /// Read file paths from PATH (one per line); use '-' to read from stdin.
+    /// Mutually exclusive with --file and --glob.
+    /// Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"])]
+    #[serde(skip)]
+    pub files_from: Option<String>,
     /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections (alias: outline), tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
     #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -308,10 +314,13 @@ impl FindFilters {
             self.task.clone_from(&overlay.task);
         }
         self.sections.extend(overlay.sections.iter().cloned());
-        // file and glob are mutually exclusive (clap enforces this at parse time).
-        // If the overlay provides either, it replaces the base to avoid an invalid
-        // combination where both file and glob are non-empty.
-        if !overlay.file.is_empty() {
+        // file, glob, and files_from are mutually exclusive (clap enforces at parse time).
+        // If the overlay provides any, it replaces the base to avoid invalid combinations.
+        if overlay.files_from.is_some() {
+            self.files_from.clone_from(&overlay.files_from);
+            self.file.clear();
+            self.glob.clear();
+        } else if !overlay.file.is_empty() {
             self.file.extend(overlay.file.iter().cloned());
             self.glob.clear();
         } else if !overlay.glob.is_empty() {
@@ -554,17 +563,21 @@ pub(crate) enum Commands {
     )]
     Mv {
         /// Source file to move (relative to --dir) — positional form (single-file mode only)
-        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "properties", "tag", "type", "file"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "properties", "tag", "type", "file", "files_from"])]
         file_positional: Option<String>,
         /// Source file to move (relative to --dir) — flag form (single-file mode only)
-        #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type"])]
+        #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type", "files_from"])]
         file: Option<String>,
         /// Destination path: a .md path or an existing directory (basename appended) in single-file mode; a directory path in batch mode
         #[arg(long)]
         to: String,
         /// Glob pattern(s) to select source files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, value_name = "GLOB")]
+        #[arg(short, long, value_name = "GLOB", conflicts_with = "files_from")]
         glob: Vec<String>,
+        /// Read file paths from PATH (one per line); use '-' to read from stdin (batch mode).
+        /// Mutually exclusive with --file, positional FILE, and --glob.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
+        files_from: Option<String>,
         /// Property filter for source selection: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists). Repeatable (AND)
         #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
@@ -613,7 +626,7 @@ Repeatable (AND).\n\
     )]
     Set {
         /// Target file(s) as positional argument(s) — alternative to --file
-        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file", "files_from"])]
         file_positional: Vec<String>,
         /// Property to set: K=V (type inferred from V). Repeatable
         #[arg(short, long = "property", value_name = "K=V")]
@@ -622,11 +635,15 @@ Repeatable (AND).\n\
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
+        /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        /// Mutually exclusive with --file, positional FILE, and --glob.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
+        files_from: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
         where_properties: Vec<String>,
@@ -669,7 +686,7 @@ Repeatable (AND).\n\
     )]
     Remove {
         /// Target file(s) as positional argument(s) — alternative to --file
-        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file", "files_from"])]
         file_positional: Vec<String>,
         /// Property to remove: K (removes key) or K=V (removes value from list/scalar). Repeatable
         #[arg(short, long = "property", value_name = "K or K=V")]
@@ -678,11 +695,15 @@ Repeatable (AND).\n\
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
+        /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        /// Mutually exclusive with --file, positional FILE, and --glob.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
+        files_from: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
         where_properties: Vec<String>,
@@ -782,17 +803,21 @@ Repeatable (AND).\n\
     )]
     Append {
         /// Target file(s) as positional argument(s) — alternative to --file
-        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file", "files_from"])]
         file_positional: Vec<String>,
         /// Property to append to: K=V. Repeatable
         #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with = "glob")]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with = "file")]
+        #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
+        /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        /// Mutually exclusive with --file, positional FILE, and --glob.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
+        files_from: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
         where_properties: Vec<String>,
@@ -902,18 +927,22 @@ Repeatable (AND).\n\
     )]
     Lint {
         /// Target file (relative to --dir) — positional form
-        #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "type"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "type", "files_from"])]
         file_positional: Option<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with_all = ["glob", "type"])]
+        #[arg(short, long, conflicts_with_all = ["glob", "type", "files_from"])]
         file: Vec<String>,
         /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with_all = ["file", "type"])]
+        #[arg(short, long, conflicts_with_all = ["file", "type", "files_from"])]
         glob: Vec<String>,
         /// Restrict linting to files matching the named type's filename template.
-        /// Equivalent to --glob <template-as-glob>. Mutually exclusive with --file and --glob.
-        #[arg(long = "type", conflicts_with_all = ["file", "glob", "file_positional"])]
+        /// Equivalent to --glob <template-as-glob>. Mutually exclusive with --file, --glob, and --files-from.
+        #[arg(long = "type", conflicts_with_all = ["file", "glob", "file_positional", "files_from"])]
         r#type: Option<String>,
+        /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        /// Mutually exclusive with --file, positional FILE, --glob, and --type.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob", "type"])]
+        files_from: Option<String>,
         /// Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
         #[arg(long)]
         fix: bool,
