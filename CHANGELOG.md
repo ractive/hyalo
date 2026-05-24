@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **`item_pattern`** on `string-list` properties: per-item regex validation
+  at `hyalo lint` time. Declare `type = "string-list"` and `item_pattern = "^..."` in
+  `[schema.types.X.properties.Y]`. Each list item is matched against the regex;
+  violations include the item index and pattern.
+- **`required-sections`** on type schemas: declares the body outline a document
+  of this type must contain. Entries are `"## Heading"` strings (level encoded by
+  hash count); order-significant; extras are silently allowed. Enforced by `hyalo lint`.
+- **`hyalo new --type <name> --file <vault-relative-path>`**: schema-driven file
+  scaffolder that emits a placeholder skeleton (required frontmatter + required
+  sections, all values `TBD` / type-appropriate empties). Designed to produce a
+  file that fails lint — the lint loop is the agent feedback mechanism.
+
 ## 0.16.0 — 2026-05-23
 
 ### Breaking changes

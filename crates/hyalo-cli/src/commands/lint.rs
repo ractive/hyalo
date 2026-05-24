@@ -21,8 +21,13 @@ use serde_json::Value;
 
 use hyalo_core::filename_template::FilenameTemplate;
 use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter};
-use hyalo_core::schema::{self, PropertyConstraint, SchemaConfig, TypeSchema};
+use hyalo_core::scanner;
+use hyalo_core::schema::{
+    self, PropertyConstraint, SchemaConfig, TypeSchema, parse_required_section_entry,
+};
 use hyalo_core::util::is_iso8601_date;
+
+use crate::commands::section_scanner::SectionScanner;
 
 use crate::output::{CommandOutcome, Format, format_success};
 
@@ -503,7 +508,24 @@ fn lint_file_with_fix(
     };
 
     let has_tags = final_props.contains_key("tags");
-    let violations = validate_properties(rel_path, &final_props, has_tags, schema);
+    let mut violations = validate_properties(rel_path, &final_props, has_tags, schema);
+
+    // Validate required_sections against the body outline.
+    let doc_type: Option<String> = final_props.get("type").and_then(|v| match v {
+        Value::String(s) => Some(s.clone()),
+        _ => None,
+    });
+    let effective_schema: TypeSchema = match &doc_type {
+        Some(t) => schema.merged_schema_for_type(t),
+        None => schema.default_schema().clone(),
+    };
+
+    if !effective_schema.required_sections.is_empty() {
+        let section_violations =
+            validate_required_sections(full_path, rel_path, &effective_schema.required_sections)?;
+        violations.extend(section_violations);
+    }
+
     Ok((
         FileLintResult {
             file: rel_path.to_owned(),
@@ -514,6 +536,65 @@ fn lint_file_with_fix(
             actions,
         },
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Required-sections body validation
+// ---------------------------------------------------------------------------
+
+/// Scan the body of `full_path` and check that each `required_sections` entry
+/// appears in document order. Returns a `Violation` for each missing entry.
+fn validate_required_sections(
+    full_path: &Path,
+    rel_path: &str,
+    required_sections: &[String],
+) -> Result<Vec<Violation>> {
+    let mut ss = SectionScanner::new();
+    scanner::scan_file_multi(full_path, &mut [&mut ss])
+        .with_context(|| format!("scanning sections of {rel_path}"))?;
+    let sections = ss.into_sections();
+
+    let mut violations = Vec::new();
+    let mut cursor = 0usize;
+    for (ordinal, entry) in required_sections.iter().enumerate() {
+        // parse_required_section_entry was validated at schema-load time, so this should
+        // not fail here; treat errors as a lint violation rather than a hard error.
+        let (level, text) = match parse_required_section_entry(entry) {
+            Ok(t) => t,
+            Err(e) => {
+                violations.push(Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("invalid required-sections entry {entry:?} in schema: {e}"),
+                });
+                continue;
+            }
+        };
+
+        // Walk sections forward from cursor, looking for matching level + trimmed text.
+        let found = sections[cursor..].iter().enumerate().find(|(_, s)| {
+            s.level == level
+                && s.heading
+                    .as_deref()
+                    .is_some_and(|h| h.trim() == text.as_str())
+        });
+
+        if let Some((offset, _)) = found {
+            cursor += offset + 1;
+        } else {
+            let hash_prefix = "#".repeat(level as usize);
+            violations.push(Violation {
+                severity: Severity::Error,
+                kind: None,
+                message: format!(
+                    "missing required section: expected \"{hash_prefix} {text}\" at or after position {} in the outline",
+                    ordinal + 1
+                ),
+            });
+        }
+    }
+
+    Ok(violations)
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,6 +1086,65 @@ fn validate_constraint(
                     values.join(", ")
                 ),
             })
+        }
+        PropertyConstraint::StringList { item_pattern } => {
+            let Value::Array(items) = value else {
+                return Some(Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" expected string-list, got {value}"),
+                });
+            };
+            let Some(pat) = item_pattern else {
+                // No per-item pattern — just ensure every item is a string.
+                for (i, item) in items.iter().enumerate() {
+                    if !matches!(item, Value::String(_)) {
+                        return Some(Violation {
+                            severity: Severity::Error,
+                            kind: None,
+                            message: format!(
+                                "property \"{name}\" item {i}: expected string, got {item}"
+                            ),
+                        });
+                    }
+                }
+                return None;
+            };
+            // Compile (or look up) the regex once per pattern per call.
+            let entry = regex_cache
+                .entry(pat.clone())
+                .or_insert_with(|| Regex::new(pat).map_err(|e| e.to_string()));
+            let re = match entry {
+                Err(e) => {
+                    return Some(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!("property \"{name}\": invalid item_pattern {pat:?}: {e}"),
+                    });
+                }
+                Ok(re) => re,
+            };
+            for (i, item) in items.iter().enumerate() {
+                let Value::String(s) = item else {
+                    return Some(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" item {i}: expected string, got {item}"
+                        ),
+                    });
+                };
+                if !re.is_match(s) {
+                    return Some(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" item {i}: value {s:?} does not match pattern {pat:?}"
+                        ),
+                    });
+                }
+            }
+            None
         }
     }
 }
@@ -2519,6 +2659,187 @@ mod tests {
         assert!(
             !content.contains("cli,ux"),
             "comma-joined tag should be removed"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // item_pattern tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn item_pattern_validates_list_items() {
+        // First item matches, second does not.
+        let constraint = PropertyConstraint::StringList {
+            item_pattern: Some(r"^[a-z]+$".to_owned()),
+        };
+        let v = vc(
+            "tags",
+            &Value::Array(vec![
+                Value::String("rust".into()),
+                Value::String("Rust123".into()), // uppercase — should fail
+            ]),
+            &constraint,
+        );
+        let viol = v.expect("expected a violation");
+        assert_eq!(viol.severity, Severity::Error);
+        assert!(
+            viol.message.contains("item 1"),
+            "expected item index in message, got: {}",
+            viol.message
+        );
+        assert!(
+            viol.message.contains(r"^[a-z]+$"),
+            "expected pattern in message, got: {}",
+            viol.message
+        );
+    }
+
+    #[test]
+    fn item_pattern_vacuous_on_empty_list() {
+        let constraint = PropertyConstraint::StringList {
+            item_pattern: Some(r"^[a-z]+$".to_owned()),
+        };
+        let v = vc("tags", &Value::Array(vec![]), &constraint);
+        assert!(v.is_none(), "empty list should produce no violations");
+    }
+
+    #[test]
+    fn item_pattern_non_string_item_errors() {
+        let constraint = PropertyConstraint::StringList { item_pattern: None };
+        let v = vc(
+            "tags",
+            &Value::Array(vec![Value::Number(42.into())]),
+            &constraint,
+        );
+        let viol = v.expect("expected a violation");
+        assert_eq!(viol.severity, Severity::Error);
+        assert!(
+            viol.message.contains("item 0"),
+            "expected item index in message, got: {}",
+            viol.message
+        );
+        assert!(
+            viol.message.contains("expected string"),
+            "expected type error message, got: {}",
+            viol.message
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // required_sections tests
+    // ---------------------------------------------------------------------------
+
+    fn make_schema_with_sections(sections: Vec<String>) -> SchemaConfig {
+        let type_schema = TypeSchema {
+            required_sections: sections,
+            ..Default::default()
+        };
+        let mut types = HashMap::new();
+        types.insert("doc".to_owned(), type_schema);
+        SchemaConfig {
+            default: TypeSchema::default(),
+            types,
+        }
+    }
+
+    #[test]
+    fn required_sections_pass_when_all_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        std::fs::write(
+            &path,
+            "---\ntype: doc\ntitle: Hello\n---\n# Goal\n\nSome text.\n\n## Tasks\n\nDo stuff.\n",
+        )
+        .unwrap();
+
+        let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
+        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let section_viols: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.message.contains("missing required section"))
+            .collect();
+        assert!(
+            section_viols.is_empty(),
+            "expected no section violations, got: {section_viols:?}"
+        );
+    }
+
+    #[test]
+    fn required_sections_violation_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        std::fs::write(
+            &path,
+            "---\ntype: doc\ntitle: Hello\n---\n# Goal\n\nSome text.\n",
+        )
+        .unwrap();
+
+        let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
+        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let section_viols: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.message.contains("missing required section"))
+            .collect();
+        assert_eq!(
+            section_viols.len(),
+            1,
+            "expected exactly one missing-section violation"
+        );
+        assert!(
+            section_viols[0].message.contains("## Tasks"),
+            "expected '## Tasks' in message, got: {}",
+            section_viols[0].message
+        );
+    }
+
+    #[test]
+    fn required_sections_order_significant() {
+        // Body has both headings but in reverse order.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        std::fs::write(
+            &path,
+            "---\ntype: doc\ntitle: Hello\n---\n## Tasks\n\nDo stuff.\n\n# Goal\n\nSome text.\n",
+        )
+        .unwrap();
+
+        // Required: Goal then Tasks (but in body: Tasks then Goal).
+        let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
+        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let section_viols: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.message.contains("missing required section"))
+            .collect();
+        // "# Goal" is never matched because its cursor position (after ## Tasks) is after where it appears.
+        assert!(
+            !section_viols.is_empty(),
+            "expected section violation when order is wrong"
+        );
+    }
+
+    #[test]
+    fn required_sections_extras_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        std::fs::write(
+            &path,
+            "---\ntype: doc\ntitle: Hello\n---\n# Goal\n\n## Extra One\n\nText.\n\n## Tasks\n\nDo stuff.\n\n## Extra Two\n\nMore.\n",
+        )
+        .unwrap();
+
+        let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
+        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let section_viols: Vec<_> = result
+            .violations
+            .iter()
+            .filter(|v| v.message.contains("missing required section"))
+            .collect();
+        assert!(
+            section_viols.is_empty(),
+            "extra headings should not cause violations, got: {section_viols:?}"
         );
     }
 }

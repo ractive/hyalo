@@ -337,17 +337,25 @@ fn extract_schema_validate_on_write(raw: Option<&toml::Value>) -> Option<bool> {
 
 /// Parse a `SchemaConfig` from the raw `[schema]` TOML value.
 ///
-/// On malformed schema TOML, emits a warning and returns an empty schema
-/// (no validation), consistent with how malformed `.hyalo.toml` is handled
+/// On malformed schema TOML (or invalid field combinations like `pattern` on a
+/// non-string property), emits a warning and returns an empty schema (no
+/// validation), consistent with how malformed `.hyalo.toml` is handled
 /// throughout the rest of the config loading pipeline.
 fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
     let Some(val) = raw else {
         return SchemaConfig::default();
     };
-    match val.clone().try_into::<RawSchemaConfig>() {
-        Ok(raw_cfg) => SchemaConfig::from(raw_cfg),
+    let raw_cfg: RawSchemaConfig = match val.clone().try_into() {
+        Ok(c) => c,
         Err(e) => {
             crate::warn::warn(format!("malformed [schema] in .hyalo.toml: {e}"));
+            return SchemaConfig::default();
+        }
+    };
+    match SchemaConfig::try_from(raw_cfg) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            crate::warn::warn(format!("invalid [schema] in .hyalo.toml: {e}"));
             SchemaConfig::default()
         }
     }

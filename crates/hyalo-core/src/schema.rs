@@ -27,6 +27,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
+use crate::heading::parse_atx_heading;
+
 /// The fully-resolved schema configuration for a vault.
 ///
 /// Constructed from the `[schema]` section of `.hyalo.toml`.  When the
@@ -84,6 +86,12 @@ impl SchemaConfig {
                 .or_insert(PropertyConstraint::String { pattern: None });
         }
 
+        // Merge required_sections: default sections first, then type-specific ones.
+        let mut required_sections = self.default.required_sections.clone();
+        if let Some(ts) = type_schema {
+            required_sections.extend(ts.required_sections.iter().cloned());
+        }
+
         TypeSchema {
             required,
             filename_template: type_schema.and_then(|ts| ts.filename_template.clone()),
@@ -91,6 +99,7 @@ impl SchemaConfig {
                 .map(|ts| ts.defaults.clone())
                 .unwrap_or_default(),
             properties,
+            required_sections,
         }
     }
 
@@ -101,24 +110,24 @@ impl SchemaConfig {
 }
 
 /// Schema definition for a single document type (or the global default).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct TypeSchema {
     /// Property keys that must be present in every file of this type.
-    #[serde(default)]
     pub required: Vec<String>,
 
     /// Optional filename template for new files of this type.
     /// Tokens: `{n}` (sequence number), `{slug}` (title-derived slug).
-    #[serde(rename = "filename-template")]
     pub filename_template: Option<String>,
 
     /// Default values used when creating new files; `$today` expands to YYYY-MM-DD.
-    #[serde(default)]
     pub defaults: HashMap<String, String>,
 
     /// Per-property type constraints keyed by property name.
-    #[serde(default)]
     pub properties: HashMap<String, PropertyConstraint>,
+
+    /// Required body sections in order. Each entry is `"<hashes> <text>"`,
+    /// e.g. `"## Tasks"`. Validated at schema-load time via `parse_required_section_entry`.
+    pub required_sections: Vec<String>,
 }
 
 /// Expand a schema-default template into a concrete value.
@@ -130,6 +139,33 @@ pub fn expand_default(raw: &str) -> String {
         return today_iso8601();
     }
     raw.to_owned()
+}
+
+/// Parse a `required-sections` entry string like `"## Tasks"` into `(level, text)`.
+///
+/// The entry must start with one to six `#` characters followed by a space and
+/// the heading text. Returns an error string if the format is invalid.
+///
+/// # Examples
+/// ```
+/// use hyalo_core::schema::parse_required_section_entry;
+/// assert_eq!(parse_required_section_entry("## Tasks").unwrap(), (2, "Tasks".to_owned()));
+/// ```
+pub fn parse_required_section_entry(entry: &str) -> Result<(u8, String), String> {
+    match parse_atx_heading(entry) {
+        Some((level, text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "heading text must be non-empty: expected 1–6 '#' characters followed by a space and heading text, got {entry:?}"
+                ));
+            }
+            Ok((level, trimmed.to_owned()))
+        }
+        None => Err(format!(
+            "not a valid ATX heading: expected 1–6 '#' characters followed by a space and heading text, got {entry:?}"
+        )),
+    }
 }
 
 /// Current UTC date in YYYY-MM-DD format.
@@ -169,8 +205,7 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
 }
 
 /// Constraint on a single frontmatter property.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum PropertyConstraint {
     /// Any string value; optional regex pattern validation.
     String {
@@ -190,11 +225,150 @@ pub enum PropertyConstraint {
         /// Valid values for this enum property.
         values: Vec<String>,
     },
+    /// A YAML list of strings, with optional per-item regex validation.
+    StringList {
+        /// Optional regex each list item must match.
+        item_pattern: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
 // Raw TOML deserialization helpers
 // ---------------------------------------------------------------------------
+
+/// Flat raw shape for a single property constraint, capturing all possible
+/// fields across all constraint variants. Converted to `PropertyConstraint`
+/// via `TryFrom`, which validates field combinations.
+///
+/// Using a flat struct avoids the issue where `#[serde(tag = "type")]`
+/// silently drops unknown fields, which would hide configuration errors like
+/// `item_pattern` on a `string` property.
+#[derive(Debug, Deserialize, Default)]
+pub struct RawPropertyConstraint {
+    #[serde(rename = "type")]
+    pub constraint_type: Option<String>,
+    pub pattern: Option<String>,
+    pub item_pattern: Option<String>,
+    pub values: Option<Vec<String>>,
+}
+
+impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
+    type Error = String;
+
+    fn try_from(raw: RawPropertyConstraint) -> Result<Self, Self::Error> {
+        // Validate mutually exclusive fields early.
+        if raw.pattern.is_some() && raw.item_pattern.is_some() {
+            return Err(
+                "cannot set both 'pattern' and 'item_pattern' on the same property".to_owned(),
+            );
+        }
+
+        let constraint_type = raw.constraint_type.as_deref().unwrap_or("string");
+
+        // `values` is only meaningful on enum properties; reject it elsewhere
+        // so misconfigured TOML surfaces as an error rather than silently
+        // discarding the configured values.
+        if raw.values.is_some() && constraint_type != "enum" {
+            return Err(format!(
+                "'values' is only valid on 'enum' properties, not '{constraint_type}'"
+            ));
+        }
+
+        match constraint_type {
+            "string" => {
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::String {
+                    pattern: raw.pattern,
+                })
+            }
+            "date" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::Date)
+            }
+            "number" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::Number)
+            }
+            "boolean" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::Boolean)
+            }
+            "list" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::List)
+            }
+            "enum" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::Enum {
+                    values: raw.values.unwrap_or_default(),
+                })
+            }
+            "string-list" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::StringList {
+                    item_pattern: raw.item_pattern,
+                })
+            }
+            other => Err(format!(
+                "unknown property constraint type '{other}': expected one of \
+                 string, date, number, boolean, list, enum, string-list"
+            )),
+        }
+    }
+}
 
 /// Raw TOML shape for a single `[schema.types.<name>]` block.
 /// Intentionally lenient (`serde(default)`) so partial configs are valid.
@@ -207,17 +381,36 @@ pub struct RawTypeSchema {
     #[serde(default)]
     pub defaults: HashMap<String, String>,
     #[serde(default)]
-    pub properties: HashMap<String, PropertyConstraint>,
+    pub properties: HashMap<String, RawPropertyConstraint>,
+    /// Required body sections (ordered). Each entry is `"<hashes> <text>"`, e.g. `"## Tasks"`.
+    #[serde(rename = "required-sections", default)]
+    pub required_sections: Vec<String>,
 }
 
-impl From<RawTypeSchema> for TypeSchema {
-    fn from(raw: RawTypeSchema) -> Self {
-        Self {
+impl TryFrom<RawTypeSchema> for TypeSchema {
+    type Error = String;
+
+    fn try_from(raw: RawTypeSchema) -> Result<Self, Self::Error> {
+        let mut properties = HashMap::new();
+        for (name, raw_constraint) in raw.properties {
+            let constraint = PropertyConstraint::try_from(raw_constraint)
+                .map_err(|e| format!("property '{name}': {e}"))?;
+            properties.insert(name, constraint);
+        }
+
+        // Validate required_sections entries: each must parse as a valid ATX heading.
+        for entry in &raw.required_sections {
+            parse_required_section_entry(entry)
+                .map_err(|e| format!("required-sections entry {entry:?}: {e}"))?;
+        }
+
+        Ok(TypeSchema {
             required: raw.required,
             filename_template: raw.filename_template,
             defaults: raw.defaults,
-            properties: raw.properties,
-        }
+            properties,
+            required_sections: raw.required_sections,
+        })
     }
 }
 
@@ -230,16 +423,31 @@ pub struct RawSchemaConfig {
     pub types: HashMap<String, RawTypeSchema>,
 }
 
-impl From<RawSchemaConfig> for SchemaConfig {
-    fn from(raw: RawSchemaConfig) -> Self {
-        Self {
-            default: raw.default.map(TypeSchema::from).unwrap_or_default(),
-            types: raw
-                .types
-                .into_iter()
-                .map(|(k, v)| (k, TypeSchema::from(v)))
-                .collect(),
+impl TryFrom<RawSchemaConfig> for SchemaConfig {
+    type Error = String;
+
+    fn try_from(raw: RawSchemaConfig) -> Result<Self, Self::Error> {
+        let default = match raw.default {
+            Some(d) => TypeSchema::try_from(d).map_err(|e| format!("[schema.default]: {e}"))?,
+            None => TypeSchema::default(),
+        };
+        let mut types = HashMap::new();
+        for (name, raw_type) in raw.types {
+            let ts = TypeSchema::try_from(raw_type)
+                .map_err(|e| format!("[schema.types.{name}]: {e}"))?;
+            types.insert(name, ts);
         }
+        Ok(Self { default, types })
+    }
+}
+
+impl SchemaConfig {
+    /// Infallible conversion from raw config. Discards schema validation errors
+    /// (emits no warning). Used where error propagation is not possible.
+    ///
+    /// Prefer [`SchemaConfig::try_from`] at call sites that can return errors.
+    pub fn from_raw_lossy(raw: RawSchemaConfig) -> Self {
+        SchemaConfig::try_from(raw).unwrap_or_default()
     }
 }
 
@@ -272,7 +480,7 @@ required = ["title"]
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
         assert_eq!(cfg.default.required, vec!["title".to_owned()]);
         assert!(!cfg.is_empty());
     }
@@ -301,7 +509,7 @@ type = "date"
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         assert!(cfg.types.contains_key("iteration"));
         let iter = &cfg.types["iteration"];
@@ -335,7 +543,7 @@ required = ["date", "status"]
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         let merged = cfg.merged_schema_for_type("iteration");
         // "title" from default + "date", "status" from type
@@ -363,7 +571,7 @@ values = ["planned", "completed"]
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         let merged = cfg.merged_schema_for_type("iteration");
         match merged.properties.get("status") {
@@ -388,7 +596,7 @@ required = ["title"]
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         let merged = cfg.merged_schema_for_type("nonexistent");
         assert_eq!(merged.required, vec!["title".to_owned()]);
@@ -409,7 +617,7 @@ pattern = "^iter-\\d+/"
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         match cfg.types["iteration"].properties.get("branch") {
             Some(PropertyConstraint::String { pattern: Some(p) }) => {
@@ -468,7 +676,7 @@ required = ["title", "date"]
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         let merged = cfg.merged_schema_for_type("note");
         // "title" must appear exactly once (no duplicate from both default and type)
@@ -500,7 +708,7 @@ values = ["active", "archived", "draft"]
                 default: None,
                 types: HashMap::new(),
             });
-        let cfg = SchemaConfig::from(raw_schema);
+        let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         let merged = cfg.merged_schema_for_type("docs");
         // All 4 required fields should have property definitions
@@ -523,5 +731,116 @@ values = ["active", "archived", "draft"]
             merged.properties.get("status"),
             Some(PropertyConstraint::Enum { .. })
         ));
+    }
+
+    // ---------------------------------------------------------------------------
+    // New tests: string-list, required_sections, schema-load error detection
+    // ---------------------------------------------------------------------------
+
+    fn parse_cfg(toml: &str) -> Result<SchemaConfig, String> {
+        let raw: toml::Value = toml::from_str(toml).expect("valid toml");
+        let raw_schema: RawSchemaConfig = raw
+            .get("schema")
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or(RawSchemaConfig {
+                default: None,
+                types: HashMap::new(),
+            });
+        SchemaConfig::try_from(raw_schema)
+    }
+
+    #[test]
+    fn parse_string_list_with_item_pattern() {
+        let toml = r#"
+[schema.types.note.properties.tags]
+type = "string-list"
+item_pattern = "^[a-z]+"
+"#;
+        let cfg = parse_cfg(toml).expect("should parse");
+        match cfg.types["note"].properties.get("tags") {
+            Some(PropertyConstraint::StringList {
+                item_pattern: Some(p),
+            }) => {
+                assert_eq!(p, "^[a-z]+");
+            }
+            other => panic!("expected string-list with item_pattern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_required_sections() {
+        let toml = "
+[schema.types.note]\n\
+required-sections = [\"# Title\", \"## Tasks\"]
+";
+        let cfg = parse_cfg(toml).expect("should parse");
+        let ts = &cfg.types["note"];
+        assert_eq!(ts.required_sections, vec!["# Title", "## Tasks"]);
+    }
+
+    #[test]
+    fn reject_pattern_on_non_string() {
+        let toml = r#"
+[schema.types.note.properties.due]
+type = "date"
+pattern = "foo"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(
+            err.contains("'pattern'"),
+            "expected 'pattern' in error, got: {err}"
+        );
+        assert!(err.contains("date"), "expected 'date' in error, got: {err}");
+    }
+
+    #[test]
+    fn reject_item_pattern_on_non_list() {
+        let toml = r#"
+[schema.types.note.properties.title]
+type = "string"
+item_pattern = "foo"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(
+            err.contains("'item_pattern'"),
+            "expected 'item_pattern' in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_both_pattern_and_item_pattern() {
+        let toml = r#"
+[schema.types.note.properties.x]
+type = "string"
+pattern = "foo"
+item_pattern = "bar"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(
+            err.contains("pattern") && err.contains("item_pattern"),
+            "expected both 'pattern' and 'item_pattern' mentioned, got: {err}"
+        );
+    }
+
+    #[test]
+    fn merge_required_sections_from_default_and_type() {
+        let toml = "[schema.default]\nrequired-sections = [\"# Title\"]\n\n[schema.types.note]\nrequired-sections = [\"## Tasks\"]\n";
+        let cfg = parse_cfg(toml).expect("should parse");
+        let merged = cfg.merged_schema_for_type("note");
+        assert_eq!(
+            merged.required_sections,
+            vec!["# Title", "## Tasks"],
+            "default sections come first, type sections after"
+        );
+    }
+
+    #[test]
+    fn required_sections_invalid_entry_rejected() {
+        let toml = "[schema.types.note]\nrequired-sections = [\"not a heading\"]\n";
+        let err = parse_cfg(toml).expect_err("should reject invalid heading");
+        assert!(
+            err.contains("required-sections"),
+            "expected 'required-sections' in error, got: {err}"
+        );
     }
 }

@@ -83,6 +83,7 @@ fn effective_index_path_for(
         | Commands::Completion { .. }
         | Commands::Config
         | Commands::Types { .. }
+        | Commands::New { .. }
         | Commands::LintRules { .. } => None,
         Commands::Views { action } => match action {
             Some(crate::cli::args::ViewsAction::Run { index_flags, .. }) => Some(index_flags),
@@ -957,6 +958,10 @@ fn run_inner() -> Result<(), AppError> {
                     &common,
                 ))
             }
+            Commands::New { file, .. } => Some(HintContext::from_common(
+                HintSource::New { file: file.clone() },
+                &common,
+            )),
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }

@@ -11,6 +11,7 @@ pub mod lint;
 pub mod lint_rules;
 pub(crate) mod mutation;
 pub mod mv;
+pub mod new;
 pub mod properties;
 pub mod read;
 pub mod remove;

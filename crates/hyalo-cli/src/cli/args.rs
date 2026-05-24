@@ -854,9 +854,12 @@ Repeatable (AND).\n\
         long_about = "Validate frontmatter properties against the `.hyalo.toml` schema and lint the\n\
             markdown body against bundled rules (mdbook-lint MD001..MD059 + HYALO native rules).\n\n\
             FRONTMATTER PASS: schema violations from `[schema.default]` / `[schema.types.*]`.\n\
-            - error: missing required property, wrong type, invalid enum value, pattern mismatch\n\
+            - error: missing required property, wrong type, invalid enum value, pattern mismatch,\n\
+            \u{00a0}         `item_pattern` violation on `string-list` items, missing `required-sections`\n\
             - warn:  no 'type' property, no 'tags', property not declared in schema\n\
-            When no `[schema]` section exists, this pass exits 0 with zero violations.\n\n\
+            When no `[schema]` section exists, this pass exits 0 with zero violations.\n\
+            Schema extensions `item_pattern` (per-item regex on `string-list` properties) and\n\
+            `required-sections` (required body outline on type schemas) are validated here.\n\n\
             BODY PASS: ~14 default-on stock rules from mdbook-lint plus two HYALO native\n\
             cross-cutting rules:\n\
             \u{00a0} - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\
@@ -975,6 +978,34 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: Option<TypesAction>,
     },
+    /// Create a new markdown file scaffolded from a schema type
+    #[command(
+        name = "new",
+        long_about = "Create a new markdown file scaffolded from a schema type defined in `.hyalo.toml`.\n\n\
+            Synthesises a skeleton file containing:\n\
+            - Frontmatter: `type: <name>` plus all required properties with type-appropriate placeholders\n\
+            - Body: required sections from `required-sections` (each with a `TBD` paragraph), if declared\n\n\
+            The output is intentionally incomplete — `TBD` placeholders are designed to fail\n\
+            `hyalo lint`, driving the agent fill-in loop.\n\n\
+            CONSTRAINTS:\n\
+            - Refuses with an error if the target file already exists\n\
+            - Refuses with an error if the parent directory does not exist\n\
+            - `--file` must be vault-relative (no leading `/`, no `..` components)\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo new --type iteration --file iterations/iter-99-example.md\n\
+            \u{00a0} hyalo new --type note --file notes/2026-05-24-standup.md\n\n\
+            OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true}}`.\n\
+            Text mode: `created <rel-path>`.\n\n\
+            SIDE EFFECTS: Writes one new file."
+    )]
+    New {
+        /// Document type to scaffold (must exist in `[schema.types.*]`)
+        #[arg(long, value_name = "TYPE", required = true)]
+        r#type: String,
+        /// Vault-relative path for the new file (must not exist; parent must exist)
+        #[arg(long, value_name = "FILE", required = true)]
+        file: String,
+    },
     /// Print the effective configuration (resolved .hyalo.toml path, dir, and core settings)
     #[command(
         name = "config",
@@ -1076,7 +1107,10 @@ pub(crate) enum TypesAction {
     List,
     /// Show the full schema for a single type
     #[command(
-        long_about = "Display the full merged schema for a named type.\n\n            OUTPUT: JSON object with type name, required fields, defaults,\n            filename template, and property constraints.\n            SIDE EFFECTS: None (read-only)."
+        long_about = "Display the full merged schema for a named type.\n\n            OUTPUT: JSON object with type name, required fields, defaults,\n            filename template, property constraints, and required_sections.\n\
+            When declared, `item_pattern` is included in the constraint for `string-list` properties,\n\
+            and `required_sections` lists the declared required body sections.\n\
+            SIDE EFFECTS: None (read-only)."
     )]
     Show {
         /// Type name to display

@@ -48,6 +48,7 @@ pub enum HintSource {
     DropIndex,
     Lint,
     Types { subcommand: Option<String> },
+    New { file: String },
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -194,6 +195,7 @@ pub fn generate_hints(
         HintSource::DropIndex => hints_for_drop_index(ctx, data),
         HintSource::Lint => hints_for_lint(ctx, data, total),
         HintSource::Types { .. } => hints_for_types(ctx, data),
+        HintSource::New { file } => hints_for_new(ctx, file),
     };
     hints.into_iter().take(MAX_HINTS).collect()
 }
@@ -1787,6 +1789,13 @@ fn hints_for_types(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     }
 
     hints
+}
+
+fn hints_for_new(ctx: &HintContext, file: &str) -> Vec<Hint> {
+    vec![Hint::new(
+        "Validate the new file and see placeholder violations",
+        build_command_no_glob(ctx, &["lint", "--file", file]),
+    )]
 }
 
 #[cfg(test)]
