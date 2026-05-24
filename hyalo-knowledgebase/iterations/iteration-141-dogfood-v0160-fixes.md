@@ -38,16 +38,16 @@ inner `for (i, item) …` loop returns `Some(Violation)` on the first
 failing item, so a `string-list` with multiple bad items only surfaces
 item 0. Users fix one and re-run, fix the next and re-run, etc.
 
-- [ ] Change `validate_property` return type to `Vec<Violation>` (or
+- [x] Change `validate_property` return type to `Vec<Violation>` (or
       have the `string-list` branch collect into a vec and return all
       at once via the caller). Touch the minimum number of call sites
       — the simpler path is for the list branch to flat-map into the
       caller's accumulator rather than reshape the whole function.
-- [ ] Same treatment for the `expected string, got <kind>` per-item
+- [x] Same treatment for the `expected string, got <kind>` per-item
       branch (currently also short-circuits).
-- [ ] Update the unit tests in `lint.rs` that exercise `item_pattern`
+- [x] Update the unit tests in `lint.rs` that exercise `item_pattern`
       to assert multi-violation output.
-- [ ] E2E test: vault with `item_pattern = "^[a-z][a-z0-9-]*$"`, file
+- [x] E2E test: vault with `item_pattern = "^[a-z][a-z0-9-]*$"`, file
       with `tags: [Foo, "1bad", "Bar"]` → expect 3 SCHEMA violations
       from one file, all with item indices.
 
@@ -62,21 +62,21 @@ The stderr hint also uses single-segment phrasing
 (`kb/notes/foo.md with --dir kb`), which is unhelpful for multi-segment
 users diagnosing the issue.
 
-- [ ] In the `--files-from` path-resolution helper, strip the **full**
+- [x] In the `--files-from` path-resolution helper, strip the **full**
       configured `dir` prefix from each input line (including any
       intermediate path components), not just the last component.
       Normalize to forward slashes first so a Windows-flavoured `--dir
       docs\guide` still matches `docs/guide/page.md`.
-- [ ] When `dir` is `.` (root vault), no prefix to strip — current
+- [x] When `dir` is `.` (root vault), no prefix to strip — current
       behaviour is correct.
-- [ ] Update the all-missing stderr hint to quote the actual
+- [x] Update the all-missing stderr hint to quote the actual
       configured `dir`, e.g. "if paths include the vault dir prefix
       (e.g. files/en-us/x.md with --dir files/en-us), …".
-- [ ] E2E test: vault `files/en-us`, input `files/en-us/x.md` →
+- [x] E2E test: vault `files/en-us`, input `files/en-us/x.md` →
       resolves to `x.md` and lints clean.
-- [ ] E2E test: vault `kb` (single segment) → existing behaviour
+- [x] E2E test: vault `kb` (single segment) → existing behaviour
       unchanged.
-- [ ] E2E test: ambiguity check — vault `notes`, input
+- [x] E2E test: ambiguity check — vault `notes`, input
       `notes/notes/foo.md` should resolve to `notes/foo.md` relative to
       the vault (existing precedence: vault-relative first, then
       strip-and-retry). Document this precedence in `--files-from`
@@ -91,11 +91,11 @@ error if the parent directory does not exist"; line 1034's `--file`
 help says "must not exist; parent must exist". iter-140 fixed the code
 to `create_dir_all(parent)` but didn't sync the docs.
 
-- [ ] Delete the "parent directory does not exist" bullet from
+- [x] Delete the "parent directory does not exist" bullet from
       `CONSTRAINTS:` in the `new` long-help.
-- [ ] Update the `--file` short-help to: "Vault-relative path for the
+- [x] Update the `--file` short-help to: "Vault-relative path for the
       new file (must not exist; parent dirs created if missing)".
-- [ ] Quick grep `grep -rn "parent must exist\|parent directory does not exist" crates/`
+- [x] Quick grep `grep -rn "parent must exist\|parent directory does not exist" crates/`
       and clean up any other occurrences.
 
 #### NEW-4 — `--files-from` doesn't trim whitespace
@@ -103,10 +103,10 @@ to `create_dir_all(parent)` but didn't sync the docs.
 `printf '  edge.md\n' | hyalo find --files-from -` reports the path as
 missing because leading whitespace isn't trimmed.
 
-- [ ] In the per-line parsing helper, `s.trim()` each line before any
+- [x] In the per-line parsing helper, `s.trim()` each line before any
       other processing (after the empty-line skip).
-- [ ] Unit test: lines with leading spaces, trailing spaces, tabs.
-- [ ] E2E test: whitespace-padded input lints/finds correctly.
+- [x] Unit test: lines with leading spaces, trailing spaces, tabs.
+- [x] E2E test: whitespace-padded input lints/finds correctly.
 
 #### NEW-5 — `create-index --index-file` UX trap
 
@@ -128,12 +128,12 @@ about an index now uses the same flag name. Document in
 `--index-file`; did you mean `hyalo create-index -o <path>`?" — uses
 the project's existing "did you mean" pattern.
 
-- [ ] Decision: pick A or B. Recommend A (less friction).
-- [ ] Apply chosen approach.
-- [ ] Either way: stop warning about a stale index at the default
+- [x] Decision: pick A or B. Recommend A (less friction).
+- [x] Apply chosen approach.
+- [x] Either way: stop warning about a stale index at the default
       location when `-o` redirected the write target. The "stale
       index" check only makes sense if we're about to use that index.
-- [ ] E2E test for the chosen approach.
+- [x] E2E test for the chosen approach.
 
 #### NEW-6 — `--files-from` doesn't dedupe input
 
@@ -141,14 +141,14 @@ Pipeline output (e.g. `git log --name-only`) can repeat paths. The
 current `--files-from` implementation processes the same path multiple
 times — `lint` re-lints, `find` returns duplicates.
 
-- [ ] Dedupe after path resolution but before the actual work
+- [x] Dedupe after path resolution but before the actual work
       (a `HashSet<String>` keyed on the resolved vault-relative path).
       Preserve **first-seen order** so the output ordering matches the
       input ordering (use an `IndexSet`).
-- [ ] Document in `--files-from` help text: "Input is deduplicated;
+- [x] Document in `--files-from` help text: "Input is deduplicated;
       results follow first-seen order."
-- [ ] Unit test for the dedupe + order-preservation behaviour.
-- [ ] E2E test: same path 3× → single entry in output.
+- [x] Unit test for the dedupe + order-preservation behaviour.
+- [x] E2E test: same path 3× → single entry in output.
 
 #### NEW-7 — Most subcommand `--help` blocks lack EXAMPLES (LLM-ergonomics)
 
@@ -160,11 +160,11 @@ without: `find`, `set`, `task`, `summary`, `read`, `links`,
 LLMs reach for `<cmd> --help` first; they shouldn't have to escalate
 to top-level `hyalo help` to find idiomatic patterns.
 
-- [ ] Add a 3–6-line `EXAMPLES:` block to each of the 16 subcommands
+- [x] Add a 3–6-line `EXAMPLES:` block to each of the 16 subcommands
       listed above. Source material: the top-level `hyalo help`
       cookbook entries (already a good starting set) plus the
       iteration plans that introduced the features.
-- [ ] Prioritise content quality on the heavy hitters:
+- [x] Prioritise content quality on the heavy hitters:
   - `find`: BM25 query, `--property` + `--tag` combo, regex
     (`title~=/regex/`), `--section`, `--fields links`, `--files-from`
     with a git-style pipeline.
@@ -172,64 +172,64 @@ to top-level `hyalo help` to find idiomatic patterns.
     targeting via `--glob`, write-time date validation.
   - `task`: toggle whole file (`--all`), by section, by line numbers.
   - `read`: `--section "Heading"`, `--lines N:M`, `--fields ...`.
-- [ ] Update the top-level help cookbook if any new patterns surface
+- [x] Update the top-level help cookbook if any new patterns surface
       while doing the per-command examples, so the two stay in sync.
-- [ ] Lint check: a unit/integration test that every `Command` in the
+- [x] Lint check: a unit/integration test that every `Command` in the
       clap tree has a non-empty `EXAMPLES:` block (parses
       `long_about`). Future-proofs the contract.
 
 ## Tasks
 
-- [ ] NEW-1: change `item_pattern` validator to collect all violations
-- [ ] NEW-1: same for `expected string, got <kind>` branch
-- [ ] NEW-1: unit + e2e tests for multi-violation output
-- [ ] NEW-2: strip full `--dir` prefix in `--files-from` resolution
-- [ ] NEW-2: update all-missing stderr hint to quote actual `dir`
-- [ ] NEW-2: e2e tests (multi-segment, single-segment unchanged,
+- [x] NEW-1: change `item_pattern` validator to collect all violations
+- [x] NEW-1: same for `expected string, got <kind>` branch
+- [x] NEW-1: unit + e2e tests for multi-violation output
+- [x] NEW-2: strip full `--dir` prefix in `--files-from` resolution
+- [x] NEW-2: update all-missing stderr hint to quote actual `dir`
+- [x] NEW-2: e2e tests (multi-segment, single-segment unchanged,
   ambiguity precedence)
 - [x] NEW-3: scrub stale "parent must exist" wording in args.rs
 - [x] NEW-3: grep audit for any other occurrences
-- [ ] NEW-4: trim whitespace per `--files-from` line
-- [ ] NEW-4: unit + e2e tests
-- [ ] NEW-5: decide A or B; apply
-- [ ] NEW-5: stop warning about default-location stale index when `-o`
+- [x] NEW-4: trim whitespace per `--files-from` line
+- [x] NEW-4: unit + e2e tests
+- [x] NEW-5: decide A or B; apply
+- [x] NEW-5: stop warning about default-location stale index when `-o`
   redirected
-- [ ] NEW-5: e2e test
-- [ ] NEW-6: dedupe `--files-from` input via `IndexSet`
-- [ ] NEW-6: document in help text
-- [ ] NEW-6: unit + e2e tests
+- [x] NEW-5: e2e test
+- [x] NEW-6: dedupe `--files-from` input via `IndexSet`
+- [x] NEW-6: document in help text
+- [x] NEW-6: unit + e2e tests
 - [x] NEW-7: add `EXAMPLES:` blocks to all 16 missing subcommands
 - [x] NEW-7: prioritise quality on `find`, `set`, `task`, `read`
 - [x] NEW-7: lint/integration test requiring `EXAMPLES:` on every
   command
-- [ ] CHANGELOG `Unreleased` entries under Fixed and Added
-- [ ] Cross-platform CI verification (macOS + Ubuntu + Windows)
+- [x] CHANGELOG `Unreleased` entries under Fixed and Added
+- [x] Cross-platform CI verification (macOS + Ubuntu + Windows)
 
 ## Acceptance criteria
 
-- [ ] `tags: [Foo, "1bad", "Bar"]` against `item_pattern =
+- [x] `tags: [Foo, "1bad", "Bar"]` against `item_pattern =
       "^[a-z][a-z0-9-]*$"` produces three SCHEMA violations, one per
       item, each citing its index (NEW-1)
-- [ ] `git diff --name-only | hyalo lint --files-from -` works against
+- [x] `git diff --name-only | hyalo lint --files-from -` works against
       a vault with multi-segment `--dir` (e.g. `files/en-us`); inputs
       resolve, `files_missing = 0` (NEW-2)
-- [ ] The all-missing stderr hint quotes the actual configured `dir`
+- [x] The all-missing stderr hint quotes the actual configured `dir`
       (NEW-2)
-- [ ] `hyalo new --help` no longer mentions "parent must exist"
+- [x] `hyalo new --help` no longer mentions "parent must exist"
       (NEW-3)
-- [ ] `printf '  x.md\n' | hyalo find --files-from -` resolves `x.md`
+- [x] `printf '  x.md\n' | hyalo find --files-from -` resolves `x.md`
       after whitespace trim (NEW-4)
-- [ ] `create-index --index-file <path>` either writes to `<path>`
+- [x] `create-index --index-file <path>` either writes to `<path>`
       (Option A) or returns a clear "did you mean -o?" error
       (Option B); no silent ignore (NEW-5)
-- [ ] Duplicate input lines to `--files-from` produce a single result
+- [x] Duplicate input lines to `--files-from` produce a single result
       per resolved path, in first-seen order (NEW-6)
-- [ ] Every `hyalo <subcommand> --help` includes an `EXAMPLES:` block
+- [x] Every `hyalo <subcommand> --help` includes an `EXAMPLES:` block
       with at least 2 concrete invocations (NEW-7)
-- [ ] An automated check guards against EXAMPLES regressions on new
+- [x] An automated check guards against EXAMPLES regressions on new
       commands (NEW-7)
-- [ ] CHANGELOG `Unreleased` updated under Fixed and Added
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] CHANGELOG `Unreleased` updated under Fixed and Added
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace` green on all three CI platforms
 
 ## Design notes
