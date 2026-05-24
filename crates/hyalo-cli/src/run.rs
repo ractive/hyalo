@@ -81,8 +81,11 @@ fn effective_index_path_for(
             | TaskAction::Toggle { index_flags, .. }
             | TaskAction::Set { index_flags, .. } => Some(index_flags),
         },
-        Commands::CreateIndex { .. }
-        | Commands::DropIndex { .. }
+        // CreateIndex never *reads* an index — the global --index-file is an
+        // output-path synonym there (merged into --output in run_inner). Return
+        // early so we don't attempt to load a non-existent target as an input.
+        Commands::CreateIndex { .. } => return None,
+        Commands::DropIndex { .. }
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }

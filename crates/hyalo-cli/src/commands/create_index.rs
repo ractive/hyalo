@@ -101,9 +101,10 @@ pub fn create_index(
 
     // Check for stale indexes in the same directory.
     // Only run this check when we wrote to the default location; if the caller
-    // redirected output via -o / --index-file, they are managing paths themselves
-    // and a warning about an unrelated default-location index would be misleading.
-    let wrote_to_default = output.is_none();
+    // redirected output elsewhere, they are managing paths themselves and a
+    // warning about an unrelated default-location index would be misleading.
+    // Compare against the resolved default path (handles `-o <default>` correctly).
+    let wrote_to_default = index_path == dir.join(".hyalo-index");
     if wrote_to_default && let Ok(stale) = find_stale_indexes(dir) {
         for (stale_path, stale_vault, stale_ts) in stale {
             // Don't warn about the file we just wrote

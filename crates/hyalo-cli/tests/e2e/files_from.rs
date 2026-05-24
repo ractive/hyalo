@@ -563,11 +563,12 @@ fn lint_files_from_multi_segment_dir_prefix_stripped() {
     // Pass --dir as the relative string "files/en-us" so resolve() can derive
     // the multi-segment prefix. We construct this relative to root.
     // In CLI invocation we use the relative path from cwd=root.
-    let mut cmd = hyalo_no_hints();
-    // Use the absolute vault path for --dir (the CLI resolves it), but pass
-    // the relative string "files/en-us" as the configured_dir via a .hyalo.toml
-    // in root with dir = "files/en-us". Create that config:
+    // Drop a root-level .hyalo.toml that sets `dir = "files/en-us"`. The CLI is
+    // invoked from `root` with no explicit --dir, so it picks up that config —
+    // configured_dir then becomes the relative multi-segment string, which is
+    // what resolve() needs to derive the prefix.
     std::fs::write(root.path().join(".hyalo.toml"), "dir = \"files/en-us\"\n").unwrap();
+    let mut cmd = hyalo_no_hints();
     cmd.current_dir(root.path());
     cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
     cmd.args(["--format", "json"]);

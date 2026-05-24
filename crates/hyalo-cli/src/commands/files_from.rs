@@ -185,36 +185,9 @@ pub fn resolve(dir: &Path, entries: &[String], configured_dir: &str) -> Result<F
                 continue;
             }
 
-            // Strip vault-dir prefix when git outputs repo-relative paths (NEW-2).
-            // E.g. configured_dir = "files/en-us", entry = "files/en-us/x.md" → "x.md".
-            //
-            // Precedence (from iter-140 BUG-2, preserved here):
-            //   (A) If the vault-relative literal exists on disk, keep entry as-is.
-            //   (B) Otherwise, if the entry starts with the configured dir prefix and
-            //       the stripped form exists, use the stripped form.
-            //   (C) Fall through (entry unchanged; will count as missing).
-            //
-            // This handles the ambiguity case: configured_dir = "notes",
-            // entry = "notes/notes/foo.md". If "notes/notes/foo.md" exists in the vault
-            // (A), use it. Otherwise try stripped "notes/foo.md" (B).
-            if let Some(prefix) = &dir_prefix {
-                if dir.join(entry.as_str()).is_file() {
-                    // (A) Vault-relative literal exists — keep as-is.
-                    entry.clone()
-                } else if let Some(stripped) = entry.strip_prefix(prefix.as_str()) {
-                    if dir.join(stripped).is_file() {
-                        // (B) Stripped form exists — stripping succeeded.
-                        stripped.to_owned()
-                    } else {
-                        // (C) Neither form exists; fall through to missing handling.
-                        entry.clone()
-                    }
-                } else {
-                    entry.clone()
-                }
-            } else {
-                entry.clone()
-            }
+            // Default to the entry as-is; prefix-strip is attempted lazily below
+            // only if the vault-relative literal does not exist on disk (NEW-2).
+            entry.clone()
         };
 
         // Filter to `.md` only (case-insensitive).
@@ -223,9 +196,32 @@ pub fn resolve(dir: &Path, entries: &[String], configured_dir: &str) -> Result<F
             continue;
         }
 
-        let full = dir.join(&rel);
+        let mut full = dir.join(&rel);
 
-        // Check existence.
+        // Check existence; on miss, lazily try the prefix-stripped form (NEW-2).
+        //
+        // Precedence (from iter-140 BUG-2, preserved here):
+        //   (A) Vault-relative literal exists → use it.
+        //   (B) Otherwise, if `entry` starts with the configured dir prefix and the
+        //       stripped form exists, use the stripped form.
+        //   (C) Neither exists → counted as missing.
+        //
+        // This handles the ambiguity case: configured_dir = "notes",
+        // entry = "notes/notes/foo.md". If the literal exists (A), we use it
+        // (single stat). Only on miss do we pay a second stat for (B).
+        let mut rel = rel;
+        if !full.is_file()
+            && let Some(prefix) = &dir_prefix
+            && Path::new(entry).is_relative()
+            && let Some(stripped) = entry.strip_prefix(prefix.as_str())
+        {
+            let stripped_full = dir.join(stripped);
+            if stripped_full.is_file() {
+                stripped.clone_into(&mut rel);
+                full = stripped_full;
+            }
+        }
+
         if !full.is_file() {
             counters.files_missing += 1;
             continue;
