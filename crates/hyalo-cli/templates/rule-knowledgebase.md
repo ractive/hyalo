@@ -13,6 +13,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply`
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
+- **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton with `TBD` placeholders; then run `hyalo lint --file <path>` to see what to fill in)
 - **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show <ID>`, `hyalo lint-rules set <ID> --enabled false`, `hyalo lint-rules set <ID> --severity warn`
 

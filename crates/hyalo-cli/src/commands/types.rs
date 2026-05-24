@@ -78,6 +78,7 @@ pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig, format: Format) 
         "filename_template": merged.filename_template,
         "defaults": merged.defaults,
         "properties": props,
+        "required_sections": merged.required_sections,
     });
 
     CommandOutcome::success(format_success(Format::Json, &val))
@@ -99,6 +100,13 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
         PropertyConstraint::List => serde_json::json!({"type": "list"}),
         PropertyConstraint::Enum { values } => {
             serde_json::json!({"type": "enum", "values": values})
+        }
+        PropertyConstraint::StringList { item_pattern } => {
+            if let Some(pat) = item_pattern {
+                serde_json::json!({"type": "string-list", "item_pattern": pat})
+            } else {
+                serde_json::json!({"type": "string-list"})
+            }
         }
     }
 }
@@ -883,7 +891,7 @@ fn load_schema_from_doc(doc: &toml_edit::DocumentMut) -> Result<SchemaConfig> {
             default: None,
             types: HashMap::new(),
         });
-    Ok(SchemaConfig::from(raw_schema))
+    Ok(SchemaConfig::from_raw_lossy(raw_schema))
 }
 
 // ---------------------------------------------------------------------------

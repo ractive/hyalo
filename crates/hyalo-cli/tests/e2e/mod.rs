@@ -23,6 +23,7 @@ mod lint_rules;
 mod llm_misuse;
 mod mv;
 mod mv_batch;
+mod new;
 mod positional_file;
 mod properties;
 mod quiet;

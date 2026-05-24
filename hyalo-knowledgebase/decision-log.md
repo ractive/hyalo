@@ -520,3 +520,27 @@ Research across tools:
 - Nightly toolchain + miri component required for `just miri`
 - Miri pass on `scanner::`, `bm25::`, `links::`, `heading::`, `frontmatter::` — 262 tests, no UB
 - Pre-existing brittle test surfaced: `bm25::test_bm25_serde_round_trip` uses `f64::EPSILON` tolerance for summed scores; failing under Miri due to HashMap iteration order. Not UB; widen tolerance when convenient.
+
+## DEC-043: Schema-as-Template; No Templating Engine for `hyalo new` (2026-05-24)
+
+**Context:** Consumer repos (ff-rdp and similar) wanted a way to create new markdown files from schema, without manually copying frontmatter boilerplate. The tempting design would have been a templating mini-DSL (`{var}`, `{date}`, `{{ #if ... }}`). See [[research/ff-rdp-discipline-consumer-notes]] for the full wishlist and design dialogue.
+
+**Decision:** No templating engine. Schema declarations ARE the template. `hyalo new --type <name> --file <path>` synthesises a skeleton file from the type schema: required frontmatter properties with type-appropriate placeholders, required body sections with `TBD` paragraphs. Zero `{var}` substitution. The only "smart default" is `date`-typed properties getting today's ISO date — and that is typed-default behaviour, not templating.
+
+**Why these tradeoffs:**
+
+1. **Schema is already the source of truth.** Adding a separate template file would split the authority for "what does a valid file look like" between the schema and the template. When they drift, the agent gets confused. One source, one place.
+
+2. **Intentionally invalid output drives the lint loop.** `TBD` placeholders fail `hyalo lint`. This is the mechanism. The agent creates a file, runs lint, and reads the violations to know exactly what to fill in. Pre-validated output would defeat this.
+
+3. **No `--force`, no `mkdir -p`.** These are rejected to keep the surface area small and the error messages clear. The agent handles file existence checks and directory creation explicitly, which surfaces intent.
+
+4. **`required-sections` defers hierarchy correctness to markdownlint MD001.** We check presence and level, not level-skipping. One concern at a time.
+
+5. **`dir` field on type schemas rejected.** Agent specifies `--file` explicitly. A `dir` field would add implicit location logic that is hard to explain and easy to misconfigure.
+
+**Consequences:**
+- `hyalo new` is stateless: no template files to manage, no migration path needed when schema changes
+- Agents using `hyalo new` must handle `lint` output to know what to fill in — the feedback loop is explicit
+- Bulk creation (`--batch`) deferred; single-file is the unit for now
+- `item_pattern` and `required-sections` schema extensions ship in the same iteration, making the lint pass immediately useful after `hyalo new`

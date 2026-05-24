@@ -99,9 +99,23 @@ hyalo lint-rules show MD013
 hyalo lint-rules set MD013 --enabled false
 hyalo lint-rules set HYALO001 --severity error
 hyalo lint-rules remove MD013           # revert to default
+
+# Schema-driven file creation: scaffold a new file from a type schema.
+hyalo new --type iteration --file iterations/iter-99-example.md
 ```
 
 Every write command supports `--dry-run` to preview changes before applying them.
+
+### Agent loop: new → edit → lint
+
+`hyalo new` creates a skeleton file with `TBD` placeholders that are intentionally
+invalid — they will fail `hyalo lint`. This is by design. The loop is:
+
+1. `hyalo new --type <name> --file <path>` — scaffold the skeleton
+2. Edit the file to fill in the real values
+3. `hyalo lint --file <path>` — see which placeholders still violate the schema
+
+The lint output tells you exactly what to fix, field by field.
 
 Run `hyalo --help` or `hyalo <command> --help` for the full reference.
 

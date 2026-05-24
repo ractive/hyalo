@@ -1188,8 +1188,7 @@ type: post
                     TypeSchema {
                         required: vec![],
                         properties: type_props,
-                        filename_template: None,
-                        defaults: HashMap::new(),
+                        ..Default::default()
                     },
                 );
                 m
@@ -1251,8 +1250,7 @@ type: post
                     TypeSchema {
                         required: vec![],
                         properties: type_props,
-                        filename_template: None,
-                        defaults: HashMap::new(),
+                        ..Default::default()
                     },
                 );
                 m

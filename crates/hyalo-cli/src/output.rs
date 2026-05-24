@@ -805,7 +805,10 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
                 return output;
             }
             // TypeShow: detected by presence of "properties" object + "required" array + "type" string.
-            if sig == "defaults,filename_template,properties,required,type" {
+            // Accept both the old signature (without required_sections) and the new one.
+            if sig == "defaults,filename_template,properties,required,type"
+                || sig == "defaults,filename_template,properties,required,required_sections,type"
+            {
                 return format_type_show_text(map);
             }
             // LintFixOutput (fix-mode): detected by `total_fixed` + `files`.
@@ -1657,6 +1660,18 @@ fn format_type_show_text(map: &serde_json::Map<String, serde_json::Value>) -> St
                 }
             }
             s.push('\n'); // blank line between property blocks
+        }
+    }
+
+    // Required sections.
+    if let Some(serde_json::Value::Array(sections)) = map.get("required_sections")
+        && !sections.is_empty()
+    {
+        let _ = write!(s, "\n\nRequired sections:");
+        for sec in sections {
+            if let Some(sv) = sec.as_str() {
+                let _ = write!(s, "\n  {sv}");
+            }
         }
     }
 

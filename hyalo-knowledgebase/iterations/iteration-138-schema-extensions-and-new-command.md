@@ -1,10 +1,10 @@
 ---
 title: >-
-  Iteration 138 — Schema extensions (item_pattern, required_sections) +
-  `hyalo new` scaffolder
+  Iteration 138 — Schema extensions (item_pattern, required_sections) + `hyalo
+  new` scaffolder
 type: iteration
 date: 2026-05-24
-status: planned
+status: completed
 branch: iter-138/schema-extensions-and-new-command
 tags:
   - iteration

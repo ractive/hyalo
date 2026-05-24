@@ -955,8 +955,7 @@ tags:
                     TypeSchema {
                         required: vec![],
                         properties: type_props,
-                        filename_template: None,
-                        defaults: HashMap::new(),
+                        ..Default::default()
                     },
                 );
                 m
@@ -1019,8 +1018,7 @@ author: alice
                     TypeSchema {
                         required: vec![],
                         properties: type_props,
-                        filename_template: None,
-                        defaults: HashMap::new(),
+                        ..Default::default()
                     },
                 );
                 m
