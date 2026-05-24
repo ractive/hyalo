@@ -246,7 +246,7 @@ pub(crate) struct FindFilters {
     /// Read file paths from PATH (one per line); use '-' to read from stdin.
     /// Mutually exclusive with --file and --glob.
     /// Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], hide = true)]
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"])]
     #[serde(skip)]
     pub files_from: Option<String>,
     /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections (alias: outline), tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)

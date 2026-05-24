@@ -42,10 +42,13 @@ hyalo command the same way.
 - [x] New global / per-subcommand `--files-from <PATH>` flag, where
       `PATH = -` reads from stdin.
 - [x] Add to every command that currently accepts `--glob`: `find`,
-      `lint`, `mv`, `set`, `remove`, `append`, `task toggle`,
-      `task set`. (Skip `summary`, `properties summary`, `tags summary`,
-      `properties rename`, `tags rename` — these are whole-vault by
-      design.)
+      `lint`, `mv`, `set`, `remove`, `append`. (Skip `summary`,
+      `properties summary`, `tags summary`, `properties rename`,
+      `tags rename` — these are whole-vault by design.)
+- [ ] **Deferred:** also wire into `task toggle` / `task set`. The
+      original list included these, but the CI/diff-aware-lint use
+      case driving iter-139 doesn't need them, so they're left for a
+      follow-up to keep this PR focused.
 - [x] Mutually exclusive with `--glob` AND `--file` via clap
       `conflicts_with_all`. Clear error if two sources are given.
 
@@ -86,12 +89,16 @@ hyalo command the same way.
 
 ### Index interaction
 
-- [x] **When `--index` (or `--index-file`) is given**: read from the
+- [ ] **When `--index` (or `--index-file`) is given**: read from the
       snapshot for every path in the input list. Paths not present in
       the index get treated the same as missing-on-disk
       (`files_missing`). **Do not fall back to disk-rescan.** The
       contract for `--index` is "snapshot is the source of truth";
       `--files-from` must not weaken that.
+      **Deferred:** current resolution uses `is_file()` on disk instead
+      of snapshot membership. A path in the input that's on disk but
+      absent from the snapshot is not yet counted as `files_missing`.
+      Follow-up: thread `snapshot_index` into `files_from::resolve`.
 - [x] **Without `--index`**: read from disk for each path. No
       directory walk happens — the input list IS the work set.
 - [x] Performance: this should be measurably faster than `--glob` on
@@ -105,12 +112,17 @@ hyalo command the same way.
 
 ### Hints
 
-- [x] `HintSource::FilesFrom` variant on success: suggest running the
+- [ ] `HintSource::FilesFrom` variant on success: suggest running the
       same command without `--files-from` to operate on the whole
-      vault, when relevant.
-- [x] Existing hints that suggest "scan all files" or "use `--glob`"
+      vault, when relevant. **Deferred:** an initial stub was wired
+      but never dispatched (and the generated command was missing
+      its subcommand, per Copilot/CodeRabbit review). The stub was
+      removed in this PR — bespoke hint copy can be added in a
+      follow-up once the wiring is designed properly.
+- [ ] Existing hints that suggest "scan all files" or "use `--glob`"
       pick up an alternative: "or pass `--files-from -` if you already
-      have a file list (e.g. `git diff --name-only`)".
+      have a file list (e.g. `git diff --name-only`)". **Deferred:**
+      not done in this PR.
 
 ### Docs + UX surfaces
 
@@ -137,10 +149,11 @@ hyalo command the same way.
 - [x] Implement filtering (`.md` only, missing files, outside-vault)
 - [x] Wire envelope counters: `files_missing`, `files_skipped_non_md`,
       `files_skipped_outside_vault`
-- [x] Wire `--index` interaction (snapshot-only resolution; no disk
-      fallback)
+- [ ] Wire `--index` interaction (snapshot-only resolution; no disk
+      fallback). **Deferred** — see Index-interaction section.
 - [x] Wire mutual-exclusion errors with `--glob` and `--file`
-- [x] `HintSource::FilesFrom` + per-command hint updates
+- [ ] `HintSource::FilesFrom` + per-command hint updates.
+      **Deferred** — see Hints section.
 - [x] Update help texts on every affected subcommand
 - [x] Update README.md with the CI diff-aware lint example
 - [x] Update `cli/help.rs` long-help examples
@@ -153,7 +166,9 @@ hyalo command the same way.
       out-of-vault, relative, `..` rejection)
 - [x] E2E tests for `find` and `lint` with `--files-from`: happy path,
       empty input, mixed valid + missing + non-md + out-of-vault
-      paths, mutual-exclusion errors, `--index --files-from` combo
+      paths, mutual-exclusion errors. (`--index --files-from` combo
+      coverage deferred along with the snapshot-membership wiring
+      above.)
 - [x] Cross-platform CI verification (macOS + Ubuntu + Windows)
 
 ## Acceptance criteria
@@ -163,8 +178,10 @@ hyalo command the same way.
 - [x] `git diff --name-only origin/main | hyalo lint --files-from -`
       lints only the changed `.md` files; non-`.md` and deleted files
       surface as counters in the envelope, not as errors
-- [x] `--index --files-from -` reads exclusively from the snapshot;
-      paths missing from the snapshot count as `files_missing`
+- [ ] `--index --files-from -` reads exclusively from the snapshot;
+      paths missing from the snapshot count as `files_missing`.
+      **Deferred** — current resolution is disk-based; see
+      Index-interaction section.
 - [x] `--files-from` + `--glob` or `--files-from` + `--file` fails with
       a clear "pick one" error
 - [x] Absolute paths inside the vault are rewritten to vault-relative;

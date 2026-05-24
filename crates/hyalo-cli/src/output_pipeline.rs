@@ -25,7 +25,10 @@ pub(crate) struct OutputPipeline<'a> {
 /// Inject `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`
 /// counters into an already-built envelope JSON object when `--files-from` was used.
 ///
-/// All three fields are always written (as `0`) so consumers can reliably check for them.
+/// When `counters` is `None` (no `--files-from` on this invocation), the envelope is
+/// left untouched and the fields are omitted entirely. When `counters` is `Some`, all
+/// three fields are written — including zero values — so consumers can reliably
+/// distinguish "used `--files-from`, zero skips" from "`--files-from` was not used".
 fn inject_files_from_counters(
     envelope: &mut serde_json::Value,
     counters: Option<&FilesFromCounters>,

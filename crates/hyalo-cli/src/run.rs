@@ -138,21 +138,11 @@ fn task_selector(line: &[usize], section: Option<&String>, all: bool) -> Option<
     }
 }
 
-/// Resolve `--files-from` for commands that accept it.
-///
-/// When a command carries a `files_from` source, this function:
-/// 1. Loads the raw path lines (from a file path or stdin `-`).
-/// 2. Resolves them against the vault `dir` (filtering `.md`, missing, outside-vault).
-/// 3. Injects the resolved vault-relative paths into the command's `file` Vec.
-/// 4. Returns `Some(FilesFromCounters)` for the output pipeline to include in the envelope.
-///
-/// Returns `Ok(None)` when the command does not carry `--files-from`.
-/// Returns `Err(...)` only for I/O failures reading the source.
-///
-/// When the resolved file list is empty (all lines filtered/missing), the command
-/// will proceed with an empty `file` Vec — each subcommand handles the empty-list
-/// case naturally (zero results, exit 0).
 /// Check whether the command's injected `file` list is empty after `--files-from` resolution.
+///
+/// Called after [`resolve_files_from_for_command`] to detect "all entries filtered
+/// out" — used by the caller to short-circuit dispatch with an empty result rather
+/// than letting the command fall through to a full-vault scan.
 #[allow(clippy::match_same_arms)]
 fn files_from_command_file_list_is_empty(cmd: &Commands) -> bool {
     match cmd {
@@ -196,6 +186,20 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
     }
 }
 
+/// Resolve `--files-from` for commands that accept it.
+///
+/// When a command carries a `files_from` source, this function:
+/// 1. Loads the raw path lines (from a file path or stdin `-`).
+/// 2. Resolves them against the vault `dir` (filtering `.md`, missing, outside-vault).
+/// 3. Injects the resolved vault-relative paths into the command's `file` Vec
+///    (or `glob` Vec for `mv` batch mode).
+/// 4. Returns `Some(FilesFromCounters)` for the output pipeline to include in the envelope.
+///
+/// Returns `Ok(None)` when the command does not carry `--files-from`.
+/// Returns `Err(...)` only for I/O failures reading the source.
+///
+/// When the resolved file list is empty, the caller is expected to use
+/// [`files_from_command_file_list_is_empty`] to short-circuit dispatch.
 #[allow(clippy::too_many_lines, clippy::match_same_arms)]
 fn resolve_files_from_for_command(
     cmd: &mut Commands,
@@ -303,18 +307,10 @@ fn resolve_files_from_for_command(
                 return Ok(None);
             };
             let (paths, counters) = resolve_source(&source)?;
-            // Mv batch mode: populate glob with the resolved paths as fake--globs
-            // isn't right; we need to use the files as batch targets.
-            // For Mv, inject resolved paths into glob using exact-path patterns.
-            // Since filter_index_entries matches exact rel_path equality when
-            // only files_arg is provided, inject into glob as exact-match patterns.
-            // Actually, Mv batch mode only checks glob/properties/tag.
-            // The cleanest wiring: put paths into glob as explicit literal globs.
-            // But discovery::match_globs uses globset which won't match unless
-            // the pattern matches. For exact paths, use the path directly.
-            // Solution: put the paths as the glob list (each is a literal path,
-            // and since they are exact vault-relative paths, they will match via
-            // glob semantics when the pattern has no wildcards and equals the path).
+            // Mv batch mode is driven by --glob/--property/--tag/--type selectors,
+            // so we feed the resolved vault-relative paths into `glob`. Each path
+            // is a literal (no wildcards), and globset treats a literal pattern
+            // as an exact-match — so this selects exactly the listed files.
             *glob = paths;
             *file = None;
             *file_positional = None;

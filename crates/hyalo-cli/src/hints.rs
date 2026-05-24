@@ -47,14 +47,8 @@ pub enum HintSource {
     CreateIndex,
     DropIndex,
     Lint,
-    Types {
-        subcommand: Option<String>,
-    },
-    New {
-        file: String,
-    },
-    /// Used when --files-from was the only source of files.
-    FilesFrom,
+    Types { subcommand: Option<String> },
+    New { file: String },
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -108,10 +102,6 @@ pub struct HintContext {
     pub lint_rule_prefix: Option<String>,
     /// Rules to fix (`--fix-rule`, repeatable).
     pub lint_fix_rules: Vec<String>,
-    // --files-from context
-    /// The `--files-from` source path (file path or "-" for stdin).
-    /// `None` when `--files-from` was not used.
-    pub files_from: Option<String>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -157,7 +147,6 @@ impl HintContext {
             lint_rule: None,
             lint_rule_prefix: None,
             lint_fix_rules: vec![],
-            files_from: None,
         }
     }
 
@@ -207,7 +196,6 @@ pub fn generate_hints(
         HintSource::Lint => hints_for_lint(ctx, data, total),
         HintSource::Types { .. } => hints_for_types(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
-        HintSource::FilesFrom => hints_for_files_from(ctx),
     };
     hints.into_iter().take(MAX_HINTS).collect()
 }
@@ -1807,14 +1795,6 @@ fn hints_for_new(ctx: &HintContext, file: &str) -> Vec<Hint> {
     vec![Hint::new(
         "Validate the new file and see placeholder violations",
         build_command_no_glob(ctx, &["lint", "--file", file]),
-    )]
-}
-
-fn hints_for_files_from(ctx: &HintContext) -> Vec<Hint> {
-    // When --files-from was in use, suggest running without it to scope the whole vault.
-    vec![Hint::new(
-        "Run on the whole vault instead (remove --files-from)",
-        build_command_no_glob(ctx, &[]),
     )]
 }
 
