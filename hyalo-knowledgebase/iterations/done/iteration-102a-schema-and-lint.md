@@ -167,5 +167,5 @@ JSON output is wrapped by the standard CLI envelope. The lint payload uses `file
 
 ## Follow-up iterations
 
-- **[[iterations/iteration-102b-lint-fix]]** — `hyalo lint --fix` auto-remediation
+- **[[iteration-102b-lint-fix]]** — `hyalo lint --fix` auto-remediation
 - **[[iterations/done/iteration-102c-types-command]]** — `hyalo types` CLI for schema management
