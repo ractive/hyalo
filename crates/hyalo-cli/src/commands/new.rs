@@ -1,6 +1,7 @@
 /// `hyalo new` — create a new markdown file scaffolded from a schema type.
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::io::Write as _;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::Context;
 use indexmap::IndexMap;
@@ -47,23 +48,30 @@ pub(crate) fn create_new(
     // Step 2: validate --file (must be vault-relative, no absolute, no ..)
     // ------------------------------------------------------------------
     let file_path = Path::new(file_arg);
-    if file_path.is_absolute() {
-        return Ok(CommandOutcome::UserError(format_error(
-            format,
-            "invalid file path: must be vault-relative, not absolute",
-            Some(file_arg),
-            Some("omit the leading '/' and provide the path relative to the vault root"),
-            None,
-        )));
-    }
-    if file_arg.split('/').any(|c| c == "..") {
-        return Ok(CommandOutcome::UserError(format_error(
-            format,
-            "invalid file path: '..' traversal is not allowed",
-            Some(file_arg),
-            Some("provide a path relative to the vault root without '..' components"),
-            None,
-        )));
+    // Cross-platform validation: walk components rather than splitting on '/'
+    // so backslash separators on Windows are also caught.
+    for component in file_path.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format,
+                    "invalid file path: must be vault-relative, not absolute",
+                    Some(file_arg),
+                    Some("omit the leading '/' and provide the path relative to the vault root"),
+                    None,
+                )));
+            }
+            Component::ParentDir => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format,
+                    "invalid file path: '..' traversal is not allowed",
+                    Some(file_arg),
+                    Some("provide a path relative to the vault root without '..' components"),
+                    None,
+                )));
+            }
+            Component::CurDir | Component::Normal(_) => {}
+        }
     }
 
     let full_path: PathBuf = dir.join(file_arg);
@@ -71,7 +79,7 @@ pub(crate) fn create_new(
     // ------------------------------------------------------------------
     // Step 3: refuse if parent directory does not exist
     // ------------------------------------------------------------------
-    if full_path.parent().is_some_and(|parent| !parent.exists()) {
+    if full_path.parent().is_some_and(|parent| !parent.is_dir()) {
         let parent_rel = full_path
             .parent()
             .and_then(|p| p.strip_prefix(dir).ok())
@@ -88,40 +96,49 @@ pub(crate) fn create_new(
     }
 
     // ------------------------------------------------------------------
-    // Step 4: refuse if target file already exists
-    // ------------------------------------------------------------------
-    if full_path.exists() {
-        return Ok(CommandOutcome::UserError(format_error(
-            format,
-            "file already exists; remove it first if you mean to re-create",
-            Some(file_arg),
-            None,
-            None,
-        )));
-    }
-
-    // ------------------------------------------------------------------
-    // Step 5: synthesise file content
+    // Step 4 & 6: synthesise and atomically create the file
     // ------------------------------------------------------------------
     let merged = schema.merged_schema_for_type(type_name);
     let content = synthesise_content(type_name, &merged, dir);
 
-    // ------------------------------------------------------------------
-    // Step 6: write file
-    // ------------------------------------------------------------------
-    std::fs::write(&full_path, &content)
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&full_path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Ok(CommandOutcome::UserError(format_error(
+                format,
+                "file already exists; remove it first if you mean to re-create",
+                Some(file_arg),
+                None,
+                None,
+            )));
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("creating new file at {}", full_path.display()));
+        }
+    };
+    file.write_all(content.as_bytes())
         .with_context(|| format!("writing new file to {}", full_path.display()))?;
 
     // ------------------------------------------------------------------
     // Step 7: output
     // ------------------------------------------------------------------
     let rel_path = file_arg;
-    let val = serde_json::json!({
-        "type": type_name,
-        "file": rel_path,
-        "created": true,
-    });
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+    let out = match format {
+        Format::Text => format!("created {rel_path}\n"),
+        Format::Json => {
+            let val = serde_json::json!({
+                "type": type_name,
+                "file": rel_path,
+                "created": true,
+            });
+            format_success(Format::Json, &val)
+        }
+    };
+    Ok(CommandOutcome::success(out))
 }
 
 // ---------------------------------------------------------------------------
@@ -150,13 +167,23 @@ fn synthesise_content(
             Some(PropertyConstraint::Date) => {
                 PropValue::Str(default_val.unwrap_or_else(today_iso8601))
             }
-            Some(PropertyConstraint::Number) => {
-                default_val.map_or(PropValue::Int(0), PropValue::Str)
-            }
-            Some(PropertyConstraint::Boolean) => {
-                default_val.map_or(PropValue::Bool(false), PropValue::Str)
-            }
+            Some(PropertyConstraint::Number) => match default_val {
+                Some(s) => s
+                    .parse::<i64>()
+                    .map_or_else(|_| PropValue::Str(s), PropValue::Int),
+                None => PropValue::Int(0),
+            },
+            Some(PropertyConstraint::Boolean) => match default_val {
+                Some(s) => match s.as_str() {
+                    "true" => PropValue::Bool(true),
+                    "false" => PropValue::Bool(false),
+                    _ => PropValue::Str(s),
+                },
+                None => PropValue::Bool(false),
+            },
             Some(PropertyConstraint::List | PropertyConstraint::StringList { .. }) => {
+                // A default for list properties is uncommon; treat unparseable
+                // values as a scalar string fallback rather than fabricating items.
                 default_val.map_or(PropValue::EmptyList, PropValue::Str)
             }
             Some(PropertyConstraint::Enum { values }) => {

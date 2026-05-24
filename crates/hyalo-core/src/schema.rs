@@ -153,7 +153,15 @@ pub fn expand_default(raw: &str) -> String {
 /// ```
 pub fn parse_required_section_entry(entry: &str) -> Result<(u8, String), String> {
     match parse_atx_heading(entry) {
-        Some((level, text)) => Ok((level, text.trim().to_owned())),
+        Some((level, text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "heading text must be non-empty: expected 1–6 '#' characters followed by a space and heading text, got {entry:?}"
+                ));
+            }
+            Ok((level, trimmed.to_owned()))
+        }
         None => Err(format!(
             "not a valid ATX heading: expected 1–6 '#' characters followed by a space and heading text, got {entry:?}"
         )),
@@ -256,6 +264,15 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
         }
 
         let constraint_type = raw.constraint_type.as_deref().unwrap_or("string");
+
+        // `values` is only meaningful on enum properties; reject it elsewhere
+        // so misconfigured TOML surfaces as an error rather than silently
+        // discarding the configured values.
+        if raw.values.is_some() && constraint_type != "enum" {
+            return Err(format!(
+                "'values' is only valid on 'enum' properties, not '{constraint_type}'"
+            ));
+        }
 
         match constraint_type {
             "string" => {

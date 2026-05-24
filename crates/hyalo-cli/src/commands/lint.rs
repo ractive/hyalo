@@ -1114,36 +1114,37 @@ fn validate_constraint(
             let entry = regex_cache
                 .entry(pat.clone())
                 .or_insert_with(|| Regex::new(pat).map_err(|e| e.to_string()));
-            match entry.clone() {
-                Err(e) => Some(Violation {
-                    severity: Severity::Error,
-                    kind: None,
-                    message: format!("property \"{name}\": invalid item_pattern {pat:?}: {e}"),
-                }),
-                Ok(re) => {
-                    for (i, item) in items.iter().enumerate() {
-                        let Value::String(s) = item else {
-                            return Some(Violation {
-                                severity: Severity::Error,
-                                kind: None,
-                                message: format!(
-                                    "property \"{name}\" item {i}: expected string, got {item}"
-                                ),
-                            });
-                        };
-                        if !re.is_match(s) {
-                            return Some(Violation {
-                                severity: Severity::Error,
-                                kind: None,
-                                message: format!(
-                                    "property \"{name}\" item {i}: value {s:?} does not match pattern {pat:?}"
-                                ),
-                            });
-                        }
-                    }
-                    None
+            let re = match entry {
+                Err(e) => {
+                    return Some(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!("property \"{name}\": invalid item_pattern {pat:?}: {e}"),
+                    });
+                }
+                Ok(re) => re,
+            };
+            for (i, item) in items.iter().enumerate() {
+                let Value::String(s) = item else {
+                    return Some(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" item {i}: expected string, got {item}"
+                        ),
+                    });
+                };
+                if !re.is_match(s) {
+                    return Some(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" item {i}: value {s:?} does not match pattern {pat:?}"
+                        ),
+                    });
                 }
             }
+            None
         }
     }
 }
