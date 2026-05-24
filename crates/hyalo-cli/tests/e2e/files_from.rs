@@ -89,7 +89,7 @@ fn find_files_from_file_path() {
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let total = envelope["total"].as_u64().unwrap();
     assert_eq!(total, 1);
-    let results = envelope["results"].as_array().unwrap();
+    let results = envelope["results"]["files"].as_array().unwrap();
     assert_eq!(results[0]["file"], "alpha.md");
 }
 
@@ -133,10 +133,20 @@ fn find_files_from_empty_input_exits_zero() {
 
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(envelope["total"].as_u64().unwrap(), 0);
-    // files_from counters must be present and all zero
-    assert_eq!(envelope["files_missing"].as_u64().unwrap(), 0);
-    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 0);
-    assert_eq!(envelope["files_skipped_outside_vault"].as_u64().unwrap(), 0);
+    // files_from counters must be present and all zero (under .results)
+    assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 0);
+    assert_eq!(
+        envelope["results"]["files_skipped_non_md"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        envelope["results"]["files_skipped_outside_vault"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -167,9 +177,19 @@ fn find_files_from_mixed_counters() {
         1,
         "only alpha.md should match"
     );
-    assert_eq!(envelope["files_missing"].as_u64().unwrap(), 1);
-    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 1);
-    assert_eq!(envelope["files_skipped_outside_vault"].as_u64().unwrap(), 1);
+    assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 1);
+    assert_eq!(
+        envelope["results"]["files_skipped_non_md"]
+            .as_u64()
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        envelope["results"]["files_skipped_outside_vault"]
+            .as_u64()
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -210,7 +230,12 @@ fn find_files_from_non_md_skipped() {
     assert!(out.status.success());
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(envelope["total"].as_u64().unwrap(), 1);
-    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 1);
+    assert_eq!(
+        envelope["results"]["files_skipped_non_md"]
+            .as_u64()
+            .unwrap(),
+        1
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -236,8 +261,13 @@ fn lint_files_from_single_file_happy_path() {
     );
 
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(envelope["files_missing"].as_u64().unwrap(), 0);
-    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 0);
+    assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 0);
+    assert_eq!(
+        envelope["results"]["files_skipped_non_md"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -253,7 +283,7 @@ fn lint_files_from_empty_exits_zero() {
     let out = cmd.output().unwrap();
     assert!(out.status.success());
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(envelope["files_missing"].as_u64().unwrap(), 0);
+    assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 0);
 }
 
 #[test]
@@ -291,7 +321,7 @@ fn lint_files_from_missing_counted() {
     let out = cmd.output().unwrap();
     assert!(out.status.success());
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(envelope["files_missing"].as_u64().unwrap(), 1);
+    assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +487,44 @@ fn mv_files_from_batch_moves_files() {
 // ---------------------------------------------------------------------------
 // strip leading ./ from input
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// BUG-2: vault dir prefix stripping (iter-140)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_files_from_strips_vault_dir_prefix() {
+    // Setup: tempdir root contains "kb/" subdir as vault.
+    let tmp = tempfile::tempdir().unwrap();
+    let kb = tmp.path().join("kb");
+    std::fs::create_dir_all(kb.join("notes")).unwrap();
+    std::fs::write(kb.join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+    write_md(&kb, "notes/foo.md", "---\ntitle: Foo\n---\n\nBody.\n");
+
+    // Pipe "kb/notes/foo.md" (repo-relative) into lint with --dir kb.
+    // Without prefix stripping this would count as files_missing.
+    let list = write_list_file(&["kb/notes/foo.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", kb.to_str().unwrap()]);
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint with vault-prefix path should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // The file should be linted (files_missing = 0, files in results > 0).
+    assert_eq!(
+        envelope["results"]["files_missing"].as_u64().unwrap_or(1),
+        0,
+        "expected files_missing=0, envelope: {envelope}"
+    );
+}
 
 #[test]
 fn find_files_from_strips_leading_dot_slash() {

@@ -1154,3 +1154,98 @@ fn lint_hyalo001_fix_dash_bare_bracket() {
         "fix should insert space: `- [ ] Do something`, got: {content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-1: required_sections enforced by lint_one_file_extended (iter-140)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_required_sections_missing_emits_schema_error() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[schema.types.note]\nrequired = [\"title\"]\nrequired_sections = [\"## Tasks\", \"## Notes\"]\n",
+    );
+    write_md(
+        tmp.path(),
+        "no_sections.md",
+        "---\ntitle: Test\ntype: note\n---\n\nBody without the required sections.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--file", "no_sections.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected exit 1 for missing required sections"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("missing required section"),
+        "expected 'missing required section' in output, got:\n{combined}"
+    );
+}
+
+#[test]
+fn lint_required_sections_all_present_exits_zero() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[schema.types.note]\nrequired = [\"title\"]\nrequired_sections = [\"## Tasks\"]\n",
+    );
+    write_md(
+        tmp.path(),
+        "with_section.md",
+        "---\ntitle: Test\ntype: note\n---\n\n## Tasks\n\nDo things.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--file", "with_section.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected exit 0 when required section is present; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn lint_required_sections_out_of_order_is_violation() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[schema.types.note]\nrequired = [\"title\"]\nrequired_sections = [\"## Tasks\", \"## Notes\"]\n",
+    );
+    // Sections are reversed compared to schema order.
+    write_md(
+        tmp.path(),
+        "reversed.md",
+        "---\ntitle: Test\ntype: note\n---\n\n## Notes\n\nContent.\n\n## Tasks\n\nDo things.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--file", "reversed.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected exit 1 for out-of-order required sections"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("out of order") || combined.contains("missing required section"),
+        "expected order violation in output, got:\n{combined}"
+    );
+}

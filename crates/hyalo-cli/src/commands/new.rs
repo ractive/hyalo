@@ -77,22 +77,13 @@ pub(crate) fn create_new(
     let full_path: PathBuf = dir.join(file_arg);
 
     // ------------------------------------------------------------------
-    // Step 3: refuse if parent directory does not exist
+    // Step 3: ensure parent directory exists (create if needed)
     // ------------------------------------------------------------------
-    if full_path.parent().is_some_and(|parent| !parent.is_dir()) {
-        let parent_rel = full_path
-            .parent()
-            .and_then(|p| p.strip_prefix(dir).ok())
-            .unwrap_or_else(|| full_path.parent().unwrap_or(Path::new(".")))
-            .display()
-            .to_string();
-        return Ok(CommandOutcome::UserError(format_error(
-            format,
-            "parent directory does not exist; create it first",
-            Some(&parent_rel),
-            None,
-            None,
-        )));
+    if let Some(parent) = full_path.parent()
+        && !parent.is_dir()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent directories for {}", full_path.display()))?;
     }
 
     // ------------------------------------------------------------------
@@ -236,6 +227,11 @@ fn synthesise_content(
             content.push('\n');
         }
     }
+
+    // Ensure exactly one trailing newline.
+    let trimmed = content.trim_end_matches('\n');
+    let mut content = trimmed.to_owned();
+    content.push('\n');
 
     content
 }

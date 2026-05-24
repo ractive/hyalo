@@ -216,24 +216,28 @@ fn new_rejects_existing_file() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn new_rejects_missing_parent_dir() {
+fn new_creates_deep_nested_parent_dirs() {
     let tmp = setup_with_iteration_type();
 
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["new", "--type", "iteration", "--file", "notyet/x.md"])
+        .args([
+            "new",
+            "--type",
+            "iteration",
+            "--file",
+            "deep/nested/notes/foo.md",
+        ])
         .output()
         .unwrap();
     assert!(
-        !output.status.success(),
-        "expected non-zero exit for missing parent dir"
+        output.status.success(),
+        "expected success creating deep nested path; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let combined = format!("{stderr}{stdout}");
     assert!(
-        combined.contains("parent directory"),
-        "expected 'parent directory' in output, got:\n{combined}"
+        tmp.path().join("deep/nested/notes/foo.md").exists(),
+        "expected file to be created at deep/nested/notes/foo.md"
     );
 }
 
@@ -330,5 +334,45 @@ fn new_hint_suggests_lint() {
     assert!(
         stdout.contains("lint"),
         "expected lint hint in output, got:\n{stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BUG-5: scaffold should produce exactly one trailing newline (iter-140)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_scaffold_no_md047_trailing_newline_violation() {
+    let tmp = setup_with_sectioned_type();
+    // Create the file (parent is the vault root, no subdir needed).
+    let new_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["new", "--type", "note", "--file", "scaffold_test.md"])
+        .output()
+        .unwrap();
+    assert!(
+        new_out.status.success(),
+        "new should succeed; stderr: {}",
+        String::from_utf8_lossy(&new_out.stderr)
+    );
+
+    // Verify exactly one trailing newline.
+    let content = fs::read_to_string(tmp.path().join("scaffold_test.md")).unwrap();
+    assert!(
+        content.ends_with('\n') && !content.ends_with("\n\n"),
+        "expected exactly one trailing newline, got content ending with {:?}",
+        &content[content.len().saturating_sub(4)..]
+    );
+
+    // Lint should not fire MD047 on the scaffolded file.
+    let lint_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--file", "scaffold_test.md", "--rule", "MD047"])
+        .output()
+        .unwrap();
+    assert!(
+        lint_out.status.success(),
+        "MD047 should not fire on scaffolded file; stdout: {}",
+        String::from_utf8_lossy(&lint_out.stdout)
     );
 }

@@ -232,10 +232,14 @@ bypassing the directory walk entirely. This is ideal for linting only changed fi
 git diff --name-only origin/main -- '**/*.md' | hyalo lint --files-from -
 
 # Non-.md paths (build artifacts, source files) are silently skipped —
-# no need to pre-filter git diff output.
-# Counters in the JSON envelope show what was skipped:
+# no need to pre-filter git diff output. Repo-relative paths that start with
+# the vault directory prefix (e.g. `hyalo-knowledgebase/notes/foo.md` when
+# the vault is configured as `dir = "hyalo-knowledgebase"`) are stripped
+# automatically — so the recipe above works whether the vault is the repo
+# root or a subdirectory.
+# Counters in the JSON envelope show what was skipped (under `.results`):
 git diff --name-only origin/main | hyalo lint --files-from - --format json \
-  | jq '{missing: .files_missing, non_md: .files_skipped_non_md}'
+  | jq '{missing: .results.files_missing, non_md: .results.files_skipped_non_md}'
 ```
 
 `--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, and `append`.
