@@ -255,7 +255,7 @@ fn files_from_hints(counters: Option<FilesFromCounterSummary>) -> Vec<Hint> {
     if c.files_missing > 0 {
         out.push(Hint::without_cmd(format!(
             "{} input path(s) did not exist on disk (likely deletions); \
-             use `git diff --diff-filter=AMR` upstream to filter them out",
+             use `git diff --name-only --diff-filter=AMR` upstream to filter them out",
             c.files_missing
         )));
     }
@@ -1785,17 +1785,22 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
     if !already_schema_focused && let Some(files) = data.get("files").and_then(|f| f.as_array()) {
         // Collect distinct types that have at least one SCHEMA violation.
         // Preserve first-seen order; cap at 2 distinct types to avoid noise.
+        //
+        // Inspect both the read-only mode shape (`rule_groups`) and the
+        // fix-mode shape (`remaining_groups`) so the hint fires regardless
+        // of which lint mode produced the output.
         let mut schema_types: Vec<String> = Vec::new();
         for file in files {
-            let has_schema = file
-                .get("rule_groups")
-                .and_then(|rg| rg.as_array())
-                .is_some_and(|groups| {
-                    groups.iter().any(|g| {
-                        g.get("rule").and_then(serde_json::Value::as_str) == Some("SCHEMA")
+            let has_schema_in = |key: &str| {
+                file.get(key)
+                    .and_then(|rg| rg.as_array())
+                    .is_some_and(|groups| {
+                        groups.iter().any(|g| {
+                            g.get("rule").and_then(serde_json::Value::as_str) == Some("SCHEMA")
+                        })
                     })
-                });
-            if !has_schema {
+            };
+            if !has_schema_in("rule_groups") && !has_schema_in("remaining_groups") {
                 continue;
             }
             let Some(t) = file.get("type").and_then(serde_json::Value::as_str) else {
@@ -2856,6 +2861,34 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("types show iteration")),
             "should suggest types show for the failing type: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_schema_violation_suggests_types_show_in_fix_mode() {
+        // iter-143 follow-up (Copilot review on PR #169): the SCHEMA→`types
+        // show` hint must also fire in `--fix` / `--fix --dry-run` output,
+        // where violations live under `remaining_groups` instead of
+        // `rule_groups`.
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{
+                "file": "foo.md",
+                "type": "iteration",
+                "fixed_groups": [],
+                "remaining_groups": [{
+                    "rule": "SCHEMA", "count": 1, "shown": 1,
+                    "truncated": false, "severity": "error", "autofixable": false,
+                    "violations": [],
+                }],
+                "conflicts": [],
+            }],
+            "dry_run": true,
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types show iteration")),
+            "should suggest types show in fix-mode too: {hints:?}"
         );
     }
 

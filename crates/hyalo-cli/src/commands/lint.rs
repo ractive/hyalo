@@ -1254,6 +1254,11 @@ pub struct ConflictEntry {
 #[derive(Debug, serde::Serialize)]
 pub struct ExtFileLintFixResult {
     pub file: String,
+    /// Frontmatter `type:` discriminator, if the file declared one. Mirrors
+    /// [`ExtFileLintResult::doc_type`] so the iter-143 SCHEMA-→-`types show`
+    /// hint also fires in `--fix` / `--fix --dry-run` output.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub doc_type: Option<String>,
     /// Rules that had fixes applied (or would be in DryRun).
     pub fixed_groups: Vec<FixedGroup>,
     /// Rules with violations that remain after fixing.
@@ -1642,6 +1647,7 @@ pub fn lint_files_extended(
             if !fixed_groups.is_empty() || !remaining_groups.is_empty() || !conflicts.is_empty() {
                 output_fix_files.push(ExtFileLintFixResult {
                     file: r.rel_path.clone(),
+                    doc_type: r.doc_type.clone(),
                     fixed_groups,
                     remaining_groups,
                     conflicts,

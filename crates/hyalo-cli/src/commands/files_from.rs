@@ -163,16 +163,21 @@ pub fn resolve_with_index(
     index: &hyalo_core::index::SnapshotIndex,
 ) -> Result<FilesFromResolved> {
     use hyalo_core::index::VaultIndex as _;
-    Ok(resolve_with_membership(dir, entries, configured_dir, |full| {
-        // `membership` is called with the full disk path
-        // (`dir.join(&rel)`). Convert back to the vault-relative form for
-        // snapshot lookup.
-        let Ok(rel_path) = full.strip_prefix(dir) else {
-            return false;
-        };
-        let rel_fwd = rel_path.to_string_lossy().replace('\\', "/");
-        index.get(&rel_fwd).is_some()
-    }))
+    Ok(resolve_with_membership(
+        dir,
+        entries,
+        configured_dir,
+        |full| {
+            // `membership` is called with the full disk path
+            // (`dir.join(&rel)`). Convert back to the vault-relative form for
+            // snapshot lookup.
+            let Ok(rel_path) = full.strip_prefix(dir) else {
+                return false;
+            };
+            let rel_fwd = rel_path.to_string_lossy().replace('\\', "/");
+            index.get(&rel_fwd).is_some()
+        },
+    ))
 }
 
 /// Internal: shared logic for [`resolve`] and [`resolve_with_index`].
