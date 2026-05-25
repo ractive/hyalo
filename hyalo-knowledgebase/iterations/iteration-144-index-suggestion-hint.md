@@ -2,7 +2,7 @@
 title: Iteration 144 — Index-suggestion hint (slow query + large vault)
 type: iteration
 date: 2026-05-24
-status: planned
+status: completed
 branch: iter-144/index-suggestion-hint
 tags:
   - iteration
