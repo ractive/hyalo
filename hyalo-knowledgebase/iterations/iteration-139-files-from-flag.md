@@ -96,7 +96,7 @@ hyalo command the same way.
       contract for `--index` is "snapshot is the source of truth";
       `--files-from` must not weaken that.
       *Landed in iter-143
-      ([[iterations/iteration-143-hint-and-files-from-polish]]):
+      ([[iteration-143-hint-and-files-from-polish]]):
       `files_from::resolve_with_index` consults the loaded snapshot via
       `VaultIndex::get` instead of `is_file()`; `run.rs` routes through
       it whenever `snapshot_index` is `Some`. E2E coverage:
@@ -117,7 +117,7 @@ hyalo command the same way.
 - [x] `HintSource::FilesFrom` variant on success: suggest running the
       same command without `--files-from` to operate on the whole
       vault, when relevant. *iter-143
-      ([[iterations/iteration-143-hint-and-files-from-polish]]) shipped a
+      ([[iteration-143-hint-and-files-from-polish]]) shipped a
       different (better) shape: counters from the resolver flow into
       `generate_hints_with_counters` as a `FilesFromCounterSummary`, and
       advice hints fire whenever `files_missing > 0` or

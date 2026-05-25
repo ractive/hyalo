@@ -129,5 +129,5 @@ Pulled from the MDN dogfooding ticket where property-only queries on a
 
 - [[backlog/index-suggestion-hint]] — the source ticket (origin: MDN
   dogfood, 2026-03-30)
-- [[iterations/iteration-143-hint-and-files-from-polish]] — predecessor
+- [[iteration-143-hint-and-files-from-polish]] — predecessor
   hint-polish iteration

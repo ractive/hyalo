@@ -2,7 +2,7 @@
 title: Iteration 143 — Hint + `--files-from` polish (deferred from iter-138 / iter-139)
 type: iteration
 date: 2026-05-24
-status: in-progress
+status: completed
 branch: iter-143/hint-and-files-from-polish
 tags:
   - iteration

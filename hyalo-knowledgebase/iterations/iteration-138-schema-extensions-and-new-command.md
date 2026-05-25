@@ -145,7 +145,7 @@ Companion to [[research/ff-rdp-discipline-consumer-notes]].
 ### Hints [5/5]
 
 > All four follow-up hint integrations landed in iter-143
-> ([[iterations/iteration-143-hint-and-files-from-polish]]).
+> ([[iteration-143-hint-and-files-from-polish]]).
 > Per-subcategory SCHEMA hints (`item_pattern`, `required_sections`) were
 > consolidated into a single generic `hyalo types show <T>` hint that points
 > at the schema declaration — more actionable than paraphrasing the violation
