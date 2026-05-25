@@ -13,9 +13,9 @@ tags:
   - llm-ergonomics
 related:
   - "[[dogfood-results/dogfood-v0160-deep]]"
-  - "[[iterations/iteration-138-schema-extensions-and-new-command]]"
-  - "[[iterations/iteration-139-files-from-flag]]"
-  - "[[iterations/iteration-140-dogfood-138-139-fixes]]"
+  - "[[iteration-138-schema-extensions-and-new-command]]"
+  - "[[iteration-139-files-from-flag]]"
+  - "[[iteration-140-dogfood-138-139-fixes]]"
 ---
 
 ## Goal

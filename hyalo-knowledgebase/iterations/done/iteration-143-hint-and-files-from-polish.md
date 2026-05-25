@@ -10,8 +10,8 @@ tags:
   - schema
   - files-from
 related:
-  - "[[iterations/iteration-138-schema-extensions-and-new-command]]"
-  - "[[iterations/iteration-139-files-from-flag]]"
+  - "[[iteration-138-schema-extensions-and-new-command]]"
+  - "[[iteration-139-files-from-flag]]"
 ---
 
 ## Goal
@@ -151,9 +151,9 @@ schema vocabulary, no new commands.
 
 ## References
 
-- [[iterations/iteration-138-schema-extensions-and-new-command]]
+- [[iteration-138-schema-extensions-and-new-command]]
   — deferred hint items (sections: Hints, status `[1/5]`)
-- [[iterations/iteration-139-files-from-flag]] — deferred
+- [[iteration-139-files-from-flag]] — deferred
   snapshot-membership + `HintSource::FilesFrom`
 - [[index-suggestion-hint]] — explicitly NOT addressed here;
   iter-144 will pick it up
