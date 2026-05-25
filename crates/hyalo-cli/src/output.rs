@@ -203,10 +203,17 @@ pub fn format_envelope(
             if !hints.is_empty() {
                 text.push('\n');
                 for hint in hints {
-                    text.push_str("\n  -> ");
-                    text.push_str(&hint.cmd);
-                    text.push_str("  # ");
-                    text.push_str(&hint.description);
+                    if hint.cmd.is_empty() {
+                        // Advice-only hint (no follow-up command). Render the
+                        // description directly without the `cmd  # desc` layout.
+                        text.push_str("\n  -> ");
+                        text.push_str(&hint.description);
+                    } else {
+                        text.push_str("\n  -> ");
+                        text.push_str(&hint.cmd);
+                        text.push_str("  # ");
+                        text.push_str(&hint.description);
+                    }
                 }
             }
             sanitize_control_chars(&text)
@@ -237,10 +244,17 @@ pub fn format_prebuilt_envelope(
             if !hints.is_empty() {
                 text.push('\n');
                 for hint in hints {
-                    text.push_str("\n  -> ");
-                    text.push_str(&hint.cmd);
-                    text.push_str("  # ");
-                    text.push_str(&hint.description);
+                    if hint.cmd.is_empty() {
+                        // Advice-only hint (no follow-up command). Render the
+                        // description directly without the `cmd  # desc` layout.
+                        text.push_str("\n  -> ");
+                        text.push_str(&hint.description);
+                    } else {
+                        text.push_str("\n  -> ");
+                        text.push_str(&hint.cmd);
+                        text.push_str("  # ");
+                        text.push_str(&hint.description);
+                    }
                 }
             }
             sanitize_control_chars(&text)

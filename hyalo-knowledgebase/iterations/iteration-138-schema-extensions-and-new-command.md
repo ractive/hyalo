@@ -142,33 +142,40 @@ Companion to [[research/ff-rdp-discipline-consumer-notes]].
       no-templating-engine call. Reference
       [[research/ff-rdp-discipline-consumer-notes]].
 
-### Hints [1/5]
+### Hints [5/5]
 
-> Only the base `HintSource::New` (suggest `hyalo lint --file <path>` after success)
-> shipped. The four follow-up hint integrations below were deferred from this PR —
-> the core schema features and `hyalo new` agent loop work without them; they are
-> follow-up polish.
+> All four follow-up hint integrations landed in iter-143
+> ([[iterations/iteration-143-hint-and-files-from-polish]]).
+> Per-subcategory SCHEMA hints (`item_pattern`, `required_sections`) were
+> consolidated into a single generic `hyalo types show <T>` hint that points
+> at the schema declaration — more actionable than paraphrasing the violation
+> message.
 
 - [x] `HintSource::New` variant. After a successful `hyalo new`:
       suggest `hyalo lint --file <path>`. After a failed
       `--file <existing-path>`: suggest `rm <path>` (only if the agent
       is in destructive-allowed mode? probably just plain text). After
       missing `--type`: list types from the schema.
-- [ ] Update existing hints that mention "create a new file" or
+- [x] Update existing hints that mention "create a new file" or
       similar to use `hyalo new` instead of suggesting `Write`.
-- [ ] `hyalo types show <name>` hint: when the type has a `template-able`
+      *Moot — a `grep` confirmed no such "create a new file" hints exist;
+      dropped in iter-143 without action.*
+- [x] `hyalo types show <name>` hint: when the type has a `template-able`
       shape (i.e. `required` is set), suggest `hyalo new --type <name>
-      --file <path>` as a usage example.
-- [ ] Lint hint for missing `required_sections`: suggest editing the
+      --file <path>` as a usage example. *Landed in iter-143.*
+- [x] Lint hint for missing `required_sections`: suggest editing the
       body to add the missing heading at the right level.
-- [ ] Lint hint for `item_pattern` violation: include the pattern in
+      *iter-143 ships a generic SCHEMA hint linking to `hyalo types show
+      <T>` — same actionable target, less paraphrasing.*
+- [x] Lint hint for `item_pattern` violation: include the pattern in
       the hint description ("expected pattern: `<pattern>`").
+      *Same as above — generic SCHEMA hint covers it.*
 
-## Tasks [11/12]
+## Tasks [12/12]
 
-> One unchecked: `Wire HintSource::New + per-rule lint hints` is only partially
-> done (base success hint shipped; per-rule lint hints for missing
-> `required_sections` and `item_pattern` violations deferred — see Hints section).
+> All ticked. Per-rule lint hints for `required_sections` and `item_pattern`
+> were consolidated into a single generic SCHEMA-→-`types show` hint by
+> iter-143; see Hints section above.
 
 - [x] Implement `item_pattern` schema field + validation
 - [x] Implement `required_sections` schema field + validation

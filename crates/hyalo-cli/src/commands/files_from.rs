@@ -140,6 +140,50 @@ pub struct FilesFromResolved {
 /// 6. Duplicate resolved paths are silently dropped; first-seen order is preserved (NEW-6).
 /// 7. Accept: push `(dir.join(rel), rel)` to output.
 pub fn resolve(dir: &Path, entries: &[String], configured_dir: &str) -> Result<FilesFromResolved> {
+    Ok(resolve_with_membership(
+        dir,
+        entries,
+        configured_dir,
+        Path::is_file,
+    ))
+}
+
+/// Resolve `--files-from` entries against a snapshot index instead of the
+/// disk. A path is considered "present" iff its vault-relative form has an
+/// entry in `index`. Paths absent from the snapshot count as `files_missing`,
+/// **with no disk fallback** — matches iter-139's contract that `--index`
+/// makes the snapshot the source of truth.
+///
+/// Use this when both `--index` and `--files-from` are active. Without
+/// `--index`, callers must use [`resolve`].
+pub fn resolve_with_index(
+    dir: &Path,
+    entries: &[String],
+    configured_dir: &str,
+    index: &hyalo_core::index::SnapshotIndex,
+) -> Result<FilesFromResolved> {
+    use hyalo_core::index::VaultIndex as _;
+    Ok(resolve_with_membership(dir, entries, configured_dir, |full| {
+        // `membership` is called with the full disk path
+        // (`dir.join(&rel)`). Convert back to the vault-relative form for
+        // snapshot lookup.
+        let Ok(rel_path) = full.strip_prefix(dir) else {
+            return false;
+        };
+        let rel_fwd = rel_path.to_string_lossy().replace('\\', "/");
+        index.get(&rel_fwd).is_some()
+    }))
+}
+
+/// Internal: shared logic for [`resolve`] and [`resolve_with_index`].
+/// `membership(full)` returns whether the candidate exists in the resolution
+/// universe (disk for `resolve`, snapshot for `resolve_with_index`).
+fn resolve_with_membership(
+    dir: &Path,
+    entries: &[String],
+    configured_dir: &str,
+    membership: impl Fn(&Path) -> bool,
+) -> FilesFromResolved {
     let mut files = Vec::with_capacity(entries.len());
     let mut counters = FilesFromCounters::default();
     // Deduplicate resolved vault-relative paths, preserving first-seen order (NEW-6).
@@ -210,19 +254,19 @@ pub fn resolve(dir: &Path, entries: &[String], configured_dir: &str) -> Result<F
         // entry = "notes/notes/foo.md". If the literal exists (A), we use it
         // (single stat). Only on miss do we pay a second stat for (B).
         let mut rel = rel;
-        if !full.is_file()
+        if !membership(&full)
             && let Some(prefix) = &dir_prefix
             && Path::new(entry).is_relative()
             && let Some(stripped) = entry.strip_prefix(prefix.as_str())
         {
             let stripped_full = dir.join(stripped);
-            if stripped_full.is_file() {
+            if membership(&stripped_full) {
                 stripped.clone_into(&mut rel);
                 full = stripped_full;
             }
         }
 
-        if !full.is_file() {
+        if !membership(&full) {
             counters.files_missing += 1;
             continue;
         }
@@ -235,7 +279,7 @@ pub fn resolve(dir: &Path, entries: &[String], configured_dir: &str) -> Result<F
         files.push((full, rel));
     }
 
-    Ok(FilesFromResolved { files, counters })
+    FilesFromResolved { files, counters }
 }
 
 // ---------------------------------------------------------------------------

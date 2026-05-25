@@ -749,6 +749,76 @@ fn find_files_from_deduplicates_same_path() {
 }
 
 #[test]
+fn lint_files_from_with_index_counts_post_index_files_as_missing() {
+    // iter-143: when both `--index` and `--files-from` are active, the
+    // snapshot is the source of truth. A file that's on disk but absent
+    // from the snapshot must count as `files_missing` — NOT silently
+    // re-scanned from disk.
+    let tmp = setup_vault();
+
+    // Build the snapshot from the current vault (alpha, beta, sub/gamma).
+    let mut create = hyalo_no_hints();
+    create.args(["--dir", tmp.path().to_str().unwrap()]);
+    create.args(["create-index"]);
+    let create_out = create.output().unwrap();
+    assert!(
+        create_out.status.success(),
+        "create-index should succeed; stderr: {}",
+        String::from_utf8_lossy(&create_out.stderr)
+    );
+
+    // Add a NEW file to disk AFTER the snapshot is built. The snapshot
+    // does not know about it.
+    write_md(
+        tmp.path(),
+        "post-index.md",
+        md!(r"
+---
+title: Post-index
+---
+# Post-index
+"),
+    );
+
+    // Lint with --index and --files-from. The list contains:
+    //   alpha.md         — exists in snapshot (lint it)
+    //   post-index.md    — on disk, NOT in snapshot (must count as missing)
+    let list = write_list_file(&["alpha.md", "post-index.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "lint",
+        "--index",
+        "--files-from",
+        list.path().to_str().unwrap(),
+    ]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "lint --index --files-from should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let missing = envelope["files_missing"]
+        .as_u64()
+        .or_else(|| envelope["results"]["files_missing"].as_u64())
+        .unwrap_or(0);
+    assert_eq!(
+        missing, 1,
+        "post-index.md should count as missing (snapshot is source of truth); envelope: {envelope}"
+    );
+    let checked = envelope["results"]["files_checked"].as_u64().unwrap_or(0);
+    assert_eq!(
+        checked, 1,
+        "only alpha.md should be linted (post-index.md is not in snapshot); envelope: {envelope}"
+    );
+}
+
+#[test]
 fn lint_files_from_deduplicates_and_preserves_order() {
     let tmp = setup_vault();
     // Paths repeated, first-seen order: alpha, beta, sub/gamma.
