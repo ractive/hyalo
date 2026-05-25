@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **iter-144**: Index-suggestion hints. Two new automatic hints surface
+  `hyalo create-index` when no snapshot index is active:
+  - **Slow-query hint** — fires on `find`, `lint`, `backlinks`,
+    `properties summary`, `tags summary`, `summary`, and `read` when the
+    command takes longer than 500 ms. Suppressed by `--quiet` or when
+    `--index`/`--index-file` is already in use.
+  - **Large-vault summary hint** — fires from `hyalo summary` when the
+    vault contains more than 500 files and no index is active.
+  Both hints count toward the existing `MAX_HINTS` cap and are suppressed
+  by `--no-hints` like all other hints.
+
 ### Changed
 
 - **iter-143**: New `hyalo lint` hint — when SCHEMA violations land on a file

@@ -574,3 +574,41 @@ Research across tools:
 - Callers don't need to filter git diff output — non-.md paths are skipped silently
 - No git binary required; works in any CI environment with hyalo on PATH
 - `--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, and `append` — the commands that already accept `--glob`
+
+## DEC-045: Wall-Clock Signal for Index-Suggestion Hints (2026-05-25)
+
+**Context:** iter-144 — index-suggestion hint for slow queries and large vaults.
+
+**Decision:** Use wall-clock elapsed time (not CPU time or file count alone) as
+the primary signal for the slow-query hint, with a 500 ms threshold. Use file
+count (>500 files) as the signal for the large-vault summary hint.
+
+**Rationale:**
+
+- **Wall-clock, not CPU time.** I/O is the dominant cost for hyalo vault scans;
+  wall-clock matches what the user perceives as "slow". CPU time would exclude
+  I/O wait and underreport the user-visible latency.
+- **500 ms slow-query threshold.** Shorter than the human "wait, this is slow"
+  threshold (~1 s) with margin; longer than typical scans on small vaults
+  (~100 ms). Calibrated from MDN dogfooding where property-only queries on a
+  14K-file vault took ~1.5 s without an index vs ~80 ms with one.
+- **500 files large-vault threshold.** Vaults above this size show measurable
+  benefit from a snapshot index. Below it, disk scan is fast enough not to
+  warrant the hint.
+- **Global threshold, not per-command.** A single threshold for all eligible
+  commands is simpler than per-command tuning. Eligible commands are those that
+  scan the vault: `find`, `lint`, `backlinks`, `properties summary`,
+  `tags summary`, `summary`, `read`.
+- **Suppress on --index / --index-file active.** If the user already requested
+  a snapshot, suppress both hints — even if the index load failed and fell back
+  to a disk scan. The intent to use an index is the suppression signal, not the
+  outcome.
+- **Suppress slow-query hint on --quiet.** `--quiet` is the user's explicit
+  opt-out from advisory output; it should silence the hint.
+
+**Alternatives rejected:**
+- Per-command thresholds: premature tuning, adds complexity without data.
+- Auto-index config (`auto_index = true`): hyalo shouldn't manage index
+  lifecycle silently. Lint and hints surface the suggestion; the user runs
+  `create-index`.
+- CPU time: misses I/O wait, doesn't reflect user-perceived latency.

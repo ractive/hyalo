@@ -7,6 +7,18 @@
 /// Maximum number of hints to return from any generator.
 const MAX_HINTS: usize = 5;
 
+/// Wall-clock threshold for the slow-query hint (milliseconds).
+///
+/// Rationale: shorter than the human "this is slow" threshold (~1 s) with
+/// margin; longer than typical disk scans on small vaults (~100 ms).
+pub(crate) const SLOW_QUERY_THRESHOLD_MS: u64 = 500;
+
+/// File count threshold for the large-vault summary hint.
+///
+/// Rationale: vaults above this size see measurable benefit from a snapshot
+/// index; below it the disk scan is fast enough not to warrant the hint.
+pub(crate) const LARGE_VAULT_FILE_COUNT: u64 = 500;
+
 /// Prefix used by lint for frontmatter parse errors. Shared between
 /// `commands::lint` and the hint generator to avoid brittle string coupling.
 pub(crate) const PARSE_ERROR_PREFIX: &str = "could not parse frontmatter";
@@ -75,6 +87,14 @@ pub struct HintContext {
     pub format: Option<String>,
     /// Explicit `--hints` from CLI (not from config).
     pub hints: bool,
+    /// Wall-clock elapsed time for the command body (set after dispatch).
+    /// Used by the slow-query hint; `None` means not yet measured.
+    pub elapsed_ms: Option<u64>,
+    /// Whether `--quiet` / `-q` was passed.  Suppresses the slow-query hint.
+    pub quiet: bool,
+    /// Whether an `--index` / `--index-file` snapshot was active for this run.
+    /// Suppresses index-suggestion hints when already using an index.
+    pub has_index: bool,
     // Find context
     pub fields: Vec<String>,
     pub sort: Option<String>,
@@ -135,6 +155,9 @@ impl HintContext {
             glob: vec![],
             format: None,
             hints: false,
+            elapsed_ms: None,
+            quiet: false,
+            has_index: false,
             fields: vec![],
             sort: None,
             has_limit: false,
@@ -232,6 +255,14 @@ pub fn generate_hints_with_counters(
         HintSource::Types { .. } => hints_for_types(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
     };
+    // iter-144: slow-query index-suggestion hint. Appended after per-command
+    // hints so domain-specific hints are not displaced; counts toward MAX_HINTS.
+    if hints.len() < MAX_HINTS
+        && let Some(hint) = slow_query_hint(ctx)
+    {
+        hints.push(hint);
+    }
+
     // iter-143: `--files-from`-aware hints. Counters are passed in from the
     // output pipeline (the envelope merge happens *after* hint generation,
     // so `data` doesn't carry them yet). Prepended so the `MAX_HINTS` cap
@@ -240,6 +271,44 @@ pub fn generate_hints_with_counters(
     let mut ff_hints = files_from_hints(counters);
     ff_hints.append(&mut hints);
     ff_hints.into_iter().take(MAX_HINTS).collect()
+}
+
+/// Return an index-suggestion hint when the command was slow and no index is active.
+///
+/// Eligible sources: `find`, `lint`, `backlinks`, `properties summary`,
+/// `tags summary`, `summary`, and `read` — commands that scan the vault and
+/// benefit from a snapshot index.
+///
+/// Suppressed when:
+/// - `ctx.quiet` is true (`--quiet` flag).
+/// - `ctx.has_index` is true (snapshot already active).
+/// - `elapsed_ms` is below [`SLOW_QUERY_THRESHOLD_MS`].
+fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
+    // Only eligible commands produce vault scans that an index can speed up.
+    let eligible = matches!(
+        ctx.source,
+        HintSource::Find
+            | HintSource::Lint
+            | HintSource::Backlinks
+            | HintSource::PropertiesSummary
+            | HintSource::TagsSummary
+            | HintSource::Summary
+            | HintSource::Read
+    );
+    if !eligible {
+        return None;
+    }
+    if ctx.quiet || ctx.has_index {
+        return None;
+    }
+    let elapsed = ctx.elapsed_ms?;
+    if elapsed <= SLOW_QUERY_THRESHOLD_MS {
+        return None;
+    }
+    Some(Hint::new(
+        format!("Query took {elapsed} ms. Create an index for faster queries:"),
+        "hyalo create-index".to_owned(),
+    ))
 }
 
 /// Return `--files-from`-counter hints when the resolver reported non-zero
@@ -628,6 +697,22 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             hints.push(Hint::new(
                 format!("Filter by status: {value}"),
                 build_command_no_glob(ctx, &["find", "--property", &filter]),
+            ));
+        }
+    }
+
+    // Large-vault index-suggestion hint. Fires when the vault exceeds the
+    // LARGE_VAULT_FILE_COUNT threshold and no snapshot index is active.
+    if hints.len() < MAX_HINTS && !ctx.has_index {
+        let files_total = data
+            .get("files")
+            .and_then(|f| f.get("total"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if files_total > LARGE_VAULT_FILE_COUNT {
+            hints.push(Hint::new(
+                format!("Vault has {files_total} files — create an index for faster queries:"),
+                "hyalo create-index".to_owned(),
             ));
         }
     }
@@ -3157,6 +3242,178 @@ mod tests {
         assert!(
             !hints.iter().any(|h| h.cmd.contains("lint --fix")),
             "after applying fixes, should not suggest fix again: {hints:?}"
+        );
+    }
+
+    // --- slow_query_hint ---
+
+    fn data_empty_array() -> serde_json::Value {
+        json!([])
+    }
+
+    /// Slow find with no index should emit the slow-query hint.
+    #[test]
+    fn slow_query_hint_fires_for_slow_find() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+        let h = slow_query_hint(&c);
+        assert!(h.is_some(), "expected slow-query hint");
+        let h = h.unwrap();
+        assert!(h.cmd == "hyalo create-index", "cmd: {}", h.cmd);
+        assert!(h.description.contains("ms"), "desc: {}", h.description);
+    }
+
+    /// Exactly at the threshold (not strictly greater) should NOT fire.
+    #[test]
+    fn slow_query_hint_does_not_fire_at_threshold() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS);
+        assert!(slow_query_hint(&c).is_none());
+    }
+
+    /// Fast query should not emit the hint.
+    #[test]
+    fn slow_query_hint_does_not_fire_when_fast() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = Some(50);
+        assert!(slow_query_hint(&c).is_none());
+    }
+
+    /// `--quiet` suppresses the slow-query hint even when slow.
+    #[test]
+    fn slow_query_hint_suppressed_by_quiet() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 100);
+        c.quiet = true;
+        assert!(slow_query_hint(&c).is_none());
+    }
+
+    /// Active index suppresses the slow-query hint even when slow.
+    #[test]
+    fn slow_query_hint_suppressed_when_has_index() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 100);
+        c.has_index = true;
+        assert!(slow_query_hint(&c).is_none());
+    }
+
+    /// Missing elapsed (`None`) means not yet measured — no hint.
+    #[test]
+    fn slow_query_hint_not_emitted_when_elapsed_none() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = None;
+        assert!(slow_query_hint(&c).is_none());
+    }
+
+    /// Ineligible source (e.g. Set) never emits slow-query hint.
+    #[test]
+    fn slow_query_hint_not_emitted_for_ineligible_source() {
+        let mut c = ctx(HintSource::Set);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 100);
+        assert!(slow_query_hint(&c).is_none());
+    }
+
+    /// All eligible sources should emit the hint when slow and no index.
+    #[test]
+    fn slow_query_hint_fires_for_all_eligible_sources() {
+        for source in [
+            HintSource::Find,
+            HintSource::Lint,
+            HintSource::Backlinks,
+            HintSource::PropertiesSummary,
+            HintSource::TagsSummary,
+            HintSource::Summary,
+            HintSource::Read,
+        ] {
+            let mut c = ctx(source);
+            c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+            assert!(
+                slow_query_hint(&c).is_some(),
+                "expected slow-query hint for source"
+            );
+        }
+    }
+
+    /// Slow-query hint appears in generate_hints output (via generate_hints_with_counters).
+    #[test]
+    fn slow_query_hint_surfaces_through_generate_hints() {
+        let mut c = ctx(HintSource::Find);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+        let hints = generate_hints(&c, &data_empty_array(), Some(0));
+        assert!(
+            hints.iter().any(|h| h.cmd == "hyalo create-index"),
+            "expected create-index hint: {hints:?}"
+        );
+    }
+
+    // --- large-vault summary hint ---
+
+    fn summary_data(files_total: u64) -> serde_json::Value {
+        json!({
+            "files": {"total": files_total, "by_directory": []},
+            "properties": [],
+            "tags": {"tags": [], "total": 0},
+            "status": [],
+            "tasks": {"total": 0, "done": 0},
+            "recent_files": []
+        })
+    }
+
+    /// Large vault (above threshold) with no index should emit the large-vault hint.
+    #[test]
+    fn large_vault_summary_hint_fires_when_over_threshold() {
+        let c = ctx(HintSource::Summary);
+        let data = summary_data(LARGE_VAULT_FILE_COUNT + 1);
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
+            "expected large-vault hint: {hints:?}"
+        );
+    }
+
+    /// Exactly at the threshold (not strictly greater) should NOT fire.
+    #[test]
+    fn large_vault_summary_hint_does_not_fire_at_threshold() {
+        let c = ctx(HintSource::Summary);
+        let data = summary_data(LARGE_VAULT_FILE_COUNT);
+        let hints = generate_hints(&c, &data, None);
+        // The hint should not appear.
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
+            "unexpected large-vault hint at threshold: {hints:?}"
+        );
+    }
+
+    /// Small vault should not emit the large-vault hint.
+    #[test]
+    fn large_vault_summary_hint_not_fired_for_small_vault() {
+        let c = ctx(HintSource::Summary);
+        let data = summary_data(10);
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
+            "unexpected large-vault hint for small vault: {hints:?}"
+        );
+    }
+
+    /// Active index suppresses the large-vault hint.
+    #[test]
+    fn large_vault_summary_hint_suppressed_when_has_index() {
+        let mut c = ctx(HintSource::Summary);
+        c.has_index = true;
+        let data = summary_data(LARGE_VAULT_FILE_COUNT + 100);
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
+            "large-vault hint should be suppressed with active index: {hints:?}"
         );
     }
 }

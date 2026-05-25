@@ -1,6 +1,7 @@
 use std::io::IsTerminal as _;
 use std::path::Path;
 use std::process;
+use std::time::Instant;
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches};
@@ -869,7 +870,7 @@ fn run_inner() -> Result<(), AppError> {
     // Build hint context before the command dispatch.
     // Only include CLI-explicit flags in hints — config values are inherited
     // automatically when the user runs the hint command from the same CWD.
-    let hint_ctx = if hints_flag && jq_filter.is_none() {
+    let mut hint_ctx = if hints_flag && jq_filter.is_none() {
         // Capture the three global flags that every HintContext arm needs.
         // Computed once here so each arm can call HintContext::from_common
         // instead of repeating the same three field assignments.
@@ -1201,6 +1202,18 @@ fn run_inner() -> Result<(), AppError> {
     let index_path_buf: Option<std::path::PathBuf> =
         effective_index_path_for(&cli.command, &dir, cli.index_file.as_deref());
 
+    // Propagate --quiet and has-index into hint context now that we know both.
+    // `quiet` suppresses the slow-query hint; `has_index` suppresses all
+    // index-suggestion hints when a snapshot is already in use.
+    // `has_index` is set from index_path_buf because the snapshot load may fail
+    // (fall back to disk scan), but the *intent* to use an index is what matters
+    // for hint suppression — we don't want to suggest creating an index that the
+    // user already requested.
+    if let Some(ref mut ctx) = hint_ctx {
+        ctx.quiet = cli.quiet;
+        ctx.has_index = index_path_buf.is_some();
+    }
+
     let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {
         match SnapshotIndex::load(p) {
             Ok(Some(idx)) => {
@@ -1341,12 +1354,25 @@ fn run_inner() -> Result<(), AppError> {
 
     // When --files-from resolved to zero files (all entries filtered/missing),
     // short-circuit with an empty result rather than falling through to "scan all".
+    //
+    // Capture wall-clock elapsed around the dispatch body so the slow-query
+    // hint can fire when the command took longer than SLOW_QUERY_THRESHOLD_MS.
+    // We measure here (not inside dispatch) so hint rendering is excluded.
+    let dispatch_start = Instant::now();
     let result = if files_from_empty {
         // Produce the appropriate empty payload for the command type.
         Ok(empty_result_for_command(&cli.command))
     } else {
         dispatch(cli.command, &mut ctx)
     };
+    // Saturate at u64::MAX on absurdly long runs (> ~585 million years).
+    let elapsed_ms = u64::try_from(dispatch_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    // Inject elapsed into hint context so slow_query_hint can read it.
+    if let Some(ref mut hctx) = hint_ctx {
+        hctx.elapsed_ms = Some(elapsed_ms);
+    }
+
     let exit_code_override = ctx.exit_code_override;
 
     let pipeline = OutputPipeline {
