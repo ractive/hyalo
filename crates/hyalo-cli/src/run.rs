@@ -1322,6 +1322,7 @@ fn run_inner() -> Result<(), AppError> {
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,
         lint_strict: lint_strict_from_config,
+        files_from_counters: None,
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
@@ -1346,13 +1347,16 @@ fn run_inner() -> Result<(), AppError> {
     }
 
     let exit_code_override = ctx.exit_code_override;
+    // Prefer counters captured inside dispatch (read/backlinks/task path through
+    // `resolve_inputs`); fall back to the pre-dispatch path used by other commands.
+    let final_files_from_counters = ctx.files_from_counters.take().or(files_from_counters);
 
     let pipeline = OutputPipeline {
         user_format: format,
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
         count: cli.count,
-        files_from_counters,
+        files_from_counters: final_files_from_counters,
     };
     let code = pipeline.finalize(result);
     // Commands like `lint` may override the exit code even on success output.

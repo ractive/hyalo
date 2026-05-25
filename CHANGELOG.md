@@ -4,14 +4,15 @@
 
 ### Added
 
-- **iter-145**: `task toggle`, `task set`, and `task read` now accept
+- **iter-145**: `task toggle` and `task set` now accept
   `--files-from <file|->` and `--glob <pattern>` via the unified input
-  resolver. Multi-file `--files-from`/`--glob` on `toggle`/`set` flattens
-  all per-file task results into a single array in the standard
+  resolver. Multi-file selection flattens all per-file task results into a
+  single array in the standard
   `{"results": [...], "total": N, "hints": [...]}` envelope.
-- **iter-145**: `read` and `backlinks` now accept `--files-from` (resolved
-  to the first matching file, consistent with their single-file policy).
-  `--glob` is explicitly rejected with a clear error for these commands.
+- **iter-145**: `task read`, `read`, and `backlinks` now accept
+  `--files-from` (resolved to a single file, consistent with their
+  single-file policy). `--glob` is explicitly rejected with a clear error
+  for these commands.
 
 ### Changed
 

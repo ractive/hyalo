@@ -116,6 +116,10 @@ pub(crate) struct CommandContext<'a> {
     /// When `true`, "no 'type' property" and "undeclared property" warnings are
     /// promoted to errors, and lint exits non-zero on them.
     pub lint_strict: bool,
+    /// `--files-from` counters captured during dispatch for commands that resolve
+    /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
+    /// the output pipeline as `files_from_counters` in the envelope.
+    pub files_from_counters: Option<crate::commands::files_from::FilesFromCounters>,
 }
 
 /// Resolve the effective limit for a list command.
@@ -564,12 +568,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )? {
                 ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                 ResolvedInputsOrOutcome::Resolved(r) => {
-                    let file = r
+                    ctx.files_from_counters = r.counters;
+                    let (_full, file) = r
                         .files
                         .into_iter()
                         .next()
-                        .map(|(_full, rel)| rel)
-                        .unwrap_or_default();
+                        .context("Single resolution returned no files")?;
                     read_commands::run(
                         dir,
                         &file,
@@ -770,12 +774,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     )? {
                         ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                         ResolvedInputsOrOutcome::Resolved(r) => {
-                            let file = r
+                            ctx.files_from_counters = r.counters;
+                            let (_full, file) = r
                                 .files
                                 .into_iter()
                                 .next()
-                                .map(|(_full, rel)| rel)
-                                .unwrap_or_default();
+                                .context("Single resolution returned no files")?;
                             task_commands::task_read(
                                 dir,
                                 &file,
@@ -806,6 +810,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     )? {
                         ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                         ResolvedInputsOrOutcome::Resolved(r) => {
+                            ctx.files_from_counters.clone_from(&r.counters);
                             if r.files.len() == 1 {
                                 // Single file: delegate directly — no wrapping.
                                 let (_full_path, rel) = &r.files[0];
@@ -824,7 +829,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 // Multi-file: collect each file's raw results into a
                                 // flat array and let the pipeline wrap it in the
                                 // standard `{"results": [...], "total": N}` envelope.
-                                let n = r.files.len();
+                                // `total` matches the flattened item count (consistent
+                                // with other list-shaped outputs and `--count`).
                                 let mut flat: Vec<serde_json::Value> = Vec::new();
                                 for (_full_path, rel) in &r.files {
                                     let outcome = task_commands::task_toggle(
@@ -853,9 +859,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                         other => return Ok(other),
                                     }
                                 }
+                                let total = flat.len() as u64;
                                 let output = serde_json::to_string(&flat)
                                     .context("failed to serialize multi-file task toggle output")?;
-                                Ok(CommandOutcome::success_with_total(output, n as u64))
+                                Ok(CommandOutcome::success_with_total(output, total))
                             }
                         }
                     }
@@ -896,6 +903,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     )? {
                         ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                         ResolvedInputsOrOutcome::Resolved(r) => {
+                            ctx.files_from_counters.clone_from(&r.counters);
                             if r.files.len() == 1 {
                                 // Single file: delegate directly — no wrapping.
                                 let (_full_path, rel) = &r.files[0];
@@ -915,7 +923,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 // Multi-file: collect each file's raw results into a
                                 // flat array and let the pipeline wrap it in the
                                 // standard `{"results": [...], "total": N}` envelope.
-                                let n = r.files.len();
+                                // `total` matches the flattened item count.
                                 let mut flat: Vec<serde_json::Value> = Vec::new();
                                 for (_full_path, rel) in &r.files {
                                     let outcome = task_commands::task_set_status(
@@ -945,9 +953,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                         other => return Ok(other),
                                     }
                                 }
+                                let total = flat.len() as u64;
                                 let output = serde_json::to_string(&flat)
                                     .context("failed to serialize multi-file task set output")?;
-                                Ok(CommandOutcome::success_with_total(output, n as u64))
+                                Ok(CommandOutcome::success_with_total(output, total))
                             }
                         }
                     }
@@ -1116,12 +1125,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )? {
                 ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                 ResolvedInputsOrOutcome::Resolved(r) => {
-                    let file = r
+                    ctx.files_from_counters = r.counters;
+                    let (_full, file) = r
                         .files
                         .into_iter()
                         .next()
-                        .map(|(_full, rel)| rel)
-                        .unwrap_or_default();
+                        .context("Single resolution returned no files")?;
                     match resolve_index(
                         snapshot_index.as_ref(),
                         dir,

@@ -1126,9 +1126,16 @@ fn task_toggle_files_from_list_file() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    // Multi-file: results is a flat array of all toggled tasks.
-    let results = json["results"].as_array().expect("expected results array");
-    assert!(results.len() >= 2, "expected tasks from both files");
+    // Multi-file with --files-from: results carries a flat `files` array of all
+    // toggled tasks plus the `files_*` counters from the envelope.
+    let results = json["results"]
+        .as_object()
+        .expect("expected results object with files-from counters");
+    let files = results["files"]
+        .as_array()
+        .expect("expected results.files array");
+    assert!(files.len() >= 2, "expected tasks from both files");
+    assert_eq!(results["files_missing"], 0);
 
     // bulk.md tasks should be toggled.
     let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
@@ -1178,9 +1185,14 @@ fn task_toggle_files_from_stdin() {
     assert!(output.status.success(), "stderr: {stderr}");
 
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("expected JSON output");
-    let results = json["results"].as_array().expect("expected results array");
+    let results = json["results"]
+        .as_object()
+        .expect("expected results object with files-from counters");
+    let files = results["files"]
+        .as_array()
+        .expect("expected results.files array");
     // Section "Tasks" has Task A and Task B.
-    assert_eq!(results.len(), 2, "expected 2 tasks in Tasks section");
+    assert_eq!(files.len(), 2, "expected 2 tasks in Tasks section");
 
     let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
     assert!(content.contains("- [x] Task A"));
@@ -1216,11 +1228,16 @@ fn task_set_files_from_list_file() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let results = json["results"].as_array().expect("expected results array");
-    assert!(results.len() >= 2, "expected tasks from both files");
+    let results = json["results"]
+        .as_object()
+        .expect("expected results object with files-from counters");
+    let files = results["files"]
+        .as_array()
+        .expect("expected results.files array");
+    assert!(files.len() >= 2, "expected tasks from both files");
 
     // All tasks should be marked done.
-    for r in results {
+    for r in files {
         assert_eq!(r["status"], "x", "expected all tasks set to x");
     }
 }

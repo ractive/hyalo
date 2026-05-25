@@ -690,16 +690,22 @@ fn read_glob_is_rejected() {
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    // Should fail: --glob is not supported for single-file commands.
+    // Should fail with a "not supported" error message — assert non-zero exit
+    // AND a recognisable rejection string so an unrelated success can't pass.
     assert!(
-        !output.status.success() || stdout.contains("not supported"),
-        "expected rejection of --glob on read; stderr={stderr} stdout={stdout}"
+        !output.status.success(),
+        "expected non-zero exit on --glob; stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("not supported") || stderr.contains("not supported"),
+        "expected 'not supported' rejection message; stderr={stderr} stdout={stdout}"
     );
 }
 
 #[test]
-fn read_files_from_is_rejected_as_multi() {
-    // `read` uses Single policy — --files-from with multiple files should error.
+fn read_files_from_single_file_succeeds() {
+    // `read` uses Single policy — a single entry from --files-from must resolve
+    // to exactly one file and succeed.
     let tmp = setup();
     let list_path = tmp.path().join("list.txt");
     std::fs::write(&list_path, "note.md\n").unwrap();
@@ -707,7 +713,6 @@ fn read_files_from_is_rejected_as_multi() {
     cmd.args(["--dir", tmp.path().to_str().unwrap()]);
     cmd.args(["read", "--files-from", list_path.to_str().unwrap()]);
     let output = cmd.output().unwrap();
-    // Single file from --files-from should work for read (resolves to one file).
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
         output.status.success(),

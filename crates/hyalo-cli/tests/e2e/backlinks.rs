@@ -407,7 +407,11 @@ title: Target
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
-        !output.status.success() || stdout.contains("not supported"),
-        "expected --glob to be rejected for backlinks; stdout={stdout} stderr={stderr}"
+        !output.status.success(),
+        "expected non-zero exit on --glob; stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("not supported") || stderr.contains("not supported"),
+        "expected 'not supported' rejection message; stdout={stdout} stderr={stderr}"
     );
 }

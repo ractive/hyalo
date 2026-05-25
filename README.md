@@ -246,8 +246,9 @@ git diff --name-only origin/main | hyalo lint --files-from - --format json \
 `task toggle`, `task set`, `task read`, `read`, and `backlinks`.
 It is mutually exclusive with `--glob` and `--file`.
 
-`--glob` is accepted on all file-taking commands except `read` and `backlinks`
-(which are single-file commands and will return an error if `--glob` is used).
+`--glob` is accepted on all file-taking commands except `read`, `backlinks`,
+and `task read` (which are single-file commands and will return an error if
+`--glob` is used).
 
 ### Snapshot index
 

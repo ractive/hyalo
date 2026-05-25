@@ -31,9 +31,8 @@ pub(crate) struct ResolvedInputs {
     /// The resolved `(full_path, vault_relative_path)` pairs.
     pub files: Vec<(PathBuf, String)>,
     /// Counter summary when `--files-from` was active; `None` otherwise.
-    /// Callers that surface `--files-from` diagnostics to the user should
-    /// propagate this to the output pipeline via `files_from_counters`.
-    #[allow(dead_code)]
+    /// Callers propagate this to `CommandContext::files_from_counters` so the
+    /// output pipeline surfaces it in the envelope.
     pub counters: Option<FilesFromCounters>,
 }
 
@@ -75,10 +74,26 @@ pub(crate) fn resolve_inputs(
     policy: &ResolutionPolicy,
     format: Format,
 ) -> Result<ResolvedInputsOrOutcome> {
-    // --files-from takes priority: resolve it and return immediately.
+    // --files-from takes priority: resolve it and apply the policy's cardinality
+    // contract so callers don't receive a 0- or many-element result for a Single
+    // policy.
     if let Some(source) = &selection.files_from {
         let (files_pairs, counters) =
             resolve_files_from(source, dir, configured_dir, snapshot_index)?;
+        if let ResolutionPolicy::Single { .. } = policy
+            && files_pairs.len() > 1
+        {
+            let out = crate::output::format_error(
+                format,
+                "--files-from resolved to multiple files but this command accepts only one",
+                None,
+                Some("provide a list with exactly one entry, or use a multi-file command"),
+                None,
+            );
+            return Ok(ResolvedInputsOrOutcome::Outcome(CommandOutcome::UserError(
+                out,
+            )));
+        }
         return Ok(ResolvedInputsOrOutcome::Resolved(ResolvedInputs {
             files: files_pairs,
             counters: Some(counters),
