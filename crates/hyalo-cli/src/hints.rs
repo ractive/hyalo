@@ -25,6 +25,16 @@ impl Hint {
             cmd,
         }
     }
+
+    /// Advice-only hint with no follow-up command. JSON consumers see
+    /// `cmd: ""`; text renderers special-case the empty-cmd shape so the
+    /// `  -> <cmd>  # <desc>` layout collapses to `  -> <desc>`.
+    fn without_cmd(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+            cmd: String::new(),
+        }
+    }
 }
 
 /// Identifies which command produced the output.
@@ -172,13 +182,38 @@ impl HintContext {
 ///
 /// Returns at most [`MAX_HINTS`] [`Hint`]s, each with a human-readable description
 /// and an executable `hyalo` command (`cmd`).
+/// Counts of paths the `--files-from` resolver dropped during input
+/// processing. Mirrors the fields injected into the JSON envelope by
+/// `output_pipeline::inject_files_from_counters`. Passed into
+/// [`generate_hints`] alongside `data` so counter-aware hints can fire even
+/// though the counters haven't been merged into the data value yet.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FilesFromCounterSummary {
+    pub files_missing: u64,
+    pub files_skipped_outside_vault: u64,
+}
+
 #[must_use]
 pub fn generate_hints(
     ctx: &HintContext,
     data: &serde_json::Value,
     total: Option<u64>,
 ) -> Vec<Hint> {
-    let hints = match &ctx.source {
+    generate_hints_with_counters(ctx, data, total, None)
+}
+
+/// Same as [`generate_hints`] but also factors in `--files-from` counters
+/// known to the caller (the output pipeline) but not yet injected into
+/// `data`. Used by the dispatch layer; tests and other callers can use the
+/// no-counters [`generate_hints`].
+#[must_use]
+pub fn generate_hints_with_counters(
+    ctx: &HintContext,
+    data: &serde_json::Value,
+    total: Option<u64>,
+    counters: Option<FilesFromCounterSummary>,
+) -> Vec<Hint> {
+    let mut hints = match &ctx.source {
         HintSource::Summary => hints_for_summary(ctx, data),
         HintSource::PropertiesSummary => hints_for_properties_summary(ctx, data, total),
         HintSource::TagsSummary => hints_for_tags_summary(ctx, data, total),
@@ -197,7 +232,41 @@ pub fn generate_hints(
         HintSource::Types { .. } => hints_for_types(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
     };
-    hints.into_iter().take(MAX_HINTS).collect()
+    // iter-143: `--files-from`-aware hints. Counters are passed in from the
+    // output pipeline (the envelope merge happens *after* hint generation,
+    // so `data` doesn't carry them yet). Prepended so the `MAX_HINTS` cap
+    // doesn't crowd them out — a skipped-input warning is more urgent than
+    // a follow-up suggestion.
+    let mut ff_hints = files_from_hints(counters);
+    ff_hints.append(&mut hints);
+    ff_hints.into_iter().take(MAX_HINTS).collect()
+}
+
+/// Return `--files-from`-counter hints when the resolver reported non-zero
+/// `files_missing` or `files_skipped_outside_vault`. `files_skipped_non_md`
+/// is intentionally not hinted — it's common when piping from `git diff` and
+/// not actionable (the caller's diff included `.toml` / `.md.lock` / etc).
+fn files_from_hints(counters: Option<FilesFromCounterSummary>) -> Vec<Hint> {
+    let mut out = Vec::new();
+    let Some(c) = counters else {
+        return out;
+    };
+
+    if c.files_missing > 0 {
+        out.push(Hint::without_cmd(format!(
+            "{} input path(s) did not exist on disk (likely deletions); \
+             use `git diff --name-only --diff-filter=AMR` upstream to filter them out",
+            c.files_missing
+        )));
+    }
+    if c.files_skipped_outside_vault > 0 {
+        out.push(Hint::without_cmd(format!(
+            "{} input path(s) were outside the vault; \
+             check your --dir or the upstream filter",
+            c.files_skipped_outside_vault
+        )));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1703,6 +1772,59 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
     }
 
     // -----------------------------------------------------------------------
+    // SCHEMA → `types show <T>` (iter-143). Surface a per-type hint when
+    // SCHEMA violations land on files that declared a `type:`. Skip when
+    // the user is already focused on schema rules (--rule SCHEMA or
+    // --rule-prefix HYALO).
+    // -----------------------------------------------------------------------
+    let already_schema_focused = ctx.lint_rule.as_deref() == Some("SCHEMA")
+        || ctx
+            .lint_rule_prefix
+            .as_deref()
+            .is_some_and(|p| p.starts_with("HYALO"));
+    if !already_schema_focused && let Some(files) = data.get("files").and_then(|f| f.as_array()) {
+        // Collect distinct types that have at least one SCHEMA violation.
+        // Preserve first-seen order; cap at 2 distinct types to avoid noise.
+        //
+        // Inspect both the read-only mode shape (`rule_groups`) and the
+        // fix-mode shape (`remaining_groups`) so the hint fires regardless
+        // of which lint mode produced the output.
+        let mut schema_types: Vec<String> = Vec::new();
+        for file in files {
+            let has_schema_in = |key: &str| {
+                file.get(key)
+                    .and_then(|rg| rg.as_array())
+                    .is_some_and(|groups| {
+                        groups.iter().any(|g| {
+                            g.get("rule").and_then(serde_json::Value::as_str) == Some("SCHEMA")
+                        })
+                    })
+            };
+            if !has_schema_in("rule_groups") && !has_schema_in("remaining_groups") {
+                continue;
+            }
+            let Some(t) = file.get("type").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            if !schema_types.iter().any(|x| x == t) {
+                schema_types.push(t.to_owned());
+            }
+            if schema_types.len() >= 2 {
+                break;
+            }
+        }
+        for t in &schema_types {
+            if hints.len() >= MAX_HINTS {
+                break;
+            }
+            hints.push(Hint::new(
+                format!("Show schema for type: {t}"),
+                build_command_no_glob(ctx, &["types", "show", t]),
+            ));
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Always suggest listing defined types.
     // -----------------------------------------------------------------------
     if hints.len() < MAX_HINTS {
@@ -1746,6 +1868,23 @@ fn hints_for_types(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         }
         "show" => {
             let type_name = data.get("type").and_then(serde_json::Value::as_str);
+            // Suggest scaffolding a new file of this type when the type
+            // declares any `required` properties. Without required fields,
+            // `hyalo new` would only emit a `type:` stub — low value.
+            let has_required = data
+                .get("required")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|arr| !arr.is_empty());
+            if let Some(name) = type_name
+                && has_required
+                && hints.len() < MAX_HINTS
+            {
+                let placeholder = format!("path/to/new-{name}.md");
+                hints.push(Hint::new(
+                    format!("Scaffold a new file of type: {name}"),
+                    build_command_no_glob(ctx, &["new", "--type", name, "--file", &placeholder]),
+                ));
+            }
             if hints.len() < MAX_HINTS {
                 hints.push(Hint::new(
                     "Validate files against schema",
@@ -2661,6 +2800,156 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("find --property")),
             "should suggest find --property: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn types_show_hints_suggest_scaffold_when_required_nonempty() {
+        // iter-143: when the type declares any `required` properties, `types
+        // show` surfaces a hint to scaffold a new file via `hyalo new`.
+        let c = ctx(HintSource::Types {
+            subcommand: Some("show".to_owned()),
+        });
+        let data = json!({
+            "type": "iteration",
+            "required": ["title", "status"],
+            "properties": {},
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("new --type iteration")),
+            "should suggest scaffolding a new file: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn types_show_hints_no_scaffold_when_required_empty() {
+        // iter-143: when `required` is empty, the scaffold hint is dropped
+        // (it would only emit a `type:` stub — low value).
+        let c = ctx(HintSource::Types {
+            subcommand: Some("show".to_owned()),
+        });
+        let data = json!({
+            "type": "note",
+            "required": [],
+            "properties": {},
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("new --type")),
+            "should NOT suggest scaffolding when required is empty: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_schema_violation_suggests_types_show() {
+        // iter-143: when SCHEMA violations land on a typed file, surface
+        // `hyalo types show <T>`.
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{
+                "file": "foo.md",
+                "type": "iteration",
+                "rule_groups": [{
+                    "rule": "SCHEMA", "count": 2, "shown": 2,
+                    "truncated": false, "severity": "error", "autofixable": false,
+                    "violations": [],
+                }]
+            }],
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types show iteration")),
+            "should suggest types show for the failing type: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_schema_violation_suggests_types_show_in_fix_mode() {
+        // iter-143 follow-up (Copilot review on PR #169): the SCHEMA→`types
+        // show` hint must also fire in `--fix` / `--fix --dry-run` output,
+        // where violations live under `remaining_groups` instead of
+        // `rule_groups`.
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{
+                "file": "foo.md",
+                "type": "iteration",
+                "fixed_groups": [],
+                "remaining_groups": [{
+                    "rule": "SCHEMA", "count": 1, "shown": 1,
+                    "truncated": false, "severity": "error", "autofixable": false,
+                    "violations": [],
+                }],
+                "conflicts": [],
+            }],
+            "dry_run": true,
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("types show iteration")),
+            "should suggest types show in fix-mode too: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_schema_violation_skipped_when_already_focused() {
+        // iter-143: when the user is already filtering on SCHEMA via --rule
+        // SCHEMA (or --rule-prefix HYALO), the `types show` hint would be
+        // redundant — suppress it.
+        let mut c = ctx(HintSource::Lint);
+        c.lint_rule = Some("SCHEMA".to_owned());
+        let data = json!({
+            "files": [{
+                "file": "foo.md",
+                "type": "iteration",
+                "rule_groups": [{
+                    "rule": "SCHEMA", "count": 1, "shown": 1,
+                    "truncated": false, "severity": "error", "autofixable": false,
+                    "violations": [],
+                }]
+            }],
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("types show")),
+            "should NOT suggest types show when --rule SCHEMA: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn files_from_hints_fire_on_missing_and_outside_vault() {
+        // iter-143: the FilesFromCounterSummary path produces advice hints.
+        let c = ctx(HintSource::Find);
+        let data = json!({"results": [], "total": 0});
+        let counters = FilesFromCounterSummary {
+            files_missing: 3,
+            files_skipped_outside_vault: 1,
+        };
+        let hints = generate_hints_with_counters(&c, &data, None, Some(counters));
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.is_empty() && h.description.contains("3 input path")),
+            "should warn about missing inputs: {hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.is_empty() && h.description.contains("outside the vault")),
+            "should warn about outside-vault inputs: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn files_from_hints_silent_when_zero_counters() {
+        let c = ctx(HintSource::Find);
+        let data = json!({"results": []});
+        let counters = FilesFromCounterSummary::default();
+        let hints = generate_hints_with_counters(&c, &data, None, Some(counters));
+        assert!(
+            !hints.iter().any(|h| h.cmd.is_empty()),
+            "no advice hints expected when counters are zero: {hints:?}"
         );
     }
 

@@ -190,6 +190,7 @@ fn adapt_view_result_to_ext(
 
     lint_commands::ExtFileLintResult {
         file: result.file.clone(),
+        doc_type: None,
         rule_groups,
     }
 }

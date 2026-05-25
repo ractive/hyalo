@@ -89,16 +89,18 @@ hyalo command the same way.
 
 ### Index interaction
 
-- [ ] **When `--index` (or `--index-file`) is given**: read from the
+- [x] **When `--index` (or `--index-file`) is given**: read from the
       snapshot for every path in the input list. Paths not present in
       the index get treated the same as missing-on-disk
       (`files_missing`). **Do not fall back to disk-rescan.** The
       contract for `--index` is "snapshot is the source of truth";
       `--files-from` must not weaken that.
-      **Deferred:** current resolution uses `is_file()` on disk instead
-      of snapshot membership. A path in the input that's on disk but
-      absent from the snapshot is not yet counted as `files_missing`.
-      Follow-up: thread `snapshot_index` into `files_from::resolve`.
+      *Landed in iter-143
+      ([[iterations/iteration-143-hint-and-files-from-polish]]):
+      `files_from::resolve_with_index` consults the loaded snapshot via
+      `VaultIndex::get` instead of `is_file()`; `run.rs` routes through
+      it whenever `snapshot_index` is `Some`. E2E coverage:
+      `lint_files_from_with_index_counts_post_index_files_as_missing`.*
 - [x] **Without `--index`**: read from disk for each path. No
       directory walk happens — the input list IS the work set.
 - [x] Performance: this should be measurably faster than `--glob` on
@@ -112,17 +114,21 @@ hyalo command the same way.
 
 ### Hints
 
-- [ ] `HintSource::FilesFrom` variant on success: suggest running the
+- [x] `HintSource::FilesFrom` variant on success: suggest running the
       same command without `--files-from` to operate on the whole
-      vault, when relevant. **Deferred:** an initial stub was wired
-      but never dispatched (and the generated command was missing
-      its subcommand, per Copilot/CodeRabbit review). The stub was
-      removed in this PR — bespoke hint copy can be added in a
-      follow-up once the wiring is designed properly.
-- [ ] Existing hints that suggest "scan all files" or "use `--glob`"
+      vault, when relevant. *iter-143
+      ([[iterations/iteration-143-hint-and-files-from-polish]]) shipped a
+      different (better) shape: counters from the resolver flow into
+      `generate_hints_with_counters` as a `FilesFromCounterSummary`, and
+      advice hints fire whenever `files_missing > 0` or
+      `files_skipped_outside_vault > 0`. No separate `HintSource` variant
+      — the hints fire across all sources that accept `--files-from`.*
+- [x] Existing hints that suggest "scan all files" or "use `--glob`"
       pick up an alternative: "or pass `--files-from -` if you already
-      have a file list (e.g. `git diff --name-only`)". **Deferred:**
-      not done in this PR.
+      have a file list (e.g. `git diff --name-only`)". *Moot — a search
+      confirmed no such "scan all" hints exist; the documentation
+      surfaces in iter-139 (README, rule template) already cover the
+      `--files-from` discoverability story.*
 
 ### Docs + UX surfaces
 
@@ -149,11 +155,11 @@ hyalo command the same way.
 - [x] Implement filtering (`.md` only, missing files, outside-vault)
 - [x] Wire envelope counters: `files_missing`, `files_skipped_non_md`,
       `files_skipped_outside_vault`
-- [ ] Wire `--index` interaction (snapshot-only resolution; no disk
-      fallback). **Deferred** — see Index-interaction section.
+- [x] Wire `--index` interaction (snapshot-only resolution; no disk
+      fallback). *Landed in iter-143 — see Index-interaction section.*
 - [x] Wire mutual-exclusion errors with `--glob` and `--file`
-- [ ] `HintSource::FilesFrom` + per-command hint updates.
-      **Deferred** — see Hints section.
+- [x] `HintSource::FilesFrom` + per-command hint updates.
+      *Landed in iter-143 in a different shape — see Hints section.*
 - [x] Update help texts on every affected subcommand
 - [x] Update README.md with the CI diff-aware lint example
 - [x] Update `cli/help.rs` long-help examples

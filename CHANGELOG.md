@@ -2,7 +2,28 @@
 
 ## Unreleased
 
+### Changed
+
+- **iter-143**: New `hyalo lint` hint — when SCHEMA violations land on a file
+  with a declared `type:`, `hyalo types show <T>` is surfaced as the
+  next-step. Generic across all SCHEMA failure modes (`required`, `pattern`,
+  `item_pattern`, `required_sections`, type-mismatch). Suppressed when
+  `--rule SCHEMA` or `--rule-prefix HYALO` is already active. Capped at 2
+  distinct types per invocation.
+- **iter-143**: `hyalo types show <T>` now suggests `hyalo new --type <T>`
+  when the type declares any `required` properties.
+- **iter-143**: `--files-from` callers (any command that accepts it) get
+  counter-aware advice hints: `<N> input path(s) did not exist on disk` and
+  `<N> input path(s) were outside the vault`. Prepended so the `MAX_HINTS`
+  cap doesn't crowd them out behind generic next-step hints.
+
 ### Fixed
+
+- **iter-143**: `--index --files-from` now consults the snapshot for
+  membership instead of falling through to `is_file()`. Paths that exist on
+  disk but are absent from the snapshot count as `files_missing` —
+  consistent with the `--index` contract ("snapshot is the source of
+  truth"). Closes the deferred item from iter-139.
 
 - **NEW-1**: `item_pattern` lint validation now reports every offending item in a
   `string-list` property (with its index) instead of short-circuiting after the first.

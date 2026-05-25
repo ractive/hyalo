@@ -208,12 +208,20 @@ fn resolve_files_from_for_command(
     cmd: &mut Commands,
     dir: &Path,
     configured_dir: &str,
+    snapshot_index: Option<&hyalo_core::index::SnapshotIndex>,
 ) -> Result<Option<FilesFromCounters>> {
-    // Helper: load + resolve a files_from source, returning (rel_paths, counters)
+    // Helper: load + resolve a files_from source, returning (rel_paths, counters).
+    // When a snapshot index is active, route through the snapshot-aware
+    // resolver so paths absent from the snapshot count as `files_missing`
+    // (no disk fallback).
     let resolve_source = |source: &str| -> Result<(Vec<String>, FilesFromCounters)> {
         let entries = files_from_load(source)?;
         let total_inputs = entries.len();
-        let resolved = files_from_resolve(dir, &entries, configured_dir)?;
+        let resolved = if let Some(idx) = snapshot_index {
+            crate::commands::files_from::resolve_with_index(dir, &entries, configured_dir, idx)?
+        } else {
+            files_from_resolve(dir, &entries, configured_dir)?
+        };
         let files = resolved.files;
         let rel_paths: Vec<String> = files.into_iter().map(|(_full, rel)| rel).collect();
         // Emit an actionable hint to stderr when every entry was missing.
@@ -1239,26 +1247,6 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(idx) = snapshot_index.as_mut() {
         idx.set_frontmatter_link_props(frontmatter_link_props_owned.clone());
     }
-    let mut ctx = CommandContext {
-        dir: &dir,
-        config_dir: &config_dir,
-        site_prefix,
-        effective_format,
-        user_format: format,
-        snapshot_index: &mut snapshot_index,
-        index_path: index_path_buf.as_deref(),
-        config_language: config_language_owned.as_deref(),
-        frontmatter_link_props: frontmatter_link_props_owned.as_deref(),
-        schema: &schema,
-        validate_on_write,
-        lint_ignore: &lint_ignore,
-        md_lint: &md_lint,
-        case_insensitive_mode,
-        exit_code_override: None,
-        config_default_limit,
-        programmatic_output: jq_filter.is_some() || cli.count,
-        lint_strict: lint_strict_from_config,
-    };
     // For `create-index`, merge the global `--index-file` flag into the
     // subcommand's `-o / --output` field.  Both are synonyms on this subcommand.
     // If both are provided and differ, return a clear user error.
@@ -1307,18 +1295,49 @@ fn run_inner() -> Result<(), AppError> {
 
     // Resolve --files-from before dispatch. This converts the files_from source
     // into the command's `file` list and returns skip counters for the envelope.
+    // When the snapshot is active, route resolution through the snapshot so paths
+    // absent from the index count as missing (iter-143: --index → snapshot is
+    // the source of truth, no disk fallback).
+    //
+    // Done *before* constructing `CommandContext` so the snapshot_index borrow
+    // for resolution doesn't conflict with the `&mut` stored on ctx.
     let configured_dir_str = config.dir.to_string_lossy();
-    let (files_from_counters, files_from_empty) =
-        match resolve_files_from_for_command(&mut cli.command, &dir, &configured_dir_str) {
-            Ok(Some(c)) => {
-                let empty = files_from_command_file_list_is_empty(&cli.command);
-                (Some(c), empty)
-            }
-            Ok(None) => (None, false),
-            Err(e) => {
-                return Err(AppError::Internal(e));
-            }
-        };
+    let (files_from_counters, files_from_empty) = match resolve_files_from_for_command(
+        &mut cli.command,
+        &dir,
+        &configured_dir_str,
+        snapshot_index.as_ref(),
+    ) {
+        Ok(Some(c)) => {
+            let empty = files_from_command_file_list_is_empty(&cli.command);
+            (Some(c), empty)
+        }
+        Ok(None) => (None, false),
+        Err(e) => {
+            return Err(AppError::Internal(e));
+        }
+    };
+
+    let mut ctx = CommandContext {
+        dir: &dir,
+        config_dir: &config_dir,
+        site_prefix,
+        effective_format,
+        user_format: format,
+        snapshot_index: &mut snapshot_index,
+        index_path: index_path_buf.as_deref(),
+        config_language: config_language_owned.as_deref(),
+        frontmatter_link_props: frontmatter_link_props_owned.as_deref(),
+        schema: &schema,
+        validate_on_write,
+        lint_ignore: &lint_ignore,
+        md_lint: &md_lint,
+        case_insensitive_mode,
+        exit_code_override: None,
+        config_default_limit,
+        programmatic_output: jq_filter.is_some() || cli.count,
+        lint_strict: lint_strict_from_config,
+    };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
     // short-circuit with an empty result rather than falling through to "scan all".

@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::commands::files_from::FilesFromCounters;
-use crate::hints::{HintContext, generate_hints};
+use crate::hints::{FilesFromCounterSummary, HintContext, generate_hints_with_counters};
 use crate::output::{CommandOutcome, Format, apply_jq_filter_result, build_envelope_value};
 
 /// Error message for `--count` on non-list commands (shared across match arms).
@@ -104,9 +104,19 @@ impl OutputPipeline<'_> {
                     }
                 };
 
-                // Generate hints when a context is available.
+                // Generate hints when a context is available. Pass through
+                // the `--files-from` counters so iter-143's counter-aware
+                // hints can fire (the envelope merge for the JSON shape
+                // happens later, so `value` doesn't carry them yet).
                 let hints = if let Some(ctx) = self.hint_ctx {
-                    generate_hints(ctx, &value, total)
+                    let counters =
+                        self.files_from_counters
+                            .as_ref()
+                            .map(|c| FilesFromCounterSummary {
+                                files_missing: c.files_missing,
+                                files_skipped_outside_vault: c.files_skipped_outside_vault,
+                            });
+                    generate_hints_with_counters(ctx, &value, total, counters)
                 } else {
                     Vec::new()
                 };

@@ -1225,6 +1225,10 @@ pub struct BodyViolation {
 #[derive(Debug, serde::Serialize)]
 pub struct ExtFileLintResult {
     pub file: String,
+    /// Frontmatter `type:` discriminator, if the file declared one. Used by
+    /// the hint layer to surface `hyalo types show <T>` for SCHEMA failures.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub doc_type: Option<String>,
     /// Frontmatter + body violations grouped by rule.
     pub rule_groups: Vec<RuleGroup>,
 }
@@ -1250,6 +1254,11 @@ pub struct ConflictEntry {
 #[derive(Debug, serde::Serialize)]
 pub struct ExtFileLintFixResult {
     pub file: String,
+    /// Frontmatter `type:` discriminator, if the file declared one. Mirrors
+    /// [`ExtFileLintResult::doc_type`] so the iter-143 SCHEMA-→-`types show`
+    /// hint also fires in `--fix` / `--fix --dry-run` output.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub doc_type: Option<String>,
     /// Rules that had fixes applied (or would be in DryRun).
     pub fixed_groups: Vec<FixedGroup>,
     /// Rules with violations that remain after fixing.
@@ -1638,6 +1647,7 @@ pub fn lint_files_extended(
             if !fixed_groups.is_empty() || !remaining_groups.is_empty() || !conflicts.is_empty() {
                 output_fix_files.push(ExtFileLintFixResult {
                     file: r.rel_path.clone(),
+                    doc_type: r.doc_type.clone(),
                     fixed_groups,
                     remaining_groups,
                     conflicts,
@@ -1731,6 +1741,7 @@ pub fn lint_files_extended(
             rule_groups.sort_by_key(|g| std::cmp::Reverse(g.count));
             output_files.push(ExtFileLintResult {
                 file: r.rel_path.clone(),
+                doc_type: r.doc_type.clone(),
                 rule_groups,
             });
         }
@@ -1793,6 +1804,9 @@ enum FixOutcome {
 /// Per-file lint result (internal, before grouping).
 struct PerFileLintResult {
     rel_path: String,
+    /// Frontmatter `type:` discriminator, if declared. Propagated into
+    /// `ExtFileLintResult.doc_type` for the hint layer.
+    doc_type: Option<String>,
     violations_by_rule: indexmap::IndexMap<String, Vec<InternalViolation>>,
     total_violations: usize,
     body_modified: bool,
@@ -1851,6 +1865,7 @@ fn lint_one_file_extended(
             );
             return Ok(PerFileLintResult {
                 rel_path: rel_path.to_owned(),
+                doc_type: None,
                 violations_by_rule,
                 total_violations: 1,
                 body_modified: false,
@@ -2135,6 +2150,7 @@ fn lint_one_file_extended(
 
     Ok(PerFileLintResult {
         rel_path: rel_path.to_owned(),
+        doc_type: post_fix_doc_type,
         violations_by_rule,
         total_violations,
         body_modified,
