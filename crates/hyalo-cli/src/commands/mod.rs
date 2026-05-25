@@ -7,6 +7,7 @@ pub mod drop_index;
 pub mod files_from;
 pub mod find;
 pub mod init;
+pub(crate) mod inputs;
 pub mod links;
 pub mod lint;
 pub mod lint_rules;

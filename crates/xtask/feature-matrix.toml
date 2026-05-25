@@ -9,10 +9,15 @@
 [flags."--files-from"]
 required_in = ["find", "lint", "mv", "set", "remove", "append"]
 shape = "selector"
+# Note: task toggle, task set, task read, read, and backlinks also accept
+# --files-from (via the unified input resolver), but the xtask checker only
+# handles top-level single-word commands; sub-subcommand coverage is provided
+# by the e2e test suite instead.
 
 [flags."--glob"]
 required_in = ["find", "lint", "mv", "set", "remove", "append"]
 shape = "selector"
+# Note: task toggle and task set also accept --glob; coverage via e2e tests.
 
 [flags."--index-file"]
 required_in = ["find", "lint", "summary", "backlinks", "links", "tags", "properties"]

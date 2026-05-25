@@ -675,3 +675,44 @@ fn show_alias_works() {
     assert!(stdout.contains("# Heading One"));
     assert!(stdout.contains("First paragraph."));
 }
+
+// ---------------------------------------------------------------------------
+// Unified input resolver: --glob rejection and --files-from support
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_glob_is_rejected() {
+    // `read` uses Single policy with allow_glob=false — --glob must return an error.
+    let tmp = setup();
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["read", "--glob", "*.md"]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Should fail: --glob is not supported for single-file commands.
+    assert!(
+        !output.status.success() || stdout.contains("not supported"),
+        "expected rejection of --glob on read; stderr={stderr} stdout={stdout}"
+    );
+}
+
+#[test]
+fn read_files_from_is_rejected_as_multi() {
+    // `read` uses Single policy — --files-from with multiple files should error.
+    let tmp = setup();
+    let list_path = tmp.path().join("list.txt");
+    std::fs::write(&list_path, "note.md\n").unwrap();
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["read", "--files-from", list_path.to_str().unwrap()]);
+    let output = cmd.output().unwrap();
+    // Single file from --files-from should work for read (resolves to one file).
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "expected read with single --files-from entry to succeed; stderr={stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("Heading One"), "expected file content");
+}

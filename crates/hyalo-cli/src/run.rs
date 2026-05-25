@@ -9,9 +9,7 @@ use clap::{CommandFactory, FromArgMatches};
 use crate::cli::args::{Cli, Commands, FindFilters, IndexFlags};
 use crate::cli::banner::cwd_help_banner;
 use crate::cli::help::{filter_examples, filter_long_help};
-use crate::commands::files_from::{
-    FilesFromCounters, load as files_from_load, resolve as files_from_resolve,
-};
+use crate::commands::files_from::FilesFromCounters;
 use crate::commands::init as init_commands;
 use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
@@ -190,62 +188,30 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
     }
 }
 
-/// Resolve `--files-from` for commands that accept it.
+/// Pre-dispatch `--files-from` resolution for commands that accept it.
 ///
-/// When a command carries a `files_from` source, this function:
-/// 1. Loads the raw path lines (from a file path or stdin `-`).
-/// 2. Resolves them against the vault `dir` (filtering `.md`, missing, outside-vault).
-/// 3. Injects the resolved vault-relative paths into the command's `file` Vec
-///    (or `glob` Vec for `mv` batch mode).
-/// 4. Returns `Some(FilesFromCounters)` for the output pipeline to include in the envelope.
+/// Delegates to [`crate::commands::inputs::resolve_files_from_to_rel_paths`]
+/// which is the single file-resolution entry point for the entire application.
+///
+/// When a command carries a `files_from` source this function:
+/// 1. Resolves path lines from the source (file or stdin `-`) via the unified resolver.
+/// 2. Injects the resolved vault-relative paths into the command's `file` Vec
+///    (or `glob` Vec for `mv` batch mode), clearing competing selectors.
+/// 3. Returns `Some(FilesFromCounters)` for the output pipeline to merge into the envelope.
 ///
 /// Returns `Ok(None)` when the command does not carry `--files-from`.
 /// Returns `Err(...)` only for I/O failures reading the source.
 ///
 /// When the resolved file list is empty, the caller is expected to use
 /// [`files_from_command_file_list_is_empty`] to short-circuit dispatch.
-#[allow(clippy::too_many_lines, clippy::match_same_arms)]
+#[allow(clippy::match_same_arms)]
 fn resolve_files_from_for_command(
     cmd: &mut Commands,
     dir: &Path,
     configured_dir: &str,
     snapshot_index: Option<&hyalo_core::index::SnapshotIndex>,
 ) -> Result<Option<FilesFromCounters>> {
-    // Helper: load + resolve a files_from source, returning (rel_paths, counters).
-    // When a snapshot index is active, route through the snapshot-aware
-    // resolver so paths absent from the snapshot count as `files_missing`
-    // (no disk fallback).
-    let resolve_source = |source: &str| -> Result<(Vec<String>, FilesFromCounters)> {
-        let entries = files_from_load(source)?;
-        let total_inputs = entries.len();
-        let resolved = if let Some(idx) = snapshot_index {
-            crate::commands::files_from::resolve_with_index(dir, &entries, configured_dir, idx)?
-        } else {
-            files_from_resolve(dir, &entries, configured_dir)?
-        };
-        let files = resolved.files;
-        let rel_paths: Vec<String> = files.into_iter().map(|(_full, rel)| rel).collect();
-        // Emit an actionable hint to stderr when every entry was missing.
-        // Use the configured_dir string (relative, e.g. "files/en-us") in the hint
-        // so the example paths are meaningful to the user.
-        let vault_dir_display = {
-            let normalized = configured_dir.replace('\\', "/");
-            let trimmed = normalized.trim_end_matches('/');
-            if trimmed.is_empty() {
-                ".".to_owned()
-            } else {
-                trimmed.to_owned()
-            }
-        };
-        if let Some(hint) =
-            resolved
-                .counters
-                .all_missing_hint(rel_paths.len(), total_inputs, &vault_dir_display)
-        {
-            crate::warn::note(hint);
-        }
-        Ok((rel_paths, resolved.counters))
-    };
+    use crate::commands::inputs::resolve_files_from_to_rel_paths;
 
     match cmd {
         Commands::Find {
@@ -261,7 +227,8 @@ fn resolve_files_from_for_command(
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
-            let (paths, counters) = resolve_source(&source)?;
+            let (paths, counters) =
+                resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             *file = paths;
             glob.clear();
             Ok(Some(counters))
@@ -276,7 +243,8 @@ fn resolve_files_from_for_command(
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
-            let (paths, counters) = resolve_source(&source)?;
+            let (paths, counters) =
+                resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             *file = paths;
             *file_positional = None;
             glob.clear();
@@ -292,7 +260,8 @@ fn resolve_files_from_for_command(
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
-            let (paths, counters) = resolve_source(&source)?;
+            let (paths, counters) =
+                resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             *file = paths;
             file_positional.clear();
             glob.clear();
@@ -308,7 +277,8 @@ fn resolve_files_from_for_command(
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
-            let (paths, counters) = resolve_source(&source)?;
+            let (paths, counters) =
+                resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             *file = paths;
             file_positional.clear();
             glob.clear();
@@ -324,7 +294,8 @@ fn resolve_files_from_for_command(
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
-            let (paths, counters) = resolve_source(&source)?;
+            let (paths, counters) =
+                resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             *file = paths;
             file_positional.clear();
             glob.clear();
@@ -340,7 +311,8 @@ fn resolve_files_from_for_command(
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
-            let (paths, counters) = resolve_source(&source)?;
+            let (paths, counters) =
+                resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             // Mv batch mode is driven by --glob/--property/--tag/--type selectors,
             // so we feed the resolved vault-relative paths into `glob`. Each path
             // is a literal (no wildcards), and globset treats a literal pattern
@@ -1012,25 +984,26 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
-            Commands::Read {
-                file_positional,
-                file,
-                ..
-            } => {
+            Commands::Read { selection, .. } => {
                 let mut ctx = HintContext::from_common(HintSource::Read, &common);
-                if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
+                if let Some(f) = selection
+                    .file_positional
+                    .as_ref()
+                    .or(selection.file.first())
+                {
                     ctx.file_targets = vec![f.clone()];
                 }
                 Some(ctx)
             }
             Commands::Backlinks {
-                file_positional,
-                file,
-                limit,
-                ..
+                selection, limit, ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Backlinks, &common);
-                if let Some(f) = file_positional.as_ref().or(file.as_ref()) {
+                if let Some(f) = selection
+                    .file_positional
+                    .as_ref()
+                    .or(selection.file.first())
+                {
                     ctx.file_targets = vec![f.clone()];
                 }
                 ctx.has_limit = limit.is_some();
@@ -1051,10 +1024,9 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             Commands::Task { action } => {
-                let (source, file_pos, file_flag, selector) = match action {
+                let (source, selection, selector) = match action {
                     crate::cli::args::TaskAction::Toggle {
-                        file_positional,
-                        file,
+                        selection,
                         line,
                         section,
                         all,
@@ -1062,39 +1034,38 @@ fn run_inner() -> Result<(), AppError> {
                         ..
                     } => (
                         HintSource::TaskToggle,
-                        file_positional,
-                        file,
+                        selection,
                         task_selector(line, section.as_ref(), *all),
                     ),
                     crate::cli::args::TaskAction::Set {
-                        file_positional,
-                        file,
+                        selection,
                         line,
                         section,
                         all,
                         ..
                     } => (
                         HintSource::TaskSetStatus,
-                        file_positional,
-                        file,
+                        selection,
                         task_selector(line, section.as_ref(), *all),
                     ),
                     crate::cli::args::TaskAction::Read {
-                        file_positional,
-                        file,
+                        selection,
                         line,
                         section,
                         all,
                         ..
                     } => (
                         HintSource::TaskRead,
-                        file_positional,
-                        file,
+                        selection,
                         task_selector(line, section.as_ref(), *all),
                     ),
                 };
                 let mut ctx = HintContext::from_common(source, &common);
-                if let Some(f) = file_pos.as_ref().or(file_flag.as_ref()) {
+                if let Some(f) = selection
+                    .file_positional
+                    .as_ref()
+                    .or(selection.file.first())
+                {
                     ctx.file_targets = vec![f.clone()];
                 }
                 ctx.task_selector = selector;
@@ -1334,6 +1305,7 @@ fn run_inner() -> Result<(), AppError> {
     let mut ctx = CommandContext {
         dir: &dir,
         config_dir: &config_dir,
+        configured_dir_str: &configured_dir_str,
         site_prefix,
         effective_format,
         user_format: format,

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::cli::inputs::InputSelection;
 use crate::output::Format;
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
@@ -449,12 +450,8 @@ pub(crate) enum Commands {
             \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json"
     )]
     Read {
-        /// Target file (relative to --dir) — positional form
-        #[arg(value_name = "FILE")]
-        file_positional: Option<String>,
-        /// Target file (relative to --dir) — flag form
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
-        file: Option<String>,
+        #[command(flatten)]
+        selection: InputSelection,
         /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
         /// prefix '##' to pin heading level; use '/regex/' for regex. Nested subsections included
         #[arg(short, long, value_name = "HEADING")]
@@ -465,8 +462,6 @@ pub(crate) enum Commands {
         /// Include the YAML frontmatter in output
         #[arg(long)]
         frontmatter: bool,
-        // TODO: Read doesn't use the snapshot index yet; consider removing
-        // IndexFlags or wiring it in for file resolution.
         #[command(flatten)]
         index_flags: IndexFlags,
     },
@@ -560,12 +555,8 @@ pub(crate) enum Commands {
             \u{00a0} hyalo backlinks --file notes/design.md --limit 20"
     )]
     Backlinks {
-        /// Target file to find backlinks for (relative to --dir) — positional form
-        #[arg(value_name = "FILE")]
-        file_positional: Option<String>,
-        /// Target file to find backlinks for (relative to --dir) — flag form
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
-        file: Option<String>,
+        #[command(flatten)]
+        selection: InputSelection,
         /// Maximum number of backlinks to return (0 = unlimited).
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
@@ -1433,12 +1424,8 @@ pub(crate) enum TaskAction {
           hyalo task read note.md --all\n  \
           hyalo task read --file note.md --line 5")]
     Read {
-        /// File containing the task(s) (relative to --dir) — positional form
-        #[arg(value_name = "FILE")]
-        file_positional: Option<String>,
-        /// File containing the task(s) (relative to --dir) — flag form
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
-        file: Option<String>,
+        #[command(flatten)]
+        selection: InputSelection,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
@@ -1454,24 +1441,22 @@ pub(crate) enum TaskAction {
     /// Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x]
     #[command(
         long_about = "Toggle task completion: [ ] -> [x], [x]/[X] -> [ ], custom -> [x].\n\n\
-        INPUT: FILE (positional or --file) and one of: --line (repeatable), --section <heading>, or --all.\n\
+        INPUT: FILE (positional or --file) or --glob or --files-from, and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
-        SIDE EFFECTS: Modifies the file on disk (rewrites the checkbox character).\n\
+        SIDE EFFECTS: Modifies the file(s) on disk (rewrites the checkbox character).\n\
         USE WHEN: You need to mark tasks as done or re-open completed tasks.\n\n\
         EXAMPLES:\n  \
           hyalo task toggle note.md --line 5\n  \
           hyalo task toggle note.md --line 5,7,9\n  \
           hyalo task toggle note.md --section Tasks\n  \
           hyalo task toggle note.md --all\n  \
-          hyalo task toggle --file note.md --line 5"
+          hyalo task toggle --file note.md --line 5\n  \
+          hyalo task toggle --files-from list.txt --section Tasks\n  \
+          hyalo task toggle --glob 'iterations/*.md' --all"
     )]
     Toggle {
-        /// File containing the task(s) (relative to --dir) — positional form
-        #[arg(value_name = "FILE")]
-        file_positional: Option<String>,
-        /// File containing the task(s) (relative to --dir) — flag form
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
-        file: Option<String>,
+        #[command(flatten)]
+        selection: InputSelection,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
@@ -1504,12 +1489,8 @@ pub(crate) enum TaskAction {
           hyalo task set note.md --line 5 --status '?' --dry-run"
     )]
     Set {
-        /// File containing the task(s) (relative to --dir) — positional form
-        #[arg(value_name = "FILE")]
-        file_positional: Option<String>,
-        /// File containing the task(s) (relative to --dir) — flag form
-        #[arg(short, long, value_name = "FILE", conflicts_with = "file_positional")]
-        file: Option<String>,
+        #[command(flatten)]
+        selection: InputSelection,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,

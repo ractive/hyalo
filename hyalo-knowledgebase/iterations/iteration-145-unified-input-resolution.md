@@ -2,7 +2,7 @@
 title: Iteration 145 — Unified input resolution + `--files-from` for task subcommands
 type: iteration
 date: 2026-05-25
-status: planned
+status: completed
 branch: iter-145/unified-input-resolution
 tags:
   - iteration
@@ -135,15 +135,15 @@ deltas are:
 
 ### Phase A — Resolver
 
-- [ ] Create `crates/hyalo-cli/src/cli/inputs.rs` with `InputSelection`.
-- [ ] Create `crates/hyalo-cli/src/commands/inputs.rs` with
+- [x] Create `crates/hyalo-cli/src/cli/inputs.rs` with `InputSelection`.
+- [x] Create `crates/hyalo-cli/src/commands/inputs.rs` with
       `ResolvedInputs`, `ResolutionPolicy`, and `resolve_inputs`.
-- [ ] Port `collect_files` logic into `resolve_inputs` (Multi policy).
-- [ ] Port `resolve_single_file` logic into `resolve_inputs`
+- [x] Port `collect_files` logic into `resolve_inputs` (Multi policy).
+- [x] Port `resolve_single_file` logic into `resolve_inputs`
       (Single policy).
-- [ ] Port the `--files-from` resolve step from
+- [x] Port the `--files-from` resolve step from
       `resolve_files_from_for_command` arms into `resolve_inputs`.
-- [ ] Unit tests for each policy (empty, positional-only, file-only,
+- [x] Unit tests for each policy (empty, positional-only, file-only,
       glob-only, files-from-only, files-from + filter, missing, mixed).
 
 ### Phase B — Migrate commands
@@ -152,66 +152,66 @@ For each command, replace per-command fields with
 `#[clap(flatten)] selection: InputSelection`, then collapse the
 dispatch arm to a single `resolve_inputs` call:
 
-- [ ] `find`
-- [ ] `set` (properties)
-- [ ] `remove` (properties)
-- [ ] `append`
-- [ ] `lint`
-- [ ] `links auto` / `links fix`
-- [ ] `backlinks`
-- [ ] `read`
-- [ ] `task read`
-- [ ] `task toggle`
-- [ ] `task set`
-- [ ] `mv` (single-file mode)
+- [x] `find`
+- [x] `set` (properties)
+- [x] `remove` (properties)
+- [x] `append`
+- [x] `lint`
+- [x] `links auto` / `links fix`
+- [x] `backlinks`
+- [x] `read`
+- [x] `task read`
+- [x] `task toggle`
+- [x] `task set`
+- [x] `mv` (single-file mode)
 
 ### Phase C — Cleanup
 
-- [ ] Delete `resolve_files_from_for_command` from `run.rs`.
-- [ ] Delete `resolve_single_file` from `cli/args.rs` (or demote to
+- [x] Delete `resolve_files_from_for_command` from `run.rs`.
+- [x] Delete `resolve_single_file` from `cli/args.rs` (or demote to
       private inside `inputs.rs`).
-- [ ] Make `collect_files` private to the new `inputs` module.
+- [x] Make `collect_files` private to the new `inputs` module.
 
 ### Phase D — Tests + docs
 
-- [ ] E2E: `task toggle --files-from list.txt --section "Tasks"`.
-- [ ] E2E: `task set --files-from - --status x --all` (stdin).
-- [ ] E2E: `task read --glob 'iterations/*.md'` returns multi-file
+- [x] E2E: `task toggle --files-from list.txt --section "Tasks"`.
+- [x] E2E: `task set --files-from - --status x --all` (stdin).
+- [x] E2E: `task read --glob 'iterations/*.md'` returns multi-file
       result (or rejects with a clear error if policy is Single —
       decided during impl).
-- [ ] E2E: counter envelope matches existing `--files-from` commands.
-- [ ] Existing e2e suite must pass unchanged — that's the regression
+- [x] E2E: counter envelope matches existing `--files-from` commands.
+- [x] Existing e2e suite must pass unchanged — that's the regression
       net.
-- [ ] CHANGELOG `Unreleased` → Added (new flags) + Changed (unified
+- [x] CHANGELOG `Unreleased` → Added (new flags) + Changed (unified
       resolver).
-- [ ] README: short note that `--files-from` / `--glob` now work on
+- [x] README: short note that `--files-from` / `--glob` now work on
       all file-taking commands.
-- [ ] `xtask check-feature-fanout`: update `feature-matrix.toml` to
+- [x] `xtask check-feature-fanout`: update `feature-matrix.toml` to
       require `--file`, `--glob`, `--files-from` on every command that
       now carries `InputSelection`. The gate enforces drift.
-- [ ] Move `iteration-145-...md` → `iterations/done/` after merge.
+- [x] Move `iteration-145-...md` → `iterations/done/` after merge.
 
 ## Tasks
 
-- [ ] Phase A: resolver + unit tests
-- [ ] Phase B: migrate all 12 commands
-- [ ] Phase C: delete dead code
-- [ ] Phase D: e2e tests, CHANGELOG, README, feature-matrix
-- [ ] All quality gates green (fmt, clippy -D warnings, full test
+- [x] Phase A: resolver + unit tests
+- [x] Phase B: migrate all 12 commands
+- [x] Phase C: delete dead code
+- [x] Phase D: e2e tests, CHANGELOG, README, feature-matrix
+- [x] All quality gates green (fmt, clippy -D warnings, full test
       suite, xtask gates)
 
 ## Acceptance criteria
 
-- [ ] `resolve_files_from_for_command` no longer exists; one
+- [x] `resolve_files_from_for_command` no longer exists; one
       resolver in `commands/inputs.rs` is the only file-selection
       entry point.
-- [ ] `hyalo task toggle --files-from <list>` and `hyalo task set
+- [x] `hyalo task toggle --files-from <list>` and `hyalo task set
       --files-from <list>` work end-to-end with counters in envelope.
-- [ ] `hyalo read`, `hyalo backlinks`, `hyalo task *` accept `--glob`
+- [x] `hyalo read`, `hyalo backlinks`, `hyalo task *` accept `--glob`
       (or reject cleanly per policy).
-- [ ] `xtask check-feature-fanout` enforces `--file` + `--glob` +
+- [x] `xtask check-feature-fanout` enforces `--file` + `--glob` +
       `--files-from` presence across all file-taking commands.
-- [ ] No regression in existing e2e suite.
+- [x] No regression in existing e2e suite.
 
 ## Design notes
 

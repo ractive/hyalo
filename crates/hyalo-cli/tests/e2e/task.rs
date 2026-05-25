@@ -1094,3 +1094,152 @@ fn task_set_status_dry_run_does_not_modify_file() {
     let after = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
     assert_eq!(original, after, "file was modified during --dry-run");
 }
+
+// ---------------------------------------------------------------------------
+// Unified input resolver: --files-from and --glob on task toggle/set
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_files_from_list_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    // Create a second file to toggle.
+    write_md(
+        tmp.path(),
+        "other.md",
+        "---\ntitle: Other\n---\n- [ ] Other task\n",
+    );
+
+    // Write a files-from list referencing both files.
+    let list_path = tmp.path().join("list.txt");
+    fs::write(&list_path, "bulk.md\nother.md\n").unwrap();
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--all",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    // Multi-file: results is a flat array of all toggled tasks.
+    let results = json["results"].as_array().expect("expected results array");
+    assert!(results.len() >= 2, "expected tasks from both files");
+
+    // bulk.md tasks should be toggled.
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+
+    // other.md task should be toggled.
+    let other_content = fs::read_to_string(tmp.path().join("other.md")).unwrap();
+    assert!(other_content.contains("- [x] Other task"));
+}
+
+#[test]
+fn task_toggle_files_from_stdin() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    // Pass file list via stdin using "-" as the source.
+    // Use std::process::Command directly since assert_cmd::Command doesn't
+    // expose stdin piping.
+    let hyalo_bin = assert_cmd::cargo::cargo_bin("hyalo");
+    let mut child = Command::new(&hyalo_bin)
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "--no-hints",
+            "task",
+            "toggle",
+            "--files-from",
+            "-",
+            "--section",
+            "Tasks",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.take().unwrap().write_all(b"bulk.md\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("expected JSON output");
+    let results = json["results"].as_array().expect("expected results array");
+    // Section "Tasks" has Task A and Task B.
+    assert_eq!(results.len(), 2, "expected 2 tasks in Tasks section");
+
+    let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
+    assert!(content.contains("- [x] Task A"));
+    assert!(content.contains("- [x] Task B"));
+    // Other section untouched.
+    assert!(content.contains("- [ ] AC one"));
+}
+
+#[test]
+fn task_set_files_from_list_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    write_md(
+        tmp.path(),
+        "other.md",
+        "---\ntitle: Other\n---\n- [ ] Other task\n",
+    );
+
+    let list_path = tmp.path().join("list.txt");
+    fs::write(&list_path, "bulk.md\nother.md\n").unwrap();
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "set",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--all",
+            "--status",
+            "x",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    let results = json["results"].as_array().expect("expected results array");
+    assert!(results.len() >= 2, "expected tasks from both files");
+
+    // All tasks should be marked done.
+    for r in results {
+        assert_eq!(r["status"], "x", "expected all tasks set to x");
+    }
+}
+
+#[test]
+fn task_toggle_glob_single_file() {
+    // Passing --glob that matches exactly one file works (SingleOrMany policy).
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &["task", "toggle", "--glob", "bulk.md", "--section", "Tasks"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+
+    // Single file matched: results is an array of toggled tasks (Task A + Task B).
+    let results = json["results"].as_array().expect("expected results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["status"], "x");
+    assert_eq!(results[1]["status"], "x");
+}

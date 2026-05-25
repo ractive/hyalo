@@ -4,6 +4,23 @@
 
 ### Added
 
+- **iter-145**: `task toggle`, `task set`, and `task read` now accept
+  `--files-from <file|->` and `--glob <pattern>` via the unified input
+  resolver. Multi-file `--files-from`/`--glob` on `toggle`/`set` flattens
+  all per-file task results into a single array in the standard
+  `{"results": [...], "total": N, "hints": [...]}` envelope.
+- **iter-145**: `read` and `backlinks` now accept `--files-from` (resolved
+  to the first matching file, consistent with their single-file policy).
+  `--glob` is explicitly rejected with a clear error for these commands.
+
+### Changed
+
+- **iter-145**: Unified file-input resolver (`commands/inputs.rs`) replaces
+  three separate seams: `resolve_files_from_for_command`, `collect_files`,
+  and `resolve_single_file`. All `<FILE>`/`--file` commands now go through
+  the single `resolve_inputs` entry point with a per-command
+  `ResolutionPolicy` that captures single-vs-multi semantics.
+
 - **iter-144**: Index-suggestion hints. Two new automatic hints surface
   `hyalo create-index` when no snapshot index is active:
   - **Slow-query hint** — fires on `find`, `lint`, `backlinks`,
