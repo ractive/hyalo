@@ -67,7 +67,7 @@ pub fn load(source: &str) -> Result<Vec<String>> {
 // ---------------------------------------------------------------------------
 
 /// Counters for entries that were skipped during resolution.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FilesFromCounters {
     pub files_missing: u64,
     pub files_skipped_non_md: u64,

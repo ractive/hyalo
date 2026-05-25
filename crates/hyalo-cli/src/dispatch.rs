@@ -6,6 +6,7 @@ use crate::cli::args::{
     Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, PropertiesAction, TagsAction,
     TaskAction, TypesAction, ViewsAction, resolve_single_file,
 };
+use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
     IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
@@ -72,6 +73,9 @@ pub(crate) struct CommandContext<'a> {
     /// or the `--dir` target when the user passes `--dir` explicitly.
     /// Views and types are stored in `config_dir/.hyalo.toml`.
     pub config_dir: &'a Path,
+    /// The vault dir as configured (`config.dir.to_string_lossy()`).
+    /// Used for `--files-from` prefix stripping in the unified resolver.
+    pub configured_dir_str: &'a str,
     pub site_prefix: Option<&'a str>,
     /// Internal format — always Json; commands build JSON, pipeline handles conversion.
     pub effective_format: Format,
@@ -112,6 +116,10 @@ pub(crate) struct CommandContext<'a> {
     /// When `true`, "no 'type' property" and "undeclared property" warnings are
     /// promoted to errors, and lint exits non-zero on them.
     pub lint_strict: bool,
+    /// `--files-from` counters captured during dispatch for commands that resolve
+    /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
+    /// the output pipeline as `files_from_counters` in the envelope.
+    pub files_from_counters: Option<crate::commands::files_from::FilesFromCounters>,
 }
 
 /// Resolve the effective limit for a list command.
@@ -544,26 +552,39 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             }
         }
         Commands::Read {
-            file_positional,
-            file,
+            selection,
             section,
             lines,
             frontmatter,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            let file = match resolve_single_file(file_positional, file) {
-                Ok(f) => f,
-                Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
-            };
-            read_commands::run(
+            match resolve_inputs(
+                &selection,
                 dir,
-                &file,
-                section.as_deref(),
-                lines.as_deref(),
-                frontmatter,
+                ctx.configured_dir_str,
+                snapshot_index.as_ref(),
+                &ResolutionPolicy::Single { allow_glob: false },
                 effective_format,
-                ctx.user_format,
-            )
+            )? {
+                ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                ResolvedInputsOrOutcome::Resolved(r) => {
+                    ctx.files_from_counters = r.counters;
+                    let (_full, file) = r
+                        .files
+                        .into_iter()
+                        .next()
+                        .context("Single resolution returned no files")?;
+                    read_commands::run(
+                        dir,
+                        &file,
+                        section.as_deref(),
+                        lines.as_deref(),
+                        frontmatter,
+                        effective_format,
+                        ctx.user_format,
+                    )
+                }
+            }
         }
         Commands::Properties { action } => {
             let action = action.unwrap_or(PropertiesAction::Summary {
@@ -733,96 +754,215 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ),
             }
         }
-        Commands::Task { action } => match action {
-            TaskAction::Read {
-                file_positional,
-                file,
-                line,
-                section,
-                all,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                let file = match resolve_single_file(file_positional, file) {
-                    Ok(f) => f,
-                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
-                };
-                task_commands::task_read(
-                    dir,
-                    &file,
-                    &line,
-                    section.as_deref(),
+        Commands::Task { action } => {
+            match action {
+                TaskAction::Read {
+                    selection,
+                    line,
+                    section,
                     all,
-                    effective_format,
-                )
-            }
-            TaskAction::Toggle {
-                file_positional,
-                file,
-                line,
-                section,
-                all,
-                dry_run,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                let file = match resolve_single_file(file_positional, file) {
-                    Ok(f) => f,
-                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
-                };
-                task_commands::task_toggle(
-                    dir,
-                    &file,
-                    &line,
-                    section.as_deref(),
-                    all,
-                    effective_format,
-                    snapshot_index,
-                    index_path,
-                    dry_run,
-                )
-            }
-            TaskAction::Set {
-                file_positional,
-                file,
-                line,
-                section,
-                all,
-                status,
-                dry_run,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                let file = match resolve_single_file(file_positional, file) {
-                    Ok(f) => f,
-                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
-                };
-                if status.chars().count() != 1 {
-                    let out = crate::output::format_error(
+                    index_flags: _, // consumed in run.rs before dispatch
+                } => {
+                    let configured_dir = ctx.configured_dir_str;
+                    match resolve_inputs(
+                        &selection,
+                        dir,
+                        configured_dir,
+                        snapshot_index.as_ref(),
+                        &ResolutionPolicy::Single { allow_glob: false },
                         effective_format,
-                        "--status must be a single character",
-                        None,
-                        Some("example: --status '?' or --status '-'"),
-                        None,
-                    );
-                    return Ok(CommandOutcome::UserError(out));
+                    )? {
+                        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                        ResolvedInputsOrOutcome::Resolved(r) => {
+                            ctx.files_from_counters = r.counters;
+                            let (_full, file) = r
+                                .files
+                                .into_iter()
+                                .next()
+                                .context("Single resolution returned no files")?;
+                            task_commands::task_read(
+                                dir,
+                                &file,
+                                &line,
+                                section.as_deref(),
+                                all,
+                                effective_format,
+                            )
+                        }
+                    }
                 }
-                // chars().count() == 1 guarantees next() returns Some.
-                let ch = status
-                    .chars()
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
-                task_commands::task_set_status(
-                    dir,
-                    &file,
-                    &line,
-                    section.as_deref(),
+                TaskAction::Toggle {
+                    selection,
+                    line,
+                    section,
                     all,
-                    ch,
-                    effective_format,
-                    snapshot_index,
-                    index_path,
                     dry_run,
-                )
+                    index_flags: _, // consumed in run.rs before dispatch
+                } => {
+                    let configured_dir = ctx.configured_dir_str;
+                    match resolve_inputs(
+                        &selection,
+                        dir,
+                        configured_dir,
+                        snapshot_index.as_ref(),
+                        &ResolutionPolicy::SingleOrMany,
+                        effective_format,
+                    )? {
+                        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                        ResolvedInputsOrOutcome::Resolved(r) => {
+                            ctx.files_from_counters.clone_from(&r.counters);
+                            if r.files.len() == 1 {
+                                // Single file: delegate directly — no wrapping.
+                                let (_full_path, rel) = &r.files[0];
+                                task_commands::task_toggle(
+                                    dir,
+                                    rel,
+                                    &line,
+                                    section.as_deref(),
+                                    all,
+                                    effective_format,
+                                    snapshot_index,
+                                    index_path,
+                                    dry_run,
+                                )
+                            } else {
+                                // Multi-file: collect each file's raw results into a
+                                // flat array and let the pipeline wrap it in the
+                                // standard `{"results": [...], "total": N}` envelope.
+                                // `total` matches the flattened item count (consistent
+                                // with other list-shaped outputs and `--count`).
+                                let mut flat: Vec<serde_json::Value> = Vec::new();
+                                for (_full_path, rel) in &r.files {
+                                    let outcome = task_commands::task_toggle(
+                                        dir,
+                                        rel,
+                                        &line,
+                                        section.as_deref(),
+                                        all,
+                                        effective_format,
+                                        snapshot_index,
+                                        index_path,
+                                        dry_run,
+                                    )?;
+                                    match outcome {
+                                        CommandOutcome::Success { output, .. } => {
+                                            let val: serde_json::Value =
+                                                serde_json::from_str(&output)
+                                                    .unwrap_or(serde_json::Value::Null);
+                                            match val {
+                                                serde_json::Value::Array(items) => {
+                                                    flat.extend(items);
+                                                }
+                                                other => flat.push(other),
+                                            }
+                                        }
+                                        other => return Ok(other),
+                                    }
+                                }
+                                let total = flat.len() as u64;
+                                let output = serde_json::to_string(&flat)
+                                    .context("failed to serialize multi-file task toggle output")?;
+                                Ok(CommandOutcome::success_with_total(output, total))
+                            }
+                        }
+                    }
+                }
+                TaskAction::Set {
+                    selection,
+                    line,
+                    section,
+                    all,
+                    status,
+                    dry_run,
+                    index_flags: _, // consumed in run.rs before dispatch
+                } => {
+                    if status.chars().count() != 1 {
+                        let out = crate::output::format_error(
+                            effective_format,
+                            "--status must be a single character",
+                            None,
+                            Some("example: --status '?' or --status '-'"),
+                            None,
+                        );
+                        return Ok(CommandOutcome::UserError(out));
+                    }
+                    // chars().count() == 1 guarantees next() returns Some.
+                    let ch = status
+                        .chars()
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
+
+                    let configured_dir = ctx.configured_dir_str;
+                    match resolve_inputs(
+                        &selection,
+                        dir,
+                        configured_dir,
+                        snapshot_index.as_ref(),
+                        &ResolutionPolicy::SingleOrMany,
+                        effective_format,
+                    )? {
+                        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                        ResolvedInputsOrOutcome::Resolved(r) => {
+                            ctx.files_from_counters.clone_from(&r.counters);
+                            if r.files.len() == 1 {
+                                // Single file: delegate directly — no wrapping.
+                                let (_full_path, rel) = &r.files[0];
+                                task_commands::task_set_status(
+                                    dir,
+                                    rel,
+                                    &line,
+                                    section.as_deref(),
+                                    all,
+                                    ch,
+                                    effective_format,
+                                    snapshot_index,
+                                    index_path,
+                                    dry_run,
+                                )
+                            } else {
+                                // Multi-file: collect each file's raw results into a
+                                // flat array and let the pipeline wrap it in the
+                                // standard `{"results": [...], "total": N}` envelope.
+                                // `total` matches the flattened item count.
+                                let mut flat: Vec<serde_json::Value> = Vec::new();
+                                for (_full_path, rel) in &r.files {
+                                    let outcome = task_commands::task_set_status(
+                                        dir,
+                                        rel,
+                                        &line,
+                                        section.as_deref(),
+                                        all,
+                                        ch,
+                                        effective_format,
+                                        snapshot_index,
+                                        index_path,
+                                        dry_run,
+                                    )?;
+                                    match outcome {
+                                        CommandOutcome::Success { output, .. } => {
+                                            let val: serde_json::Value =
+                                                serde_json::from_str(&output)
+                                                    .unwrap_or(serde_json::Value::Null);
+                                            match val {
+                                                serde_json::Value::Array(items) => {
+                                                    flat.extend(items);
+                                                }
+                                                other => flat.push(other),
+                                            }
+                                        }
+                                        other => return Ok(other),
+                                    }
+                                }
+                                let total = flat.len() as u64;
+                                let output = serde_json::to_string(&flat)
+                                    .context("failed to serialize multi-file task set output")?;
+                                Ok(CommandOutcome::success_with_total(output, total))
+                            }
+                        }
+                    }
+                }
             }
-        },
+        }
         Commands::Summary {
             glob,
             recent,
@@ -971,38 +1111,55 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )
         }
         Commands::Backlinks {
-            file_positional,
-            file,
+            selection,
             limit: cli_limit,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            let file = match resolve_single_file(file_positional, file) {
-                Ok(f) => f,
-                Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
-            };
-            match resolve_index(
-                snapshot_index.as_ref(),
+            match resolve_inputs(
+                &selection,
                 dir,
-                &[],
-                &[],
+                ctx.configured_dir_str,
+                snapshot_index.as_ref(),
+                &ResolutionPolicy::Single { allow_glob: false },
                 effective_format,
-                site_prefix,
-                true,
-                &ScanOptions {
-                    scan_body: true,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
             )? {
-                IndexResolution::Resolved(resolved) => backlinks_commands::backlinks(
-                    resolved.as_index(),
-                    &file,
-                    dir,
-                    effective_format,
-                    resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
-                ),
-                IndexResolution::Outcome(outcome) => Ok(outcome),
+                ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                ResolvedInputsOrOutcome::Resolved(r) => {
+                    ctx.files_from_counters = r.counters;
+                    let (_full, file) = r
+                        .files
+                        .into_iter()
+                        .next()
+                        .context("Single resolution returned no files")?;
+                    match resolve_index(
+                        snapshot_index.as_ref(),
+                        dir,
+                        &[],
+                        &[],
+                        effective_format,
+                        site_prefix,
+                        true,
+                        &ScanOptions {
+                            scan_body: true,
+                            bm25_tokenize: false,
+                            default_language: None,
+                            frontmatter_link_props: ctx.frontmatter_link_props,
+                        },
+                    )? {
+                        IndexResolution::Resolved(resolved) => backlinks_commands::backlinks(
+                            resolved.as_index(),
+                            &file,
+                            dir,
+                            effective_format,
+                            resolve_limit(
+                                cli_limit,
+                                ctx.config_default_limit,
+                                ctx.programmatic_output,
+                            ),
+                        ),
+                        IndexResolution::Outcome(outcome) => Ok(outcome),
+                    }
+                }
             }
         }
         Commands::Mv {

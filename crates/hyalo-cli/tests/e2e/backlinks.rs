@@ -381,3 +381,37 @@ fn backlinks_wikilink_with_path_from_subdirectory() {
     assert_eq!(json["total"], 1, "expected 1 backlink, got: {json}");
     assert_eq!(json["results"]["backlinks"][0]["source"], "sub/source.md");
 }
+
+// ---------------------------------------------------------------------------
+// Unified input resolver: --glob rejection on backlinks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn backlinks_glob_is_rejected() {
+    // `backlinks` uses Single policy with allow_glob=false — --glob must fail.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+# Target
+"),
+    );
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["backlinks", "--glob", "*.md"]);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit on --glob; stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stdout.contains("not supported") || stderr.contains("not supported"),
+        "expected 'not supported' rejection message; stdout={stdout} stderr={stderr}"
+    );
+}

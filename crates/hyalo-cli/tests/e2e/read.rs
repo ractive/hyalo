@@ -675,3 +675,49 @@ fn show_alias_works() {
     assert!(stdout.contains("# Heading One"));
     assert!(stdout.contains("First paragraph."));
 }
+
+// ---------------------------------------------------------------------------
+// Unified input resolver: --glob rejection and --files-from support
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_glob_is_rejected() {
+    // `read` uses Single policy with allow_glob=false — --glob must return an error.
+    let tmp = setup();
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["read", "--glob", "*.md"]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Should fail with a "not supported" error message — assert non-zero exit
+    // AND a recognisable rejection string so an unrelated success can't pass.
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit on --glob; stderr={stderr} stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("not supported") || stderr.contains("not supported"),
+        "expected 'not supported' rejection message; stderr={stderr} stdout={stdout}"
+    );
+}
+
+#[test]
+fn read_files_from_single_file_succeeds() {
+    // `read` uses Single policy — a single entry from --files-from must resolve
+    // to exactly one file and succeed.
+    let tmp = setup();
+    let list_path = tmp.path().join("list.txt");
+    std::fs::write(&list_path, "note.md\n").unwrap();
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["read", "--files-from", list_path.to_str().unwrap()]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "expected read with single --files-from entry to succeed; stderr={stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(stdout.contains("Heading One"), "expected file content");
+}

@@ -7,12 +7,17 @@
 # subcommands implement it before merging.
 
 [flags."--files-from"]
-required_in = ["find", "lint", "mv", "set", "remove", "append"]
+required_in = ["find", "lint", "mv", "set", "remove", "append", "read", "backlinks"]
 shape = "selector"
+# Note: task toggle, task set, and task read also accept --files-from (via the
+# unified input resolver), but the xtask checker only handles top-level
+# single-word commands; sub-subcommand coverage is provided by the e2e test
+# suite instead.
 
 [flags."--glob"]
 required_in = ["find", "lint", "mv", "set", "remove", "append"]
 shape = "selector"
+# Note: task toggle and task set also accept --glob; coverage via e2e tests.
 
 [flags."--index-file"]
 required_in = ["find", "lint", "summary", "backlinks", "links", "tags", "properties"]
@@ -23,4 +28,4 @@ shape = "read-source"
 # files_missing / files_skipped_non_md / files_skipped_outside_vault
 # under .results when --files-from is in effect.
 [envelopes]
-files_from_counters = ["find", "lint", "mv", "set", "remove", "append"]
+files_from_counters = ["find", "lint", "mv", "set", "remove", "append", "read", "backlinks"]
