@@ -257,6 +257,8 @@ hyalo drop-index            # clean up
 
 Mutations with `--index` patch the index in-place, keeping it current for subsequent queries.
 
+hyalo surfaces the index recommendation automatically: if a command takes longer than 500 ms or `hyalo summary` reports more than 500 files, a hint appears suggesting `hyalo create-index`. Both hints are suppressed when `--index`/`--index-file` is already in use, when `--quiet` is set, or when `--no-hints` is passed.
+
 ## Building from source
 
 ```sh

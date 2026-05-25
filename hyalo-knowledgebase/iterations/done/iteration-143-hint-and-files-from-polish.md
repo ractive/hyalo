@@ -155,5 +155,5 @@ schema vocabulary, no new commands.
   — deferred hint items (sections: Hints, status `[1/5]`)
 - [[iterations/iteration-139-files-from-flag]] — deferred
   snapshot-membership + `HintSource::FilesFrom`
-- [[backlog/index-suggestion-hint]] — explicitly NOT addressed here;
+- [[index-suggestion-hint]] — explicitly NOT addressed here;
   iter-144 will pick it up

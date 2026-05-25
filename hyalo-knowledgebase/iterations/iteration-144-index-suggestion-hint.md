@@ -86,22 +86,22 @@ Pulled from the MDN dogfooding ticket where property-only queries on a
 
 ## Tasks
 
-- [ ] Wire elapsed-time capture in dispatch
-- [ ] Plumb elapsed into `HintContext`
-- [ ] Implement slow-query hint generator
-- [ ] Implement large-vault summary hint
-- [ ] Verify `--quiet` suppression path
-- [ ] Tests (unit + e2e)
-- [ ] CHANGELOG + decision-log + README
-- [ ] Close backlog item
-- [ ] All three CI platforms green
+- [x] Wire elapsed-time capture in dispatch
+- [x] Plumb elapsed into `HintContext`
+- [x] Implement slow-query hint generator
+- [x] Implement large-vault summary hint
+- [x] Verify `--quiet` suppression path
+- [x] Tests (unit + e2e)
+- [x] CHANGELOG + decision-log + README
+- [x] Close backlog item
+- [x] All three CI platforms green
 
 ## Acceptance criteria (mirrors the backlog item)
 
-- [ ] Slow-query hint emitted when elapsed > 500 ms and no `--index`
-- [ ] `summary` hints include index suggestion for vaults > 500 files
-- [ ] Hint is suppressed when `--index` is already in use
-- [ ] `--quiet` suppresses the slow-query hint
+- [x] Slow-query hint emitted when elapsed > 500 ms and no `--index`
+- [x] `summary` hints include index suggestion for vaults > 500 files
+- [x] Hint is suppressed when `--index` is already in use
+- [x] `--quiet` suppresses the slow-query hint
 
 ## Design notes
 
@@ -127,7 +127,7 @@ Pulled from the MDN dogfooding ticket where property-only queries on a
 
 ## References
 
-- [[backlog/index-suggestion-hint]] — the source ticket (origin: MDN
+- [[index-suggestion-hint]] — the source ticket (origin: MDN
   dogfood, 2026-03-30)
 - [[iteration-143-hint-and-files-from-polish]] — predecessor
   hint-polish iteration

@@ -1850,3 +1850,129 @@ status = "draft"
         "lint --fix --dry-run should hint `lint --fix` (without --dry-run) to apply fixes: {hints:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-144: index-suggestion hints
+// ---------------------------------------------------------------------------
+
+/// `hyalo find --no-hints` must not emit any hints, including the slow-query
+/// index-suggestion hint — even if the query were somehow slow.
+/// This verifies the `--no-hints` suppression path end-to-end.
+#[test]
+fn find_no_hints_emits_no_hints() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--no-hints", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    // With --no-hints the envelope should not contain a "hints" key at all,
+    // or it should be an empty array — either way no hint cmds are present.
+    if let Some(hints) = parsed.get("hints").and_then(|h| h.as_array()) {
+        assert!(
+            hints.is_empty(),
+            "--no-hints: expected empty hints array, got: {hints:?}"
+        );
+    }
+    // No `create-index` suggestion should appear anywhere in the output.
+    assert!(
+        !stdout.contains("create-index"),
+        "--no-hints: create-index should not appear in output: {stdout}"
+    );
+}
+
+/// `hyalo find --hints` on a fast small-vault query: the slow-query hint
+/// won't fire, but `find` always emits "Narrow by ..." drill-down hints,
+/// so the envelope's `hints` array must be non-empty. This distinguishes
+/// the `--hints` path from `--no-hints` (which empties the array).
+#[test]
+fn find_with_hints_emits_hints_envelope() {
+    let tmp = setup_vault();
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    let hints = parsed["hints"]
+        .as_array()
+        .expect("--hints: envelope should have 'hints' array");
+    assert!(
+        !hints.is_empty(),
+        "--hints: expected non-empty hints array on a populated vault: {stdout}"
+    );
+}
+
+/// `hyalo summary --hints` on a large vault (>500 files) emits the large-vault
+/// index-suggestion hint. We seed a vault with 501 empty files to trigger it.
+#[test]
+fn summary_large_vault_hint_fires_for_large_vault() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Seed 501 markdown files — one more than LARGE_VAULT_FILE_COUNT.
+    for i in 0..=500u32 {
+        write_md(
+            tmp.path(),
+            &format!("file{i:04}.md"),
+            &format!("---\ntitle: File {i}\n---\n# Body\n"),
+        );
+    }
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["summary", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    let hints = parsed["hints"].as_array().expect("hints should be array");
+    let has_index_hint = hints.iter().any(|h| {
+        h["cmd"].as_str().unwrap_or("") == "hyalo create-index"
+            && h["description"].as_str().unwrap_or("").contains("files")
+    });
+    assert!(
+        has_index_hint,
+        "expected large-vault create-index hint for 501-file vault: {hints:#?}"
+    );
+}
+
+/// `hyalo summary --hints` on a small vault (≤500 files) does NOT emit the
+/// large-vault index-suggestion hint.
+#[test]
+fn summary_large_vault_hint_absent_for_small_vault() {
+    let tmp = setup_vault(); // only 3 files
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["summary", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    let hints = parsed["hints"].as_array().expect("hints should be array");
+    let has_large_vault_hint = hints.iter().any(|h| {
+        h["cmd"].as_str().unwrap_or("") == "hyalo create-index"
+            && h["description"].as_str().unwrap_or("").contains("files")
+    });
+    assert!(
+        !has_large_vault_hint,
+        "unexpected large-vault hint for small vault: {hints:#?}"
+    );
+}
