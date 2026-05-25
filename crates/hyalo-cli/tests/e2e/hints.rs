@@ -1887,9 +1887,10 @@ fn find_no_hints_emits_no_hints() {
     );
 }
 
-/// `hyalo find --hints` with hints enabled must not suppress the hint envelope
-/// on a fast query (the slow-query hint won't fire, but other hints may).
-/// This tests that hints work end-to-end when enabled.
+/// `hyalo find --hints` on a fast small-vault query: the slow-query hint
+/// won't fire, but `find` always emits "Narrow by ..." drill-down hints,
+/// so the envelope's `hints` array must be non-empty. This distinguishes
+/// the `--hints` path from `--no-hints` (which empties the array).
 #[test]
 fn find_with_hints_emits_hints_envelope() {
     let tmp = setup_vault();
@@ -1904,10 +1905,12 @@ fn find_with_hints_emits_hints_envelope() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
 
-    // The envelope must contain a "hints" key.
+    let hints = parsed["hints"]
+        .as_array()
+        .expect("--hints: envelope should have 'hints' array");
     assert!(
-        parsed.get("hints").is_some(),
-        "--hints: envelope should have 'hints' key: {stdout}"
+        !hints.is_empty(),
+        "--hints: expected non-empty hints array on a populated vault: {stdout}"
     );
 }
 

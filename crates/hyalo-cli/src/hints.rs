@@ -257,8 +257,12 @@ pub fn generate_hints_with_counters(
     };
     // iter-144: slow-query index-suggestion hint. Appended after per-command
     // hints so domain-specific hints are not displaced; counts toward MAX_HINTS.
+    // Dedupe against the large-vault hint emitted by `hints_for_summary`:
+    // when a `summary` run is *both* slow and large, only one create-index
+    // hint should occupy a slot.
     if hints.len() < MAX_HINTS
         && let Some(hint) = slow_query_hint(ctx)
+        && !hints.iter().any(|h| h.cmd == hint.cmd)
     {
         hints.push(hint);
     }
@@ -306,7 +310,7 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
         return None;
     }
     Some(Hint::new(
-        format!("Query took {elapsed} ms. Create an index for faster queries:"),
+        format!("Command took {elapsed} ms. Create an index for faster queries:"),
         "hyalo create-index".to_owned(),
     ))
 }
@@ -703,7 +707,8 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
 
     // Large-vault index-suggestion hint. Fires when the vault exceeds the
     // LARGE_VAULT_FILE_COUNT threshold and no snapshot index is active.
-    if hints.len() < MAX_HINTS && !ctx.has_index {
+    // Suppressed by `--quiet` to match the slow-query hint's behavior.
+    if hints.len() < MAX_HINTS && !ctx.has_index && !ctx.quiet {
         let files_total = data
             .get("files")
             .and_then(|f| f.get("total"))
@@ -3414,6 +3419,39 @@ mod tests {
                 .iter()
                 .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
             "large-vault hint should be suppressed with active index: {hints:?}"
+        );
+    }
+
+    /// `--quiet` suppresses the large-vault hint (parity with slow-query hint).
+    #[test]
+    fn large_vault_summary_hint_suppressed_by_quiet() {
+        let mut c = ctx(HintSource::Summary);
+        c.quiet = true;
+        let data = summary_data(LARGE_VAULT_FILE_COUNT + 100);
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.cmd == "hyalo create-index" && h.description.contains("files")),
+            "large-vault hint should be suppressed by --quiet: {hints:?}"
+        );
+    }
+
+    /// When both slow-query and large-vault conditions fire, only one
+    /// `create-index` hint should appear in the envelope (dedupe by `cmd`).
+    #[test]
+    fn create_index_hint_deduped_when_both_conditions_fire() {
+        let mut c = ctx(HintSource::Summary);
+        c.elapsed_ms = Some(SLOW_QUERY_THRESHOLD_MS + 1);
+        let data = summary_data(LARGE_VAULT_FILE_COUNT + 100);
+        let hints = generate_hints(&c, &data, None);
+        let n = hints
+            .iter()
+            .filter(|h| h.cmd == "hyalo create-index")
+            .count();
+        assert_eq!(
+            n, 1,
+            "expected exactly one create-index hint, got {n}: {hints:?}"
         );
     }
 }

@@ -34,7 +34,7 @@ Add `auto_index = true` so vaults can opt in to automatic index creation.
 
 ## Acceptance criteria
 
-- [ ] Slow query hint emitted when elapsed >500ms and no `--index`
-- [ ] `summary` hints include index suggestion for vaults >500 files
-- [ ] Hint is suppressed when `--index` is already in use
-- [ ] `--quiet` suppresses the slow-query hint
+- [x] Slow query hint emitted when elapsed >500ms and no `--index`
+- [x] `summary` hints include index suggestion for vaults >500 files
+- [x] Hint is suppressed when `--index` is already in use
+- [x] `--quiet` suppresses the slow-query hint
