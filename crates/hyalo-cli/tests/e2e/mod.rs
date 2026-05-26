@@ -40,4 +40,5 @@ mod summary;
 mod tags;
 mod task;
 mod types;
+mod version;
 mod views;

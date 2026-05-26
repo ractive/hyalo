@@ -2,7 +2,7 @@
 title: Iteration 146 — Embed git sha + date in `hyalo --version`
 type: iteration
 date: 2026-05-26
-status: planned
+status: completed
 branch: iter-146/version-git-provenance
 tags:
   - iteration
@@ -107,46 +107,46 @@ Wire it into the `#[command(...)]` macro at line 99: change
 
 ## Steps
 
-- [ ] Create `crates/hyalo-cli/build.rs` with the git-provenance
+- [x] Create `crates/hyalo-cli/build.rs` with the git-provenance
       logic, including the env-var override paths and the
       `CARGO_HYALO_FORCE_NO_GIT` escape hatch.
-- [ ] Add `build_version_string()` to `cli/args.rs` with a
+- [x] Add `build_version_string()` to `cli/args.rs` with a
       `format_version_string(pkg, sha, date)` helper that the unit
       tests can exercise directly.
-- [ ] Wire `version = build_version_string()` into the `#[command]`
+- [x] Wire `version = build_version_string()` into the `#[command]`
       macro.
-- [ ] Unit tests in `args.rs` for both paths (sha present,
+- [x] Unit tests in `args.rs` for both paths (sha present,
       sha empty).
-- [ ] New `tests/e2e/version.rs` with the binary-level assertion.
-      Register the file in `tests/e2e/main.rs`.
-- [ ] README + CHANGELOG entries.
-- [ ] Confirm `cargo build --release` followed by
+- [x] New `tests/e2e/version.rs` with the binary-level assertion.
+      Register the file in `tests/e2e/mod.rs`.
+- [x] README + CHANGELOG entries.
+- [x] Confirm `cargo build --release` followed by
       `target/release/hyalo --version` prints the new format on the
       developer's machine.
-- [ ] Quality gates: `cargo fmt`, `cargo clippy --workspace
+- [x] Quality gates: `cargo fmt`, `cargo clippy --workspace
       --all-targets -- -D warnings`, `cargo test --workspace -q`.
-- [ ] xtask gates: `check-ac-fidelity`, `check-feature-fanout`,
+- [x] xtask gates: `check-ac-fidelity`, `check-feature-fanout`,
       `check-help-drift`.
 
 ## Tasks
 
-- [ ] build.rs implementation
-- [ ] args.rs version-string assembly
-- [ ] Unit tests (sha + tarball paths)
-- [ ] E2E test
-- [ ] CHANGELOG + README
-- [ ] Quality + xtask gates green
+- [x] build.rs implementation
+- [x] args.rs version-string assembly
+- [x] Unit tests (sha + tarball paths)
+- [x] E2E test
+- [x] CHANGELOG + README
+- [x] Quality + xtask gates green
 
 ## Acceptance criteria
 
-- [ ] `hyalo --version` outputs `hyalo <semver> (<sha12> <YYYY-MM-DD>)`
+- [x] `hyalo --version` outputs `hyalo <semver> (<sha12> <YYYY-MM-DD>)`
       when built from a git checkout
-- [ ] `hyalo -V` matches `--version`
-- [ ] A dirty working tree at build time appends `+dirty` to the sha
-- [ ] `CARGO_HYALO_FORCE_NO_GIT=1` env var produces the bare semver
-- [ ] Build does not fail when run outside a git repo
+- [x] `hyalo -V` matches `--version`
+- [x] A dirty working tree at build time appends `+dirty` to the sha
+- [x] `CARGO_HYALO_FORCE_NO_GIT=1` env var produces the bare semver
+- [x] Build does not fail when run outside a git repo
       (e.g. `cargo install` from crates.io tarball would-be path)
-- [ ] No new runtime dependencies; no new build dependencies beyond
+- [x] No new runtime dependencies; no new build dependencies beyond
       stdlib (no `vergen`, no `built`)
 
 ## Design notes

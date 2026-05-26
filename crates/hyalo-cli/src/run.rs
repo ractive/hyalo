@@ -393,10 +393,11 @@ fn run_inner() -> Result<(), AppError> {
     }
 
     // Append `(kb dir: <dir>)` to the version string when .hyalo.toml is in CWD.
+    // Preserves the git-provenance suffix produced by `build_version_string()`.
     if cwd_has_config {
         let version_with_dir = format!(
             "{} (kb dir: {})",
-            env!("CARGO_PKG_VERSION"),
+            crate::cli::args::build_version_string(),
             config.dir.display()
         );
         cmd = cmd.version(version_with_dir);
