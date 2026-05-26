@@ -16,6 +16,14 @@
 
 ### Changed
 
+- **iter-146**: `hyalo --version` now includes the git short-sha and commit
+  date — e.g. `hyalo 0.16.0 (abc123def456 2026-05-26)`. A `+dirty` suffix is
+  appended when the working tree had uncommitted changes at build time.
+  Builds without a `.git` directory (crates.io tarball, offline) fall back
+  silently to the bare `hyalo <semver>` form. Set
+  `CARGO_HYALO_FORCE_NO_GIT=1` to force the bare form; CI can pre-supply
+  `GIT_COMMIT` + `GIT_COMMIT_DATE` to skip the shell-out.
+
 - **iter-145**: Unified file-input resolver (`commands/inputs.rs`) replaces
   three separate seams: `resolve_files_from_for_command`, `collect_files`,
   and `resolve_single_file`. All `<FILE>`/`--file` commands now go through

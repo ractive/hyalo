@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -93,10 +94,37 @@ pub(crate) fn resolve_single_file(
     }
 }
 
+/// Compose a version string in the form `"{PKG} ({SHA} {DATE})"`.
+///
+/// Returns the bare `pkg` string when `sha` is empty (tarball / offline build).
+fn format_version_string(pkg: &str, sha: &str, date: &str) -> String {
+    if sha.is_empty() {
+        pkg.to_string()
+    } else {
+        format!("{pkg} ({sha} {date})")
+    }
+}
+
+/// Return the long-form version string used by `--version` / `-V`.
+///
+/// Memoized in a `OnceLock` because clap's `version =` attribute requires a
+/// `&'static str`. The SHA and date come from env vars set by `build.rs`
+/// (`HYALO_BUILD_VERSION_SHA`, `HYALO_BUILD_DATE`).
+pub(crate) fn build_version_string() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        format_version_string(
+            env!("CARGO_PKG_VERSION"),
+            env!("HYALO_BUILD_VERSION_SHA"),
+            env!("HYALO_BUILD_DATE"),
+        )
+    })
+}
+
 #[derive(Parser)]
 #[command(
     name = "hyalo",
-    version,
+    version = build_version_string(),
     about = "Query, filter, and mutate YAML frontmatter across markdown file collections",
     long_about = "Hyalo — query, filter, and mutate YAML frontmatter across markdown file collections.\n\n\
         Compatible with Obsidian vaults, Zettelkasten systems, and any directory of .md files \
@@ -1595,4 +1623,36 @@ pub(crate) enum TagsAction {
         #[command(flatten)]
         index_flags: IndexFlags,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_version_string, format_version_string};
+
+    #[test]
+    fn format_version_string_with_sha() {
+        let s = format_version_string("0.16.0", "abc123def456", "2026-05-26");
+        assert_eq!(s, "0.16.0 (abc123def456 2026-05-26)");
+    }
+
+    #[test]
+    fn format_version_string_with_dirty_sha() {
+        let s = format_version_string("0.16.0", "abc123def456+dirty", "2026-05-26");
+        assert_eq!(s, "0.16.0 (abc123def456+dirty 2026-05-26)");
+    }
+
+    #[test]
+    fn format_version_string_returns_pkg_version_when_sha_empty() {
+        let s = format_version_string("0.16.0", "", "");
+        assert_eq!(s, "0.16.0");
+    }
+
+    #[test]
+    fn build_version_string_starts_with_pkg_version() {
+        let v = build_version_string();
+        assert!(
+            v.starts_with(env!("CARGO_PKG_VERSION")),
+            "version string {v:?} should start with CARGO_PKG_VERSION"
+        );
+    }
 }
