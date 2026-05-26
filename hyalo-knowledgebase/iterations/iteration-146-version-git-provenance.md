@@ -2,7 +2,7 @@
 title: Iteration 146 — Embed git sha + date in `hyalo --version`
 type: iteration
 date: 2026-05-26
-status: in-progress
+status: completed
 branch: iter-146/version-git-provenance
 tags:
   - iteration
@@ -118,7 +118,7 @@ Wire it into the `#[command(...)]` macro at line 99: change
 - [x] Unit tests in `args.rs` for both paths (sha present,
       sha empty).
 - [x] New `tests/e2e/version.rs` with the binary-level assertion.
-      Register the file in `tests/e2e/main.rs`.
+      Register the file in `tests/e2e/mod.rs`.
 - [x] README + CHANGELOG entries.
 - [x] Confirm `cargo build --release` followed by
       `target/release/hyalo --version` prints the new format on the

@@ -42,6 +42,19 @@ fn resolve_provenance() -> (String, String) {
         _ => return (String::new(), String::new()),
     };
 
+    // Cargo's default "rerun if any package file changes" is suppressed as
+    // soon as we emit any rerun-if-changed, so re-declare crate sources
+    // explicitly. Without this, edits under src/ would not refresh the
+    // `+dirty` marker computed from `git status --porcelain`. Also watch
+    // `.git/index` so staging changes (which also flip dirty state) refresh.
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=build.rs");
+    let index = git_dir.join("index");
+    if index.exists() {
+        println!("cargo:rerun-if-changed={}", index.display());
+    }
+
     // Rerun directives — these paths change on commits / branch switches.
     let head = git_dir.join("HEAD");
     if head.exists() {
