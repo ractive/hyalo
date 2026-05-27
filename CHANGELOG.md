@@ -4,6 +4,13 @@
 
 ### Added
 
+- **iter-147**: Hardened `--files-from` on `task toggle` / `task set`.
+  `--line` is now rejected at clap parse time when combined with
+  `--files-from` (line numbers are per-file and don't compose across a
+  list), and `--files-from` without `--all` or `--section` returns a
+  clear user error. Help-text examples on `task set` now include
+  `--files-from` and `--glob` forms (`task toggle` already had them).
+
 - **iter-145**: `task toggle` and `task set` now accept
   `--files-from <file|->` and `--glob <pattern>` via the unified input
   resolver. Multi-file selection flattens all per-file task results into a
