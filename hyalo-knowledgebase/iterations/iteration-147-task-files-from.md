@@ -1,9 +1,9 @@
 ---
-title: Iteration 145 — `--files-from` on `task toggle` and `task set`
+title: Iteration 147 — `--files-from` on `task toggle` and `task set`
 type: iteration
 date: 2026-05-25
 status: planned
-branch: iter-145/task-files-from
+branch: iter-147/task-files-from
 tags:
   - iteration
   - cli
