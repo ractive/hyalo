@@ -45,10 +45,10 @@ hyalo command the same way.
       `lint`, `mv`, `set`, `remove`, `append`. (Skip `summary`,
       `properties summary`, `tags summary`, `properties rename`,
       `tags rename` — these are whole-vault by design.)
-- [ ] **Deferred:** also wire into `task toggle` / `task set`. The
+- [x] **Deferred:** also wire into `task toggle` / `task set`. The
       original list included these, but the CI/diff-aware-lint use
       case driving iter-139 doesn't need them, so they're left for a
-      follow-up to keep this PR focused.
+      follow-up to keep this PR focused. *(Completed in iter-147.)*
 - [x] Mutually exclusive with `--glob` AND `--file` via clap
       `conflicts_with_all`. Clear error if two sources are given.
 

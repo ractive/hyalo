@@ -2,7 +2,7 @@
 title: Iteration 147 — `--files-from` on `task toggle` and `task set`
 type: iteration
 date: 2026-05-25
-status: planned
+status: completed
 branch: iter-147/task-files-from
 tags:
   - iteration
@@ -136,18 +136,18 @@ the existing one.
 
 ## Tasks
 
-- [ ] Add `--files-from` arg + conflict groups to TaskToggle and TaskSet
-- [ ] Extend `run::resolve_files_from_for_command` with two arms
-- [ ] Refactor task command bodies to loop over `file` Vec when
+- [x] Add `--files-from` arg + conflict groups to TaskToggle and TaskSet
+- [x] Extend `run::resolve_files_from_for_command` with two arms
+- [x] Refactor task command bodies to loop over `file` Vec when
       `--files-from` was used; preserve single-file shape otherwise
-- [ ] Verify counter-aware hints fire (e2e)
-- [ ] Update `--help` examples on both subcommands
-- [ ] CHANGELOG entry
-- [ ] Tick the iter-139 plan deferred box
-- [ ] Unit tests
-- [ ] E2E tests covering all five scenarios above
-- [ ] `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
-- [ ] Cross-platform CI green
+- [x] Verify counter-aware hints fire (e2e)
+- [x] Update `--help` examples on both subcommands
+- [x] CHANGELOG entry
+- [x] Tick the iter-139 plan deferred box
+- [x] Unit tests
+- [x] E2E tests covering all five scenarios above
+- [x] `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
+- [x] Cross-platform CI green
 
 ## Acceptance criteria
 

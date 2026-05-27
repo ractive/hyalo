@@ -799,6 +799,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     dry_run,
                     index_flags: _, // consumed in run.rs before dispatch
                 } => {
+                    if selection.files_from.is_some() && !all && section.is_none() {
+                        let out = crate::output::format_error(
+                            effective_format,
+                            "--files-from requires --all or --section",
+                            None,
+                            Some(
+                                "try: --files-from <list> --all   or   --files-from <list> --section <heading>",
+                            ),
+                            Some("--line is per-file and cannot compose with --files-from"),
+                        );
+                        return Ok(CommandOutcome::UserError(out));
+                    }
                     let configured_dir = ctx.configured_dir_str;
                     match resolve_inputs(
                         &selection,
@@ -876,6 +888,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     dry_run,
                     index_flags: _, // consumed in run.rs before dispatch
                 } => {
+                    if selection.files_from.is_some() && !all && section.is_none() {
+                        let out = crate::output::format_error(
+                            effective_format,
+                            "--files-from requires --all or --section",
+                            None,
+                            Some(
+                                "try: --files-from <list> --all --status <c>   or   --files-from <list> --section <heading> --status <c>",
+                            ),
+                            Some("--line is per-file and cannot compose with --files-from"),
+                        );
+                        return Ok(CommandOutcome::UserError(out));
+                    }
                     if status.chars().count() != 1 {
                         let out = crate::output::format_error(
                             effective_format,

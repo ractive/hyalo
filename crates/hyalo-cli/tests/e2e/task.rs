@@ -1243,6 +1243,153 @@ fn task_set_files_from_list_file() {
 }
 
 #[test]
+fn task_toggle_files_from_with_line_is_rejected_at_clap() {
+    // --line is per-file and cannot compose with --files-from; clap rejects.
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    let list_path = tmp.path().join("list.txt");
+    fs::write(&list_path, "bulk.md\n").unwrap();
+
+    let (status, _stdout, stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--line",
+            "5",
+        ],
+    );
+    assert!(
+        !status.success(),
+        "expected clap rejection, stderr: {stderr}"
+    );
+    let combined = stderr.to_lowercase();
+    assert!(
+        combined.contains("--line") || combined.contains("line"),
+        "expected --line in error, got: {stderr}"
+    );
+    assert!(
+        combined.contains("--files-from") || combined.contains("files-from"),
+        "expected --files-from in error, got: {stderr}"
+    );
+}
+
+#[test]
+fn task_set_files_from_with_line_is_rejected_at_clap() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    let list_path = tmp.path().join("list.txt");
+    fs::write(&list_path, "bulk.md\n").unwrap();
+
+    let (status, _stdout, stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task",
+            "set",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--line",
+            "5",
+            "--status",
+            "?",
+        ],
+    );
+    assert!(
+        !status.success(),
+        "expected clap rejection, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn task_toggle_files_from_without_all_or_section_errors() {
+    // --files-from requires --all or --section (post-parse validation).
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    let list_path = tmp.path().join("list.txt");
+    fs::write(&list_path, "bulk.md\n").unwrap();
+
+    let (status, stdout, stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--files-from",
+            list_path.to_str().unwrap(),
+        ],
+    );
+    assert!(!status.success(), "expected error, stderr: {stderr}");
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("--all") && combined.contains("--section"),
+        "expected hint mentioning --all/--section, got: {combined}"
+    );
+}
+
+#[test]
+fn task_toggle_files_from_counters_for_missing_and_outside_vault() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+
+    // list mixes: one real file, one missing file, one path outside the vault.
+    let list_path = tmp.path().join("list.txt");
+    let outside = std::env::temp_dir()
+        .join("definitely-outside-vault.md")
+        .to_string_lossy()
+        .into_owned();
+    fs::write(
+        &list_path,
+        format!("bulk.md\ndoes-not-exist.md\n{outside}\n"),
+    )
+    .unwrap();
+
+    let (status, json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--section",
+            "Tasks",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    let results = json["results"]
+        .as_object()
+        .expect("expected results object with files-from counters");
+    assert!(
+        results["files_missing"].as_u64().unwrap_or(0) >= 1,
+        "expected files_missing >= 1, got: {results:?}"
+    );
+    assert!(
+        results["files_skipped_outside_vault"].as_u64().unwrap_or(0) >= 1,
+        "expected files_skipped_outside_vault >= 1, got: {results:?}"
+    );
+}
+
+#[test]
+fn task_toggle_files_from_empty_input_exits_zero() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    let list_path = tmp.path().join("empty.txt");
+    fs::write(&list_path, "").unwrap();
+
+    let (status, _json, stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--all",
+        ],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
 fn task_toggle_glob_single_file() {
     // Passing --glob that matches exactly one file works (SingleOrMany policy).
     let tmp = tempfile::tempdir().unwrap();

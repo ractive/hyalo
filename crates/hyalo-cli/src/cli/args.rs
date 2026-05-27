@@ -1486,7 +1486,7 @@ pub(crate) enum TaskAction {
         #[command(flatten)]
         selection: InputSelection,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
-        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
         /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
         #[arg(long, conflicts_with_all = ["line", "all"])]
@@ -1505,7 +1505,7 @@ pub(crate) enum TaskAction {
         name = "set",
         alias = "set-status",
         long_about = "Set a custom single-character status on one or more task checkboxes.\n\n\
-        INPUT: FILE (positional or --file), --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
+        INPUT: FILE (positional or --file) or --glob or --files-from, --status (single char), and one of: --line (repeatable), --section <heading>, or --all.\n\
         OUTPUT: wrapped in {\"results\": <task>, ...} envelope; single object for one task, array for multiple.\n\
         SIDE EFFECTS: Modifies the file on disk unless --dry-run is passed.\n\
         USE WHEN: You need to set a non-standard status like '?' (question), '-' (cancelled), or '!' (important).\n\n\
@@ -1514,13 +1514,15 @@ pub(crate) enum TaskAction {
           hyalo task set note.md --line 5,7 --status '-'\n  \
           hyalo task set note.md --section Tasks --status '-'\n  \
           hyalo task set note.md --all --status x\n  \
+          hyalo task set --files-from list.txt --section Tasks --status '-'\n  \
+          hyalo task set --glob 'iterations/*.md' --all --status x\n  \
           hyalo task set note.md --line 5 --status '?' --dry-run"
     )]
     Set {
         #[command(flatten)]
         selection: InputSelection,
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
-        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
+        #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
         /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
         #[arg(long, conflicts_with_all = ["line", "all"])]
