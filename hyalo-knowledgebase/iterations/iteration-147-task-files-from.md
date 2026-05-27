@@ -68,62 +68,84 @@ the existing one.
 
 ### Argument shape
 
-- [ ] Add `--files-from <PATH>` to `TaskAction::Toggle` and
-      `TaskAction::Set`.
-- [ ] Add clap `conflicts_with_all` against `--file` and `--glob`.
-- [ ] Add clap `requires_all = ["all_or_section"]` or equivalent
+- [x] Add `--files-from <PATH>` to `TaskAction::Toggle` and
+      `TaskAction::Set`. *(Via `InputSelection` flatten — landed in
+      iter-145; closed out by iter-147.)*
+- [x] Add clap `conflicts_with_all` against `--file` and `--glob`.
+      *(Inherited from `InputSelection`.)*
+- [x] Add clap `requires_all = ["all_or_section"]` or equivalent
       attribute group so `--files-from` cannot be combined with
       `--line`. Concretely: mark `--line` as conflicting with
       `--files-from`; when `--files-from` is set, at least one of
       `--all` / `--section` must also be set (clap `required_unless`
-      or a manual post-parse validation).
+      or a manual post-parse validation). *(iter-147: clap
+      `conflicts_with_all` for `--line` + post-parse dispatch
+      validation requiring `--all`/`--section`.)*
 
 ### Dispatch
 
-- [ ] `run::resolve_files_from_for_command` gains two match arms for
+- [x] `run::resolve_files_from_for_command` gains two match arms for
       `TaskAction::Toggle` and `TaskAction::Set`. Pattern matches the
-      existing Find/Lint/Set/etc. arms.
-- [ ] Each task command consumes the resolved file list and loops the
+      existing Find/Lint/Set/etc. arms. *(Landed in iter-145.)*
+- [x] Each task command consumes the resolved file list and loops the
       single-file path internally. Failure on one file (missing,
       malformed) is per-file: report in the result, continue with the
       rest. Aggregate results into the existing task output envelope.
+      *(Landed in iter-145; iter-147 added post-parse guard so
+      `--files-from` without `--all`/`--section` errors cleanly.)*
 
 ### Result envelope
 
-- [ ] Single-file shape today: `{results: {file, toggled: [...], ...}}`
+- [x] Single-file shape today: `{results: {file, toggled: [...], ...}}`
       or similar. With `--files-from`, promote to a list:
-      `{results: [{file, toggled: [...], ...}, ...]}`.
-- [ ] When `--files-from` resolves to exactly one file, preserve the
+      `{results: [{file, toggled: [...], ...}, ...]}`. *(Landed in
+      iter-145.)*
+- [x] When `--files-from` resolves to exactly one file, preserve the
       single-object shape for backwards compat — OR always promote to
       list. Decide on the cleaner UX during implementation; default is
       "always promote to list when `--files-from` was used" because
-      callers can `jq .results[0]` cheaply.
-- [ ] `files_missing` / `files_skipped_non_md` /
+      callers can `jq .results[0]` cheaply. *(Chose "always promote to
+      list when `--files-from` used"; single positional file keeps
+      the object shape.)*
+- [x] `files_missing` / `files_skipped_non_md` /
       `files_skipped_outside_vault` counters are already wired by
       `output_pipeline::inject_files_from_counters` — no new code.
+      *(Verified via iter-147 e2e
+      `task_toggle_files_from_counters_for_missing_and_outside_vault`.)*
 
 ### Hints
 
-- [ ] `HintSource::TaskToggle` / `HintSource::TaskSetStatus` already
+- [x] `HintSource::TaskToggle` / `HintSource::TaskSetStatus` already
       exist. iter-143's counter-aware hints
       (`generate_hints_with_counters`) fire automatically — no new
-      hint generator needed. Verify with a quick e2e.
+      hint generator needed. Verify with a quick e2e. *(Verified via
+      iter-147 counters e2e.)*
 - [ ] If `--section` matched no tasks in any file: emit a "no
       matching tasks" hint (similar to the existing single-file
-      handling). Same for `--all` on empty vaults.
+      handling). Same for `--all` on empty vaults. *(Not explicitly
+      implemented as a multi-file aggregate hint. The empty-input
+      case is covered by `task_toggle_files_from_empty_input_exits_zero`
+      and per-file no-match behavior is unchanged; a dedicated
+      aggregate hint can be added when a real use case surfaces.)*
 
 ### Docs + tests
 
-- [ ] `task toggle --help` + `task set --help`: add `--files-from`
+- [x] `task toggle --help` + `task set --help`: add `--files-from`
       examples (probably `--all --files-from -` and
-      `--section Tasks --files-from -`).
-- [ ] README: nothing new needed — the existing `--files-from` section
+      `--section Tasks --files-from -`). *(`task toggle` already had
+      them from iter-145; iter-147 added the matching examples to
+      `task set`.)*
+- [x] README: nothing new needed — the existing `--files-from` section
       already describes the general shape.
-- [ ] CHANGELOG `Unreleased` entry under Added.
-- [ ] Tick the iter-139 deferred box (Step 1 list of subcommands).
-- [ ] Unit tests in `commands/task.rs`: the per-file loop preserves
+- [x] CHANGELOG `Unreleased` entry under Added.
+- [x] Tick the iter-139 deferred box (Step 1 list of subcommands).
+- [x] Unit tests in `commands/task.rs`: the per-file loop preserves
       ordering, accumulates results, surfaces per-file errors.
-- [ ] E2E tests in `tests/e2e/files_from.rs` (or a sibling
+      *(Covered by the iter-145 e2e suite plus iter-147 hardening
+      tests; no dedicated unit-test module was added since the e2e
+      coverage already exercises ordering, accumulation, and
+      per-file error paths.)*
+- [x] E2E tests in `tests/e2e/files_from.rs` (or a sibling
       `tests/e2e/task_files_from.rs`):
   - Happy path: `--all --files-from list.txt` mutates tasks across
     multiple files.
@@ -151,18 +173,18 @@ the existing one.
 
 ## Acceptance criteria
 
-- [ ] `hyalo task toggle --all --files-from list.txt` toggles every
+- [x] `hyalo task toggle --all --files-from list.txt` toggles every
       task in every listed file
-- [ ] `hyalo task set --section Tasks --status x --files-from -`
+- [x] `hyalo task set --section Tasks --status x --files-from -`
       sets every task under `## Tasks` to status `x` across stdin paths
-- [ ] `hyalo task toggle --line 5 --files-from -` fails at clap parse
+- [x] `hyalo task toggle --line 5 --files-from -` fails at clap parse
       with a clear "use --all or --section" error
-- [ ] Result envelope is a list when `--files-from` was used; counters
+- [x] Result envelope is a list when `--files-from` was used; counters
       and counter-aware hints fire identically to other commands
-- [ ] Both `task toggle` and `task set` work with `--index --files-from`
+- [x] Both `task toggle` and `task set` work with `--index --files-from`
       via the iter-143 snapshot-membership resolver (no disk fallback
       for paths absent from the index)
-- [ ] iter-139's Step 1 deferred checkbox can be ticked
+- [x] iter-139's Step 1 deferred checkbox can be ticked
 
 ## Design notes
 
