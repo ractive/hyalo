@@ -1300,6 +1300,42 @@ fn task_set_files_from_with_line_is_rejected_at_clap() {
         !status.success(),
         "expected clap rejection, stderr: {stderr}"
     );
+    let combined = stderr.to_lowercase();
+    assert!(
+        combined.contains("--line") || combined.contains("line"),
+        "expected --line in error, got: {stderr}"
+    );
+    assert!(
+        combined.contains("--files-from") || combined.contains("files-from"),
+        "expected --files-from in error, got: {stderr}"
+    );
+}
+
+#[test]
+fn task_set_files_from_without_all_or_section_errors() {
+    // --files-from requires --all or --section for `task set` too (post-parse validation).
+    let tmp = tempfile::tempdir().unwrap();
+    setup_bulk_file(&tmp);
+    let list_path = tmp.path().join("list.txt");
+    fs::write(&list_path, "bulk.md\n").unwrap();
+
+    let (status, stdout, stderr) = run_task_cmd(
+        &tmp,
+        &[
+            "task",
+            "set",
+            "--files-from",
+            list_path.to_str().unwrap(),
+            "--status",
+            "?",
+        ],
+    );
+    assert!(!status.success(), "expected error, stderr: {stderr}");
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("--all") && combined.contains("--section"),
+        "expected hint mentioning --all/--section, got: {combined}"
+    );
 }
 
 #[test]

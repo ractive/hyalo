@@ -807,7 +807,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             Some(
                                 "try: --files-from <list> --all   or   --files-from <list> --section <heading>",
                             ),
-                            Some("--line is per-file and cannot compose with --files-from"),
+                            Some(
+                                "multi-file inputs need a selection that composes across files (--all or --section)",
+                            ),
                         );
                         return Ok(CommandOutcome::UserError(out));
                     }
@@ -896,7 +898,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             Some(
                                 "try: --files-from <list> --all --status <c>   or   --files-from <list> --section <heading> --status <c>",
                             ),
-                            Some("--line is per-file and cannot compose with --files-from"),
+                            Some(
+                                "multi-file inputs need a selection that composes across files (--all or --section)",
+                            ),
                         );
                         return Ok(CommandOutcome::UserError(out));
                     }
