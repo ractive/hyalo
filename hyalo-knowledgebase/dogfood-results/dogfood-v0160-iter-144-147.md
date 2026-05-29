@@ -357,16 +357,28 @@ In rough priority order:
 1. **NEW-3 (MEDIUM)** — strip multi-segment `--dir` prefix in
    `--files-from`. Still the biggest practical blocker for the
    marquee `git diff | hyalo` recipe on real doc repos.
+   **Fixed in iter-148** — `configured_dir_str` now uses the raw CLI
+   `--dir` string so multi-segment prefixes like `files/en-us` are
+   stripped correctly.
 2. **NEW-1 (MEDIUM)** — re-order summary hints so the iter-144
    large-vault index hint can fire on real large vaults, not just
    600-file synthetics. Either prepend or raise MAX_HINTS for summary.
+   **Fixed in iter-148** — `create-index` hint is now prepended (not
+   appended), so it is visible even when all 5 hint slots are taken.
 3. **NEW-4 (LOW)** — sync `set` / `remove` / `append --file` help
    text to mention `--files-from` in the mutual-exclusion list.
+   **Fixed in iter-148** — shared `FILE_FLAG_DOC` const used across
+   all three subcommands.
 4. **NEW-5 (LOW)** — drop the duplicated `dir` key from the summary
    envelope.
+   **Fixed in iter-148** — `dir` is hoisted to envelope root and
+   removed from `results`; callers must read `.dir` not `.results.dir`.
 5. Accept `--allow-outside-vault` (or `-o`-outside-vault) on
    `create-index` so external read-only KBs can store the snapshot in
    `/tmp/` or `~/.cache/hyalo/`.
+   **Already present** — `create-index` already accepted
+   `--allow-outside-vault` as of iter-141; the dogfood binary was
+   an older build that predated that fix.
 
 (NEW-2 retracted — see section above; substring `--section` is by
 design.)

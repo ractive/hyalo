@@ -6,6 +6,13 @@ use clap::{Args, Parser, Subcommand};
 use crate::cli::inputs::InputSelection;
 use crate::output::Format;
 
+/// Shared `--file` doc string used on every command that accepts `--file`,
+/// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
+/// Keeping it in one place prevents future help-text drift across `find`,
+/// `set`, `remove`, `append`, `lint`, and `task toggle`.
+const FILE_FLAG_DOC: &str =
+    "Target file(s) (repeatable). Mutually exclusive with --glob and --files-from";
+
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
 pub(crate) fn is_false(v: &bool) -> bool {
     !v
@@ -264,8 +271,7 @@ pub(crate) struct FindFilters {
     #[arg(short, long = "section", value_name = "HEADING")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
-    /// Target file(s) (repeatable). Mutually exclusive with --glob
-    #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
+    #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file: Vec<String>,
     /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
@@ -700,8 +706,7 @@ Repeatable (AND).\n\
         /// Tag to add (idempotent). Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -765,8 +770,7 @@ Repeatable (AND).\n\
         /// Tag to remove. Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -895,8 +899,7 @@ Repeatable (AND).\n\
         /// Property to append to: K=V. Repeatable
         #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
-        /// Target file(s) (repeatable). Mutually exclusive with --glob
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"])]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]

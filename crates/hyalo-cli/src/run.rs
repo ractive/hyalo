@@ -606,6 +606,13 @@ fn run_inner() -> Result<(), AppError> {
     // Track whether --dir was explicitly passed (not from config) so hints
     // can omit it when the user relies on .hyalo.toml.
     let dir_from_cli = cli.dir.is_some();
+    // Capture the raw CLI --dir string before it's consumed by the match below.
+    // Used later to compute `configured_dir_str` for --files-from prefix
+    // stripping: when --dir is explicit, the target's .hyalo.toml may report
+    // config.dir = "." (no config file found), losing the multi-segment prefix
+    // the user passed (e.g. "files/en-us"). Saving the raw CLI string here
+    // lets us restore it as the effective configured_dir for the resolver.
+    let cli_dir_str: Option<String> = cli.dir.as_deref().map(|p| p.to_string_lossy().into_owned());
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
     // Save the CWD-derived vault dir for the redundant-dir warning below.
@@ -1286,11 +1293,26 @@ fn run_inner() -> Result<(), AppError> {
     //
     // Done *before* constructing `CommandContext` so the snapshot_index borrow
     // for resolution doesn't conflict with the `&mut` stored on ctx.
-    let configured_dir_str = config.dir.to_string_lossy();
+    // Compute the effective configured-dir string for --files-from prefix
+    // stripping. Two sources in priority order:
+    //
+    // 1. Explicit `--dir <path>` on the CLI (relative or absolute as typed).
+    //    When the target dir has no .hyalo.toml, config.dir falls back to "."
+    //    which would suppress all prefix stripping. Using the raw CLI value
+    //    instead preserves multi-segment dirs (e.g. "files/en-us") so that
+    //    repo-relative git output like "files/en-us/foo.md" is resolved
+    //    correctly (NEW-3).
+    //
+    // 2. `config.dir` from .hyalo.toml (e.g. "files/en-us", "kb", ".").
+    let configured_dir_owned: String = match cli_dir_str {
+        Some(s) => s,
+        None => config.dir.to_string_lossy().into_owned(),
+    };
+    let configured_dir_str: &str = &configured_dir_owned;
     let (files_from_counters, files_from_empty) = match resolve_files_from_for_command(
         &mut cli.command,
         &dir,
-        &configured_dir_str,
+        configured_dir_str,
         snapshot_index.as_ref(),
     ) {
         Ok(Some(c)) => {
@@ -1306,7 +1328,7 @@ fn run_inner() -> Result<(), AppError> {
     let mut ctx = CommandContext {
         dir: &dir,
         config_dir: &config_dir,
-        configured_dir_str: &configured_dir_str,
+        configured_dir_str,
         site_prefix,
         effective_format,
         user_format: format,

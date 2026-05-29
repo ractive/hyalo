@@ -568,6 +568,28 @@ fn first_modified_file(data: &serde_json::Value) -> Option<&str> {
 // ---------------------------------------------------------------------------
 
 fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    // Compute the large-vault create-index hint upfront so it can be
+    // prepended at the end. This guarantees the hint is visible even when all
+    // MAX_HINTS slots would otherwise be consumed by orphan / broken-link /
+    // links-fix hints on large vaults (NEW-1).
+    let create_index_hint: Option<Hint> = if !ctx.has_index && !ctx.quiet {
+        let files_total = data
+            .get("files")
+            .and_then(|f| f.get("total"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if files_total > LARGE_VAULT_FILE_COUNT {
+            Some(Hint::new(
+                format!("Vault has {files_total} files — create an index for faster queries:"),
+                "hyalo create-index".to_owned(),
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let mut hints = Vec::new();
 
     hints.push(Hint::new(
@@ -705,20 +727,15 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         }
     }
 
-    // Large-vault index-suggestion hint. Fires when the vault exceeds the
-    // LARGE_VAULT_FILE_COUNT threshold and no snapshot index is active.
-    // Suppressed by `--quiet` to match the slow-query hint's behavior.
-    if hints.len() < MAX_HINTS && !ctx.has_index && !ctx.quiet {
-        let files_total = data
-            .get("files")
-            .and_then(|f| f.get("total"))
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        if files_total > LARGE_VAULT_FILE_COUNT {
-            hints.push(Hint::new(
-                format!("Vault has {files_total} files — create an index for faster queries:"),
-                "hyalo create-index".to_owned(),
-            ));
+    // Prepend the create-index hint (computed at the top of this function) so
+    // it is visible even when all MAX_HINTS slots are consumed by health hints
+    // (orphans / broken-links / links-fix) on large vaults (NEW-1). Inserting
+    // at position 0 displaces the last (lowest-priority) hint when the cap is
+    // already reached — the index hint has the highest user-visible payoff.
+    if let Some(ci_hint) = create_index_hint {
+        hints.insert(0, ci_hint);
+        if hints.len() > MAX_HINTS {
+            hints.pop();
         }
     }
 
@@ -3452,6 +3469,43 @@ mod tests {
         assert_eq!(
             n, 1,
             "expected exactly one create-index hint, got {n}: {hints:?}"
+        );
+    }
+
+    /// NEW-1 regression: create-index hint must appear even when orphans +
+    /// broken-links + links-fix hints would otherwise consume all MAX_HINTS
+    /// slots. On real large vaults (MDN: 4245 orphans, 49933 broken links)
+    /// the health hints used to crowd out the index hint entirely.
+    #[test]
+    fn create_index_hint_visible_even_when_health_hints_fill_cap() {
+        let c = ctx(HintSource::Summary);
+        // A large vault with both orphans and broken links to generate many hints.
+        let data = json!({
+            "files": {"total": LARGE_VAULT_FILE_COUNT + 14000, "by_directory": []},
+            "orphans": 4245u64,
+            "dead_ends": 100u64,
+            "links": {"total": 100_000u64, "broken": 49_933u64},
+            "properties": [],
+            "tags": {"tags": [], "total": 0},
+            "status": [],
+            "tasks": {"total": 0, "done": 0},
+            "recent_files": []
+        });
+        let hints = generate_hints(&c, &data, None);
+        // Total hints must not exceed MAX_HINTS.
+        assert!(
+            hints.len() <= MAX_HINTS,
+            "hints exceeded MAX_HINTS={MAX_HINTS}: {hints:?}"
+        );
+        // The create-index hint must be present despite the health-hint pressure.
+        assert!(
+            hints.iter().any(|h| h.cmd == "hyalo create-index"),
+            "create-index hint missing; hints: {hints:?}"
+        );
+        // create-index should be the first hint (highest priority).
+        assert_eq!(
+            hints[0].cmd, "hyalo create-index",
+            "create-index should be first hint; got: {hints:?}"
         );
     }
 }

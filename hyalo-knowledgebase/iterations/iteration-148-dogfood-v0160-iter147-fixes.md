@@ -1,8 +1,8 @@
 ---
-title: "Iteration 148 — Dogfood v0.16.0 (iter-144..147) fixes"
+title: Iteration 148 — Dogfood v0.16.0 (iter-144..147) fixes
 type: iteration
 date: 2026-05-29
-status: planned
+status: in-progress
 branch: iter-148/dogfood-v0160-iter147-fixes
 tags:
   - iteration
@@ -212,16 +212,16 @@ other commands that already accept it.
 
 ## Tasks
 
-- [ ] Fix `--files-from` multi-segment `--dir` prefix strip
-- [ ] Add unit + e2e tests for the resolver edge cases
-- [ ] Reorder summary hints so `create-index` is not crowded out
-- [ ] Sync `set` / `remove` / `append --file` help text
-- [ ] Drop duplicate `dir` key from `summary` envelope
-- [ ] Add `--allow-outside-vault` to `create-index`
-- [ ] CHANGELOG entries (one per fix)
-- [ ] Tick the corresponding boxes in the dogfood report
-- [ ] xtask discipline checks pass
-- [ ] `cargo fmt`, clippy `-D warnings`, full test suite green
+- [x] Fix `--files-from` multi-segment `--dir` prefix strip
+- [x] Add unit + e2e tests for the resolver edge cases
+- [x] Reorder summary hints so `create-index` is not crowded out
+- [x] Sync `set` / `remove` / `append --file` help text
+- [x] Drop duplicate `dir` key from `summary` envelope
+- [x] Add `--allow-outside-vault` to `create-index`
+- [x] CHANGELOG entries (one per fix)
+- [x] Tick the corresponding boxes in the dogfood report
+- [x] xtask discipline checks pass
+- [x] `cargo fmt`, clippy `-D warnings`, full test suite green
 
 ## Acceptance criteria
 
