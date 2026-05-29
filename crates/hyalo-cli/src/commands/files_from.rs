@@ -554,6 +554,52 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // NEW-3 — additional edge cases for multi-segment --dir prefix strip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_strips_multi_segment_dir_with_trailing_slash() {
+        // configured_dir with a trailing slash should be normalized.
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("x.md"), "").unwrap();
+
+        // configured_dir = "files/en-us/" (trailing slash) — should strip "files/en-us/".
+        let r = resolve(
+            vault.path(),
+            &["files/en-us/x.md".to_owned()],
+            "files/en-us/",
+        )
+        .unwrap();
+        assert_eq!(r.files.len(), 1, "trailing slash: expected 1 file");
+        assert_eq!(r.files[0].1, "x.md");
+        assert_eq!(r.counters.files_missing, 0);
+    }
+
+    #[test]
+    fn resolve_strips_multi_segment_dir_three_levels() {
+        // Three-segment vault dir: "a/b/c".
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("doc.md"), "").unwrap();
+
+        let r = resolve(vault.path(), &["a/b/c/doc.md".to_owned()], "a/b/c").unwrap();
+        assert_eq!(r.files.len(), 1, "three-level: expected 1 file");
+        assert_eq!(r.files[0].1, "doc.md");
+        assert_eq!(r.counters.files_missing, 0);
+    }
+
+    #[test]
+    fn resolve_entry_already_vault_relative_not_double_stripped() {
+        // Entry is already vault-relative ("doc.md"), no prefix to strip.
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join("doc.md"), "").unwrap();
+
+        let r = resolve(vault.path(), &["doc.md".to_owned()], "files/en-us").unwrap();
+        assert_eq!(r.files.len(), 1, "vault-relative pass-through: expected 1");
+        assert_eq!(r.files[0].1, "doc.md");
+        assert_eq!(r.counters.files_missing, 0);
+    }
+
+    // -----------------------------------------------------------------------
     // NEW-6 — deduplicate resolved paths, first-seen order preserved
     // -----------------------------------------------------------------------
 

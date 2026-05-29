@@ -167,10 +167,11 @@ fn summary_json_includes_dir_field() {
     let json: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
 
-    let dir_val = json["results"]["dir"].as_str().unwrap_or("");
+    // NEW-5: `dir` is now only at the envelope level, not duplicated in results.
+    let dir_val = json["dir"].as_str().unwrap_or("");
     assert!(
         dir_val.contains("docs"),
-        "expected 'docs' in summary JSON dir field; got dir={dir_val:?}"
+        "expected 'docs' in envelope dir field; got dir={dir_val:?}"
     );
 }
 
@@ -193,9 +194,17 @@ fn summary_json_dir_present_without_config() {
     let json: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
 
+    // NEW-5: `dir` is hoisted to envelope level and removed from results.
     assert!(
-        json["results"].get("dir").is_some(),
-        "expected 'dir' field in summary JSON; got: {json}"
+        json.get("dir").is_some(),
+        "expected envelope 'dir' field in summary JSON; got: {json}"
+    );
+    // Results must NOT contain dir after the dedup fix.
+    assert!(
+        json["results"]
+            .get("dir")
+            .is_none_or(serde_json::Value::is_null),
+        "results.dir should be absent after NEW-5; got: {json}"
     );
 }
 

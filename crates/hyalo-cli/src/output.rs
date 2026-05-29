@@ -169,13 +169,19 @@ pub fn build_envelope_value(
     // Hoist a top-level `dir` field when results carry one (e.g. `summary`),
     // so consumers can read it without traversing into `results`. This matches
     // the shape of `hyalo config --format json`, which surfaces `dir` at the
-    // top level.
+    // top level. After hoisting, strip `dir` from the inner results so it
+    // is not duplicated at both `.dir` and `.results.dir` (NEW-5).
     if let Some(dir) = value
         .as_object()
         .and_then(|o| o.get("dir"))
         .and_then(serde_json::Value::as_str)
     {
         envelope["dir"] = serde_json::json!(dir);
+        // Remove from the results copy (envelope["results"] is already cloned
+        // by the json! macro above so the borrow on `value` is no longer active).
+        if let Some(obj) = envelope["results"].as_object_mut() {
+            obj.remove("dir");
+        }
     }
     envelope
 }
@@ -2764,5 +2770,43 @@ mod tests {
         let out = format_success(Format::Text, &value);
         assert!(out.contains("MD013:"));
         assert!(out.contains("no override to remove") || out.contains("no override found"));
+    }
+
+    // --- build_envelope_value: NEW-5 dir dedup ---
+
+    #[test]
+    fn envelope_hoists_dir_and_removes_from_results() {
+        let results = json!({
+            "dir": "hyalo-knowledgebase",
+            "files": {"total": 10},
+            "other": "value"
+        });
+        let envelope = build_envelope_value(&results, None, &[]);
+        // dir is hoisted to top level.
+        assert_eq!(
+            envelope["dir"].as_str().unwrap(),
+            "hyalo-knowledgebase",
+            "dir must be at envelope root"
+        );
+        // dir is removed from results.
+        assert!(
+            envelope["results"]
+                .get("dir")
+                .is_none_or(serde_json::Value::is_null),
+            "dir must be removed from results; envelope: {envelope}"
+        );
+        // Other results fields are preserved.
+        assert_eq!(envelope["results"]["files"]["total"].as_u64().unwrap(), 10);
+        assert_eq!(envelope["results"]["other"].as_str().unwrap(), "value");
+    }
+
+    #[test]
+    fn envelope_without_dir_in_results_has_no_top_dir() {
+        let results = json!({"files": {"total": 5}});
+        let envelope = build_envelope_value(&results, None, &[]);
+        assert!(
+            envelope.get("dir").is_none() || envelope["dir"].is_null(),
+            "no dir should be at envelope root when results has none"
+        );
     }
 }

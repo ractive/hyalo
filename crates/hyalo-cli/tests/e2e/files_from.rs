@@ -844,3 +844,146 @@ fn lint_files_from_deduplicates_and_preserves_order() {
         "should lint 3 unique files; envelope: {envelope}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NEW-3 — multi-segment --dir prefix strip in --files-from (iter-148)
+// ---------------------------------------------------------------------------
+
+/// When `--dir files/en-us` is passed (relative, as the user would type from
+/// the repo root) and git outputs `files/en-us/foo.md` (repo-relative), the
+/// resolver must strip the full prefix and resolve to `foo.md` inside the
+/// vault. `files_missing` must be 0.
+///
+/// This is the marquee `git diff --name-only | hyalo --dir files/en-us find
+/// --files-from -` recipe from the dogfood report (NEW-3).
+#[test]
+fn find_files_from_multi_segment_dir_strips_prefix() {
+    // Simulate a repo layout: root/files/en-us/<vault files>.
+    // The vault is at `files/en-us/` relative to the repo root.
+    let repo_root = tempfile::tempdir().unwrap();
+    let vault_dir = repo_root.path().join("files").join("en-us");
+    fs::create_dir_all(&vault_dir).unwrap();
+    write_md(
+        &vault_dir,
+        "foo.md",
+        md!(r"
+---
+title: Foo
+---
+# Foo
+"),
+    );
+
+    // The entry in --files-from is the repo-relative path (as git diff
+    // --name-only would produce).
+    let list = write_list_file(&["files/en-us/foo.md"]);
+
+    // Run from the repo root with `--dir files/en-us` (relative path, exactly
+    // as a user would pass it from the repo root). This is the key scenario:
+    // configured_dir = "files/en-us" so the prefix strip fires.
+    let mut cmd = hyalo_no_hints();
+    cmd.current_dir(repo_root.path());
+    cmd.args(["--dir", "files/en-us"]);
+    cmd.args(["find", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let files_missing = envelope["results"]["files_missing"].as_u64().unwrap_or(0);
+    assert_eq!(
+        files_missing, 0,
+        "expected files_missing=0 with multi-segment --dir; envelope: {envelope}"
+    );
+    assert_eq!(
+        envelope["total"].as_u64().unwrap_or(0),
+        1,
+        "expected 1 resolved file; envelope: {envelope}"
+    );
+}
+
+/// Regression: single-segment vault dir still works after the multi-segment fix.
+#[test]
+fn find_files_from_single_segment_dir_strips_prefix_regression() {
+    let repo_root = tempfile::tempdir().unwrap();
+    let vault_dir = repo_root.path().join("kb");
+    fs::create_dir_all(&vault_dir).unwrap();
+    write_md(
+        &vault_dir,
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+# Note
+"),
+    );
+
+    // Git would output "kb/note.md" (repo-relative single-segment).
+    let list = write_list_file(&["kb/note.md"]);
+
+    // Run from repo root with relative `--dir kb`.
+    let mut cmd = hyalo_no_hints();
+    cmd.current_dir(repo_root.path());
+    cmd.args(["--dir", "kb"]);
+    cmd.args(["find", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let files_missing = envelope["results"]["files_missing"].as_u64().unwrap_or(0);
+    assert_eq!(
+        files_missing, 0,
+        "single-segment regression: expected files_missing=0; envelope: {envelope}"
+    );
+}
+
+/// Vault at repo root (`.`): no prefix stripping should occur; vault-relative
+/// entries pass through unchanged.
+#[test]
+fn find_files_from_vault_at_repo_root_no_prefix_strip() {
+    let vault_dir = tempfile::tempdir().unwrap();
+    write_md(
+        vault_dir.path(),
+        "root.md",
+        md!(r"
+---
+title: Root
+---
+# Root
+"),
+    );
+
+    // Entry is already vault-relative when vault is at repo root.
+    let list = write_list_file(&["root.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", vault_dir.path().to_str().unwrap()]);
+    cmd.args(["find", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        envelope["results"]["files_missing"].as_u64().unwrap_or(0),
+        0,
+        "vault-at-root: expected files_missing=0; envelope: {envelope}"
+    );
+}

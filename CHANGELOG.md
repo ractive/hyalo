@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed
+
+- **iter-148** (NEW-3): `--files-from` now correctly strips a multi-segment
+  `--dir` prefix from repo-relative paths when `--dir` is passed explicitly on
+  the CLI. The marquee recipe `git diff --name-only | hyalo --dir files/en-us
+  find --files-from -` now resolves entries like `files/en-us/foo.md` to
+  `foo.md` inside the vault, with `files_missing=0`. Single-segment and
+  dot-dir vaults are not regressed.
+- **iter-148** (NEW-1): `hyalo summary` now always includes the `create-index`
+  hint on large vaults (>500 files) even when orphan / broken-link / `links
+  fix` hints would otherwise fill all `MAX_HINTS=5` slots. The hint is
+  prepended (highest priority) rather than appended, so it is visible on real
+  large vaults like MDN where health-hint pressure is highest.
+
+### Changed
+
+- **iter-148** (NEW-5): `hyalo summary --format json` no longer duplicates the
+  `dir` field inside `results`. It is now present only at the top-level
+  envelope (`.dir`); `.results.dir` is absent. This is a breaking JSON shape
+  change — callers must read `.dir` instead of `.results.dir`.
+- **iter-148** (NEW-4): `hyalo set --help`, `hyalo remove --help`, and `hyalo
+  append --help` now list `--files-from` in the `--file` mutual-exclusion
+  sentence. Previously only `--glob` was mentioned; the flag itself already
+  worked.
+
 ### Added
 
 - **iter-147**: Hardened `--files-from` on `task toggle` / `task set`.
