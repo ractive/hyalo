@@ -9,7 +9,7 @@ use crate::output::Format;
 /// Shared `--file` doc string used on every command that accepts `--file`,
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
 /// Keeping it in one place prevents future help-text drift across `find`,
-/// `set`, `remove`, `append`, `lint`, and `task toggle`.
+/// `set`, `remove`, and `append`.
 const FILE_FLAG_DOC: &str =
     "Target file(s) (repeatable). Mutually exclusive with --glob and --files-from";
 

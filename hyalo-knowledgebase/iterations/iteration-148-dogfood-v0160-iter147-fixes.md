@@ -42,7 +42,7 @@ $ echo "files/en-us/games/index.md" \
     | hyalo --dir files/en-us find --files-from - --no-hints
 note: all --files-from entries were missing; …
 { "files_missing": 1, ... }
-```text
+```
 
 The resolver currently strips only the *last* segment of `--dir`
 (`en-us`), not the full multi-segment prefix (`files/en-us`). Fix the
@@ -89,13 +89,13 @@ cap, fix the ordering.
 ```text
 $ hyalo set --help | grep -A1 "Target file"
         Target file(s) (repeatable). Mutually exclusive with --glob
-```text
+```
 
 vs `find` / `task toggle`:
 
 ```text
         Mutually exclusive with --glob and --files-from
-```text
+```
 
 The flag itself works (mutual exclusion is enforced at clap parse
 time), only the help text is stale on the three subcommands. Per
@@ -108,7 +108,7 @@ three `--file` doc strings.
 ```text
 $ hyalo summary --format json | jq '{top: .dir, inner: .results.dir}'
 { "top": "hyalo-knowledgebase", "inner": "hyalo-knowledgebase" }
-```text
+```
 
 `dir` is envelope-level metadata on every other command. Drop it from
 `results` and keep it at the top of the envelope. This is a JSON
@@ -124,7 +124,7 @@ error: output path is outside the vault boundary
 hint: pass --allow-outside-vault to override
 $ hyalo --dir files/en-us create-index --allow-outside-vault -o /tmp/mdn.idx
 error: unexpected argument '--allow-outside-vault'
-```text
+```
 
 The hint suggests a flag the subcommand doesn't accept. Two ways out:
 add the flag (consistent with the hint), or drop the hint. The flag
