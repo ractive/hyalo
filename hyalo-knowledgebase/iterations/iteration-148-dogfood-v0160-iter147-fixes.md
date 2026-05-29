@@ -2,7 +2,7 @@
 title: Iteration 148 — Dogfood v0.16.0 (iter-144..147) fixes
 type: iteration
 date: 2026-05-29
-status: in-progress
+status: completed
 branch: iter-148/dogfood-v0160-iter147-fixes
 tags:
   - iteration
