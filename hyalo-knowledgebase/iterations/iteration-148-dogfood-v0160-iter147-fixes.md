@@ -135,58 +135,65 @@ other commands that already accept it.
 
 ## Steps
 
-### NEW-3 — `--files-from` multi-segment prefix strip
+### NEW-3 — `--files-from` multi-segment prefix strip [4/5]
 
-- [ ] Locate `--dir` prefix-strip logic in the `--files-from`
+- [x] Locate `--dir` prefix-strip logic in the `--files-from`
       resolver (`crates/hyalo-cli/src/files_from.rs` or the unified
       resolver in `commands/run.rs`).
-- [ ] Replace last-segment strip with full normalized vault-dir
+- [x] Replace last-segment strip with full normalized vault-dir
       prefix strip. Reuse the existing path canonicalization helper
       so trailing-slash and Windows-separator handling is consistent.
-- [ ] Add unit tests in the resolver module for the six edge cases
+- [x] Add unit tests in the resolver module for the six edge cases
       above (`.`, single-segment, multi-segment, vault-relative entry,
       trailing slash, Windows separators).
-- [ ] E2E test: in `tests/e2e/files_from.rs` add a `--dir files/en-us`
+- [x] E2E test: in `tests/e2e/files_from.rs` add a `--dir files/en-us`
       scenario that pipes `files/en-us/foo.md` and asserts
       `files_missing == 0`.
 - [ ] Polish the hint emitted when entries miss: the current text
       mentions `notes/foo.md` — update so the example also works for
-      multi-segment dirs.
+      multi-segment dirs. (Deferred — hint wording untouched in this PR.)
 
-### NEW-1 — re-order summary hints
+### NEW-1 — re-order summary hints [3/4]
 
-- [ ] Find `hints_for_summary` in `crates/hyalo-cli/src/hints.rs`.
-- [ ] Push the create-index hint before the orphan / broken-link /
+- [x] Find `hints_for_summary` in `crates/hyalo-cli/src/hints.rs`.
+- [x] Push the create-index hint before the orphan / broken-link /
       links-fix hints, keeping the MAX_HINTS = 5 cap.
-- [ ] Update the unit test in `hints.rs` that asserts hint order for
+- [x] Update the unit test in `hints.rs` that asserts hint order for
       large vaults.
 - [ ] Add an e2e regression test: a 600-file synthetic vault with
       broken links + orphans must include the `create-index` hint in
-      its summary output.
+      its summary output. (Unit test covers the priority/cap behavior;
+      no synthetic-vault e2e added.)
 
-### NEW-4 — help-text sync
+### NEW-4 — help-text sync [3/4]
 
-- [ ] Update `--file` doc string on `set`, `remove`, `append` to
+- [x] Update `--file` doc string on `set`, `remove`, `append` to
       include `--files-from` in the mutual-exclusion list.
-- [ ] Verify with `hyalo set --help | grep -A1 'Target file'` etc.
-- [ ] If the wording is duplicated across subcommands, extract to a
+- [x] Verify with `hyalo set --help | grep -A1 'Target file'` etc.
+- [x] If the wording is duplicated across subcommands, extract to a
       shared `const` so future drift is harder.
 - [ ] Help-drift xtask: confirm `check-help-drift` (if it exists)
       catches this kind of asymmetry; otherwise file a follow-up.
+      (Not investigated this PR; treat as separate follow-up.)
 
-### NEW-5 — drop duplicated `dir` from summary envelope
+### NEW-5 — drop duplicated `dir` from summary envelope [4/4]
 
-- [ ] Remove `dir` from the `SummaryResults` struct (`commands/summary.rs`
-      or equivalent).
-- [ ] Verify the envelope-level `dir` is still emitted by the shared
+- [x] Remove `dir` from the `SummaryResults` struct (`commands/summary.rs`
+      or equivalent). (Implemented by stripping `dir` from `results` in
+      `build_envelope_value` after hoisting — functionally equivalent
+      and keeps the hoist single-sourced.)
+- [x] Verify the envelope-level `dir` is still emitted by the shared
       `OutputEnvelope` wrapper — top-level `dir` is what callers
       should consume.
-- [ ] Update any unit / e2e tests that read `.results.dir`.
-- [ ] CHANGELOG: note the inner field removal under a `Changed` or
+- [x] Update any unit / e2e tests that read `.results.dir`.
+- [x] CHANGELOG: note the inner field removal under a `Changed` or
       `Removed` entry; risk is low (no schema, no README usage) but
       mention it for grep-ability.
 
-### Friction — `--allow-outside-vault` on `create-index`
+### Friction — `--allow-outside-vault` on `create-index` [0/4]
+
+Not addressed in this PR — deferred to a follow-up iteration. The
+existing `create-index` flag set is unchanged in `args.rs`/`commands/`.
 
 - [ ] Add `--allow-outside-vault` flag to `create-index` subcommand.
 - [ ] Plumb through to the same vault-boundary check the other
@@ -196,19 +203,20 @@ other commands that already accept it.
 - [ ] Update the existing error hint text only if the flag name
       changes; otherwise the hint is now accurate as-is.
 
-### Cross-cutting
+### Cross-cutting [3/5]
 
-- [ ] CHANGELOG `Unreleased` entry per item under the right sections.
+- [x] CHANGELOG `Unreleased` entry per item under the right sections.
 - [ ] Tick the NEW-1, NEW-3, NEW-4, NEW-5 boxes in
       [[dogfood-results/dogfood-v0160-iter-144-147]] (mark each as
-      "fixed in iter-148").
+      "fixed in iter-148"). (Dogfood report was added in this PR but
+      its NEW-* sections were not re-ticked as "fixed in iter-148".)
 - [ ] Run discipline xtasks before `/create-pr`:
       `cargo run -p xtask -- check-dead-primitives --since origin/main`
       and `cargo run -p xtask -- check-todo-annotations --since
-      origin/main`.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
+      origin/main`. (Not recorded as run in PR.)
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q`.
-- [ ] Cross-platform CI green.
+- [x] Cross-platform CI green.
 
 ## Tasks
 
@@ -223,24 +231,25 @@ other commands that already accept it.
 - [x] xtask discipline checks pass
 - [x] `cargo fmt`, clippy `-D warnings`, full test suite green
 
-## Acceptance criteria
+## Acceptance criteria [6/7]
 
-- [ ] `echo files/en-us/foo.md | hyalo --dir files/en-us find
+- [x] `echo files/en-us/foo.md | hyalo --dir files/en-us find
       --files-from -` resolves the file (no `files_missing`) on any
       multi-segment vault dir, including `.` and single-segment as
       regressions
-- [ ] `hyalo --dir <large-vault> summary --format json` includes a
+- [x] `hyalo --dir <large-vault> summary --format json` includes a
       `create-index` hint, even when orphan/broken-link/`links fix`
       hints are also present
-- [ ] `hyalo set --help`, `hyalo remove --help`, `hyalo append --help`
+- [x] `hyalo set --help`, `hyalo remove --help`, `hyalo append --help`
       all mention `--files-from` in the `--file` mutual-exclusion
       sentence
-- [ ] `hyalo summary --format json | jq '.results.dir'` is `null`
+- [x] `hyalo summary --format json | jq '.results.dir'` is `null`
       (field removed); top-level `.dir` still present
 - [ ] `hyalo --dir files/en-us create-index --allow-outside-vault -o
       /tmp/test.idx` succeeds and the index loads via `--index-file`
-- [ ] All new tests pass on Linux, macOS, Windows CI
-- [ ] NEW-3 cannot reproduce against this build on
+      (Friction item deferred; flag not added in this PR.)
+- [x] All new tests pass on Linux, macOS, Windows CI
+- [x] NEW-3 cannot reproduce against this build on
       `/Users/james/devel/mdn`
 
 ## Design notes
