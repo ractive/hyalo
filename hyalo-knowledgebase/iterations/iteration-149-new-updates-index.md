@@ -2,7 +2,7 @@
 title: Iteration 149 — hyalo new updates the snapshot index
 type: iteration
 date: 2026-05-31
-status: in-progress
+status: completed
 branch: iter-149/new-updates-index
 tags:
   - iteration
@@ -81,18 +81,21 @@ not silently create an index where the user hasn't asked for one.
       then `hyalo find --file Y.md` returns the new file from the index
       (verify by checking index was not rebuilt — file mtime preserved)
 - [ ] E2E test: `hyalo new --dry-run` does not modify the index
+      — N/A: `hyalo new` has no `--dry-run` flag (never has had one); the
+      plan over-specified the surface. Nothing to test.
 - [x] E2E test: `hyalo new` on a vault with no `.hyalo-index` succeeds
       and does not create one
 - [x] Update `hyalo new --help` if it mentions index behavior anywhere
 - [x] Update the rule-knowledgebase template / agent docs if they describe
       the index-update guarantees
-- [ ] Mention the gap-closed in the iter-149 PR description
+- [x] Mention the gap-closed in the iter-149 PR description
 
 ## Acceptance Criteria
 
 - [x] After `hyalo new --file foo.md`, `hyalo find --file foo.md` returns
       foo.md without a full index rebuild
 - [ ] `hyalo new --dry-run` leaves the index byte-identical
+      — N/A: no `--dry-run` flag exists on `hyalo new`; AC over-specified.
 - [x] `hyalo new` is a no-op against the index when no `.hyalo-index` exists
 - [x] All existing tests pass; new unit + e2e tests added
 - [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings &&
