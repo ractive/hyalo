@@ -151,20 +151,15 @@ fn t5_mv_prefers_short_form_unique_basename() {
     );
 
     let content = fs::read_to_string(tmp.path().join("notes/index.md")).unwrap();
-    // Both links should be in short-form (stem is unique)
+    // Path-form is preserved: [[iterations/iteration-42]] → [[iterations/done/iteration-42]]
     assert!(
-        content.contains("[[iteration-42]]"),
-        "notes/index.md should use short-form: {content}"
+        content.contains("[[iterations/done/iteration-42]]"),
+        "notes/index.md should preserve path-form with new path: {content}"
     );
-    // The path-form [[iterations/iteration-42]] should be rewritten
+    // The old path-form should be gone
     assert!(
         !content.contains("[[iterations/iteration-42]]"),
         "old path-form link should be gone: {content}"
-    );
-    // No path-expanded form should appear either
-    assert!(
-        !content.contains("[[iterations/done/iteration-42]]"),
-        "path-expanded form should not appear when stem is unique: {content}"
     );
 }
 
@@ -376,18 +371,14 @@ fn t9_markdown_link_form_unchanged() {
         content.contains("[foo](archive/foo.md)"),
         "markdown link should use path-form with .md: {content}"
     );
-    // Wikilink uses short-form (stem "foo" is unique)
+    // Wikilink preserves path-form: [[notes/foo]] → [[archive/foo]]
     assert!(
-        content.contains("[[foo]]"),
-        "wikilink should use short-form: {content}"
+        content.contains("[[archive/foo]]"),
+        "wikilink should preserve path-form with new path: {content}"
     );
     assert!(
         !content.contains("[[notes/foo]]"),
         "old wikilink path should be gone: {content}"
-    );
-    assert!(
-        !content.contains("[[archive/foo]]"),
-        "wikilink should not use path-form when stem is unique: {content}"
     );
 }
 
@@ -418,10 +409,10 @@ fn t10_path_form_becomes_short_form_when_unique_after_rename() {
     );
 
     let content = fs::read_to_string(tmp.path().join("index.md")).unwrap();
-    // "renamed" is now unique → short-form [[renamed]]
+    // Path-form is preserved: [[a/note]] → [[a/renamed]]
     assert!(
-        content.contains("[[renamed]]"),
-        "should switch to short-form when new basename is unique: {content}"
+        content.contains("[[a/renamed]]"),
+        "should preserve path-form with new file name: {content}"
     );
     assert!(
         !content.contains("[[a/note]]"),

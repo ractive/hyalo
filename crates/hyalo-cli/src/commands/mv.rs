@@ -62,7 +62,7 @@ struct BatchMvResult {
 // Single-file command entry point
 // ---------------------------------------------------------------------------
 
-/// Run `hyalo mv --file <old> --to <new> [--dry-run]`.
+/// Run `hyalo mv --file <old> --to <new> [--dry-run] [--allow-ambiguous]`.
 #[allow(clippy::too_many_arguments)]
 pub fn mv(
     dir: &Path,
@@ -73,6 +73,7 @@ pub fn mv(
     site_prefix: Option<&str>,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
+    allow_ambiguous: bool,
 ) -> Result<CommandOutcome> {
     // 1. Validate source exists
     let (_src_full, old_rel) = match super::resolve_file_user(dir, file_arg) {
@@ -91,7 +92,7 @@ pub fn mv(
     let src_mtime = hyalo_core::frontmatter::read_mtime(&dir.join(&old_rel))?;
 
     // 4. Plan all rewrites
-    let plans = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix)?;
+    let plans = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix, allow_ambiguous)?;
 
     // 5. Build result
     let updated_files: Vec<UpdatedFile> = plans
@@ -156,6 +157,7 @@ pub fn mv_batch(
     site_prefix: Option<&str>,
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
+    allow_ambiguous: bool,
 ) -> Result<CommandOutcome> {
     // 1. Validate --to is a directory-shaped path.
     let to_dir = match validate_batch_target(to_arg, format) {
@@ -201,7 +203,7 @@ pub fn mv_batch(
     let plans = if renames.is_empty() {
         vec![]
     } else {
-        link_rewrite::plan_batch_mv(dir, &renames, site_prefix)?
+        link_rewrite::plan_batch_mv(dir, &renames, site_prefix, allow_ambiguous)?
     };
 
     // 6. Build result.

@@ -113,9 +113,10 @@ Content.
     assert!(tmp.path().join("archive/b.md").exists());
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    // Path-form is preserved — [[sub/b]] becomes [[archive/b]] (form preserved, path updated)
     assert!(
-        content.contains("[[b]]"),
-        "path wikilink should become short-form [[b]]: {content}"
+        content.contains("[[archive/b]]"),
+        "path wikilink should preserve path-form and update path: {content}"
     );
     assert!(
         !content.contains("[[sub/b]]"),
@@ -155,8 +156,47 @@ fn mv_bare_wikilink_ambiguous_not_rewritten() {
 }
 
 #[test]
+fn mv_bare_wikilink_ambiguous_rewritten_with_allow_ambiguous() {
+    // Opt-in path: with --allow-ambiguous, an ambiguous bare wikilink that
+    // targets the moved file IS rewritten (BUG-2 opt-in escape hatch).
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[b]] here.\n");
+    write_md(tmp.path(), "b.md", "Root B.\n");
+    write_md(tmp.path(), "sub/b.md", "Sub B.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "--file",
+            "b.md",
+            "--to",
+            "archive/renamed.md",
+            "--allow-ambiguous",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // With --allow-ambiguous, [[b]] in a.md is rewritten to [[renamed]].
+    assert_eq!(
+        json["results"]["total_links_updated"], 1,
+        "expected one rewrite with --allow-ambiguous; got: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(content.contains("[[renamed]]"), "a.md content: {content}");
+    assert!(!content.contains("[[b]]"), "a.md content: {content}");
+}
+
+#[test]
 fn mv_updates_wikilink_with_path() {
-    // Path-form wikilinks are rewritten to short-form when the stem is unique.
+    // Path-form wikilinks are rewritten to the new path (form preserved).
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[backlog/item]] for details.\n");
     write_md(tmp.path(), "backlog/item.md", "Content.\n");
@@ -176,8 +216,11 @@ fn mv_updates_wikilink_with_path() {
     assert_eq!(json["results"]["total_links_updated"], 1);
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "item" is unique → short-form
-    assert!(content.contains("[[item]]"), "a.md content: {content}");
+    // Path-form is preserved: [[backlog/item]] → [[archive/item]]
+    assert!(
+        content.contains("[[archive/item]]"),
+        "a.md content: {content}"
+    );
     assert!(!content.contains("[[backlog/item]]"));
 }
 
@@ -199,8 +242,11 @@ fn mv_preserves_wikilink_alias() {
         String::from_utf8_lossy(&output.stderr)
     );
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "b" is unique → short-form, alias preserved
-    assert!(content.contains("[[b|my note]]"), "a.md content: {content}");
+    // Path-form is preserved, path updated, alias preserved
+    assert!(
+        content.contains("[[archive/b|my note]]"),
+        "a.md content: {content}"
+    );
 }
 
 #[test]
@@ -221,8 +267,11 @@ fn mv_preserves_wikilink_fragment() {
         String::from_utf8_lossy(&output.stderr)
     );
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "b" is unique → short-form, fragment preserved
-    assert!(content.contains("[[b#section]]"), "a.md content: {content}");
+    // Path-form is preserved, path updated, fragment preserved
+    assert!(
+        content.contains("[[archive/b#section]]"),
+        "a.md content: {content}"
+    );
 }
 
 #[test]
@@ -333,9 +382,9 @@ Real [[sub/b]] here.
         content.contains("```\n[[sub/b]]\n```"),
         "code block was modified: {content}"
     );
-    // Real link becomes short-form [[b]] since stem "b" is unique
+    // Real link is updated to new path-form (form preserved)
     assert!(
-        content.contains("Real [[b]] here."),
+        content.contains("Real [[archive/b]] here."),
         "real link not updated: {content}"
     );
 }
@@ -366,9 +415,9 @@ fn mv_skips_links_in_inline_code() {
         content.contains("`[[sub/b]]`"),
         "inline code was modified: {content}"
     );
-    // Real link becomes short-form [[b]] since stem "b" is unique
+    // Real link is updated to new path-form (form preserved)
     assert!(
-        content.contains("real [[b]]"),
+        content.contains("real [[archive/b]]"),
         "real link not updated: {content}"
     );
 }
@@ -488,8 +537,8 @@ fn mv_text_format() {
     assert!(stdout.contains("Moved sub/b.md"), "stdout: {stdout}");
     assert!(stdout.contains("archive/b.md"), "stdout: {stdout}");
     assert!(stdout.contains("[[sub/b]]"), "stdout: {stdout}");
-    // stem "b" is unique → short-form in the rewrite
-    assert!(stdout.contains("[[b]]"), "stdout: {stdout}");
+    // path-form is preserved: [[sub/b]] → [[archive/b]]
+    assert!(stdout.contains("[[archive/b]]"), "stdout: {stdout}");
 }
 
 #[test]
@@ -542,9 +591,12 @@ fn mv_multiple_links_same_file() {
     assert_eq!(json["results"]["total_links_updated"], 2);
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "b" is unique → short-form for both links
-    assert!(content.contains("[[b]]"), "a.md content: {content}");
-    assert!(content.contains("[[b|alias]]"), "a.md content: {content}");
+    // Path-form is preserved for both links, path updated
+    assert!(content.contains("[[archive/b]]"), "a.md content: {content}");
+    assert!(
+        content.contains("[[archive/b|alias]]"),
+        "a.md content: {content}"
+    );
 }
 
 #[test]
@@ -638,9 +690,9 @@ fn mv_updates_wikilink_with_path_separator() {
     assert_eq!(json["results"]["total_links_updated"], 1, "json: {json}");
 
     let content = fs::read_to_string(tmp.path().join("iterations/iter-1.md")).unwrap();
-    // stem "item" is unique → short-form
+    // Path-form is preserved: [[backlog/item]] → [[archive/item]]
     assert!(
-        content.contains("[[item]]"),
+        content.contains("[[archive/item]]"),
         "iterations/iter-1.md content: {content}"
     );
     assert!(
@@ -1217,8 +1269,9 @@ fn mv_bare_wikilink_short_form_resolves_after_move() {
 
 #[test]
 fn mv_dot_slash_wikilink_plain_rewritten() {
-    // [[./b]] in a.md should be rewritten when b.md is moved. Since stem "b"
-    // is unique, the result is short-form [[b]].
+    // [[./b]] in a.md should be rewritten when b.md is moved to sub/b.md.
+    // DotRelative upgrades to PathRelative since the target is no longer
+    // in the same directory as a.md.
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
@@ -1235,16 +1288,17 @@ fn mv_dot_slash_wikilink_plain_rewritten() {
     );
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "b" is unique → short-form [[b]]
+    // DotRelative → PathRelative (target moved to different dir)
     assert!(
-        content.contains("[[b]]"),
-        "[[./b]] should be rewritten to [[b]] (short-form), got: {content}"
+        content.contains("[[sub/b]]"),
+        "[[./b]] should be rewritten to [[sub/b]] (path-relative), got: {content}"
     );
 }
 
 #[test]
 fn mv_dot_slash_wikilink_with_alias_rewritten() {
-    // [[./b|Alias]] should be rewritten to [[b|Alias]] (short-form, stem unique).
+    // [[./b|Alias]] should be rewritten to [[sub/b|Alias]] (path-relative,
+    // DotRelative upgrades since target moved to different dir).
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b|My Note]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
@@ -1257,16 +1311,17 @@ fn mv_dot_slash_wikilink_with_alias_rewritten() {
     assert!(mv_out.status.success(), "mv failed");
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "b" is unique → short-form, alias preserved
+    // DotRelative → PathRelative, alias preserved
     assert!(
-        content.contains("[[b|My Note]]"),
-        "[[./b|My Note]] should become [[b|My Note]], got: {content}"
+        content.contains("[[sub/b|My Note]]"),
+        "[[./b|My Note]] should become [[sub/b|My Note]], got: {content}"
     );
 }
 
 #[test]
 fn mv_dot_slash_wikilink_with_section_rewritten() {
-    // [[./b#intro]] should be rewritten to [[b#intro]] (short-form, stem unique).
+    // [[./b#intro]] should be rewritten to [[sub/b#intro]] (path-relative,
+    // DotRelative upgrades since target moved to different dir).
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b#intro]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
@@ -1279,10 +1334,10 @@ fn mv_dot_slash_wikilink_with_section_rewritten() {
     assert!(mv_out.status.success(), "mv failed");
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // stem "b" is unique → short-form, fragment preserved
+    // DotRelative → PathRelative, fragment preserved
     assert!(
-        content.contains("[[b#intro]]"),
-        "[[./b#intro]] should become [[b#intro]], got: {content}"
+        content.contains("[[sub/b#intro]]"),
+        "[[./b#intro]] should become [[sub/b#intro]], got: {content}"
     );
 }
 

@@ -20,8 +20,10 @@ use serde::Serialize;
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
-use crate::link_graph::{LinkGraph, normalize_target, relative_path_between, strip_site_prefix};
-use crate::links::{LinkKind, extract_link_spans_with_original};
+use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
+use crate::link_resolve::LinkResolver;
+use crate::link_write::{LinkWriter, SpanReplacement};
+use crate::links::{LinkKind, PreserveForm, Resolution, extract_link_spans_with_original};
 use crate::scanner::{
     FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
 };
@@ -73,11 +75,17 @@ pub struct RewritePlan {
 ///
 /// Both `old_rel` and `new_rel` must use forward slashes and be relative to
 /// `dir`.
+///
+/// `allow_ambiguous` — when `false` (default), bare wikilinks that map to an
+/// ambiguous stem (multiple files with the same basename) are skipped with a
+/// warning instead of being silently rewritten (BUG-2 fix).  Pass `true` to
+/// opt-in to rewriting ambiguous bare wikilinks at the caller's risk.
 pub fn plan_mv(
     dir: &Path,
     old_rel: &str,
     new_rel: &str,
     site_prefix: Option<&str>,
+    allow_ambiguous: bool,
 ) -> Result<Vec<RewritePlan>> {
     // Step 1: build link graph to discover inbound links.
     // The build also yields a case-insensitive index of all vault paths, which
@@ -158,6 +166,7 @@ pub fn plan_mv(
             new_stem,
             site_prefix,
             Some(&case_index),
+            allow_ambiguous,
         );
 
         if !replacements.is_empty() {
@@ -354,73 +363,19 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Link-form selection (short-form vs path-form)
-// ---------------------------------------------------------------------------
-
-/// Outcome of [`choose_wikilink_form`]: what form should an emitted wikilink use?
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WikilinkForm {
-    /// Emit `[[stem]]` — the basename stem is unique vault-wide after the move.
-    Short(String),
-    /// Emit `[[path/stem]]` — disambiguation needed; no `.md` suffix.
-    Path(String),
-}
-
-/// Decide whether to emit a wikilink in short-form (`[[stem]]`) or path-form
-/// (`[[dir/stem]]`) based on the basename uniqueness of `new_rel` in the
-/// vault **after** the move.
-///
-/// `old_rel` is the pre-move path (used to simulate the post-move vault state:
-/// the moved file is removed from `old_rel` and added at `new_rel`).
-///
-/// When `case_index` is `None`, falls back to path-form (safe default).
-pub(crate) fn choose_wikilink_form(
-    new_rel: &str,
-    old_rel: &str,
-    case_index: Option<&CaseInsensitiveIndex>,
-) -> WikilinkForm {
-    let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
-    // Stem is the basename only (no directory).
-    let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
-
-    let Some(idx) = case_index else {
-        return WikilinkForm::Path(new_stem.to_string());
-    };
-
-    // Count how many vault files have the same basename stem after the move.
-    // The pre-move index includes `old_rel` (which will be removed) and does
-    // NOT include `new_rel` (which will be added). Adjust accordingly.
-    let pre_move_candidates = idx.lookup_stem_all(new_basename_stem);
-
-    // Count: remove old_rel if present, add new_rel if not already present.
-    let had_old = pre_move_candidates
-        .iter()
-        .any(|c| c.eq_ignore_ascii_case(old_rel));
-    let has_new = pre_move_candidates
-        .iter()
-        .any(|c| c.eq_ignore_ascii_case(new_rel));
-
-    let post_count =
-        pre_move_candidates.len().cast_signed() - isize::from(had_old) + isize::from(!has_new);
-
-    if post_count == 1 {
-        WikilinkForm::Short(new_basename_stem.to_string())
-    } else {
-        WikilinkForm::Path(new_stem.to_string())
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Inbound rewrite planning
 // ---------------------------------------------------------------------------
 
 /// Walk every body line in `content` and return [`Replacement`]s for links
 /// that target the moved file.
 ///
-/// When `case_index` is provided, link targets are canonicalized through it
-/// before comparison against `old_rel`/`old_stem`.  This fixes BUG-6: a link
-/// written as `Web/JavaScript/…` resolves to the on-disk lowercase path and is
-/// therefore detected as pointing at the moved file.
+/// Uses [`LinkResolver`] to match links and [`LinkWriter`] to emit the new
+/// target in the user's original written form (BUG-1 fix: `[[sub/target]]`
+/// stays path-form after rename, not collapsed to `[[renamed]]`).
+///
+/// When `allow_ambiguous` is `false`, bare wikilinks whose stem matches
+/// multiple vault files are skipped with a stderr warning instead of being
+/// silently rewritten to an incorrect target (BUG-2 fix).
 #[allow(clippy::too_many_arguments)]
 fn plan_inbound_rewrites(
     content: &str,
@@ -431,12 +386,10 @@ fn plan_inbound_rewrites(
     _new_stem: &str,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    allow_ambiguous: bool,
 ) -> Vec<Replacement> {
-    // Decide once whether to use short-form for wikilinks pointing at new_rel.
-    let wikilink_target = match choose_wikilink_form(new_rel, old_rel, case_index) {
-        WikilinkForm::Short(stem) => stem,
-        WikilinkForm::Path(path) => path,
-    };
+    let resolver_idx = case_index.unwrap_or(&EMPTY_CASE_INDEX);
+    let resolver = LinkResolver::new(resolver_idx, site_prefix);
 
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
@@ -466,8 +419,6 @@ fn plan_inbound_rewrites(
         }
 
         // ---- Comment fence (Obsidian %% blocks) ----
-        // When already inside a comment, only look for the closing `%%`.
-        // Code fences are literal text inside comments, so don't process them.
         if in_comment_fence {
             if is_comment_fence(line) {
                 in_comment_fence = false;
@@ -481,7 +432,6 @@ fn plan_inbound_rewrites(
         }
 
         // ---- Comment fence opening (only outside code blocks) ----
-        // A `%%` inside a fenced code block is literal text, not a delimiter.
         if is_comment_fence(line) {
             in_comment_fence = true;
             continue;
@@ -493,141 +443,93 @@ fn plan_inbound_rewrites(
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
-            let matches = match span.kind {
-                LinkKind::Wikilink => {
-                    let t = &span.link.target;
-                    // Normalize `./`-prefixed wikilinks (e.g. `[[./b]]`) to the
-                    // path form without the leading `./` (e.g. `b`).  Such links
-                    // are rare but valid and were missed before this fix.
-                    // `source_rel` gives the directory context so we can resolve
-                    // `./b` relative to the source file.
-                    // Resolve `./`-relative wikilink against the source file's dir.
-                    // e.g. `[[./b]]` in `notes/a.md` → `notes/b` (or `b` at root).
-                    let t_resolved: std::borrow::Cow<str> =
-                        if let Some(without_dot_slash) = t.strip_prefix("./") {
-                            std::borrow::Cow::Owned(normalize_target(
-                                Path::new(source_rel),
-                                without_dot_slash,
-                            ))
-                        } else {
-                            std::borrow::Cow::Borrowed(t.as_str())
-                        };
-                    let t = t_resolved.as_ref();
-                    let is_bare = !(t.contains('/') || t.contains('\\'));
-                    if is_bare {
-                        // Bare wikilinks (e.g. [[note]]) are resolved via the
-                        // case-insensitive stem index: only match when the stem
-                        // is unambiguous (unique file in vault with that stem).
-                        if let Some(idx) = case_index {
-                            let t_norm = t.to_ascii_lowercase();
-                            // Strip .md extension for stem lookup if present.
-                            let stem = if std::path::Path::new(&t_norm)
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                            {
-                                &t_norm[..t_norm.len() - 3]
-                            } else {
-                                &t_norm
-                            };
-                            let canonical = idx.lookup_stem(stem);
-                            canonical == Some(old_rel) || canonical == Some(old_stem)
-                        } else {
-                            false
-                        }
-                    } else if t == old_stem || t == old_rel {
-                        true
-                    } else if let Some(idx) = case_index {
-                        // Canonicalize the written target through the case index.
-                        // Normalize path separators to forward slashes first so
-                        // wikilinks written with backslashes (e.g. `[[Web\\Foo]]`)
-                        // can still match. Wikilinks may be written without the
-                        // `.md` extension, so try both the literal target and
-                        // its `.md`-appended form.
-                        let t_norm = t.replace('\\', "/").to_ascii_lowercase();
-                        let canonical = idx.lookup_unique(&t_norm).or_else(|| {
-                            let with_md = format!("{t_norm}.md");
-                            idx.lookup_unique(&with_md)
-                        });
-                        canonical == Some(old_rel) || canonical == Some(old_stem)
+            // BUG-2 fix: for bare wikilinks, check for ambiguity before
+            // accepting the match. If the stem resolves to multiple files
+            // and `allow_ambiguous` is false, warn and skip. When
+            // `allow_ambiguous` is true, rewrite directly if the moved file
+            // is among the ambiguous candidates (LinkResolver::matches_target
+            // would reject the link because lookup_stem returns None for
+            // ambiguous stems).
+            let mut bare_ambiguous_match = false;
+            if span.kind == LinkKind::Wikilink {
+                let t = &span.link.target;
+                // Only bare wikilinks (no path separator) need the ambiguity check.
+                let normalized = if let Some(wo) = t.strip_prefix("./") {
+                    std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
+                } else {
+                    std::borrow::Cow::Borrowed(t.as_str())
+                };
+                let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
+                if is_bare && case_index.is_some() {
+                    let t_norm = normalized.to_ascii_lowercase();
+                    let stem = if std::path::Path::new(&t_norm)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    {
+                        &t_norm[..t_norm.len() - 3]
                     } else {
-                        false
-                    }
-                }
-                LinkKind::Markdown => {
-                    // Absolute links (starting with `/`) are stripped of the
-                    // site_prefix then compared; relative links are normalized
-                    // against the source file's directory.
-                    let norm = if span.link.target.starts_with('/') {
-                        strip_site_prefix(&span.link.target, site_prefix)
-                    } else {
-                        normalize_target(Path::new(source_rel), &span.link.target)
+                        &t_norm
                     };
-                    if norm == old_rel || norm == old_stem {
-                        true
-                    } else if let Some(idx) = case_index {
-                        // Try canonicalizing the normalized target through the
-                        // index. Markdown links may also be written without the
-                        // `.md` extension (e.g. `[x](Web/Foo)`), so try both the
-                        // literal and `.md`-appended forms — mirrors the wikilink
-                        // branch above.
-                        let norm_lower = norm.to_ascii_lowercase();
-                        let canonical = idx.lookup_unique(&norm_lower).or_else(|| {
-                            let with_md = format!("{norm_lower}.md");
-                            idx.lookup_unique(&with_md)
-                        });
-                        canonical == Some(old_rel) || canonical == Some(old_stem)
-                    } else {
-                        false
+                    let res = resolver.resolve_stem(stem);
+                    match res {
+                        Resolution::Hit { ref vault_path } => {
+                            let matches_old = vault_path == old_rel
+                                || vault_path == old_stem
+                                || vault_path.strip_suffix(".md") == Some(old_stem);
+                            if !matches_old {
+                                continue;
+                            }
+                        }
+                        Resolution::Ambiguous(ref candidates) => {
+                            if !allow_ambiguous {
+                                eprintln!(
+                                    "warning: skipping ambiguous bare wikilink [[{t}]] in \
+                                     {source_rel}:{line_num} — matches {} files: {}. \
+                                     Use --allow-ambiguous to rewrite anyway.",
+                                    candidates.len(),
+                                    candidates.join(", ")
+                                );
+                                continue;
+                            }
+                            // allow_ambiguous: rewrite only when the moved
+                            // file is one of the candidates.
+                            let matches_old = candidates.iter().any(|c| {
+                                c == old_rel
+                                    || c == old_stem
+                                    || c.strip_suffix(".md") == Some(old_stem)
+                            });
+                            if !matches_old {
+                                continue;
+                            }
+                            bare_ambiguous_match = true;
+                        }
+                        Resolution::Broken => continue,
                     }
                 }
-            };
+            }
 
-            if !matches {
+            if !bare_ambiguous_match
+                && !resolver.matches_target(&span, source_rel, old_rel, old_stem)
+            {
                 continue;
             }
 
-            // Compute the new target text.
-            let new_target = match span.kind {
-                // Prefer short-form (`[[stem]]`) when the new basename is unique
-                // vault-wide, path-form (`[[dir/stem]]`) otherwise.
-                LinkKind::Wikilink => wikilink_target.clone(),
-                LinkKind::Markdown => {
-                    // If the original link was absolute-path style, preserve that
-                    // style by re-prepending the site_prefix (or just `/`).
-                    if span.link.target.starts_with('/') {
-                        // Preserve whether the original used .md or stem style.
-                        let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
-                        let target = if std::path::Path::new(&span.link.target)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                        {
-                            new_rel
-                        } else {
-                            new_stem
-                        };
-                        match site_prefix {
-                            Some(prefix) => format!("/{prefix}/{target}"),
-                            None => format!("/{target}"),
-                        }
-                    } else {
-                        relative_path_between(source_rel, new_rel)
-                    }
-                }
-            };
-
-            // Build old_text and new_text using the ORIGINAL line (not cleaned).
-            let old_text = line[span.full_start..span.full_end].to_string();
-            let new_text = format!(
-                "{}{}{}",
-                &line[span.full_start..span.target_start],
-                new_target,
-                &line[span.target_end..span.full_end]
-            );
-
-            if old_text != new_text {
+            // Use LinkWriter to emit the new target in the user's written form.
+            if let Some(SpanReplacement {
+                byte_offset,
+                old_text,
+                new_text,
+            }) = LinkWriter::rewrite(
+                &span,
+                line,
+                new_rel,
+                source_rel,
+                PreserveForm::Preserve,
+                site_prefix,
+            ) {
                 replacements.push(Replacement {
                     line: line_num,
-                    byte_offset: span.full_start,
+                    byte_offset,
                     old_text,
                     new_text,
                 });
@@ -637,6 +539,10 @@ fn plan_inbound_rewrites(
 
     replacements
 }
+
+/// A static empty index used as a fallback when no case_index is available.
+static EMPTY_CASE_INDEX: std::sync::LazyLock<CaseInsensitiveIndex> =
+    std::sync::LazyLock::new(CaseInsensitiveIndex::new);
 
 // ---------------------------------------------------------------------------
 // Outbound rewrite planning
@@ -861,6 +767,7 @@ pub fn plan_batch_mv(
     dir: &Path,
     renames: &[(String, String)],
     site_prefix: Option<&str>,
+    allow_ambiguous: bool,
 ) -> Result<Vec<RewritePlan>> {
     if renames.is_empty() {
         return Ok(vec![]);
@@ -963,6 +870,7 @@ pub fn plan_batch_mv(
                 new_stem,
                 site_prefix,
                 Some(&case_index),
+                allow_ambiguous,
             );
             all_replacements.extend(repls);
         }
@@ -1080,6 +988,9 @@ pub fn plan_batch_mv(
 /// Unlike `plan_inbound_rewrites`, this function also rewrites wikilinks
 /// found inside YAML frontmatter values for the configured link properties
 /// (`related`, `depends-on`, `supersedes`, `superseded-by`).
+///
+/// Uses [`LinkResolver`] + [`LinkWriter`] for consistent form-preserving
+/// rewrites (BUG-1/BUG-2 fix).
 #[allow(clippy::too_many_arguments)]
 fn plan_inbound_rewrites_with_fm(
     content: &str,
@@ -1090,12 +1001,10 @@ fn plan_inbound_rewrites_with_fm(
     new_stem: &str,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    allow_ambiguous: bool,
 ) -> Vec<Replacement> {
-    // Decide once whether to use short-form for wikilinks pointing at new_rel.
-    let wikilink_target = match choose_wikilink_form(new_rel, old_rel, case_index) {
-        WikilinkForm::Short(stem) => stem,
-        WikilinkForm::Path(path) => path,
-    };
+    let resolver_idx = case_index.unwrap_or(&EMPTY_CASE_INDEX);
+    let resolver = LinkResolver::new(resolver_idx, site_prefix);
 
     let mut replacements = Vec::new();
     let mut fence = FenceTracker::new();
@@ -1120,10 +1029,6 @@ fn plan_inbound_rewrites_with_fm(
                     continue;
                 }
                 // Scan for wikilinks inside frontmatter link properties.
-                // Matches lines like:   - "[[some/path]]"  or  - [[some/path]]
-                // We detect list-item wikilinks regardless of the YAML key —
-                // the link_graph already validated these are wikilink entries.
-                // For safety, only rewrite if the target matches.
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
                     line, line_num, old_rel, old_stem, new_rel, new_stem, case_index,
                 );
@@ -1158,110 +1063,83 @@ fn plan_inbound_rewrites_with_fm(
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
-            let matches = match span.kind {
-                LinkKind::Wikilink => {
-                    let t = &span.link.target;
-                    let t_resolved: std::borrow::Cow<str> =
-                        if let Some(without_dot_slash) = t.strip_prefix("./") {
-                            std::borrow::Cow::Owned(normalize_target(
-                                Path::new(source_rel),
-                                without_dot_slash,
-                            ))
-                        } else {
-                            std::borrow::Cow::Borrowed(t.as_str())
-                        };
-                    let t = t_resolved.as_ref();
-                    let is_bare = !(t.contains('/') || t.contains('\\'));
-                    if is_bare {
-                        if let Some(idx) = case_index {
-                            let t_norm = t.to_ascii_lowercase();
-                            let stem = if std::path::Path::new(&t_norm)
-                                .extension()
-                                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                            {
-                                &t_norm[..t_norm.len() - 3]
-                            } else {
-                                &t_norm
-                            };
-                            let canonical = idx.lookup_stem(stem);
-                            canonical == Some(old_rel) || canonical == Some(old_stem)
-                        } else {
-                            false
-                        }
-                    } else if t == old_stem || t == old_rel {
-                        true
-                    } else if let Some(idx) = case_index {
-                        let t_norm = t.replace('\\', "/").to_ascii_lowercase();
-                        let canonical = idx.lookup_unique(&t_norm).or_else(|| {
-                            let with_md = format!("{t_norm}.md");
-                            idx.lookup_unique(&with_md)
-                        });
-                        canonical == Some(old_rel) || canonical == Some(old_stem)
+            // BUG-2: bare wikilink ambiguity check (same as plan_inbound_rewrites).
+            let mut bare_ambiguous_match = false;
+            if span.kind == LinkKind::Wikilink {
+                let t = &span.link.target;
+                let normalized = if let Some(wo) = t.strip_prefix("./") {
+                    std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
+                } else {
+                    std::borrow::Cow::Borrowed(t.as_str())
+                };
+                let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
+                if is_bare && case_index.is_some() {
+                    let t_norm = normalized.to_ascii_lowercase();
+                    let stem = if std::path::Path::new(&t_norm)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    {
+                        &t_norm[..t_norm.len() - 3]
                     } else {
-                        false
-                    }
-                }
-                LinkKind::Markdown => {
-                    let norm = if span.link.target.starts_with('/') {
-                        strip_site_prefix(&span.link.target, site_prefix)
-                    } else {
-                        normalize_target(Path::new(source_rel), &span.link.target)
+                        &t_norm
                     };
-                    if norm == old_rel || norm == old_stem {
-                        true
-                    } else if let Some(idx) = case_index {
-                        let norm_lower = norm.to_ascii_lowercase();
-                        let canonical = idx.lookup_unique(&norm_lower).or_else(|| {
-                            let with_md = format!("{norm_lower}.md");
-                            idx.lookup_unique(&with_md)
-                        });
-                        canonical == Some(old_rel) || canonical == Some(old_stem)
-                    } else {
-                        false
+                    let res = resolver.resolve_stem(stem);
+                    match res {
+                        Resolution::Hit { ref vault_path } => {
+                            let matches_old = vault_path == old_rel
+                                || vault_path == old_stem
+                                || vault_path.strip_suffix(".md") == Some(old_stem);
+                            if !matches_old {
+                                continue;
+                            }
+                        }
+                        Resolution::Ambiguous(ref candidates) => {
+                            if !allow_ambiguous {
+                                eprintln!(
+                                    "warning: skipping ambiguous bare wikilink [[{t}]] in \
+                                     {source_rel}:{line_num} — matches {} files: {}. \
+                                     Use --allow-ambiguous to rewrite anyway.",
+                                    candidates.len(),
+                                    candidates.join(", ")
+                                );
+                                continue;
+                            }
+                            let matches_old = candidates.iter().any(|c| {
+                                c == old_rel
+                                    || c == old_stem
+                                    || c.strip_suffix(".md") == Some(old_stem)
+                            });
+                            if !matches_old {
+                                continue;
+                            }
+                            bare_ambiguous_match = true;
+                        }
+                        Resolution::Broken => continue,
                     }
                 }
-            };
+            }
 
-            if !matches {
+            if !bare_ambiguous_match
+                && !resolver.matches_target(&span, source_rel, old_rel, old_stem)
+            {
                 continue;
             }
 
-            let new_target = match span.kind {
-                // Prefer short-form (`[[stem]]`) when new basename is unique.
-                LinkKind::Wikilink => wikilink_target.clone(),
-                LinkKind::Markdown => {
-                    if span.link.target.starts_with('/') {
-                        let new_stem_local = new_rel.strip_suffix(".md").unwrap_or(new_rel);
-                        let target = if std::path::Path::new(&span.link.target)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                        {
-                            new_rel
-                        } else {
-                            new_stem_local
-                        };
-                        match site_prefix {
-                            Some(prefix) => format!("/{prefix}/{target}"),
-                            None => format!("/{target}"),
-                        }
-                    } else {
-                        relative_path_between(source_rel, new_rel)
-                    }
-                }
-            };
-
-            let old_text = line[span.full_start..span.full_end].to_string();
-            let new_text = format!(
-                "{}{}{}",
-                &line[span.full_start..span.target_start],
-                new_target,
-                &line[span.target_end..span.full_end]
-            );
-
-            if old_text != new_text {
+            if let Some(SpanReplacement {
+                byte_offset,
+                old_text,
+                new_text,
+            }) = LinkWriter::rewrite(
+                &span,
+                line,
+                new_rel,
+                source_rel,
+                PreserveForm::Preserve,
+                site_prefix,
+            ) {
                 replacements.push(Replacement {
                     line: line_num,
-                    byte_offset: span.full_start,
+                    byte_offset,
                     old_text,
                     new_text,
                 });
@@ -1277,6 +1155,9 @@ fn plan_inbound_rewrites_with_fm(
 /// Matches patterns like `  - "[[path/to/file]]"` or `  - [[path/to/file]]`
 /// (YAML list items containing Obsidian wikilinks).  Only replaces when the
 /// target normalizes to `old_rel` or `old_stem`.
+///
+/// Uses the same form-preserving approach as body link rewrites: path-form
+/// wikilinks in frontmatter stay path-form after the rename (BUG-1 fix).
 fn plan_frontmatter_wikilink_rewrites(
     line: &str,
     line_num: usize,
@@ -1286,11 +1167,8 @@ fn plan_frontmatter_wikilink_rewrites(
     _new_stem: &str,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Vec<Replacement> {
-    // Decide once whether to use short-form for this move's wikilinks.
-    let wikilink_target = match choose_wikilink_form(new_rel, old_rel, case_index) {
-        WikilinkForm::Short(stem) => stem,
-        WikilinkForm::Path(path) => path,
-    };
+    let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
+    let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
 
     let mut replacements = Vec::new();
 
@@ -1327,9 +1205,19 @@ fn plan_frontmatter_wikilink_rewrites(
 
             if matches {
                 let old_text = format!("[[{target}]]");
+                // Detect written form of the target path (before alias).
                 // Preserve alias if present (e.g. `path|My Alias` → `new_target|My Alias`).
                 let alias_suffix = target.find('|').map_or("", |i| &target[i..]);
-                let new_text = format!("[[{wikilink_target}{alias_suffix}]]");
+                // Preserve the user's written form: path-form → path-form, bare → bare.
+                let new_wikilink_target = if target_path.contains('/') || target_path.contains('\\')
+                {
+                    // Path-form wikilink: preserve path-form with new stem (BUG-1 fix).
+                    new_stem.to_string()
+                } else {
+                    // Bare wikilink: preserve bare form (just the basename).
+                    new_basename_stem.to_string()
+                };
+                let new_text = format!("[[{new_wikilink_target}{alias_suffix}]]");
                 if old_text != new_text {
                     replacements.push(Replacement {
                         line: line_num,
@@ -1502,7 +1390,7 @@ mod tests {
             ("a.md", "---\ntitle: A\n---\nSee [[b]] for details\n"),
             ("b.md", "---\ntitle: B\n---\nContent\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None, false).unwrap();
         // [[b]] is already correct short-form — no replacement needed.
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
@@ -1513,20 +1401,20 @@ mod tests {
 
     #[test]
     fn plan_mv_path_wikilink_rewritten_to_short_form_when_stem_unique() {
-        // A path-form wikilink [[sub/b]] should be rewritten to short-form
-        // [[b]] when the stem `b` is unique vault-wide after the move.
+        // A path-form wikilink [[sub/b]] should be rewritten to the new path
+        // [[archive/b]] — written form (path-relative) is preserved.
         let vault = create_vault(&[
             ("a.md", "---\ntitle: A\n---\nSee [[sub/b]] for details\n"),
             ("sub/b.md", "---\ntitle: B\n---\nContent\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(
             plans.len(),
             1,
             "path wikilink [[sub/b]] should be rewritten"
         );
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
     }
 
     #[test]
@@ -1538,7 +1426,7 @@ mod tests {
             ("b.md", "Content root\n"),
             ("sub/b.md", "Content sub\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None, false).unwrap();
         // stem "b" is ambiguous (two files: b.md and sub/b.md) — no rewrite.
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
@@ -1551,7 +1439,7 @@ mod tests {
     fn plan_mv_bare_wikilink_with_alias_stays_short_form_when_unique() {
         // [[b|my note]] with unique stem: already short-form, no rewrite needed.
         let vault = create_vault(&[("a.md", "See [[b|my note]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         // Already short-form and stem is unique — no replacement.
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
@@ -1562,22 +1450,22 @@ mod tests {
 
     #[test]
     fn plan_mv_path_wikilink_with_alias_rewritten_to_short_form() {
-        // [[sub/b|my note]] should become [[b|my note]] when stem is unique.
+        // [[sub/b|my note]] should become [[archive/b|my note]] — path-form preserved.
         let vault = create_vault(&[
             ("a.md", "See [[sub/b|my note]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b|my note]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[b|my note]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b|my note]]");
     }
 
     #[test]
     fn plan_mv_bare_wikilink_with_fragment_stays_short_form_when_unique() {
         // [[b#section]] with unique stem: already short-form, no rewrite needed.
         let vault = create_vault(&[("a.md", "See [[b#section]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
             a_plan.is_none(),
@@ -1587,22 +1475,22 @@ mod tests {
 
     #[test]
     fn plan_mv_path_wikilink_with_fragment_rewritten_to_short_form() {
-        // [[sub/b#section]] should become [[b#section]] when stem is unique.
+        // [[sub/b#section]] should become [[archive/b#section]] — path-form preserved.
         let vault = create_vault(&[
             ("a.md", "See [[sub/b#section]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b#section]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[b#section]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b#section]]");
     }
 
     #[test]
     fn plan_mv_bare_wikilink_case_mismatch_rewritten_to_short_form() {
         // [[B]] matches b.md case-insensitively; stem is unique → short-form.
         let vault = create_vault(&[("a.md", "See [[B]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(
             plans.len(),
             1,
@@ -1622,7 +1510,7 @@ mod tests {
             ("c.md", "C\n"),
             ("bb.md", "BB\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None, false).unwrap();
         // a.md has no links to b.md — no plan for it.
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
@@ -1633,7 +1521,7 @@ mod tests {
 
     #[test]
     fn plan_mv_inbound_wikilink_with_path() {
-        // Wikilinks that already contain a path ARE rewritten.
+        // Wikilinks that already contain a path ARE rewritten — path-form preserved.
         let vault = create_vault(&[
             (
                 "a.md",
@@ -1646,14 +1534,15 @@ mod tests {
             "backlog/item.md",
             "backlog/done/item.md",
             None,
+            false,
         )
         .unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "a.md");
         assert_eq!(plans[0].replacements.len(), 1);
-        // stem "item" is unique → short-form
+        // Path-form preserved: [[backlog/item]] → [[backlog/done/item]]
         assert_eq!(plans[0].replacements[0].old_text, "[[backlog/item]]");
-        assert_eq!(plans[0].replacements[0].new_text, "[[item]]");
+        assert_eq!(plans[0].replacements[0].new_text, "[[backlog/done/item]]");
     }
 
     #[test]
@@ -1662,11 +1551,11 @@ mod tests {
             ("a.md", "See [[sub/b|my note]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b|my note]]");
-        // stem "b" is unique → short-form, alias preserved
-        assert_eq!(plans[0].replacements[0].new_text, "[[b|my note]]");
+        // Path-form preserved, alias preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b|my note]]");
     }
 
     #[test]
@@ -1675,17 +1564,17 @@ mod tests {
             ("a.md", "See [[sub/b#section]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b#section]]");
-        // stem "b" is unique → short-form, fragment preserved
-        assert_eq!(plans[0].replacements[0].new_text, "[[b#section]]");
+        // Path-form preserved, fragment preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b#section]]");
     }
 
     #[test]
     fn plan_mv_inbound_markdown_link() {
         let vault = create_vault(&[("a.md", "See [note](b.md) here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[note](b.md)");
         assert_eq!(plans[0].replacements[0].new_text, "[note](sub/b.md)");
@@ -1696,7 +1585,7 @@ mod tests {
         // b.md in root links to a.md. Moving b.md to sub/b.md means the
         // relative path changes.
         let vault = create_vault(&[("a.md", "Content A\n"), ("b.md", "See [note](a.md) here\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "sub/b.md").unwrap();
         assert_eq!(moved_plan.replacements[0].old_text, "[note](a.md)");
         assert_eq!(moved_plan.replacements[0].new_text, "[note](../a.md)");
@@ -1706,7 +1595,7 @@ mod tests {
     fn plan_mv_outbound_wikilink_unchanged() {
         // Wikilinks are vault-relative, so moving the file doesn't change them.
         let vault = create_vault(&[("a.md", "Content A\n"), ("b.md", "See [[a]] here\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         // b.md should NOT appear in plans (no outbound changes needed for wikilinks).
         let moved_plan = plans.iter().find(|p| p.rel_path == "b.md");
         assert!(moved_plan.is_none());
@@ -1721,7 +1610,7 @@ mod tests {
             ),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         // Only the real link outside code block should be rewritten.
         assert_eq!(plans[0].replacements.len(), 1);
@@ -1734,7 +1623,7 @@ mod tests {
             ("a.md", "Use `[[sub/b]]` and real [[sub/b]]\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b]]");
@@ -1743,7 +1632,7 @@ mod tests {
     #[test]
     fn plan_mv_no_links_empty_result() {
         let vault = create_vault(&[("a.md", "No links here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         assert!(plans.is_empty());
     }
 
@@ -1753,7 +1642,7 @@ mod tests {
             ("a.md", "See [[sub/b]] and [[sub/b|alias]]\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
     }
@@ -1761,11 +1650,11 @@ mod tests {
     #[test]
     fn execute_plans_writes_files() {
         let vault = create_vault(&[("a.md", "See [[sub/b]] here\n"), ("sub/b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         execute_plans(vault.path(), &plans).unwrap();
         let content = fs::read_to_string(vault.path().join("a.md")).unwrap();
-        // stem "b" is unique → short-form [[b]]
-        assert!(content.contains("[[b]]"), "content: {content}");
+        // Path-form preserved: [[sub/b]] → [[archive/b]]
+        assert!(content.contains("[[archive/b]]"), "content: {content}");
         assert!(!content.contains("[[sub/b]]"));
     }
 
@@ -1804,7 +1693,7 @@ mod tests {
             ("a.md", "---\nrelated: \"[[sub/b]]\"\n---\nBody [[sub/b]]\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].line, 4); // Body line
@@ -1815,7 +1704,7 @@ mod tests {
         // Moving within the same directory: outbound relative links don't change.
         let vault = create_vault(&[("a.md", "Content A\n"), ("b.md", "See [note](a.md) here\n")]);
         // Both old and new are in the root → no outbound rewrite needed.
-        let plans = plan_mv(vault.path(), "b.md", "c.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "c.md", None, false).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "b.md");
         assert!(moved_plan.is_none());
     }
@@ -1827,7 +1716,7 @@ mod tests {
             ("sub/a.md", "See [note](../b.md) here\n"),
             ("b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "sub/a.md");
         assert_eq!(plans[0].replacements[0].old_text, "[note](../b.md)");
@@ -1844,7 +1733,7 @@ mod tests {
             ("sub/b.md", "Content sub\n"),
             ("b.md", "Content root\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "archive/b.md", None, false).unwrap();
         // sub/a.md links to sub/b.md, not root b.md — should NOT be rewritten.
         let sub_plan = plans.iter().find(|p| p.rel_path == "sub/a.md");
         assert!(sub_plan.is_none(), "false positive: {plans:?}");
@@ -1852,30 +1741,32 @@ mod tests {
 
     #[test]
     fn plan_mv_bare_wikilink_with_md_extension_rewritten() {
-        // [[b.md]] is a bare wikilink (after .md strip) — stem "b" is unique,
-        // so we rewrite it. Since stem is already short-form and unique,
-        // the new target is [[b]] (short-form, .md stripped).
+        // [[b.md]] — MdSuffixed form, bare stem. After moving b.md → sub/b.md,
+        // the MdSuffixed form is preserved: new target is [[b.md]] (same stem).
+        // Since the replacement equals the original, no rewrite is emitted.
         let vault = create_vault(&[("a.md", "See [[b.md]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
-        assert_eq!(plans.len(), 1, "[[b.md]] should be rewritten: {plans:?}");
-        assert_eq!(plans[0].replacements[0].old_text, "[[b.md]]");
-        // stem "b" is unique → short-form [[b]] (no .md, no sub/ prefix)
-        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
+        // [[b.md]] resolves correctly at the new location — no rewrite needed.
+        let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
+        assert!(
+            a_plan.is_none(),
+            "[[b.md]] MdSuffixed should not need a rewrite when basename unchanged: {plans:?}"
+        );
     }
 
     #[test]
     fn plan_mv_wikilink_with_path_and_md_extension() {
-        // [[sub/b.md]] has a path separator — should be rewritten.
-        // stem "b" is unique → short-form [[b]].
+        // [[sub/b.md]] has a path separator → PathRelative form.
+        // Path-form is preserved: [[sub/b.md]] → [[archive/b]] (stem without .md).
         let vault = create_vault(&[
             ("a.md", "See [[sub/b.md]] here\n"),
             ("sub/b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/b.md", "archive/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b.md]]");
-        // stem "b" is unique → short-form
-        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
+        // PathRelative form preserved, emits stem without .md suffix
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
     }
 
     // ---- Absolute-path inbound link tests ----
@@ -1898,6 +1789,7 @@ mod tests {
             "configure/settings.md",
             "config/settings.md",
             Some("docs"),
+            false,
         )
         .unwrap();
         assert_eq!(plans.len(), 1, "should produce one rewrite plan");
@@ -1921,7 +1813,7 @@ mod tests {
             ("index.md", "See [page](/page.md) here\n"),
             ("page.md", "# Page\n"),
         ]);
-        let plans = plan_mv(vault.path(), "page.md", "archive/page.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "page.md", "archive/page.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "index.md");
         assert_eq!(plans[0].replacements[0].old_text, "[page](/page.md)");
@@ -1945,6 +1837,7 @@ mod tests {
             "configure/settings.md",
             "config/settings.md",
             Some("docs"),
+            false,
         )
         .unwrap();
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
@@ -1970,6 +1863,7 @@ mod tests {
             "configure/settings.md",
             "config/settings.md",
             Some("docs"),
+            false,
         )
         .unwrap();
         assert_eq!(plans.len(), 1);
@@ -1991,7 +1885,7 @@ mod tests {
         // in the same directory must (1) succeed, (2) produce a plan whose path
         // points to the NEW location, and (3) rewrite the self-link.
         let vault = create_vault(&[("self.md", "A link to [me](self.md).\n")]);
-        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         let plan = &plans[0];
         assert_eq!(plan.rel_path, "other.md");
@@ -2005,7 +1899,7 @@ mod tests {
     fn execute_plans_self_link_same_directory_e2e() {
         // Full mv flow: rename + rewrite without canonicalization error.
         let vault = create_vault(&[("self.md", "A link to [me](self.md).\n")]);
-        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None, false).unwrap();
         fs::rename(vault.path().join("self.md"), vault.path().join("other.md")).unwrap();
         execute_plans(vault.path(), &plans).unwrap();
         let content = fs::read_to_string(vault.path().join("other.md")).unwrap();
@@ -2031,6 +1925,7 @@ mod tests {
             "games/anatomy/index.md",
             "games/anatomy-renamed/index.md",
             None,
+            false,
         )
         .unwrap();
         let moved_plan = plans
@@ -2048,7 +1943,7 @@ mod tests {
             "sub/note.md",
             "See [link](https://example.com/x) and [mail](mailto:a@b.c).\n",
         )]);
-        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None, false).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "archive/note.md");
         assert!(
             moved_plan.is_none(),
@@ -2059,7 +1954,7 @@ mod tests {
     #[test]
     fn plan_mv_outbound_skips_fragment_only() {
         let vault = create_vault(&[("sub/note.md", "Jump to [top](#top).\n")]);
-        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None, false).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "archive/note.md");
         assert!(
             moved_plan.is_none(),
@@ -2072,7 +1967,7 @@ mod tests {
         // `[obsidian](Note One)` — no `.md`, no path separator. Must be left
         // alone (treated as a label / Obsidian-style reference).
         let vault = create_vault(&[("sub/note.md", "See [obsidian](Note One) here.\n")]);
-        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/note.md", "archive/note.md", None, false).unwrap();
         let moved_plan = plans.iter().find(|p| p.rel_path == "archive/note.md");
         assert!(
             moved_plan.is_none(),
@@ -2090,7 +1985,7 @@ mod tests {
             ("sub/a.md", "See [peer](peer.md).\n"),
             ("sub/peer.md", "peer\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None, false).unwrap();
         let moved_plan = plans
             .iter()
             .find(|p| p.rel_path == "a.md")
@@ -2145,7 +2040,7 @@ mod tests {
         // NEW-BUG-2 follow-up: self-links with fragments must still be rewritten
         // to point at the file's new location while preserving the anchor.
         let vault = create_vault(&[("self.md", "Jump to [intro](self.md#intro) in this file.\n")]);
-        let plans = plan_mv(vault.path(), "self.md", "other.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "self.md", "other.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         let plan = &plans[0];
         assert_eq!(plan.rel_path, "other.md");
@@ -2163,7 +2058,7 @@ mod tests {
             ("sub/a.md", "See [peer](peer.md#heading).\n"),
             ("sub/peer.md", "peer\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None, false).unwrap();
         let moved_plan = plans
             .iter()
             .find(|p| p.rel_path == "a.md")
@@ -2229,6 +2124,7 @@ mod tests {
             "web/javascript/reference/iteration_protocols/index.md",
             "web/javascript/reference/iteration_protocols_v2/index.md",
             None,
+            false,
         )
         .unwrap();
 
@@ -2247,7 +2143,7 @@ mod tests {
             ("web/foo.md", "Content\n"),
             ("other.md", "See [link](Web/Foo.md)\n"),
         ]);
-        let plans = plan_mv(vault.path(), "web/foo.md", "archive/foo.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "web/foo.md", "archive/foo.md", None, false).unwrap();
 
         let other_plan = plans.iter().find(|p| p.rel_path == "other.md");
         assert!(
@@ -2273,7 +2169,14 @@ mod tests {
             ),
             ("sub/target.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/target.md", "archive/target.md", None).unwrap();
+        let plans = plan_mv(
+            vault.path(),
+            "sub/target.md",
+            "archive/target.md",
+            None,
+            false,
+        )
+        .unwrap();
         // The [[sub/target]] link after the code block must be detected as inbound.
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
@@ -2288,8 +2191,8 @@ mod tests {
             a_plan.replacements
         );
         assert_eq!(a_plan.replacements[0].old_text, "[[sub/target]]");
-        // stem "target" is unique → short-form
-        assert_eq!(a_plan.replacements[0].new_text, "[[target]]");
+        // Path-form preserved: [[sub/target]] → [[archive/target]]
+        assert_eq!(a_plan.replacements[0].new_text, "[[archive/target]]");
     }
 
     #[test]
@@ -2301,7 +2204,7 @@ mod tests {
             ("sub/peer.md", "peer\n"),
         ]);
         // Moving sub/a.md to root triggers outbound rewrite of [peer](peer.md).
-        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None, false).unwrap();
         let moved_plan = plans
             .iter()
             .find(|p| p.rel_path == "a.md")
@@ -2328,7 +2231,14 @@ mod tests {
             ),
             ("sub/target.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/target.md", "archive/target.md", None).unwrap();
+        let plans = plan_mv(
+            vault.path(),
+            "sub/target.md",
+            "archive/target.md",
+            None,
+            false,
+        )
+        .unwrap();
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(
             a_plan.is_some(),
@@ -2337,8 +2247,8 @@ mod tests {
         let a_plan = a_plan.unwrap();
         assert_eq!(a_plan.replacements.len(), 1);
         assert_eq!(a_plan.replacements[0].old_text, "[[sub/target]]");
-        // stem "target" is unique → short-form
-        assert_eq!(a_plan.replacements[0].new_text, "[[target]]");
+        // Path-form preserved: [[sub/target]] → [[archive/target]]
+        assert_eq!(a_plan.replacements[0].new_text, "[[archive/target]]");
     }
 
     #[test]
@@ -2351,7 +2261,7 @@ mod tests {
             ),
             ("sub/peer.md", "peer\n"),
         ]);
-        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "sub/a.md", "a.md", None, false).unwrap();
         let moved_plan = plans
             .iter()
             .find(|p| p.rel_path == "a.md")
@@ -2365,16 +2275,16 @@ mod tests {
 
     #[test]
     fn plan_mv_inbound_wikilink_dot_slash_plain() {
-        // `[[./b]]` in a.md should rewrite to short-form `[[b]]` after mv b.md →
-        // sub/b.md because stem "b" is unique vault-wide.
+        // `[[./b]]` in a.md (root): after mv b.md → sub/b.md, DotRelative upgrades
+        // to PathRelative since the target is no longer in the same directory.
         let vault = create_vault(&[("a.md", "See [[./b]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].rel_path, "a.md");
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b]]");
-        // stem "b" is unique → short-form
-        assert_eq!(plans[0].replacements[0].new_text, "[[b]]");
+        // DotRelative → PathRelative (new vault-relative stem)
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b]]");
     }
 
     #[test]
@@ -2383,23 +2293,23 @@ mod tests {
             ("a.md", "See [[./b|my note]] here\n"),
             ("b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b|my note]]");
-        // stem "b" is unique → short-form, alias preserved
-        assert_eq!(plans[0].replacements[0].new_text, "[[b|my note]]");
+        // DotRelative → PathRelative, alias preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b|my note]]");
     }
 
     #[test]
     fn plan_mv_inbound_wikilink_dot_slash_with_section() {
         let vault = create_vault(&[("a.md", "See [[./b#sec]] here\n"), ("b.md", "Content\n")]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b#sec]]");
-        // stem "b" is unique → short-form, fragment preserved
-        assert_eq!(plans[0].replacements[0].new_text, "[[b#sec]]");
+        // DotRelative → PathRelative, fragment preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#sec]]");
     }
 
     #[test]
@@ -2408,12 +2318,12 @@ mod tests {
             ("a.md", "See [[./b#sec|note]] here\n"),
             ("b.md", "Content\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[./b#sec|note]]");
-        // stem "b" is unique → short-form, fragment+alias preserved
-        assert_eq!(plans[0].replacements[0].new_text, "[[b#sec|note]]");
+        // DotRelative → PathRelative, fragment+alias preserved
+        assert_eq!(plans[0].replacements[0].new_text, "[[sub/b#sec|note]]");
     }
 
     #[test]
@@ -2424,7 +2334,7 @@ mod tests {
             ("b.md", "Content\n"),
             ("other.md", "Other\n"),
         ]);
-        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None).unwrap();
+        let plans = plan_mv(vault.path(), "b.md", "sub/b.md", None, false).unwrap();
         // a.md should not appear in plans (it has no link to b.md).
         let a_plan = plans.iter().find(|p| p.rel_path == "a.md");
         assert!(

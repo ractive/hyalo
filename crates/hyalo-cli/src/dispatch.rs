@@ -1202,6 +1202,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             dry_run,
             apply,
             on_conflict,
+            allow_ambiguous,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
             // Parse property filters for batch mode
@@ -1263,6 +1264,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     site_prefix,
                     snapshot_index,
                     index_path,
+                    allow_ambiguous,
                 )
             } else {
                 let file = match resolve_single_file(file_positional, file) {
@@ -1279,6 +1281,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     site_prefix,
                     snapshot_index,
                     index_path,
+                    allow_ambiguous,
                 )
             }
         }
