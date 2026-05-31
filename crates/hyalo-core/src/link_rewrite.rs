@@ -445,7 +445,12 @@ fn plan_inbound_rewrites(
         for span in spans {
             // BUG-2 fix: for bare wikilinks, check for ambiguity before
             // accepting the match. If the stem resolves to multiple files
-            // and `allow_ambiguous` is false, warn and skip.
+            // and `allow_ambiguous` is false, warn and skip. When
+            // `allow_ambiguous` is true, rewrite directly if the moved file
+            // is among the ambiguous candidates (LinkResolver::matches_target
+            // would reject the link because lookup_stem returns None for
+            // ambiguous stems).
+            let mut bare_ambiguous_match = false;
             if span.kind == LinkKind::Wikilink {
                 let t = &span.link.target;
                 // Only bare wikilinks (no path separator) need the ambiguity check.
@@ -466,19 +471,6 @@ fn plan_inbound_rewrites(
                         &t_norm
                     };
                     let res = resolver.resolve_stem(stem);
-                    if let Resolution::Ambiguous(ref candidates) = res
-                        && !allow_ambiguous
-                    {
-                        eprintln!(
-                            "warning: skipping ambiguous bare wikilink [[{t}]] in \
-                             {source_rel}:{line_num} — matches {} files: {}. \
-                             Use --allow-ambiguous to rewrite anyway.",
-                            candidates.len(),
-                            candidates.join(", ")
-                        );
-                        continue;
-                    }
-                    // Check if it resolves to old_rel.
                     match res {
                         Resolution::Hit { ref vault_path } => {
                             let matches_old = vault_path == old_rel
@@ -488,15 +480,37 @@ fn plan_inbound_rewrites(
                                 continue;
                             }
                         }
-                        Resolution::Ambiguous(_) => {
-                            // allow_ambiguous is true: fall through to LinkResolver::matches_target
+                        Resolution::Ambiguous(ref candidates) => {
+                            if !allow_ambiguous {
+                                eprintln!(
+                                    "warning: skipping ambiguous bare wikilink [[{t}]] in \
+                                     {source_rel}:{line_num} — matches {} files: {}. \
+                                     Use --allow-ambiguous to rewrite anyway.",
+                                    candidates.len(),
+                                    candidates.join(", ")
+                                );
+                                continue;
+                            }
+                            // allow_ambiguous: rewrite only when the moved
+                            // file is one of the candidates.
+                            let matches_old = candidates.iter().any(|c| {
+                                c == old_rel
+                                    || c == old_stem
+                                    || c.strip_suffix(".md") == Some(old_stem)
+                            });
+                            if !matches_old {
+                                continue;
+                            }
+                            bare_ambiguous_match = true;
                         }
                         Resolution::Broken => continue,
                     }
                 }
             }
 
-            if !resolver.matches_target(&span, source_rel, old_rel, old_stem) {
+            if !bare_ambiguous_match
+                && !resolver.matches_target(&span, source_rel, old_rel, old_stem)
+            {
                 continue;
             }
 
@@ -1050,6 +1064,7 @@ fn plan_inbound_rewrites_with_fm(
 
         for span in spans {
             // BUG-2: bare wikilink ambiguity check (same as plan_inbound_rewrites).
+            let mut bare_ambiguous_match = false;
             if span.kind == LinkKind::Wikilink {
                 let t = &span.link.target;
                 let normalized = if let Some(wo) = t.strip_prefix("./") {
@@ -1059,46 +1074,54 @@ fn plan_inbound_rewrites_with_fm(
                 };
                 let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
                 if is_bare && case_index.is_some() {
+                    let t_norm = normalized.to_ascii_lowercase();
+                    let stem = if std::path::Path::new(&t_norm)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
                     {
-                        let t_norm = normalized.to_ascii_lowercase();
-                        let stem = if std::path::Path::new(&t_norm)
-                            .extension()
-                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                        {
-                            &t_norm[..t_norm.len() - 3]
-                        } else {
-                            &t_norm
-                        };
-                        let res = resolver.resolve_stem(stem);
-                        if let Resolution::Ambiguous(ref candidates) = res
-                            && !allow_ambiguous
-                        {
-                            eprintln!(
-                                "warning: skipping ambiguous bare wikilink [[{t}]] in \
-                                 {source_rel}:{line_num} — matches {} files: {}. \
-                                 Use --allow-ambiguous to rewrite anyway.",
-                                candidates.len(),
-                                candidates.join(", ")
-                            );
-                            continue;
-                        }
-                        match res {
-                            Resolution::Hit { ref vault_path } => {
-                                let matches_old = vault_path == old_rel
-                                    || vault_path == old_stem
-                                    || vault_path.strip_suffix(".md") == Some(old_stem);
-                                if !matches_old {
-                                    continue;
-                                }
+                        &t_norm[..t_norm.len() - 3]
+                    } else {
+                        &t_norm
+                    };
+                    let res = resolver.resolve_stem(stem);
+                    match res {
+                        Resolution::Hit { ref vault_path } => {
+                            let matches_old = vault_path == old_rel
+                                || vault_path == old_stem
+                                || vault_path.strip_suffix(".md") == Some(old_stem);
+                            if !matches_old {
+                                continue;
                             }
-                            Resolution::Ambiguous(_) => {}
-                            Resolution::Broken => continue,
                         }
+                        Resolution::Ambiguous(ref candidates) => {
+                            if !allow_ambiguous {
+                                eprintln!(
+                                    "warning: skipping ambiguous bare wikilink [[{t}]] in \
+                                     {source_rel}:{line_num} — matches {} files: {}. \
+                                     Use --allow-ambiguous to rewrite anyway.",
+                                    candidates.len(),
+                                    candidates.join(", ")
+                                );
+                                continue;
+                            }
+                            let matches_old = candidates.iter().any(|c| {
+                                c == old_rel
+                                    || c == old_stem
+                                    || c.strip_suffix(".md") == Some(old_stem)
+                            });
+                            if !matches_old {
+                                continue;
+                            }
+                            bare_ambiguous_match = true;
+                        }
+                        Resolution::Broken => continue,
                     }
                 }
             }
 
-            if !resolver.matches_target(&span, source_rel, old_rel, old_stem) {
+            if !bare_ambiguous_match
+                && !resolver.matches_target(&span, source_rel, old_rel, old_stem)
+            {
                 continue;
             }
 

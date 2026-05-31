@@ -82,9 +82,14 @@ impl LinkWriter {
         let new_stem = new_vault_rel.strip_suffix(".md").unwrap_or(new_vault_rel);
 
         match span.kind {
-            LinkKind::Wikilink => {
-                Self::compute_wikilink_target(span, line, new_vault_rel, new_stem, policy)
-            }
+            LinkKind::Wikilink => Self::compute_wikilink_target(
+                span,
+                line,
+                new_vault_rel,
+                new_stem,
+                policy,
+                source_rel,
+            ),
             LinkKind::Markdown => Self::compute_markdown_target(
                 span,
                 new_vault_rel,
@@ -101,6 +106,7 @@ impl LinkWriter {
         new_vault_rel: &str,
         new_stem: &str,
         policy: PreserveForm,
+        source_rel: &str,
     ) -> String {
         match policy {
             PreserveForm::Bare => {
@@ -112,23 +118,35 @@ impl LinkWriter {
                 // Detect the user's original written form from the raw target text.
                 let raw_target = &line[span.target_start..span.target_end];
                 let form = detect_wikilink_form(raw_target);
-                Self::emit_wikilink_with_form(form, new_vault_rel, new_stem)
+                Self::emit_wikilink_with_form(form, new_vault_rel, new_stem, source_rel)
             }
         }
     }
 
     /// Emit a wikilink target in the given form.
-    fn emit_wikilink_with_form(form: WrittenForm, _new_vault_rel: &str, new_stem: &str) -> String {
+    fn emit_wikilink_with_form(
+        form: WrittenForm,
+        _new_vault_rel: &str,
+        new_stem: &str,
+        source_rel: &str,
+    ) -> String {
         let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
         match form {
             WrittenForm::Bare => new_basename_stem.to_string(),
             WrittenForm::PathRelative => new_stem.to_string(),
             WrittenForm::DotRelative => {
-                // DotRelative (`[[./foo]]`) is only valid when the target is in
-                // the same directory as the source.  After a move the target
-                // may be in a different directory, so we upgrade to PathRelative
-                // (full vault-relative stem) which is always unambiguous.
-                new_stem.to_string()
+                // DotRelative (`[[./foo]]`) means the target lives in the same
+                // directory as the source. Preserve `./{basename}` when the
+                // new target stays in the source's directory; otherwise upgrade
+                // to PathRelative (full vault-relative stem), which is always
+                // unambiguous.
+                let source_dir = source_rel.rsplit_once('/').map_or("", |(d, _)| d);
+                let new_dir = new_stem.rsplit_once('/').map_or("", |(d, _)| d);
+                if source_dir == new_dir {
+                    format!("./{new_basename_stem}")
+                } else {
+                    new_stem.to_string()
+                }
             }
             WrittenForm::MdSuffixed => {
                 // Preserve the `.md` suffix on the stem (no directory).
@@ -232,9 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_dot_relative_wikilink_upgrades_to_path_relative() {
-        // [[./b]] — dot-relative form. After a mv the target may be in a
-        // different directory, so DotRelative upgrades to PathRelative.
+    fn rewrite_dot_relative_wikilink_upgrades_to_path_relative_when_dir_changes() {
+        // [[./b]] — dot-relative form, source at root. After moving target into
+        // `notes/`, source dir (root) ≠ new dir (`notes`) → upgrade to PathRelative.
         let line = "See [[./b]] here";
         let span = span_from(line, 0);
         let r = LinkWriter::rewrite(
@@ -247,6 +265,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.new_text, "[[notes/renamed]]");
+    }
+
+    #[test]
+    fn rewrite_dot_relative_wikilink_preserved_when_dir_unchanged() {
+        // [[./b]] — source at notes/a.md, target moves from notes/b.md to
+        // notes/renamed.md (same dir). DotRelative form is preserved.
+        let line = "See [[./b]] here";
+        let span = span_from(line, 0);
+        let r = LinkWriter::rewrite(
+            &span,
+            line,
+            "notes/renamed.md",
+            "notes/a.md",
+            PreserveForm::Preserve,
+            None,
+        )
+        .unwrap();
+        assert_eq!(r.new_text, "[[./renamed]]");
     }
 
     #[test]

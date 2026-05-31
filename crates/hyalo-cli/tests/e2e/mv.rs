@@ -156,6 +156,45 @@ fn mv_bare_wikilink_ambiguous_not_rewritten() {
 }
 
 #[test]
+fn mv_bare_wikilink_ambiguous_rewritten_with_allow_ambiguous() {
+    // Opt-in path: with --allow-ambiguous, an ambiguous bare wikilink that
+    // targets the moved file IS rewritten (BUG-2 opt-in escape hatch).
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "See [[b]] here.\n");
+    write_md(tmp.path(), "b.md", "Root B.\n");
+    write_md(tmp.path(), "sub/b.md", "Sub B.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "--file",
+            "b.md",
+            "--to",
+            "archive/renamed.md",
+            "--allow-ambiguous",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // With --allow-ambiguous, [[b]] in a.md is rewritten to [[renamed]].
+    assert_eq!(
+        json["results"]["total_links_updated"], 1,
+        "expected one rewrite with --allow-ambiguous; got: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(content.contains("[[renamed]]"), "a.md content: {content}");
+    assert!(!content.contains("[[b]]"), "a.md content: {content}");
+}
+
+#[test]
 fn mv_updates_wikilink_with_path() {
     // Path-form wikilinks are rewritten to the new path (form preserved).
     let tmp = TempDir::new().unwrap();
