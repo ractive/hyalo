@@ -288,5 +288,5 @@ existing `create-index` flag set is unchanged in `args.rs`/`commands/`.
 - [[iterations/done/iteration-145-unified-input-resolution]] — added
   `--files-from` to `set`/`remove`/`append`; NEW-4 is a help-text
   miss from that work
-- [[iterations/iteration-147-task-files-from]] — most recent iter; no
+- [[iteration-147-task-files-from]] — most recent iter; no
   regressions, just adjacent polish
