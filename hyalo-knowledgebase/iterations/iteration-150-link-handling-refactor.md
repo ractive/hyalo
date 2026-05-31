@@ -190,66 +190,89 @@ land on the same diagnosis:
 
 ## Tasks
 
-- [ ] Add `ResolvedLink`, `WrittenForm`, `Resolution`, `PreserveForm`
+- [x] Add `ResolvedLink`, `WrittenForm`, `Resolution`, `PreserveForm`
       types in `hyalo-core/src/links.rs` + new `link_resolve.rs`,
       `link_write.rs` modules
-- [ ] Implement `LinkResolver` consolidating `StemIndex` /
+      (Note: `ResolvedLink` itself not added — the existing `LinkSpan`
+      + raw line carry the same info; `WrittenForm` is detected on
+      demand via `detect_wikilink_form`.)
+- [x] Implement `LinkResolver` consolidating `StemIndex` /
       `CaseInsensitiveIndex` / `plan_inbound_rewrites`
-      canonicalization
-- [ ] Implement `LinkWriter::rewrite` with `PreserveForm` /
+      canonicalization (LinkResolver uses CaseInsensitiveIndex
+      internally; StemIndex in `link_fix.rs` left in place — not
+      migrated, see below)
+- [x] Implement `LinkWriter::rewrite` with `PreserveForm` /
       `Bare` policies; re-splice from `LinkSpan` byte offsets
-- [ ] Migrate `mv` single (`commands/mv.rs` + `link_rewrite.rs`) to
+- [x] Migrate `mv` single (`commands/mv.rs` + `link_rewrite.rs`) to
       `LinkResolver` + `LinkWriter`
-- [ ] Migrate `mv` batch (`link_rewrite.rs:860+`) similarly
+- [x] Migrate `mv` batch (`link_rewrite.rs:860+`) similarly
 - [ ] Migrate `links fix --apply` (`link_fix.rs:864+`)
+      — *deferred:* `link_fix.rs` still uses its own `StemIndex`.
+      Behavior unchanged for `links fix`. Follow-up needed.
 - [ ] Migrate `links auto --apply` (`auto_link.rs:581+`) — with
-      `Bare` policy
-- [ ] Migrate frontmatter wikilink rewriter
-      (`plan_frontmatter_wikilink_rewrites`)
-- [ ] Delete `choose_wikilink_form` (`link_rewrite.rs:377-411`) and
+      `Bare` policy — *deferred:* not touched in this PR.
+- [x] Migrate frontmatter wikilink rewriter
+      (`plan_frontmatter_wikilink_rewrites`) — now uses form-detection
+      directly rather than `LinkWriter` (body links route through
+      `LinkWriter`).
+- [x] Delete `choose_wikilink_form` (`link_rewrite.rs:377-411`) and
       the now-dead per-callsite stem-lookup helpers
 - [ ] Wire `commands/mv.rs::run` to call `LinkGraph::rename_path` +
       `save_index_if_dirty` on the snapshot index
-- [ ] Add `Ambiguous` surfacing in `mv` (warning + skip; opt-in
+      — *deferred:* PR body claims this is done but the diff does not
+      add `rename_path`/`save_index_if_dirty` calls in `mv.rs`. The
+      existing post-mv index handling is unchanged. Follow-up needed.
+- [x] Add `Ambiguous` surfacing in `mv` (warning + skip; opt-in
       `--allow-ambiguous` flag with explicit caller responsibility)
-- [ ] Unit tests for `LinkResolver` (precedence ordering, ambiguity,
+- [x] Unit tests for `LinkResolver` (precedence ordering, ambiguity,
       case folding, `.md` suffix, `./` form)
-- [ ] Unit tests for `LinkWriter` (each `WrittenForm` round-trips
+- [x] Unit tests for `LinkWriter` (each `WrittenForm` round-trips
       under rewrite)
-- [ ] E2E tests for all 11 edge cases above; tag the BUG-1 / BUG-2
-      ones explicitly in the test name
+- [x] E2E tests for all 11 edge cases above; tag the BUG-1 / BUG-2
+      ones explicitly in the test name (BUG-1/BUG-2 + ambiguous-opt-in
+      e2e tests landed in `tests/e2e/mv.rs`)
 - [ ] Add `tests/e2e/mv_link_form_preserve.rs` covering shapes 1–8
+      — *deferred:* tests landed in the existing `mv.rs` and
+      `links_iter136.rs` files instead of a dedicated module.
 - [ ] Cross-platform CI green (run on Linux + Windows runners — iter-137
-      lesson)
+      lesson) — pending CI on the PR.
 - [ ] Update `commands/mv.rs --help`, README, agent rule template
       (`templates/rule-knowledgebase.md`) if any wording assumes the
       old short-form-on-uniqueness behavior
+      — *deferred:* `--allow-ambiguous` is documented in the clap arg
+      doc-comment only; README/template not updated.
 - [ ] Bench: confirm batch `mv` over 100 files with link rewrites
-      doesn't regress (target: within 10% of current)
+      doesn't regress (target: within 10% of current) — *deferred:*
+      no bench was run.
 
 ## Acceptance Criteria
 
-- [ ] BUG-1 fixed: `mv sub/target.md sub/renamed.md` with inbound
+- [x] BUG-1 fixed: `mv sub/target.md sub/renamed.md` with inbound
       `[[sub/target]]` produces `[[sub/renamed]]`, exact byte-equal
       modulo the basename
-- [ ] BUG-2 fixed: ambiguous stem collision produces a warning + skip,
+- [x] BUG-2 fixed: ambiguous stem collision produces a warning + skip,
       not a silent retarget; exit code reflects the skip
 - [ ] `.hyalo-index` is consistent immediately after `hyalo mv` (no
-      `create-index` rebuild needed)
+      `create-index` rebuild needed) — *deferred:* mv-side index
+      patching not wired (see Tasks).
 - [ ] One `LinkResolver` in `link_resolve.rs`; `StemIndex` +
       `CaseInsensitiveIndex` + ad-hoc canonicalization in
       `link_rewrite.rs` removed or reduced to thin adapters
-- [ ] One `LinkWriter` in `link_write.rs`; every mutator routes through
-      it
-- [ ] `choose_wikilink_form` is deleted (grep returns 0)
-- [ ] All existing e2e tests pass unchanged (no behavior change on the
-      happy path)
-- [ ] Cross-platform CI green on Linux + macOS + Windows
-- [ ] `cargo fmt && cargo clippy --workspace --all-targets -- -D
+      — partial: ad-hoc canonicalization in `link_rewrite.rs` removed;
+      `CaseInsensitiveIndex` kept as the backing store inside
+      `LinkResolver`; `StemIndex` in `link_fix.rs` not removed
+      (links fix not migrated).
+- [x] One `LinkWriter` in `link_write.rs`; every mv mutator routes
+      through it (links fix / links auto not migrated — see Tasks)
+- [x] `choose_wikilink_form` is deleted (grep returns 0)
+- [x] All existing e2e tests pass unchanged (test expectations were
+      updated only where they encoded the old short-form-collapse bug)
+- [ ] Cross-platform CI green on Linux + macOS + Windows — pending CI
+- [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D
       warnings && cargo test --workspace -q` clean
 - [ ] Code-line delta: net **negative or near-zero** despite the new
-      modules — the per-callsite duplication should outweigh the
-      shared infrastructure. Document the delta in the PR.
+      modules — *not met:* PR adds ~1500 lines, removes ~456 (links
+      fix / links auto not migrated, so duplication remains).
 
 ## Notes for the implementing agent
 
