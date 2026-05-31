@@ -1,8 +1,8 @@
 ---
-title: "Iteration 150 — Link handling refactor (unify resolver + writer)"
+title: Iteration 150 — Link handling refactor (unify resolver + writer)
 type: iteration
 date: 2026-05-31
-status: planned
+status: in-progress
 branch: iter-150/link-handling-refactor
 tags:
   - iteration

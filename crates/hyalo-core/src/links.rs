@@ -1,6 +1,51 @@
 #![allow(clippy::missing_errors_doc)]
 use serde::{Deserialize, Serialize};
 
+// ---------------------------------------------------------------------------
+// New types for the unified resolver / writer (iter-150)
+// ---------------------------------------------------------------------------
+
+/// The syntactic form a user chose when writing a wikilink target.
+///
+/// Preserved through `mv` and `links fix` so the writer can emit the new
+/// target in exactly the same shape the user originally chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrittenForm {
+    /// `[[note]]` — bare stem, no directory prefix.
+    Bare,
+    /// `[[sub/note]]` — vault-relative path (most common for unambiguous refs).
+    PathRelative,
+    /// `[[./note]]` — explicit current-directory prefix.
+    DotRelative,
+    /// `[[note.md]]` — bare stem with `.md` suffix.
+    MdSuffixed,
+    /// `[text](/site/note.md)` — site-absolute path (markdown link only).
+    VaultAbsolute,
+}
+
+/// How a link target was resolved against the vault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// Target resolved to exactly one vault path.
+    Hit {
+        /// Vault-relative path (forward slashes, `.md` suffix).
+        vault_path: String,
+    },
+    /// Target could not be resolved to any known vault file.
+    Broken,
+    /// Target matched more than one vault file (ambiguous bare stem).
+    Ambiguous(Vec<String>),
+}
+
+/// Policy for how `LinkWriter` should emit the new target text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreserveForm {
+    /// Re-emit using the same `WrittenForm` the user originally used.
+    Preserve,
+    /// Always emit as a bare stem (Obsidian short-form).
+    Bare,
+}
+
 /// A parsed link extracted from a markdown file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Link {

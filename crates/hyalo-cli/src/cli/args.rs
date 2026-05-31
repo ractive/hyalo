@@ -661,6 +661,11 @@ pub(crate) enum Commands {
         /// How to handle destination basename collisions: 'error' (default) or 'skip'
         #[arg(long = "on-conflict", value_name = "POLICY", default_value = "error")]
         on_conflict: String,
+        /// Allow rewriting bare wikilinks ([[note]]) even when the stem is ambiguous
+        /// (matches multiple vault files). By default, ambiguous bare wikilinks are
+        /// skipped with a warning to avoid silent retargeting (BUG-2 prevention).
+        #[arg(long)]
+        allow_ambiguous: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },
