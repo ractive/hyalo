@@ -405,9 +405,12 @@ impl SnapshotIndex {
     /// snapshot index sees the file without a full rebuild. When `rel_path` is
     /// already present, the existing entry is replaced in-place (idempotent).
     ///
-    /// The link graph is **not** touched — outbound links from the new file
-    /// will only appear in backlink queries after the next full index build.
-    /// This matches the behaviour of [`SnapshotIndex::refresh_entry`].
+    /// The link graph and persisted BM25 inverted index are **not** touched —
+    /// outbound links from the new file will only appear in backlink queries,
+    /// and the file body will only be returned for indexed text searches,
+    /// after the next full `create-index` rebuild. This matches the behaviour
+    /// of [`SnapshotIndex::refresh_entry`] and the other in-place mutation
+    /// helpers (set/append/lint --fix).
     pub fn insert_or_replace_entry(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
         let fm_props = self.effective_frontmatter_link_props();
         let (entry, _file_links) =

@@ -125,7 +125,15 @@ pub(crate) fn create_new(
     // ------------------------------------------------------------------
     // Step 6.5: keep the snapshot index in sync (no-op when no index loaded)
     // ------------------------------------------------------------------
-    let rel_path = file_arg;
+    // Normalize to forward slashes so the snapshot's rel_path invariant holds
+    // when callers pass Windows-style backslashes via `--file`.
+    let rel_path_owned;
+    let rel_path: &str = if file_arg.contains('\\') {
+        rel_path_owned = file_arg.replace('\\', "/");
+        &rel_path_owned
+    } else {
+        file_arg
+    };
     let mut index_dirty = false;
     mutation::add_index_entry(snapshot_index, rel_path, &full_path, &mut index_dirty)?;
     mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;

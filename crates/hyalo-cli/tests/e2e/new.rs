@@ -401,7 +401,6 @@ fn new_inserts_into_existing_snapshot_index() {
     );
     let index_path = tmp.path().join(".hyalo-index");
     assert!(index_path.exists(), "index file should exist");
-    let pre_meta = fs::metadata(&index_path).unwrap();
 
     // Create a new file — this must also patch the snapshot index in place.
     let new_out = hyalo_no_hints()
@@ -420,13 +419,6 @@ fn new_inserts_into_existing_snapshot_index() {
         new_out.status.success(),
         "new should succeed; stderr: {}",
         String::from_utf8_lossy(&new_out.stderr)
-    );
-
-    // The snapshot file was rewritten by `new` (its mtime/size changed).
-    let post_meta = fs::metadata(&index_path).unwrap();
-    assert!(
-        post_meta.modified().unwrap() >= pre_meta.modified().unwrap(),
-        "index file should have been re-saved after new"
     );
 
     // `find --index --file <new>` must locate the file via the index — without
