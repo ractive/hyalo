@@ -6,10 +6,12 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::Context;
 use indexmap::IndexMap;
 
+use hyalo_core::index::SnapshotIndex;
 use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default, today_iso8601};
 
 use anyhow::Result;
 
+use crate::commands::mutation;
 use crate::output::{CommandOutcome, Format, format_error, format_success};
 
 // ---------------------------------------------------------------------------
@@ -22,6 +24,8 @@ pub(crate) fn create_new(
     type_name: &str,
     file_arg: &str,
     schema: &SchemaConfig,
+    snapshot_index: &mut Option<SnapshotIndex>,
+    index_path: Option<&Path>,
     format: Format,
 ) -> Result<CommandOutcome> {
     // ------------------------------------------------------------------
@@ -113,11 +117,30 @@ pub(crate) fn create_new(
     };
     file.write_all(content.as_bytes())
         .with_context(|| format!("writing new file to {}", full_path.display()))?;
+    // Drop the file handle so the subsequent index scan sees the final state
+    // on platforms (notably Windows) where open writers can interfere with
+    // readers, and so mtime reflects the completed write.
+    drop(file);
+
+    // ------------------------------------------------------------------
+    // Step 6.5: keep the snapshot index in sync (no-op when no index loaded)
+    // ------------------------------------------------------------------
+    // Normalize to forward slashes so the snapshot's rel_path invariant holds
+    // when callers pass Windows-style backslashes via `--file`.
+    let rel_path_owned;
+    let rel_path: &str = if file_arg.contains('\\') {
+        rel_path_owned = file_arg.replace('\\', "/");
+        &rel_path_owned
+    } else {
+        file_arg
+    };
+    let mut index_dirty = false;
+    mutation::add_index_entry(snapshot_index, rel_path, &full_path, &mut index_dirty)?;
+    mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
 
     // ------------------------------------------------------------------
     // Step 7: output
     // ------------------------------------------------------------------
-    let rel_path = file_arg;
     let out = match format {
         Format::Text => format!("created {rel_path}\n"),
         Format::Json => {

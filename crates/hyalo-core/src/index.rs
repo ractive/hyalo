@@ -398,6 +398,36 @@ impl SnapshotIndex {
         }
     }
 
+    /// Scan a file at `full_path` and insert (or replace) its entry under
+    /// `rel_path`, maintaining sorted order.
+    ///
+    /// Use this after creating a brand-new file (e.g. from `hyalo new`) so the
+    /// snapshot index sees the file without a full rebuild. When `rel_path` is
+    /// already present, the existing entry is replaced in-place (idempotent).
+    ///
+    /// The link graph and persisted BM25 inverted index are **not** touched —
+    /// outbound links from the new file will only appear in backlink queries,
+    /// and the file body will only be returned for indexed text searches,
+    /// after the next full `create-index` rebuild. This matches the behaviour
+    /// of [`SnapshotIndex::refresh_entry`] and the other in-place mutation
+    /// helpers (set/append/lint --fix).
+    pub fn insert_or_replace_entry(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
+        let fm_props = self.effective_frontmatter_link_props();
+        let (entry, _file_links) =
+            scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
+        if let Some(&idx) = self.path_index.get(rel_path) {
+            self.entries[idx] = entry;
+        } else {
+            let pos = self
+                .entries
+                .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
+                .unwrap_or_else(|i| i);
+            self.entries.insert(pos, entry);
+            self.rebuild_path_index();
+        }
+        Ok(())
+    }
+
     /// Rename an entry: remove the old entry, scan the file at its new path,
     /// and insert the result — rebuilding the path index only once.
     ///
@@ -1516,6 +1546,108 @@ Content.
         // Link graph is empty
         assert!(idx.link_graph().backlinks("a").is_empty());
         assert!(idx.link_graph().backlinks("b").is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // insert_or_replace_entry — incremental insert for `hyalo new`
+    // -------------------------------------------------------------------------
+
+    /// Build a snapshot from a vault directory, persist it, and reload it.
+    ///
+    /// Mirrors the round-trip a real CLI command performs and gives us a
+    /// `SnapshotIndex` (not the in-memory `ScannedIndex`) so we can exercise
+    /// the `insert_or_replace_entry` helper.
+    fn build_and_reload_snapshot(
+        dir: &Path,
+    ) -> (tempfile::TempDir, std::path::PathBuf, SnapshotIndex) {
+        let files = crate::discovery::discover_files(dir).unwrap();
+        let pairs: Vec<(PathBuf, String)> = files
+            .into_iter()
+            .map(|f| {
+                let rel = f
+                    .strip_prefix(dir)
+                    .unwrap_or(&f)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                (f, rel)
+            })
+            .collect();
+        let build = ScannedIndex::build(
+            &pairs,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let snap_dir = tempfile::tempdir().unwrap();
+        let snap_path = snap_dir.path().join(".hyalo-index");
+        SnapshotIndex::save(&build.index, &snap_path, "/tmp/vault", None, None).unwrap();
+        let loaded = SnapshotIndex::load(&snap_path).unwrap().unwrap();
+        (snap_dir, snap_path, loaded)
+    }
+
+    #[test]
+    fn insert_or_replace_inserts_new_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("a.md"),
+            "---\ntitle: A\n---\nHello [[b]].\n",
+        )
+        .unwrap();
+        let (_snap_dir, _snap_path, mut snap) = build_and_reload_snapshot(tmp.path());
+        assert_eq!(snap.entries().len(), 1);
+
+        // Add a brand-new file on disk and insert it incrementally.
+        fs::write(
+            tmp.path().join("c.md"),
+            "---\ntitle: C\ntags: [fresh]\n---\nBody of C.\n",
+        )
+        .unwrap();
+        snap.insert_or_replace_entry(&tmp.path().join("c.md"), "c.md")
+            .unwrap();
+
+        assert_eq!(snap.entries().len(), 2);
+        let c = snap.get("c.md").expect("c.md should be indexed");
+        assert_eq!(c.rel_path, "c.md");
+        assert_eq!(
+            c.properties.get("title").and_then(|v| v.as_str()),
+            Some("C")
+        );
+        assert_eq!(c.tags, vec!["fresh".to_owned()]);
+    }
+
+    #[test]
+    fn insert_or_replace_is_idempotent_and_refreshes() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\nBody.\n").unwrap();
+        let (_snap_dir, _snap_path, mut snap) = build_and_reload_snapshot(tmp.path());
+        assert_eq!(snap.entries().len(), 1);
+
+        // Mutate file on disk, then call insert_or_replace — entry should
+        // refresh with the new content (idempotent: still exactly one entry).
+        fs::write(
+            tmp.path().join("a.md"),
+            "---\ntitle: A updated\ntags: [rewritten]\n---\nBody v2.\n",
+        )
+        .unwrap();
+        snap.insert_or_replace_entry(&tmp.path().join("a.md"), "a.md")
+            .unwrap();
+
+        assert_eq!(
+            snap.entries().len(),
+            1,
+            "should still hold exactly one entry"
+        );
+        let a = snap.get("a.md").expect("a.md should still be indexed");
+        assert_eq!(
+            a.properties.get("title").and_then(|v| v.as_str()),
+            Some("A updated")
+        );
+        assert_eq!(a.tags, vec!["rewritten".to_owned()]);
     }
 
     // -------------------------------------------------------------------------

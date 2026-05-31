@@ -101,6 +101,8 @@ hyalo lint-rules set HYALO001 --severity error
 hyalo lint-rules remove MD013           # revert to default
 
 # Schema-driven file creation: scaffold a new file from a type schema.
+# Add --index (or --index-file PATH) to also insert the entry into an existing
+# snapshot index so subsequent --index queries see the new file immediately.
 hyalo new --type iteration --file iterations/iter-99-example.md
 ```
 

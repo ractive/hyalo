@@ -1132,7 +1132,9 @@ Repeatable (AND).\n\
             \u{00a0} hyalo new --type note --file notes/2026-05-24-standup.md\n\n\
             OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true}}`.\n\
             Text mode: `created <rel-path>`.\n\n\
-            SIDE EFFECTS: Writes one new file."
+            SIDE EFFECTS: Writes one new file. When `--index` or `--index-file` is set,\n\
+            also inserts a fresh entry into the snapshot index so subsequent `--index`\n\
+            queries (find, summary, etc.) see the file without a full rebuild."
     )]
     New {
         /// Document type to scaffold (must exist in `[schema.types.*]`)
@@ -1141,6 +1143,11 @@ Repeatable (AND).\n\
         /// Vault-relative path for the new file (must not exist; parent dirs created if missing)
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
+        /// When `--index` or `--index-file` is set, patch the snapshot index in
+        /// place after the file is created so later `--index` queries see it
+        /// without a full rebuild.
+        #[command(flatten)]
+        index_flags: IndexFlags,
     },
     /// Print the effective configuration (resolved .hyalo.toml path, dir, and core settings)
     #[command(

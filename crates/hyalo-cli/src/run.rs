@@ -55,7 +55,8 @@ fn effective_index_path_for(
         | Commands::Append { index_flags, .. }
         | Commands::Mv { index_flags, .. }
         | Commands::Read { index_flags, .. }
-        | Commands::Lint { index_flags, .. } => Some(index_flags),
+        | Commands::Lint { index_flags, .. }
+        | Commands::New { index_flags, .. } => Some(index_flags),
         Commands::Tags { action } => match action {
             Some(
                 TagsAction::Summary { index_flags, .. } | TagsAction::Rename { index_flags, .. },
@@ -90,7 +91,6 @@ fn effective_index_path_for(
         | Commands::Completion { .. }
         | Commands::Config
         | Commands::Types { .. }
-        | Commands::New { .. }
         | Commands::LintRules { .. } => None,
         Commands::Views { action } => match action {
             Some(crate::cli::args::ViewsAction::Run { index_flags, .. }) => Some(index_flags),
