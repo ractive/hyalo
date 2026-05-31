@@ -2,7 +2,7 @@
 title: Iteration 150 — Link handling refactor (unify resolver + writer)
 type: iteration
 date: 2026-05-31
-status: in-progress
+status: completed
 branch: iter-150/link-handling-refactor
 tags:
   - iteration
