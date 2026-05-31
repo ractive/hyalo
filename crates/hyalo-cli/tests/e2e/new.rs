@@ -376,3 +376,181 @@ fn new_scaffold_no_md047_trailing_newline_violation() {
         String::from_utf8_lossy(&lint_out.stdout)
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-149: `hyalo new` keeps the snapshot index in sync
+// ---------------------------------------------------------------------------
+
+/// After `hyalo create-index` + `hyalo new`, the freshly created file must
+/// be visible via `hyalo find --index` without a full rebuild.
+#[test]
+fn new_inserts_into_existing_snapshot_index() {
+    let tmp = setup_with_iteration_type();
+    fs::create_dir_all(tmp.path().join("iterations")).unwrap();
+
+    // Build a snapshot index that captures only the placeholder.
+    let create = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+    assert!(
+        create.status.success(),
+        "create-index should succeed; stderr: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let index_path = tmp.path().join(".hyalo-index");
+    assert!(index_path.exists(), "index file should exist");
+    let pre_meta = fs::metadata(&index_path).unwrap();
+
+    // Create a new file — this must also patch the snapshot index in place.
+    let new_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "new",
+            "--index",
+            "--type",
+            "iteration",
+            "--file",
+            "iterations/iter-001-new.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        new_out.status.success(),
+        "new should succeed; stderr: {}",
+        String::from_utf8_lossy(&new_out.stderr)
+    );
+
+    // The snapshot file was rewritten by `new` (its mtime/size changed).
+    let post_meta = fs::metadata(&index_path).unwrap();
+    assert!(
+        post_meta.modified().unwrap() >= pre_meta.modified().unwrap(),
+        "index file should have been re-saved after new"
+    );
+
+    // `find --index --file <new>` must locate the file via the index — without
+    // a full rebuild, this only succeeds when `new` inserted the entry.
+    let find_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "--index",
+            "--file",
+            "iterations/iter-001-new.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        find_out.status.success(),
+        "find --index should succeed; stderr: {}",
+        String::from_utf8_lossy(&find_out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&find_out.stdout).unwrap();
+    let results = json
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .or_else(|| json.get("results").cloned().map(|v| vec![v]))
+        .unwrap_or_default();
+    assert!(
+        results
+            .iter()
+            .any(|r| r.get("file").and_then(|v| v.as_str()) == Some("iterations/iter-001-new.md")),
+        "new file must appear in --index find results: {results:?}"
+    );
+}
+
+/// When no `.hyalo-index` exists, `hyalo new` succeeds and must not create
+/// one — keeping the "indexes are explicit" contract.
+#[test]
+fn new_does_not_create_index_when_absent() {
+    let tmp = setup_with_iteration_type();
+    fs::create_dir_all(tmp.path().join("iterations")).unwrap();
+    let index_path = tmp.path().join(".hyalo-index");
+    assert!(!index_path.exists(), "precondition: no index file");
+
+    let new_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "new",
+            "--type",
+            "iteration",
+            "--file",
+            "iterations/no-index.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        new_out.status.success(),
+        "new should succeed without an index; stderr: {}",
+        String::from_utf8_lossy(&new_out.stderr)
+    );
+    assert!(tmp.path().join("iterations/no-index.md").exists());
+    assert!(
+        !index_path.exists(),
+        "new must not auto-create a snapshot index"
+    );
+}
+
+/// Idempotency: even when the snapshot already contains an entry for the
+/// to-be-created path (e.g. stale entry from a previous run), `new` should
+/// refresh it rather than error out.
+#[test]
+fn new_with_index_refreshes_stale_entry() {
+    let tmp = setup_with_iteration_type();
+    fs::create_dir_all(tmp.path().join("iterations")).unwrap();
+
+    // Pre-create the file, build an index that contains it, then delete it
+    // so the next `new` call can create a fresh copy.
+    let rel = "iterations/iter-002-refresh.md";
+    fs::write(
+        tmp.path().join(rel),
+        "---\ntitle: Old\ndate: 2026-01-01\nstatus: planned\n---\nold body\n",
+    )
+    .unwrap();
+    let create = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+    assert!(create.status.success());
+    fs::remove_file(tmp.path().join(rel)).unwrap();
+
+    let new_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["new", "--index", "--type", "iteration", "--file", rel])
+        .output()
+        .unwrap();
+    assert!(
+        new_out.status.success(),
+        "new should refresh the stale entry; stderr: {}",
+        String::from_utf8_lossy(&new_out.stderr)
+    );
+
+    let find_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--file", rel, "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(find_out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&find_out.stdout).unwrap();
+    let body = json
+        .get("results")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .or_else(|| json.get("results"))
+        .cloned()
+        .unwrap_or_default();
+    // The scaffolded skeleton uses title "TBD", not the pre-existing "Old".
+    let title = body
+        .pointer("/properties/title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert_eq!(
+        title, "TBD",
+        "stale entry must be replaced by fresh scaffold"
+    );
+}

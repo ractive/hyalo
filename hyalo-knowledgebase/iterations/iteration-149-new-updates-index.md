@@ -1,8 +1,8 @@
 ---
-title: "Iteration 149 — hyalo new updates the snapshot index"
+title: Iteration 149 — hyalo new updates the snapshot index
 type: iteration
 date: 2026-05-31
-status: planned
+status: in-progress
 branch: iter-149/new-updates-index
 tags:
   - iteration
@@ -72,28 +72,28 @@ not silently create an index where the user hasn't asked for one.
 
 ## Tasks
 
-- [ ] Add `mutation::add_index_entry` with the signature above; unit-test
+- [x] Add `mutation::add_index_entry` with the signature above; unit-test
       the four cases (no index, fresh insert, idempotent re-insert, dirty
       flag propagation)
-- [ ] Wire `create_new` in `new.rs` to load index → `add_index_entry` →
+- [x] Wire `create_new` in `new.rs` to load index → `add_index_entry` →
       `save_index_if_dirty`, gated on non-dry-run + successful write
-- [ ] E2E test: `hyalo create-index`, then `hyalo new --type X --file Y.md`,
+- [x] E2E test: `hyalo create-index`, then `hyalo new --type X --file Y.md`,
       then `hyalo find --file Y.md` returns the new file from the index
       (verify by checking index was not rebuilt — file mtime preserved)
 - [ ] E2E test: `hyalo new --dry-run` does not modify the index
-- [ ] E2E test: `hyalo new` on a vault with no `.hyalo-index` succeeds
+- [x] E2E test: `hyalo new` on a vault with no `.hyalo-index` succeeds
       and does not create one
-- [ ] Update `hyalo new --help` if it mentions index behavior anywhere
-- [ ] Update the rule-knowledgebase template / agent docs if they describe
+- [x] Update `hyalo new --help` if it mentions index behavior anywhere
+- [x] Update the rule-knowledgebase template / agent docs if they describe
       the index-update guarantees
 - [ ] Mention the gap-closed in the iter-149 PR description
 
 ## Acceptance Criteria
 
-- [ ] After `hyalo new --file foo.md`, `hyalo find --file foo.md` returns
+- [x] After `hyalo new --file foo.md`, `hyalo find --file foo.md` returns
       foo.md without a full index rebuild
 - [ ] `hyalo new --dry-run` leaves the index byte-identical
-- [ ] `hyalo new` is a no-op against the index when no `.hyalo-index` exists
-- [ ] All existing tests pass; new unit + e2e tests added
-- [ ] `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings &&
+- [x] `hyalo new` is a no-op against the index when no `.hyalo-index` exists
+- [x] All existing tests pass; new unit + e2e tests added
+- [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings &&
       cargo test --workspace -q` clean

@@ -49,6 +49,32 @@ pub fn update_index_entry(
 }
 
 // ---------------------------------------------------------------------------
+// Index-entry insert (for `new`)
+// ---------------------------------------------------------------------------
+
+/// Insert a freshly created file into the snapshot index.
+///
+/// Scans `full_path` from disk and inserts a complete entry under `rel_path`,
+/// matching the shape produced by a full index build. When the entry already
+/// exists (idempotent — e.g. race or leftover from a previous run), it is
+/// replaced with the freshly scanned version.
+///
+/// This is a no-op when `snapshot_index` is `None` (no index loaded).
+/// Sets `*index_dirty = true` when the index is mutated.
+pub fn add_index_entry(
+    snapshot_index: &mut Option<SnapshotIndex>,
+    rel_path: &str,
+    full_path: &Path,
+    index_dirty: &mut bool,
+) -> Result<()> {
+    if let Some(idx) = snapshot_index.as_mut() {
+        idx.insert_or_replace_entry(full_path, rel_path)?;
+        *index_dirty = true;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Index-entry rename (for `mv`)
 // ---------------------------------------------------------------------------
 

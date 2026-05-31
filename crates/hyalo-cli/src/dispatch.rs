@@ -1919,9 +1919,19 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ),
             }
         }
-        Commands::New { r#type, file } => {
-            crate::commands::new::create_new(ctx.dir, &r#type, &file, ctx.schema, effective_format)
-        }
+        Commands::New {
+            r#type,
+            file,
+            index_flags: _,
+        } => crate::commands::new::create_new(
+            ctx.dir,
+            &r#type,
+            &file,
+            ctx.schema,
+            snapshot_index,
+            index_path,
+            effective_format,
+        ),
         // Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config => unreachable!("Config command is handled before dispatch"),
     }
