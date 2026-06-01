@@ -576,7 +576,7 @@ title: Hello
 
 // ── BUG-3: frontmatter size budget enforcement ────────────────────────────────
 
-const MAX_FRONTMATTER_BYTES: usize = 64 * 1024;
+use hyalo_core::frontmatter::MAX_FRONTMATTER_BYTES;
 
 /// `hyalo set` with a 10 KiB value — well within the 64 KiB budget — must succeed.
 #[test]

@@ -1116,10 +1116,12 @@ Line 2
 
     #[test]
     fn multi_visitor_frontmatter_exceeds_budget_returns_error() {
-        // Build a frontmatter block with 201 content lines and no closing `---`,
-        // which exceeds the 200-line budget enforced by scan_reader_multi.
+        // Build a frontmatter block with MAX_FRONTMATTER_LINES+1 content lines
+        // and no closing `---`, which exceeds the line budget enforced by
+        // scan_reader_multi.
+        use crate::frontmatter::MAX_FRONTMATTER_LINES;
         let mut input = String::from("---\n");
-        for i in 0..201usize {
+        for i in 0..=MAX_FRONTMATTER_LINES {
             let _ = writeln!(input, "k{i}: v");
         }
         // Deliberately omit the closing `---` so the budget is hit before EOF.
@@ -1151,9 +1153,11 @@ Line 2
             }
         }
 
-        // 201 content lines, no closing `---` — must exceed the 200-line budget.
+        // MAX_FRONTMATTER_LINES+1 content lines, no closing `---` — must
+        // exceed the line budget.
+        use crate::frontmatter::MAX_FRONTMATTER_LINES;
         let mut input = String::from("---\n");
-        for i in 0..201usize {
+        for i in 0..=MAX_FRONTMATTER_LINES {
             let _ = writeln!(input, "k{i}: v");
         }
         let mut v = BodyOnly { lines: Vec::new() };

@@ -266,20 +266,24 @@ pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result
     // --- Step 3: serialize new frontmatter ---
     let mut out: Vec<u8> = Vec::new();
     if !props.is_empty() {
-        let yaml = serde_saphyr::to_string_with_options(
+        let mut yaml = serde_saphyr::to_string_with_options(
             props,
             hyalo_serializer_options(compact_list_indent),
         )
         .context("failed to serialize YAML")?;
+        // Normalize trailing newline before the budget check so the check
+        // sees the exact byte/line count we are about to write — otherwise
+        // a YAML of exactly MAX_FRONTMATTER_BYTES could pass the check yet
+        // be written as MAX_FRONTMATTER_BYTES + 1.
+        if !yaml.ends_with('\n') {
+            yaml.push('\n');
+        }
 
         // Pre-flight budget check: reject before touching the file.
         check_frontmatter_size_budget(&yaml, path).map_err(anyhow::Error::new)?;
 
         out.extend_from_slice(b"---\n");
         out.extend_from_slice(yaml.as_bytes());
-        if !yaml.ends_with('\n') {
-            out.push(b'\n');
-        }
         out.extend_from_slice(b"---\n");
     }
     out.extend_from_slice(&body_bytes);
@@ -294,21 +298,38 @@ pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result
 /// A structured error returned when serialized frontmatter would exceed the size budget.
 ///
 /// Returned by [`check_frontmatter_size_budget`] so that callers (write commands)
-/// can emit a structured JSON error with `limit_bytes`, `would_be_bytes`, and `file`
-/// fields, rather than an opaque anyhow error.
+/// can emit a structured JSON error rather than an opaque anyhow error. Both
+/// byte and line dimensions are reported so the user error can identify which
+/// limit was crossed when only one of the two is exceeded.
 #[derive(Debug)]
 pub struct FrontmatterBudgetError {
     pub limit_bytes: usize,
     pub would_be_bytes: usize,
+    pub limit_lines: usize,
+    pub would_be_lines: usize,
     pub file: String,
 }
 
 impl std::fmt::Display for FrontmatterBudgetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts: Vec<String> = Vec::new();
+        if self.would_be_bytes > self.limit_bytes {
+            parts.push(format!(
+                "{} bytes > {} byte limit",
+                self.would_be_bytes, self.limit_bytes
+            ));
+        }
+        if self.would_be_lines > self.limit_lines {
+            parts.push(format!(
+                "{} lines > {} line limit",
+                self.would_be_lines, self.limit_lines
+            ));
+        }
         write!(
             f,
-            "frontmatter would exceed size budget ({} bytes > {} byte limit) in {}",
-            self.would_be_bytes, self.limit_bytes, self.file
+            "frontmatter would exceed size budget ({}) in {}",
+            parts.join(", "),
+            self.file
         )
     }
 }
@@ -333,6 +354,8 @@ pub fn check_frontmatter_size_budget(
         return Err(FrontmatterBudgetError {
             limit_bytes: MAX_FRONTMATTER_BYTES,
             would_be_bytes: byte_len,
+            limit_lines: MAX_FRONTMATTER_LINES,
+            would_be_lines: line_count,
             file: path.display().to_string(),
         });
     }
