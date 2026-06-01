@@ -604,11 +604,18 @@ pub(crate) enum Commands {
             Builds an in-memory link graph, then:\n\
             1. Moves the file on disk.\n\
             2. Rewrites all [[wikilinks]] and [markdown](links) in other files that pointed to the old path.\n\
-            3. Rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.\n\n\
+            3. Rewrites self-referencing [[wikilinks]] inside the moved file (e.g. [[x]] in x.md → [[y]] after mv x.md y.md).\n\
+            4. Rewrites relative markdown links inside the moved file whose targets changed due to the new directory context.\n\n\
             WIKILINK FORM PREFERENCE:\n\
             When the new basename is unique vault-wide (case-insensitively), rewritten [[wikilinks]] use\n\
             short-form [[stem]] (Obsidian-compatible). When the basename is ambiguous (multiple files share\n\
             the same stem), path-form [[new/path/stem]] is used for disambiguation.\n\n\
+            Written form is preserved: [[./note]], [[note.md]], [[note|alias]], and [[note#section]] forms\n\
+            are kept intact with updated targets after the move.\n\n\
+            AMBIGUOUS BARE WIKILINKS:\n\
+            A bare [[stem]] that matches multiple vault files is skipped by default (logged to stderr and\n\
+            included in the 'skipped_ambiguous' JSON field). Pass --allow-ambiguous to rewrite it anyway\n\
+            based on stem matching.\n\n\
             SINGLE-FILE MODE:\n\
             Provide a positional FILE or --file. --to accepts a .md path or an existing directory\n\
             (basename of source is appended). Applied immediately unless --dry-run is passed.\n\n\
@@ -621,7 +628,8 @@ pub(crate) enum Commands {
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
             \u{00a0} hyalo mv --tag archive --to archive/ --apply\n\n\
-            OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, and applied flag.\n\
+            OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, applied flag,\n\
+            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\
             SIDE EFFECTS: Moves files and modifies files containing links (unless dry-run)."
     )]
     Mv {

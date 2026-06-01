@@ -1269,9 +1269,10 @@ fn mv_bare_wikilink_short_form_resolves_after_move() {
 
 #[test]
 fn mv_dot_slash_wikilink_plain_rewritten() {
-    // [[./b]] in a.md should be rewritten when b.md is moved to sub/b.md.
-    // DotRelative upgrades to PathRelative since the target is no longer
-    // in the same directory as a.md.
+    // [[./b]] in a.md (root) should be rewritten when b.md is moved to sub/b.md.
+    // iter-151 NEW-2: DotRelative preserves the `./` prefix when the linker is
+    // at vault root (source_dir=""), since the new target is still reachable
+    // as `./sub/b` from root. Result: [[./sub/b]].
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
@@ -1288,17 +1289,16 @@ fn mv_dot_slash_wikilink_plain_rewritten() {
     );
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // DotRelative → PathRelative (target moved to different dir)
+    // DotRelative → ./sub/b (form preserved, path updated; iter-151 NEW-2)
     assert!(
-        content.contains("[[sub/b]]"),
-        "[[./b]] should be rewritten to [[sub/b]] (path-relative), got: {content}"
+        content.contains("[[./sub/b]]"),
+        "[[./b]] should be rewritten to [[./sub/b]] (dot-relative preserved), got: {content}"
     );
 }
 
 #[test]
 fn mv_dot_slash_wikilink_with_alias_rewritten() {
-    // [[./b|Alias]] should be rewritten to [[sub/b|Alias]] (path-relative,
-    // DotRelative upgrades since target moved to different dir).
+    // [[./b|Alias]] should be rewritten with the `./` prefix preserved (iter-151 NEW-2).
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b|My Note]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
@@ -1311,17 +1311,16 @@ fn mv_dot_slash_wikilink_with_alias_rewritten() {
     assert!(mv_out.status.success(), "mv failed");
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // DotRelative → PathRelative, alias preserved
+    // DotRelative preserved, alias preserved
     assert!(
-        content.contains("[[sub/b|My Note]]"),
-        "[[./b|My Note]] should become [[sub/b|My Note]], got: {content}"
+        content.contains("[[./sub/b|My Note]]"),
+        "[[./b|My Note]] should become [[./sub/b|My Note]], got: {content}"
     );
 }
 
 #[test]
 fn mv_dot_slash_wikilink_with_section_rewritten() {
-    // [[./b#intro]] should be rewritten to [[sub/b#intro]] (path-relative,
-    // DotRelative upgrades since target moved to different dir).
+    // [[./b#intro]] should be rewritten with the `./` prefix preserved (iter-151 NEW-2).
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "See [[./b#intro]] here.\n");
     write_md(tmp.path(), "b.md", "Content.\n");
@@ -1334,10 +1333,10 @@ fn mv_dot_slash_wikilink_with_section_rewritten() {
     assert!(mv_out.status.success(), "mv failed");
 
     let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
-    // DotRelative → PathRelative, fragment preserved
+    // DotRelative preserved, fragment preserved
     assert!(
-        content.contains("[[sub/b#intro]]"),
-        "[[./b#intro]] should become [[sub/b#intro]], got: {content}"
+        content.contains("[[./sub/b#intro]]"),
+        "[[./b#intro]] should become [[./sub/b#intro]], got: {content}"
     );
 }
 

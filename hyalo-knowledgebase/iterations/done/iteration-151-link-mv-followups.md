@@ -1,8 +1,10 @@
 ---
-title: Iteration 151 — Link/mv follow-ups (self-link, form preservation, ambiguity diagnostic)
+title: >-
+  Iteration 151 — Link/mv follow-ups (self-link, form preservation, ambiguity
+  diagnostic)
 type: iteration
 date: 2026-06-01
-status: planned
+status: completed
 branch: iter-151/link-mv-followups
 tags:
   - iteration

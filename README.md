@@ -57,7 +57,7 @@ hyalo find --property status=draft --tag research
 # Bulk-update metadata
 hyalo set --property status=reviewed --where-tag research
 
-# Move a single file — all links across the vault are updated
+# Move a single file — all inbound/outbound links and self-links are updated
 hyalo mv --file old/path.md --to archive/path.md
 
 # Batch move: preview files that would move (dry-run by default)
@@ -65,6 +65,10 @@ hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/do
 
 # Batch move: commit changes with --apply (builds link graph once for all files)
 hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply
+
+# Ambiguous bare wikilinks ([[stem]] matching multiple files) are skipped by default;
+# pass --allow-ambiguous to rewrite them anyway based on stem matching
+hyalo mv --file old.md --to new.md --allow-ambiguous
 
 # Detect and fix broken links
 hyalo links fix --apply

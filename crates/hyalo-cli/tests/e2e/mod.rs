@@ -26,6 +26,7 @@ mod lint_rules;
 mod llm_misuse;
 mod mv;
 mod mv_batch;
+mod mv_link_forms;
 mod new;
 mod positional_file;
 mod properties;
