@@ -1,7 +1,9 @@
 //! Comprehensive link-form tests for `hyalo mv` (iter-151).
 //!
 //! Covers:
-//! - 8 link shapes × 4 topologies × 3 move kinds × 2 selflink = 192-case matrix
+//! - Representative subset of the 8 link shapes × 4 topologies × 3 move kinds ×
+//!   2 selflink matrix (full 192-case enumeration is not run; the matrix test
+//!   below selects illustrative cases — see `mv_link_forms_matrix`)
 //! - 10 named bug-repro tests (iter-150 NEW-1/2/3 follow-ups)
 //! - Dogfood verbatim repro (x.md self-link → y.md)
 use super::common::{hyalo_no_hints, write_md};

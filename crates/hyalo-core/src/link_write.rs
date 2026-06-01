@@ -165,14 +165,11 @@ impl LinkWriter {
                 }
             }
             WrittenForm::MdSuffixed => {
-                // MdSuffixed: preserve the `.md` suffix. The user's stylistic
-                // choice is to always write the `.md` extension. Re-apply it
-                // to the full vault-relative stem so cross-dir moves preserve
-                // both the path and the suffix (NEW-2).
-                // Note: detect_wikilink_form returns PathRelative for paths
-                // containing `/` even with `.md` suffix, so MdSuffixed here
-                // means the original was a bare `[[stem.md]]` (no slash).
-                // We preserve just the basename with suffix.
+                // MdSuffixed: preserve the `.md` suffix on the basename only.
+                // detect_wikilink_form returns PathRelative for paths containing
+                // `/` even with `.md` suffix, so MdSuffixed here means the
+                // original was a bare `[[stem.md]]` (no slash). Emit just the
+                // basename with the suffix re-applied.
                 format!("{new_basename_stem}.md")
             }
             WrittenForm::VaultAbsolute => {
@@ -427,11 +424,13 @@ mod tests {
     //
     // For each (form, linker_dir, old target, new target) tuple we assert:
     // 1. The writer emits a string.
-    // 2. The emitted string, when re-parsed by extract_link_spans, produces a
-    //    link target that resolves to new_vault_rel (round-trip invariant).
+    // 2. The emitted string, when re-parsed by extract_link_spans, yields the
+    //    expected target text (a syntactic round-trip — these tests do not run
+    //    vault resolution).
 
-    /// Helper: parse the full link text, extract the target stem (strip any
-    /// fragment and .md suffix), and return it for comparison.
+    /// Helper: parse the full link text and return the parsed target as-is
+    /// (no fragment stripping, no `.md` normalization — callers compare
+    /// against the literal expected target text).
     fn round_trip_target(full_link: &str) -> String {
         use crate::links::extract_link_spans;
         let spans = extract_link_spans(full_link);

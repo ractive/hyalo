@@ -26,7 +26,7 @@ sweep around mv/link semantics looking for the *next* shape of bug.
 
 ### BUG-1 from iter-149 (path-form stripped on mv) — FIXED
 
-```
+```text
 [[bulk/file-1]]          → [[bulk/moved-1]]              ✓
 [[bulk/file-1|aliased]]  → [[bulk/moved-1|aliased]]      ✓
 [[bulk/file-1#sec|al2]]  → [[bulk/moved-1#sec|al2]]      ✓ (frag + alias preserved)
@@ -41,7 +41,7 @@ plan's `WrittenForm::PathRelative` preservation guarantee.
 
 Reproduced the exact iter-149 scenario:
 
-```
+```text
 linker.md →  [[bulk/file-1]]
 mv bulk/file-1.md  → bulk/moved-1.md   # path form preserved
 create-index
@@ -67,7 +67,7 @@ source file and line. `hyalo find --file linker.md` shows
 `hyalo set long.md --property "huge=<10000 x's>"` writes successfully
 (exit 0, JSON envelope confirms the write). Next `find --file long.md`:
 
-```
+```text
 warning: skipping long.md: frontmatter too large (no closing `---` found within 200 lines / 8192 bytes)
 No results
 ```
@@ -80,7 +80,7 @@ worth tracking as an open item.
 
 ### iter-149 BUG-4 (unicode tag write/query asymmetry) — STILL OPEN (MEDIUM)
 
-```
+```text
 hyalo tags                       → shows "日本語  1 file"
 hyalo find --tag "日本語"        → invalid character '日' in tag name
 ```
@@ -143,7 +143,7 @@ The form-preservation guarantee from the iter-150 plan holds for the
 Sibling case (linker and target in the same directory) — all forms
 preserved:
 
-```
+```text
 [[b]]        → [[c]]      ✓
 [[./b]]      → [[./c]]    ✓
 [[b.md]]     → [[c.md]]   ✓
@@ -153,7 +153,7 @@ preserved:
 Cross-dir case (linker at vault root, target under `bulk/`, only the
 target is renamed within `bulk/`):
 
-```
+```text
 [[bulk/file-1]]      → [[bulk/moved-1]]    ✓
 [[./bulk/file-1]]    → [[bulk/moved-1]]    ✗   (lost `./`)
 [[bulk/file-1.md]]   → [[bulk/moved-1]]    ✗   (lost `.md`)

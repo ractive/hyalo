@@ -25,7 +25,7 @@ The iter-150 plan listed this in scope; the shipped diff documented
 it as deferred (commit `5013e37`: "*deferred:* mv-side index
 incremental patching"). The iter-150 dogfood confirmed the gap:
 
-```
+```bash
 $ hyalo mv b.md --to c.md
 $ hyalo --index-file .hyalo-index find --format text
 "a.md"  ...

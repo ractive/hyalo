@@ -541,21 +541,14 @@ fn plan_inbound_rewrites(
                                 continue;
                             }
                             if !allow_ambiguous {
-                                // NEW-3: record the skipped link for the JSON
-                                // envelope and emit a stderr note.
+                                // NEW-3: record the skipped link for the CLI to
+                                // surface (JSON envelope or stderr note).
                                 skipped_ambiguous.push(SkippedAmbiguous {
                                     source: source_rel.to_string(),
                                     line: line_num,
                                     target: t.clone(),
                                     candidates: candidates.clone(),
                                 });
-                                eprintln!(
-                                    "note: skipped ambiguous link [[{t}]] at \
-                                     {source_rel}:{line_num}\n      \
-                                     candidates: {}\n      \
-                                     (use --allow-ambiguous to rewrite based on stem match anyway)",
-                                    candidates.join(", ")
-                                );
                                 continue;
                             }
                             bare_ambiguous_match = true;
