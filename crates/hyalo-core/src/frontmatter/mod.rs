@@ -5,8 +5,25 @@ mod types;
 
 use anyhow::Context as _;
 
-pub use parse::{body_only, hyalo_options, read_frontmatter, skip_frontmatter, write_frontmatter};
+pub use parse::{
+    FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
+    read_frontmatter, skip_frontmatter, write_frontmatter,
+};
 pub use types::{infer_type, parse_value};
+
+/// Maximum number of content lines in a YAML frontmatter block.
+///
+/// Applies to both the read-side parser budget and the write-side pre-flight
+/// check. Any frontmatter that would exceed this limit is rejected at write
+/// time; any file that already exceeds it is skipped with a warning on read.
+pub const MAX_FRONTMATTER_LINES: usize = 2000;
+
+/// Maximum byte size of YAML frontmatter content (excluding `---` delimiters).
+///
+/// Applies to both the read-side parser budget and the write-side pre-flight
+/// check. 64 KiB is generous — real-world frontmatter is well under 8 KiB at
+/// the 99th percentile.
+pub const MAX_FRONTMATTER_BYTES: usize = 64 * 1024;
 
 /// Read a file's modification time and size for TOCTOU detection.
 ///
@@ -67,6 +84,14 @@ impl std::error::Error for FrontmatterError {}
 pub fn is_parse_error(err: &anyhow::Error) -> bool {
     err.chain()
         .any(|cause| cause.downcast_ref::<FrontmatterError>().is_some())
+}
+
+/// If `err` is a [`FrontmatterBudgetError`] (frontmatter write would exceed the
+/// size budget), return a reference to it so the caller can emit a structured
+/// user error instead of an internal failure.
+pub fn as_budget_error(err: &anyhow::Error) -> Option<&FrontmatterBudgetError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<FrontmatterBudgetError>())
 }
 
 #[cfg(test)]
@@ -394,8 +419,9 @@ Body.
 
     #[test]
     fn streaming_budget_boundary_lines_at_limit() {
-        // Exactly 200 content lines — must succeed
-        let input = make_frontmatter_with_n_lines(200);
+        // Exactly MAX_FRONTMATTER_LINES (2000) content lines — must succeed
+        use super::MAX_FRONTMATTER_LINES;
+        let input = make_frontmatter_with_n_lines(MAX_FRONTMATTER_LINES);
         let mut reader = input.as_bytes();
         // Read and discard the opening "---\n" line, then call skip_frontmatter
         let mut first_line = String::new();
@@ -404,20 +430,25 @@ Body.
         let result = skip_frontmatter(&mut reader, first);
         assert!(
             result.is_ok(),
-            "200 content lines should succeed: {result:?}"
+            "{MAX_FRONTMATTER_LINES} content lines should succeed: {result:?}"
         );
     }
 
     #[test]
     fn streaming_budget_boundary_lines_over_limit() {
-        // 201 content lines — must error
-        let input = make_frontmatter_with_n_lines(201);
+        // MAX_FRONTMATTER_LINES + 1 content lines — must error
+        use super::MAX_FRONTMATTER_LINES;
+        let input = make_frontmatter_with_n_lines(MAX_FRONTMATTER_LINES + 1);
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
         let first = first_line.trim_end_matches(['\n', '\r']);
         let result = skip_frontmatter(&mut reader, first);
-        assert!(result.is_err(), "201 content lines should fail");
+        assert!(
+            result.is_err(),
+            "{} content lines should fail",
+            MAX_FRONTMATTER_LINES + 1
+        );
         assert!(
             result
                 .unwrap_err()
@@ -428,11 +459,11 @@ Body.
 
     #[test]
     fn streaming_budget_boundary_bytes_at_limit() {
-        // Build frontmatter whose content is just under or equal to 8192 bytes.
+        // Build frontmatter whose content is exactly MAX_FRONTMATTER_BYTES.
         // skip_frontmatter counts raw bytes from read_line (including \n).
-        // Use a single long line of exactly 8192 bytes (including the \n).
-        // "x: " (3 bytes) + value + "\n" = 8192 → value = 8188 bytes of 'a'
-        let value = "a".repeat(8188);
+        // Use a single long line: "x: " (3 bytes) + value + "\n" = MAX_FRONTMATTER_BYTES
+        use super::MAX_FRONTMATTER_BYTES;
+        let value = "a".repeat(MAX_FRONTMATTER_BYTES - 4); // "x: " (3) + value + "\n" = limit
         let input = format!("---\nx: {value}\n---\n");
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
@@ -441,21 +472,26 @@ Body.
         let result = skip_frontmatter(&mut reader, first);
         assert!(
             result.is_ok(),
-            "8192-byte content should succeed: {result:?}"
+            "{MAX_FRONTMATTER_BYTES}-byte content should succeed: {result:?}"
         );
     }
 
     #[test]
     fn streaming_budget_boundary_bytes_over_limit() {
-        // Content line of 8193 bytes (including \n) — must error
-        let value = "a".repeat(8189); // "x: " (3) + 8189 + "\n" = 8193
+        // Content line of MAX_FRONTMATTER_BYTES + 1 bytes (including \n) — must error
+        use super::MAX_FRONTMATTER_BYTES;
+        let value = "a".repeat(MAX_FRONTMATTER_BYTES - 3); // "x: " (3) + value + "\n" = limit + 1
         let input = format!("---\nx: {value}\n---\n");
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
         let first = first_line.trim_end_matches(['\n', '\r']);
         let result = skip_frontmatter(&mut reader, first);
-        assert!(result.is_err(), "8193-byte content should fail");
+        assert!(
+            result.is_err(),
+            "{} byte content should fail",
+            MAX_FRONTMATTER_BYTES + 1
+        );
         assert!(
             result
                 .unwrap_err()
@@ -770,6 +806,113 @@ Body.
             serialized.contains("tags:\n- a\n- b"),
             "compact list style should be preserved: {serialized}"
         );
+    }
+
+    // --- Budget check unit tests ---
+
+    #[test]
+    fn check_budget_passes_under_limits() {
+        let yaml = "title: Hello\nstatus: draft\n";
+        let result = check_frontmatter_size_budget(yaml, std::path::Path::new("test.md"));
+        assert!(result.is_ok(), "small frontmatter should pass budget check");
+    }
+
+    #[test]
+    fn check_budget_fails_over_byte_limit() {
+        // Construct YAML that's just over the byte budget
+        let big_value = "a".repeat(MAX_FRONTMATTER_BYTES + 1);
+        let yaml = format!("x: {big_value}\n");
+        let result = check_frontmatter_size_budget(&yaml, std::path::Path::new("test.md"));
+        assert!(result.is_err(), "over-budget YAML should be rejected");
+        let err = result.unwrap_err();
+        assert_eq!(err.limit_bytes, MAX_FRONTMATTER_BYTES);
+        assert!(err.would_be_bytes > MAX_FRONTMATTER_BYTES);
+        assert_eq!(err.file, "test.md");
+    }
+
+    #[test]
+    fn check_budget_fails_over_line_limit() {
+        // Construct YAML with MAX_FRONTMATTER_LINES + 1 lines
+        let mut yaml = String::new();
+        for i in 0..=MAX_FRONTMATTER_LINES {
+            let _ = writeln!(yaml, "k{i}: v");
+        }
+        let result = check_frontmatter_size_budget(&yaml, std::path::Path::new("test.md"));
+        assert!(result.is_err(), "over-line-limit YAML should be rejected");
+    }
+
+    #[test]
+    fn check_budget_at_exact_byte_limit_passes() {
+        // Exactly MAX_FRONTMATTER_BYTES — should pass (limit is exclusive)
+        let value = "a".repeat(MAX_FRONTMATTER_BYTES - 4); // "x: " (3) + value + "\n" = MAX
+        let yaml = format!("x: {value}\n");
+        assert_eq!(yaml.len(), MAX_FRONTMATTER_BYTES);
+        let result = check_frontmatter_size_budget(&yaml, std::path::Path::new("test.md"));
+        assert!(
+            result.is_ok(),
+            "exactly-at-limit YAML should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn write_frontmatter_rejects_over_budget() {
+        use indexmap::IndexMap;
+        use serde_json::Value;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.md");
+        // Write a minimal valid file first
+        std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
+
+        // Build a props map with an over-budget value
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        let big_val = "a".repeat(MAX_FRONTMATTER_BYTES + 100);
+        props.insert("x".to_owned(), Value::String(big_val));
+
+        let result = write_frontmatter(&path, &props);
+        assert!(
+            result.is_err(),
+            "write_frontmatter should reject over-budget props"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.downcast_ref::<FrontmatterBudgetError>().is_some()
+                || err
+                    .chain()
+                    .any(|c| c.downcast_ref::<FrontmatterBudgetError>().is_some()),
+            "error should be or contain FrontmatterBudgetError: {err}"
+        );
+
+        // File must be unmodified (no write occurred)
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("title: Hello"),
+            "file must not be modified after rejected write: {content}"
+        );
+    }
+
+    #[test]
+    fn as_budget_error_extracts_from_anyhow() {
+        use indexmap::IndexMap;
+        use serde_json::Value;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.md");
+        std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
+
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        let big_val = "a".repeat(MAX_FRONTMATTER_BYTES + 100);
+        props.insert("x".to_owned(), Value::String(big_val));
+
+        let err = write_frontmatter(&path, &props).unwrap_err();
+        let budget = as_budget_error(&err);
+        assert!(
+            budget.is_some(),
+            "as_budget_error should extract FrontmatterBudgetError"
+        );
+        let b = budget.unwrap();
+        assert_eq!(b.limit_bytes, MAX_FRONTMATTER_BYTES);
+        assert!(b.would_be_bytes > MAX_FRONTMATTER_BYTES);
     }
 
     #[test]

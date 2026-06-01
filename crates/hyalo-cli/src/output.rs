@@ -350,6 +350,38 @@ pub fn format_error(
     }
 }
 
+/// Format a structured error for a frontmatter size-budget violation.
+///
+/// JSON shape:
+/// ```json
+/// {"error": "frontmatter would exceed size budget", "limit_bytes": N, "would_be_bytes": M, "file": "path"}
+/// ```
+///
+/// Text shape mirrors the JSON fields for readability in a terminal.
+#[must_use]
+pub fn format_budget_error(
+    format: Format,
+    e: &hyalo_core::frontmatter::FrontmatterBudgetError,
+) -> String {
+    match format {
+        Format::Json => {
+            let obj = serde_json::json!({
+                "error": "frontmatter would exceed size budget",
+                "limit_bytes": e.limit_bytes,
+                "would_be_bytes": e.would_be_bytes,
+                "file": e.file
+            });
+            serde_json::to_string_pretty(&obj).expect("serializing serde_json::Value is infallible")
+        }
+        Format::Text => {
+            format!(
+                "Error: frontmatter would exceed size budget\n  file: {}\n  would_be_bytes: {}\n  limit_bytes: {}",
+                e.file, e.would_be_bytes, e.limit_bytes
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // jq filter constants — one per output type
 // ---------------------------------------------------------------------------

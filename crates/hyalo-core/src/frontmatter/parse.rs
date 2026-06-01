@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::FrontmatterError;
+use super::{FrontmatterError, MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
 /// Convenience macro: return a [`FrontmatterError`] wrapped in `anyhow::Error`.
 ///
@@ -266,12 +266,16 @@ pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result
     // --- Step 3: serialize new frontmatter ---
     let mut out: Vec<u8> = Vec::new();
     if !props.is_empty() {
-        out.extend_from_slice(b"---\n");
         let yaml = serde_saphyr::to_string_with_options(
             props,
             hyalo_serializer_options(compact_list_indent),
         )
         .context("failed to serialize YAML")?;
+
+        // Pre-flight budget check: reject before touching the file.
+        check_frontmatter_size_budget(&yaml, path).map_err(anyhow::Error::new)?;
+
+        out.extend_from_slice(b"---\n");
         out.extend_from_slice(yaml.as_bytes());
         if !yaml.ends_with('\n') {
             out.push(b'\n');
@@ -287,14 +291,59 @@ pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result
     Ok(())
 }
 
+/// A structured error returned when serialized frontmatter would exceed the size budget.
+///
+/// Returned by [`check_frontmatter_size_budget`] so that callers (write commands)
+/// can emit a structured JSON error with `limit_bytes`, `would_be_bytes`, and `file`
+/// fields, rather than an opaque anyhow error.
+#[derive(Debug)]
+pub struct FrontmatterBudgetError {
+    pub limit_bytes: usize,
+    pub would_be_bytes: usize,
+    pub file: String,
+}
+
+impl std::fmt::Display for FrontmatterBudgetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "frontmatter would exceed size budget ({} bytes > {} byte limit) in {}",
+            self.would_be_bytes, self.limit_bytes, self.file
+        )
+    }
+}
+
+impl std::error::Error for FrontmatterBudgetError {}
+
+/// Check whether `yaml_content` (the YAML between the `---` delimiters, without
+/// the delimiters themselves) would exceed the size budget.
+///
+/// Call this **before** writing serialized frontmatter to disk.  If the check
+/// fails, return the [`FrontmatterBudgetError`] — callers should turn it into a
+/// structured user error (exit 1) rather than an internal error (exit 2).
+///
+/// The `path` parameter is used only for the error message.
+pub fn check_frontmatter_size_budget(
+    yaml_content: &str,
+    path: &Path,
+) -> std::result::Result<(), FrontmatterBudgetError> {
+    let byte_len = yaml_content.len();
+    let line_count = yaml_content.lines().count();
+    if byte_len > MAX_FRONTMATTER_BYTES || line_count > MAX_FRONTMATTER_LINES {
+        return Err(FrontmatterBudgetError {
+            limit_bytes: MAX_FRONTMATTER_BYTES,
+            would_be_bytes: byte_len,
+            file: path.display().to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Find the byte offset in `file` where the body starts (i.e. the byte immediately
 /// after the closing `---\n` of the frontmatter block).
 ///
 /// Returns `0` if the file has no frontmatter, which means the entire file is body.
 fn find_body_offset(file: &mut File) -> Result<u64> {
-    const MAX_FRONTMATTER_LINES: usize = 200;
-    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
-
     let mut reader = BufReader::new(&mut *file);
     let mut line = String::new();
 
@@ -325,7 +374,7 @@ fn find_body_offset(file: &mut File) -> Result<u64> {
         content_bytes += n;
         if line_count > MAX_FRONTMATTER_LINES || content_bytes > MAX_FRONTMATTER_BYTES {
             parse_bail!(
-                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
             );
         }
     }
@@ -341,9 +390,6 @@ fn find_body_offset(file: &mut File) -> Result<u64> {
 /// (including the opening and closing `---` delimiters). Returns 0 if no frontmatter is present.
 /// The reader is left positioned at the first line after the closing `---`.
 pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<usize> {
-    const MAX_FRONTMATTER_LINES: usize = 200;
-    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
-
     if first_line.trim() != "---" {
         return Ok(0);
     }
@@ -367,7 +413,7 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
         total_bytes += n;
         if line_count - 1 > MAX_FRONTMATTER_LINES || total_bytes > MAX_FRONTMATTER_BYTES {
             parse_bail!(
-                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
             );
         }
     }
@@ -386,9 +432,6 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
     reader: R,
 ) -> Result<IndexMap<String, Value>> {
-    const MAX_FRONTMATTER_LINES: usize = 200;
-    const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
-
     let mut lines = reader.lines();
 
     // First line must be `---`
@@ -411,7 +454,7 @@ pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
         line_count += 1;
         if line_count > MAX_FRONTMATTER_LINES || yaml.len() + line.len() > MAX_FRONTMATTER_BYTES {
             parse_bail!(
-                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
             );
         }
         yaml.push_str(&line);

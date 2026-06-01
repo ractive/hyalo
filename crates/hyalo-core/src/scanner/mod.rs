@@ -168,8 +168,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
 
     let (mut fm_props, fm_lines) = if first_line.trim() == "---" {
-        const MAX_FRONTMATTER_LINES: usize = 200;
-        const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+        use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         let mut yaml = if any_needs_fm {
             Some(String::new())
@@ -193,7 +192,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
             if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
                 return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
                     format!(
-                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
                     ),
                 )));
             }
@@ -202,7 +201,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
                 if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
                     return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
                         format!(
-                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
                         ),
                     )));
                 }
@@ -345,8 +344,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
     // Try to parse frontmatter
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
     let (mut fm_props, fm_lines) = if first_trimmed.trim() == "---" {
-        const MAX_FRONTMATTER_LINES: usize = 200;
-        const MAX_FRONTMATTER_BYTES: usize = 8 * 1024;
+        use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         // Read past frontmatter lines, optionally collecting YAML content
         let mut yaml = if any_needs_fm {
@@ -374,7 +372,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
             if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
                 return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
                     format!(
-                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
                     ),
                 )));
             }
@@ -383,7 +381,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
                 if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
                     return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
                         format!(
-                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes)"
+                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
                         ),
                     )));
                 }

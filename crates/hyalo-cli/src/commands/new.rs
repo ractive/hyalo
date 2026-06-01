@@ -96,6 +96,19 @@ pub(crate) fn create_new(
     let merged = schema.merged_schema_for_type(type_name);
     let content = synthesise_content(type_name, &merged, dir);
 
+    // Pre-flight budget check: reject before touching the filesystem.
+    // Extract the YAML content between the --- delimiters.
+    if let Some(yaml_part) = content
+        .strip_prefix("---\n")
+        .and_then(|s| s.find("\n---\n").map(|pos| &s[..=pos]))
+        && let Err(budget_err) =
+            hyalo_core::frontmatter::check_frontmatter_size_budget(yaml_part, &full_path)
+    {
+        return Ok(CommandOutcome::UserError(
+            crate::output::format_budget_error(format, &budget_err),
+        ));
+    }
+
     let mut file = match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
