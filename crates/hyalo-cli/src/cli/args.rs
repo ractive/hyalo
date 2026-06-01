@@ -699,6 +699,9 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
+            this limit is rejected with exit 1 and a JSON error \
+            {\"error\": \"frontmatter would exceed size budget\", \"limit_bytes\": ..., \"would_be_bytes\": ..., \"file\": ...}.\n\
             USE WHEN: You need to create or overwrite frontmatter properties or add tags, \
             possibly across many files at once.\n\n\
             EXAMPLES:\n\
@@ -766,6 +769,8 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
+            this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo remove --property status --file notes/todo.md\n\
@@ -898,6 +903,8 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
+            this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \
             without overwriting the existing list.\n\n\
             EXAMPLES:\n\
@@ -1139,7 +1146,8 @@ Repeatable (AND).\n\
             `hyalo lint`, driving the agent fill-in loop.\n\n\
             CONSTRAINTS:\n\
             - Refuses with an error if the target file already exists\n\
-            - `--file` must be vault-relative (no leading `/`, no `..` components)\n\n\
+            - `--file` must be vault-relative (no leading `/`, no `..` components)\n\
+            - Frontmatter is limited to 64 KiB / 2000 lines; schema templates exceeding this are rejected\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo new --type iteration --file iterations/iter-99-example.md\n\
             \u{00a0} hyalo new --type note --file notes/2026-05-24-standup.md\n\n\

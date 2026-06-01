@@ -293,7 +293,15 @@ pub fn append(
 
         if file_changed && !dry_run {
             frontmatter::check_mtime(full_path, mtime)?;
-            frontmatter::write_frontmatter(full_path, &props)?;
+            match frontmatter::write_frontmatter(full_path, &props) {
+                Ok(()) => {}
+                Err(ref e) if frontmatter::as_budget_error(e).is_some() => {
+                    let budget_err = frontmatter::as_budget_error(e).unwrap();
+                    let out = crate::output::format_budget_error(format, budget_err);
+                    return Ok(CommandOutcome::UserError(out));
+                }
+                Err(e) => return Err(e),
+            }
             mutation::update_index_entry(
                 snapshot_index,
                 rel_path,

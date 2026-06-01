@@ -573,3 +573,212 @@ title: Hello
         "property should be set in file"
     );
 }
+
+// ── BUG-3: frontmatter size budget enforcement ────────────────────────────────
+
+use hyalo_core::frontmatter::MAX_FRONTMATTER_BYTES;
+
+/// `hyalo set` with a 10 KiB value — well within the 64 KiB budget — must succeed.
+#[test]
+fn bug_iter149_3_set_within_budget_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+Body
+"),
+    );
+    // 10 KiB value — well under budget
+    let big_val = "a".repeat(10 * 1024);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "set",
+            "--file",
+            "note.md",
+            &format!("--property=big={big_val}"),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "set within budget should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains(&big_val[..20]),
+        "value should be written to file"
+    );
+}
+
+/// `hyalo set` with a value that puts frontmatter just over 64 KiB must be
+/// rejected with exit code 1 and a structured JSON error.
+///
+/// BUG-3 regression test.
+#[test]
+fn bug_iter149_3_set_over_budget_refused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+Body
+"),
+    );
+    // Value that puts YAML content over the 64 KiB budget.
+    // "big: " (5) + value + "\ntitle: Note\n" overhead ≈ value bytes
+    let big_val = "a".repeat(MAX_FRONTMATTER_BYTES + 100);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "set",
+            "--file",
+            "note.md",
+            &format!("--property=big={big_val}"),
+        ])
+        .output()
+        .unwrap();
+
+    // Must fail (exit 1)
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "over-budget set should exit 1; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Structured JSON error on stderr
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: serde_json::Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|e| panic!("expected JSON error on stderr, got: {stderr}\nerr: {e}"));
+    assert_eq!(
+        json["error"], "frontmatter would exceed size budget",
+        "unexpected error field: {json}"
+    );
+    assert!(
+        json["limit_bytes"].as_u64().unwrap_or(0) == MAX_FRONTMATTER_BYTES as u64,
+        "limit_bytes should be {MAX_FRONTMATTER_BYTES}: {json}"
+    );
+    assert!(
+        json["would_be_bytes"].as_u64().unwrap_or(0) > json["limit_bytes"].as_u64().unwrap_or(0),
+        "would_be_bytes should exceed limit_bytes: {json}"
+    );
+    assert!(
+        json["file"].as_str().is_some(),
+        "file field should be present: {json}"
+    );
+
+    // File must be unmodified
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        !content.contains(&big_val[..20]),
+        "file must not be written when budget exceeded"
+    );
+    assert!(
+        content.contains("title: Note"),
+        "original content must be preserved"
+    );
+}
+
+/// `hyalo append` with an over-budget value must also be rejected.
+#[test]
+fn bug_iter149_3_append_over_budget_refused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+aliases: []
+---
+Body
+"),
+    );
+    let big_val = "a".repeat(MAX_FRONTMATTER_BYTES + 100);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "append",
+            "--file",
+            "note.md",
+            &format!("--property=aliases={big_val}"),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "over-budget append should exit 1; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: serde_json::Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|e| panic!("expected JSON error on stderr, got: {stderr}\nerr: {e}"));
+    assert_eq!(json["error"], "frontmatter would exceed size budget");
+}
+
+/// A file that already has over-budget frontmatter (written bypassing hyalo)
+/// produces a single warning, not a crash, when scanned by `hyalo find`.
+#[test]
+fn bug_iter149_3_existing_over_budget_file_warns_once() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write an over-budget file directly, bypassing hyalo
+    let big_val = "a".repeat(MAX_FRONTMATTER_BYTES + 100);
+    let over_budget = format!("---\ntitle: Big\nbig: {big_val}\n---\nBody\n");
+    std::fs::write(tmp.path().join("big.md"), &over_budget).unwrap();
+
+    // Also write a normal file so the scan has at least one result
+    write_md(
+        tmp.path(),
+        "normal.md",
+        md!(r"
+---
+title: Normal
+---
+Body
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find"])
+        .output()
+        .unwrap();
+
+    // Should succeed (graceful skip)
+    assert!(
+        output.status.success(),
+        "find with over-budget file should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Warning must mention big.md
+    assert!(
+        stderr.contains("big.md"),
+        "should warn about big.md; got: {stderr}"
+    );
+
+    // Warning must appear exactly once (deduplication)
+    let count = stderr.matches("big.md").count();
+    assert_eq!(
+        count, 1,
+        "big.md should appear exactly once in warnings; full stderr:\n{stderr}"
+    );
+}

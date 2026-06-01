@@ -2,7 +2,7 @@
 title: Iteration 152 — Reconcile frontmatter write vs. parse size budget
 type: iteration
 date: 2026-06-01
-status: planned
+status: in-progress
 branch: iter-152/frontmatter-size-budget
 tags:
   - iteration
@@ -92,42 +92,42 @@ as the suggested next step.
 
 ## Tasks
 
-- [ ] Sample real-world frontmatter sizes across MDN + own KB, decide
+- [x] Sample real-world frontmatter sizes across MDN + own KB, decide
       A vs B, note in PR
-- [ ] Apply chosen budget to the frontmatter scanner constant
-- [ ] Add the same budget check to the `set` / `append` / `remove`
+- [x] Apply chosen budget to the frontmatter scanner constant
+- [x] Add the same budget check to the `set` / `append` / `remove`
       write path before the file is written
-- [ ] Add the same check to `hyalo new`
-- [ ] Emit structured error on over-budget write, non-zero exit
-- [ ] De-duplicate the parse warning (once per file, not once per
+- [x] Add the same check to `hyalo new`
+- [x] Emit structured error on over-budget write, non-zero exit
+- [x] De-duplicate the parse warning (once per file, not once per
       command)
-- [ ] Suggest `hyalo lint <file>` in the warning text
-- [ ] Test: write a 10 KB property, assert refusal + non-zero exit +
+- [x] Suggest `hyalo lint <file>` in the warning text
+- [x] Test: write a 10 KB property, assert refusal + non-zero exit +
       structured error fields
-- [ ] Test: write a value just under the budget, assert success +
+- [x] Test: write a value just under the budget, assert success +
       read round-trip
-- [ ] Test: write a value just over, assert refusal
-- [ ] Test: existing files with over-budget frontmatter still produce
+- [x] Test: write a value just over, assert refusal
+- [x] Test: existing files with over-budget frontmatter still produce
       a (de-duplicated) parse warning, not a crash
-- [ ] Update `set` / `append` / `new` `--help` with the budget number
-- [ ] `cargo fmt && cargo clippy --workspace --all-targets -- -D
+- [x] Update `set` / `append` / `new` `--help` with the budget number
+- [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D
       warnings && cargo test --workspace -q` clean
-- [ ] Mark `status=completed`, move to `iterations/done/`
+- [ ] Mark `status=completed`, move to `iterations/done/` (handled at merge time)
 
 ## Acceptance Criteria
 
-- [ ] Write path and read path agree on a single frontmatter size
+- [x] Write path and read path agree on a single frontmatter size
       budget, documented in `--help`.
-- [ ] `hyalo set` refuses to write frontmatter that would exceed the
+- [x] `hyalo set` refuses to write frontmatter that would exceed the
       budget; exit non-zero; structured error.
-- [ ] A file written with the largest *allowed* frontmatter parses
+- [x] A file written with the largest *allowed* frontmatter parses
       cleanly on read and round-trips in `find` / `read` / `lint`.
-- [ ] The iter-149 BUG-3 repro (`set --property "huge=$(printf 'x'
+- [x] The iter-149 BUG-3 repro (`set --property "huge=$(printf 'x'
       x 10000)"`) returns a structured error at write time, not a
       silent success followed by parse failure.
-- [ ] The parse warning is emitted at most once per file per command
+- [x] The parse warning is emitted at most once per file per command
       run (not per scanned line).
-- [ ] No regression on existing tests.
+- [x] No regression on existing tests.
 
 ## Notes for the implementing agent
 
