@@ -11,7 +11,7 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery::{discover_files, match_globs};
 use hyalo_core::filter::{PropertyFilter, matches_frontmatter_filters};
 use hyalo_core::index::SnapshotIndex;
-use hyalo_core::link_rewrite::{self, Replacement, RewritePlan};
+use hyalo_core::link_rewrite::{self, Replacement, RewritePlan, SkippedAmbiguous};
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -25,6 +25,9 @@ struct MvResult {
     updated_files: Vec<UpdatedFile>,
     total_files_updated: usize,
     total_links_updated: usize,
+    /// Links that were skipped because the stem was ambiguous (NEW-3).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    skipped_ambiguous: Vec<SkippedAmbiguous>,
 }
 
 #[derive(Serialize, Clone)]
@@ -92,10 +95,11 @@ pub fn mv(
     let src_mtime = hyalo_core::frontmatter::read_mtime(&dir.join(&old_rel))?;
 
     // 4. Plan all rewrites
-    let plans = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix, allow_ambiguous)?;
+    let mv_plan = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix, allow_ambiguous)?;
 
     // 5. Build result
-    let updated_files: Vec<UpdatedFile> = plans
+    let updated_files: Vec<UpdatedFile> = mv_plan
+        .plans
         .iter()
         .map(|p| UpdatedFile {
             file: p.rel_path.clone(),
@@ -104,22 +108,37 @@ pub fn mv(
         .collect();
     let total_links: usize = updated_files.iter().map(|f| f.replacements.len()).sum();
 
+    // NEW-3: emit stderr notes for text format (JSON envelope has skipped_ambiguous array).
+    if format == Format::Text {
+        for skipped in &mv_plan.skipped_ambiguous {
+            eprintln!(
+                "note: skipped ambiguous link [[{}]] at {}:{}\n      candidates: {}\n      \
+                 (use --allow-ambiguous to rewrite based on stem match anyway)",
+                skipped.target,
+                skipped.source,
+                skipped.line,
+                skipped.candidates.join(", ")
+            );
+        }
+    }
+
     let result = MvResult {
         from: old_rel.clone(),
         to: new_rel.clone(),
         dry_run,
         updated_files,
-        total_files_updated: plans.len(),
+        total_files_updated: mv_plan.plans.len(),
         total_links_updated: total_links,
+        skipped_ambiguous: mv_plan.skipped_ambiguous,
     };
 
     // 6. If not dry-run, execute the move and rewrites, then update the index.
     if !dry_run {
-        execute_mv(dir, &old_rel, &new_rel, &plans, src_mtime)?;
+        execute_mv(dir, &old_rel, &new_rel, &mv_plan.plans, src_mtime)?;
 
         // Patch index: rename the entry, re-scan files with rewritten links,
         // and update the link graph so backlink queries stay accurate.
-        let rewritten: Vec<&str> = plans.iter().map(|p| p.rel_path.as_str()).collect();
+        let rewritten: Vec<&str> = mv_plan.plans.iter().map(|p| p.rel_path.as_str()).collect();
         let mut index_dirty = false;
         mutation::rename_index_entry(
             snapshot_index,

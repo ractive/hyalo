@@ -22,7 +22,7 @@ iter-150 round): the write path accepts frontmatter values that the
 read path then refuses to parse, silently orphaning the file from every
 hyalo command.
 
-```
+```bash
 hyalo set f.md --property "huge=$(python3 -c 'print("x"*10000)')"
 # exit 0, JSON envelope confirms write
 hyalo find --file f.md
