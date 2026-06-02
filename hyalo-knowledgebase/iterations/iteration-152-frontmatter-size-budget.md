@@ -2,7 +2,7 @@
 title: Iteration 152 — Reconcile frontmatter write vs. parse size budget
 type: iteration
 date: 2026-06-01
-status: in-progress
+status: completed
 branch: iter-152/frontmatter-size-budget
 tags:
   - iteration
