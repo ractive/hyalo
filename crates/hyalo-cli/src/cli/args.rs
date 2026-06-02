@@ -629,7 +629,12 @@ pub(crate) enum Commands {
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
             \u{00a0} hyalo mv --tag archive --to archive/ --apply\n\n\
             OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, applied flag,\n\
-            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\
+            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\n\
+            INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
+            in-place after a successful move: the moved entry is renamed, files whose links were\n\
+            rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
+            updated. Index path keys are vault-relative and use forward slashes on all platforms.\n\
+            In batch mode the index is saved once at the end, not per move.\n\
             SIDE EFFECTS: Moves files and modifies files containing links (unless dry-run)."
     )]
     Mv {

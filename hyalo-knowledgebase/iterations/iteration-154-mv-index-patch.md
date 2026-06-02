@@ -2,7 +2,7 @@
 title: Iteration 154 — Incremental snapshot-index patch on `mv`
 type: iteration
 date: 2026-06-01
-status: planned
+status: completed
 branch: iter-154/mv-index-patch
 tags:
   - iteration
@@ -87,39 +87,39 @@ matters here — iter-137 lesson).
 
 ## Tasks
 
-- [ ] Call `LinkGraph::rename_path(old, new)` in `commands/mv.rs::run`
+- [x] Call `LinkGraph::rename_path(old, new)` in `commands/mv.rs::run`
       after successful rename + rewrite
-- [ ] Update each inbound entry's `links` field in the snapshot to
+- [x] Update each inbound entry's `links` field in the snapshot to
       reflect the rewritten target
-- [ ] Call `save_index_if_dirty` once at end of mv (single or batch)
-- [ ] Skip cleanly when no snapshot exists
-- [ ] Ensure path keys are forward-slash + vault-relative on Windows
-- [ ] Test: `mv b.md c.md` → `--index-file .hyalo-index find` shows
+- [x] Call `save_index_if_dirty` once at end of mv (single or batch)
+- [x] Skip cleanly when no snapshot exists
+- [x] Ensure path keys are forward-slash + vault-relative on Windows
+- [x] Test: `mv b.md c.md` → `--index-file .hyalo-index find` shows
       `c.md`, not `b.md`
-- [ ] Test: batch `mv --files-from list.txt` for 10 files patches
+- [x] Test: batch `mv --files-from list.txt` for 10 files patches
       all 10 entries and saves once
-- [ ] Test: `mv a.md sub/dir/a.md` produces index entry with key
+- [x] Test: `mv a.md sub/dir/a.md` produces index entry with key
       `sub/dir/a.md` (forward slash even on Windows CI)
-- [ ] Test: corrupt-snapshot path — if patch fails, snapshot is
+- [x] Test: corrupt-snapshot path — if patch fails, snapshot is
       removed and a rebuild hint surfaces (mirror iter-149)
-- [ ] Update `mv --help` to mention the snapshot is auto-patched
-- [ ] `cargo fmt && cargo clippy --workspace --all-targets -- -D
+- [x] Update `mv --help` to mention the snapshot is auto-patched
+- [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D
       warnings && cargo test --workspace -q` clean
-- [ ] Cross-platform CI green (Windows specifically — path keys)
-- [ ] Mark `status=completed`, move to `iterations/done/`
+- [x] Cross-platform CI green (Windows specifically — path keys)
+- [x] Mark `status=completed`, move to `iterations/done/`
 
 ## Acceptance Criteria
 
-- [ ] After `hyalo mv` on a vault with a snapshot, the snapshot
+- [x] After `hyalo mv` on a vault with a snapshot, the snapshot
       reflects the new state immediately. `hyalo --index-file
       .hyalo-index find` returns the new path and not the old.
-- [ ] Inbound link rewrites are reflected in the snapshot's link
+- [x] Inbound link rewrites are reflected in the snapshot's link
       tables for each affected file, not just the renamed file.
-- [ ] Batch `mv` saves the snapshot once, not N times.
-- [ ] Windows index keys are forward-slash and vault-relative.
-- [ ] If the snapshot is corrupt/unreadable, mv still succeeds; the
+- [x] Batch `mv` saves the snapshot once, not N times.
+- [x] Windows index keys are forward-slash and vault-relative.
+- [x] If the snapshot is corrupt/unreadable, mv still succeeds; the
       snapshot is invalidated with a clear stderr note.
-- [ ] No performance regression on single `mv` (snapshot patch is
+- [x] No performance regression on single `mv` (snapshot patch is
       O(inbound files), not O(vault)).
 
 ## Notes for the implementing agent
