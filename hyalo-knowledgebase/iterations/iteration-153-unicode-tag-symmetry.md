@@ -2,7 +2,7 @@
 title: Iteration 153 — Unicode tag write/query symmetry
 type: iteration
 date: 2026-06-01
-status: planned
+status: in-progress
 branch: iter-153/unicode-tag-symmetry
 tags:
   - iteration
@@ -87,37 +87,37 @@ is_emoji(c)`).
 
 ## Tasks
 
-- [ ] Decide A vs B (recommend A), note in PR
-- [ ] Define single `is_valid_tag_char` in `tags.rs`
-- [ ] Call from `set --tag`, `new --tag`, `find --tag`,
+- [x] Decide A vs B (recommend A), note in PR
+- [x] Define single `is_valid_tag_char` in `tags.rs`
+- [x] Call from `set --tag`, `new --tag`, `find --tag`,
       tag-index population, `hyalo tags` listing
-- [ ] Decide emoji policy (recommend allow), implement
-- [ ] Update `find --tag` `--help` text
-- [ ] Update `set` / `new` `--help` text
-- [ ] Update README tag section
-- [ ] Test: `bug_iter149_4_unicode_tag_roundtrip` — set tag `日本語`,
+- [x] Decide emoji policy (recommend allow), implement
+- [x] Update `find --tag` `--help` text
+- [x] Update `set` / `new` `--help` text
+- [x] Update README tag section
+- [x] Test: `bug_iter149_4_unicode_tag_roundtrip` — set tag `日本語`,
       then `find --tag 日本語` returns the file
-- [ ] Test: `bug_iter149_4_emoji_tag_roundtrip` — set tag
+- [x] Test: `bug_iter149_4_emoji_tag_roundtrip` — set tag
       `emoji-🎉`, then `find --tag emoji-🎉` returns the file
-- [ ] Test: `bug_iter149_4_invalid_tag_chars_still_rejected` — `set
+- [x] Test: `bug_iter149_4_invalid_tag_chars_still_rejected` — `set
       --tag "foo bar"` (space) still rejected on both sides
-- [ ] Test: round-trip with NFC vs NFD normalised input behaves
+- [x] Test: round-trip with NFC vs NFD normalised input behaves
       consistently (or document the limitation)
-- [ ] `cargo fmt && cargo clippy --workspace --all-targets -- -D
+- [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D
       warnings && cargo test --workspace -q` clean
-- [ ] Mark `status=completed`, move to `iterations/done/`
+- [x] Mark `status=completed`, move to `iterations/done/`
 
 ## Acceptance Criteria
 
-- [ ] Tag validator lives in one place, called by every read and
+- [x] Tag validator lives in one place, called by every read and
       write path.
-- [ ] `set --tag 日本語 f.md && find --tag 日本語` returns `f.md`.
-- [ ] `set --tag 'emoji-🎉' f.md && find --tag 'emoji-🎉'` returns
+- [x] `set --tag 日本語 f.md && find --tag 日本語` returns `f.md`.
+- [x] `set --tag 'emoji-🎉' f.md && find --tag 'emoji-🎉'` returns
       `f.md`.
-- [ ] Invalid characters (space, `#`, etc.) are rejected at *both*
+- [x] Invalid characters (space, `#`, etc.) are rejected at *both*
       `set` and `find`, with identical error messages.
-- [ ] `--help` and README document the rule.
-- [ ] No regression on existing ASCII tag tests.
+- [x] `--help` and README document the rule.
+- [x] No regression on existing ASCII tag tests.
 
 ## Notes for the implementing agent
 
