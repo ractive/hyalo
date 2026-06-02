@@ -2,7 +2,7 @@
 title: Iteration 153 — Unicode tag write/query symmetry
 type: iteration
 date: 2026-06-01
-status: in-progress
+status: completed
 branch: iter-153/unicode-tag-symmetry
 tags:
   - iteration
