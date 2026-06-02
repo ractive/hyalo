@@ -36,10 +36,13 @@ pub fn is_valid_tag_char(c: char) -> bool {
 /// Conservative emoji-range check used by [`is_valid_tag_char`].
 ///
 /// We deliberately avoid pulling in a Unicode-emoji table crate. The ranges
-/// below cover all assigned emoji blocks plus the zero-width joiner and
-/// variation-selector codepoints that appear inside multi-codepoint emoji
-/// sequences. New emoji added to these blocks in future Unicode revisions
-/// will be accepted automatically.
+/// below cover the most commonly used emoji blocks plus the zero-width
+/// joiner and variation-selector codepoints that appear inside
+/// multi-codepoint emoji sequences. This is **not exhaustive** — emoji
+/// presentation forms of codepoints outside these ranges (e.g. © U+00A9,
+/// the combining enclosing keycap U+20E3 used in keycap sequences) are
+/// not accepted. New emoji assigned inside the listed blocks in future
+/// Unicode revisions are picked up automatically.
 #[must_use]
 pub fn is_emoji_like(c: char) -> bool {
     matches!(c as u32,
@@ -80,6 +83,15 @@ pub fn validate_tag(name: &str) -> Result<(), String> {
     if name.chars().all(char::is_numeric) {
         return Err(format!(
             "tag '{name}' is all numeric; tags must contain at least one non-numeric character (e.g. 'y{name}')"
+        ));
+    }
+
+    // Reject tags composed entirely of invisible joiner / variation-selector
+    // codepoints — they are permitted *inside* emoji sequences but a tag
+    // made only of them would be effectively blank.
+    if name.chars().all(|c| matches!(c, '\u{200D}' | '\u{FE0F}')) {
+        return Err(format!(
+            "tag '{name}' contains only invisible joiner/variation-selector codepoints; tags must contain a visible character"
         ));
     }
 
@@ -392,6 +404,18 @@ mod tests {
         assert!(validate_tag("tag!").is_err());
         assert!(validate_tag("tag@name").is_err());
         assert!(validate_tag("#tag").is_err());
+    }
+
+    #[test]
+    fn invalid_tag_only_joiners() {
+        // ZWJ / VS16 alone — permitted inside an emoji sequence, but a tag
+        // made entirely of these invisible codepoints is rejected.
+        let err = validate_tag("\u{200D}").unwrap_err();
+        assert!(err.contains("invisible"), "got: {err}");
+        let err = validate_tag("\u{FE0F}\u{200D}").unwrap_err();
+        assert!(err.contains("invisible"), "got: {err}");
+        // But a real emoji that uses them internally still passes.
+        assert!(validate_tag("emoji-🎉").is_ok());
     }
 
     // --- Nested tag matching ---
