@@ -1,4 +1,5 @@
 use super::common::{hyalo_no_hints, md, write_md, write_tagged};
+use std::path::Path;
 use tempfile::TempDir;
 
 /// Helper: extract the results array from a `{total, results}` envelope.
@@ -833,4 +834,164 @@ fn tags_bare_defaults_to_summary() {
     assert!(output.status.success(), "bare `tags` should succeed");
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 2, "should produce summary output");
+}
+
+// ---------------------------------------------------------------------------
+// iter-149 BUG-4: write/query symmetry for Unicode and emoji tags
+// (see hyalo-knowledgebase/iterations/iteration-153-unicode-tag-symmetry.md)
+// ---------------------------------------------------------------------------
+
+/// Helper: write `name.md` then `set --tag <tag>` it and assert success.
+fn set_tag(dir: &Path, name: &str, tag: &str) {
+    write_md(dir, name, "---\ntitle: x\n---\n# Body\n");
+    let out = hyalo_no_hints()
+        .args(["--dir", dir.to_str().unwrap(), "set", name, "--tag", tag])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`set --tag {tag}` should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Helper: `find --tag <tag>` and return the list of returned file paths.
+fn find_by_tag(dir: &Path, tag: &str) -> Vec<String> {
+    let out = hyalo_no_hints()
+        .args(["--dir", dir.to_str().unwrap(), "find", "--tag", tag])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "`find --tag {tag}` should succeed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn bug_iter149_4_unicode_tag_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    set_tag(tmp.path(), "note.md", "日本語");
+    let hits = find_by_tag(tmp.path(), "日本語");
+    assert!(
+        hits.iter().any(|f| f == "note.md"),
+        "expected 'note.md' in find --tag results, got: {hits:?}"
+    );
+}
+
+#[test]
+fn bug_iter149_4_emoji_tag_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    set_tag(tmp.path(), "party.md", "emoji-🎉");
+    let hits = find_by_tag(tmp.path(), "emoji-🎉");
+    assert!(
+        hits.iter().any(|f| f == "party.md"),
+        "expected 'party.md' in find --tag results, got: {hits:?}"
+    );
+}
+
+#[test]
+fn bug_iter149_4_invalid_tag_chars_still_rejected() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "f.md", "---\ntitle: x\n---\n# Body\n");
+
+    // `set --tag "foo bar"` — space rejected on the write path.
+    let set_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "set",
+            "f.md",
+            "--tag",
+            "foo bar",
+        ])
+        .output()
+        .unwrap();
+    assert!(!set_out.status.success(), "set should reject space in tag");
+    let stderr = String::from_utf8_lossy(&set_out.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&set_out.stdout).to_string();
+    let combined_set = format!("{stderr}{stdout}");
+    assert!(
+        combined_set.contains("invalid character"),
+        "expected 'invalid character' error from set, got stderr: {stderr} stdout: {stdout}"
+    );
+
+    // `find --tag "foo bar"` — same character class, same rejection.
+    let find_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--tag",
+            "foo bar",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !find_out.status.success(),
+        "find should reject space in tag"
+    );
+    let find_stderr = String::from_utf8_lossy(&find_out.stderr).to_string();
+    let find_stdout = String::from_utf8_lossy(&find_out.stdout).to_string();
+    let combined_find = format!("{find_stderr}{find_stdout}");
+    assert!(
+        combined_find.contains("invalid character"),
+        "expected 'invalid character' error from find, got stderr: {find_stderr} stdout: {find_stdout}"
+    );
+}
+
+#[test]
+fn bug_iter149_4_nfc_vs_nfd_codepoint_equal() {
+    // Tag identity is codepoint-equal (no NFC/NFD folding). The NFC composed
+    // form of accented Latin (e.g. "café" = U+0063 U+0061 U+0066 U+00E9)
+    // round-trips through write and query. The NFD decomposed form
+    // ("cafe\u{0301}") is rejected on both sides because the combining mark
+    // U+0301 is not in the permitted character class — this is the
+    // documented limitation. Critically, write and query reject it
+    // *symmetrically*, which is the contract this iteration restores.
+    let tmp = TempDir::new().unwrap();
+    let nfc = "caf\u{00E9}";
+    let nfd = "cafe\u{0301}";
+    set_tag(tmp.path(), "cafe.md", nfc);
+
+    // NFC round-trips.
+    let composed_hits = find_by_tag(tmp.path(), nfc);
+    assert!(
+        composed_hits.iter().any(|f| f == "cafe.md"),
+        "NFC form should round-trip"
+    );
+
+    // NFD is rejected on the write path …
+    let write_out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "set",
+            "cafe.md",
+            "--tag",
+            nfd,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !write_out.status.success(),
+        "NFD (combining mark) should be rejected on write"
+    );
+
+    // … and on the query path with an identical error class.
+    let read_out = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap(), "find", "--tag", nfd])
+        .output()
+        .unwrap();
+    assert!(
+        !read_out.status.success(),
+        "NFD (combining mark) should be rejected on query (symmetric with write)"
+    );
 }

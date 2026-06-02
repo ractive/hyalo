@@ -40,8 +40,10 @@ pub fn extract_tags(props: &IndexMap<String, Value>) -> Vec<String> {
 /// A tag matches if it equals the query or starts with `query/` (case-insensitive,
 /// using ASCII-only case folding via `eq_ignore_ascii_case`).
 ///
-/// Matching is performed at the byte level and is intended for tags that use
-/// ASCII-compatible characters (letters, digits, `_`, `-`, `/`).
+/// Matching is performed at the byte level. ASCII letters case-fold; all other
+/// codepoints (including Unicode letters and emoji) must match exactly, which
+/// is the intended behaviour — tag identity is codepoint-equal and no
+/// NFC/NFD normalisation is applied.
 #[must_use]
 pub fn tag_matches(tag: &str, query: &str) -> bool {
     tag.eq_ignore_ascii_case(query)

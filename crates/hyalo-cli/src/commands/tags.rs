@@ -16,29 +16,82 @@ use serde_json::Value;
 // Tag format validation
 // ---------------------------------------------------------------------------
 
+/// Returns `true` if `c` is a permitted tag character.
+///
+/// Permitted set:
+/// - Unicode alphabetic characters (`char::is_alphabetic`) — covers ASCII
+///   letters as well as CJK, Cyrillic, Greek, Arabic, etc.
+/// - Unicode numeric characters (`char::is_numeric`).
+/// - The punctuation `_`, `-`, `/` (the last separates tag hierarchy levels).
+/// - Emoji and related pictographs (see [`is_emoji_like`]). This matches the
+///   tag conventions used by Mastodon, Bluesky and GitHub labels and keeps
+///   the write and query paths symmetric for non-Latin / non-ASCII users.
+///
+/// Tag identity is codepoint-equal — no NFC/NFD normalisation is performed.
+#[must_use]
+pub fn is_valid_tag_char(c: char) -> bool {
+    c.is_alphabetic() || c.is_numeric() || matches!(c, '_' | '-' | '/') || is_emoji_like(c)
+}
+
+/// Conservative emoji-range check used by [`is_valid_tag_char`].
+///
+/// We deliberately avoid pulling in a Unicode-emoji table crate. The ranges
+/// below cover the most commonly used emoji blocks plus the zero-width
+/// joiner and variation-selector codepoints that appear inside
+/// multi-codepoint emoji sequences. This is **not exhaustive** — emoji
+/// presentation forms of codepoints outside these ranges (e.g. © U+00A9,
+/// the combining enclosing keycap U+20E3 used in keycap sequences) are
+/// not accepted. New emoji assigned inside the listed blocks in future
+/// Unicode revisions are picked up automatically.
+#[must_use]
+pub fn is_emoji_like(c: char) -> bool {
+    matches!(c as u32,
+        0x2600..=0x27BF        // Misc symbols and dingbats (☀ ✨ ✅ …)
+        | 0x2300..=0x23FF      // Misc technical (⌛ ⏰ …)
+        | 0x2B00..=0x2BFF      // Misc symbols and arrows
+        | 0x200D               // Zero-width joiner (emoji sequences)
+        | 0xFE0F               // Variation selector-16 (emoji presentation)
+        | 0x1F000..=0x1FFFF    // Supplementary symbols/pictographs (🎉 🚀 …)
+    )
+}
+
 /// Validate an Obsidian-compatible tag name.
+///
 /// Rules:
-/// - Only letters, digits, underscores (`_`), hyphens (`-`), forward slashes (`/`)
-/// - Must contain at least one non-numeric character
-/// - Must not be empty
-/// - Forward slashes are allowed for hierarchy (e.g. `inbox/processing`)
+/// - Must not be empty.
+/// - Every character must satisfy [`is_valid_tag_char`].
+/// - Must contain at least one non-numeric character (so a tag like `1984`
+///   is rejected — write `y1984` instead).
+///
+/// This single validator is called from both write paths (`set --tag`,
+/// `new --tag`, `tags rename`) and read paths (`find --tag`,
+/// `--where-tag`) so the two directions can never drift.
 pub fn validate_tag(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("tag name must not be empty".to_owned());
     }
 
     for ch in name.chars() {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' && ch != '/' {
+        if !is_valid_tag_char(ch) {
             return Err(format!(
-                "invalid character '{ch}' in tag name; allowed: letters, digits, _, -, /"
+                "invalid character '{ch}' in tag name; allowed: Unicode letters and digits, _, -, /, and emoji"
             ));
         }
     }
 
-    // Must contain at least one non-digit character
-    if name.chars().all(|c| c.is_ascii_digit()) {
+    // Must contain at least one non-digit character (Unicode-aware).
+    if name.chars().all(char::is_numeric) {
         return Err(format!(
             "tag '{name}' is all numeric; tags must contain at least one non-numeric character (e.g. 'y{name}')"
+        ));
+    }
+
+    // Reject tags composed entirely of invisible joiner / variation-selector
+    // codepoints — they are permitted *inside* emoji sequences but a tag
+    // made only of them would be effectively blank.
+    if name.chars().all(|c| matches!(c, '\u{200D}' | '\u{FE0F}')) {
+        return Err(format!(
+            "tag '{name}' contains only invisible joiner/variation-selector codepoints; tags must contain a visible character"
         ));
     }
 
@@ -311,6 +364,25 @@ mod tests {
     }
 
     #[test]
+    fn valid_tag_unicode_letters() {
+        // CJK, Cyrillic, Greek, Arabic — all accepted on both write and query.
+        assert!(validate_tag("日本語").is_ok());
+        assert!(validate_tag("проект").is_ok());
+        assert!(validate_tag("Ελληνικά").is_ok());
+        assert!(validate_tag("مشروع").is_ok());
+        assert!(validate_tag("café").is_ok());
+        // Hierarchy with non-ASCII parents.
+        assert!(validate_tag("проект/задача").is_ok());
+    }
+
+    #[test]
+    fn valid_tag_emoji() {
+        assert!(validate_tag("emoji-🎉").is_ok());
+        assert!(validate_tag("🚀").is_ok());
+        assert!(validate_tag("✨sparkle✨").is_ok());
+    }
+
+    #[test]
     fn invalid_tag_empty() {
         assert!(validate_tag("").is_err());
     }
@@ -332,6 +404,18 @@ mod tests {
         assert!(validate_tag("tag!").is_err());
         assert!(validate_tag("tag@name").is_err());
         assert!(validate_tag("#tag").is_err());
+    }
+
+    #[test]
+    fn invalid_tag_only_joiners() {
+        // ZWJ / VS16 alone — permitted inside an emoji sequence, but a tag
+        // made entirely of these invisible codepoints is rejected.
+        let err = validate_tag("\u{200D}").unwrap_err();
+        assert!(err.contains("invisible"), "got: {err}");
+        let err = validate_tag("\u{FE0F}\u{200D}").unwrap_err();
+        assert!(err.contains("invisible"), "got: {err}");
+        // But a real emoji that uses them internally still passes.
+        assert!(validate_tag("emoji-🎉").is_ok());
     }
 
     // --- Nested tag matching ---

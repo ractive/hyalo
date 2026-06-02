@@ -243,7 +243,7 @@ pub fn set(
                 &msg,
                 None,
                 Some(
-                    "tag names may contain letters, digits, _, -, / and must have at least one non-numeric character",
+                    "tag names may contain Unicode letters and digits, _, -, /, and emoji, and must have at least one non-numeric character",
                 ),
                 None,
             );
