@@ -51,8 +51,11 @@ expect without needing a separate `min_items` constraint.
 
 ## Non-goals
 
-- Not adding a `min_items` / `non_empty` constraint to `List` /
-  `StringList`. Out of scope; track as a follow-up iteration if needed.
+- No `min_items` / `non_empty` TOML constraint on `List` / `StringList`.
+  Considered and rejected: the tightened `required` semantics above
+  cover the only motivating use case ("list must carry ≥1 entry")
+  without adding a new schema knob. If users later surface a need for
+  `min_items > 1` or `max_items`, revisit then.
 - Not retrofitting rule IDs onto the remaining built-in schema-pass
   warnings ("no `type`", "undeclared property"). Same story, different
   iteration.
