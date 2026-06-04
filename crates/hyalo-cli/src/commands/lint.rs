@@ -882,17 +882,40 @@ fn validate_properties(
     };
 
     // Check required properties.
+    //
+    // A list-typed required property must also be non-empty: an empty `[]` is
+    // semantically equivalent to absent for sequence-shaped properties (the
+    // user has declared "this document categorically must carry at least one
+    // entry"). Atomic-typed required properties only need to be present —
+    // checking emptiness on strings/numbers is a separate constraint.
+    let type_hint = doc_type
+        .as_deref()
+        .map(|t| format!(" (type: {t})"))
+        .unwrap_or_default();
     for req in &effective_schema.required {
-        if !properties.contains_key(req.as_str()) {
-            let type_hint = doc_type
-                .as_deref()
-                .map(|t| format!(" (type: {t})"))
-                .unwrap_or_default();
-            violations.push(Violation {
-                severity: Severity::Error,
-                kind: None,
-                message: format!("missing required property \"{req}\"{type_hint}"),
-            });
+        match properties.get(req.as_str()) {
+            None => {
+                violations.push(Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("missing required property \"{req}\"{type_hint}"),
+                });
+            }
+            Some(Value::Array(items)) if items.is_empty() => {
+                if matches!(
+                    effective_schema.properties.get(req.as_str()),
+                    Some(PropertyConstraint::List | PropertyConstraint::StringList { .. })
+                ) {
+                    violations.push(Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "required property \"{req}\" must not be empty{type_hint}"
+                        ),
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2746,6 +2769,75 @@ mod tests {
         assert!(
             counts.errors > 0,
             "strict: undeclared prop should be an error"
+        );
+    }
+
+    /// A required list-typed property satisfied by an empty `[]` is an error:
+    /// for sequence-shaped properties, `required` means "must carry at least
+    /// one item", not just "key present".
+    #[test]
+    fn required_list_property_must_be_non_empty() {
+        use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty_tags.md");
+        std::fs::write(
+            &path,
+            "---\ntitle: Hello\ntype: note\ntags: []\n---\nBody\n",
+        )
+        .unwrap();
+
+        let schema = {
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("title".to_owned());
+            ts.required.push("tags".to_owned());
+            ts.properties
+                .insert("tags".to_owned(), PropertyConstraint::List);
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (outcome, counts) = lint_extended_strict(&path, "empty_tags.md", &schema, false);
+        assert!(counts.errors > 0, "empty required list should error");
+        let body = match outcome {
+            crate::output::CommandOutcome::Success { output, .. } => output,
+            other => panic!("expected Success outcome, got: {other:?}"),
+        };
+        assert!(
+            body.contains("must not be empty") && body.contains("tags"),
+            "expected non-empty-list error mentioning tags in output, got: {body}"
+        );
+    }
+
+    /// A required atomic-typed property satisfied by any value (including a
+    /// zero-ish one like `0` or `""`) is *not* an error from the
+    /// non-empty-list check — only sequence-typed required properties get the
+    /// extra emptiness gate.
+    #[test]
+    fn required_non_list_property_is_unaffected_by_empty_check() {
+        use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty_title.md");
+        std::fs::write(&path, "---\ntitle: \"\"\ntype: note\n---\nBody\n").unwrap();
+
+        let schema = {
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("title".to_owned());
+            ts.properties.insert(
+                "title".to_owned(),
+                PropertyConstraint::String { pattern: None },
+            );
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (_, counts) = lint_extended_strict(&path, "empty_title.md", &schema, false);
+        assert_eq!(
+            counts.errors, 0,
+            "empty required string is not flagged here"
         );
     }
 

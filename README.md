@@ -203,6 +203,8 @@ values = ["planned", "in-progress", "completed", "superseded"]
 
 Supported property types: `string` (with optional `pattern`), `date` (`YYYY-MM-DD`), `datetime` (naive local ISO 8601 — `YYYY-MM-DDThh:mm:ss`, no timezone), `number`, `boolean`, `list`, `enum` (with `values`), and `string-list` (with optional `item_pattern`).
 
+A list-typed property listed in `required` must contain at least one item — an empty `[]` is reported as `required property "tags" must not be empty`. This makes `required = ["tags"]` (with `tags` declared `type = "list"`) the idiomatic way to enforce non-empty tags; there's no separate `min_items` knob. Atomic-typed required properties (`string`, `date`, `number`, ...) only need to be present.
+
 See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to validate your vault against them.
 
 ### CWD-aware behaviour

@@ -105,6 +105,9 @@ research/karpathy-llm-wiki.md:
 
 To require `tags` on a given document type, list it in that type's `required` array
 (e.g. `required = ["title", "tags"]`) — a missing `tags` key then becomes an error.
+For list-typed required properties (`tags` is `type = "list"`), an empty `[]` is
+also an error: `required` on a sequence means "must carry at least one item",
+not just "key present".
 
 ## Summary Integration
 

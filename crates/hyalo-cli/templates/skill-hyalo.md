@@ -333,6 +333,8 @@ pattern = "^iter-\\d+/"
 
 Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `number`, `boolean`, `list`, `enum` (with `values`).
 
+**`required` semantics for list-typed properties:** if a property is in `required` AND its constraint is `type = "list"` (or `type = "string-list"`), the value must contain at least one item — an empty `[]` is an error (`required property "tags" must not be empty`). Atomic-typed required properties only need to be present. So `required = ["tags"]` + `type = "list"` is the idiomatic way to enforce non-empty tags; no separate `min_items` knob exists.
+
 When no `[schema]` block exists, lint exits 0 with zero violations (backwards compatible).
 
 `hyalo summary` includes a `schema` field with error/warning counts when a schema is configured.
