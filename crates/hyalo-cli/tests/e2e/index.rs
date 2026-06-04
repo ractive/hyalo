@@ -880,9 +880,11 @@ fn mv_with_index_updates_index_path() {
 
 #[test]
 fn mv_batch_with_index_updates_index_paths() {
-    // Batch `mv --apply` must patch the snapshot index for every move
-    // (and save once at the end, not per move). Verifies the iter-154 AC:
-    // "Batch mv saves the snapshot once, not N times."
+    // Batch `mv --apply` must patch the snapshot index for every move,
+    // remapping both moved entries and any backlink sources that point to
+    // them. The "save once at the end, not per move" optimization is
+    // exercised indirectly: this test only asserts the post-batch index
+    // state is correct; save-count instrumentation is out of scope here.
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
 
