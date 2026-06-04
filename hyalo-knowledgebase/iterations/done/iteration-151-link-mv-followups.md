@@ -201,7 +201,7 @@ Plus property-style tests for `LinkWriter` (in
   pending from iter-150; orthogonal to this iteration's bugs. Track
   separately if needed.
 - **`mv`-side `.hyalo-index` incremental patch** — covered by
-  [[iterations/iteration-154-mv-index-patch]].
+  [[iterations/done/iteration-154-mv-index-patch]].
 - **Reference-style markdown links** — not in scope.
 - **Image links** — not in scope.
 - **Property tests under `proptest`/`quickcheck`** — overkill for

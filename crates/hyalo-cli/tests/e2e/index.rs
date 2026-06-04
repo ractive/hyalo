@@ -879,6 +879,132 @@ fn mv_with_index_updates_index_path() {
 }
 
 #[test]
+fn mv_batch_with_index_updates_index_paths() {
+    // Batch `mv --apply` must patch the snapshot index for every move,
+    // remapping both moved entries and any backlink sources that point to
+    // them. The "save once at the end, not per move" optimization is
+    // exercised indirectly: this test only asserts the post-batch index
+    // state is correct; save-count instrumentation is out of scope here.
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Move every file with status=draft into archive/ via batch mv.
+    // alpha.md and gamma.md both match.
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "mv",
+            "--property",
+            "status=draft",
+            "--to",
+            "archive/",
+            "--apply",
+        ],
+    );
+
+    // The index should now contain archive/alpha.md and archive/gamma.md,
+    // and not the old top-level paths.
+    let json = run_find(&tmp, &["--index"]);
+    let files = sorted_files(&json);
+    assert!(
+        files.contains(&"archive/alpha.md".to_owned()),
+        "archive/alpha.md should be in index; got: {files:?}"
+    );
+    assert!(
+        files.contains(&"archive/gamma.md".to_owned()),
+        "archive/gamma.md should be in index; got: {files:?}"
+    );
+    assert!(
+        !files.contains(&"alpha.md".to_owned()),
+        "old path alpha.md should be gone; got: {files:?}"
+    );
+    assert!(
+        !files.contains(&"gamma.md".to_owned()),
+        "old path gamma.md should be gone; got: {files:?}"
+    );
+
+    // The link graph must also be patched: gamma.md → [[alpha]] was rewritten
+    // to point at archive/alpha.md, and the backlink source is now archive/gamma.md.
+    let bl_json = run_with_index(
+        &tmp,
+        &index_path,
+        &["backlinks", "--file", "archive/alpha.md"],
+    );
+    let bl_sources: Vec<&str> = bl_json["results"]["backlinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["source"].as_str().unwrap())
+        .collect();
+    assert!(
+        bl_sources.contains(&"archive/gamma.md"),
+        "backlink source should be the new path archive/gamma.md; got: {bl_sources:?}"
+    );
+}
+
+#[test]
+fn mv_to_subdir_with_index_uses_forward_slash_key() {
+    // iter-154 AC: index path keys are vault-relative and use forward slashes
+    // on all platforms — including when mv creates intermediate directories.
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Move beta.md into a freshly-created nested directory.
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["mv", "--file", "beta.md", "--to", "sub2/dir2/beta.md"],
+    );
+
+    let json = run_find(&tmp, &["--index"]);
+    let files = sorted_files(&json);
+    assert!(
+        files.iter().any(|f| f == "sub2/dir2/beta.md"),
+        "moved entry should use forward-slash key 'sub2/dir2/beta.md'; got: {files:?}"
+    );
+    // Defense in depth: no backslashes anywhere in index keys.
+    for f in &files {
+        assert!(
+            !f.contains('\\'),
+            "index key {f:?} must not contain backslashes"
+        );
+    }
+}
+
+#[test]
+fn mv_with_corrupt_index_still_succeeds_with_warning() {
+    // iter-154 AC: if the snapshot is corrupt/unreadable, mv still succeeds
+    // and a stderr note is emitted (the load-time fallback warning).
+    let tmp = setup_vault();
+    let index_path = tmp.path().join(".hyalo-index");
+    std::fs::write(&index_path, b"not a valid hyalo index").unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("mv")
+        .arg(format!("--index-file={}", index_path.display()))
+        .args(["--file", "gamma.md", "--to", "renamed-gamma.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "mv must still succeed with a corrupt index: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("falling back to disk scan"),
+        "expected stderr to warn about the corrupt index fallback; got: {stderr}"
+    );
+
+    // The file move itself happened on disk regardless of the index state.
+    assert!(tmp.path().join("renamed-gamma.md").exists());
+    assert!(!tmp.path().join("gamma.md").exists());
+}
+
+#[test]
 fn tags_rename_with_index_updates_index() {
     let tmp = setup_vault();
     let index_path = create_default_index(&tmp);
