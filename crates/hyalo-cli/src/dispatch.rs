@@ -1277,7 +1277,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &file,
                     &to,
                     effective_dry_run,
-                    effective_format,
+                    ctx.user_format,
                     site_prefix,
                     snapshot_index,
                     index_path,
