@@ -214,6 +214,8 @@ pub enum PropertyConstraint {
     },
     /// ISO 8601 date (YYYY-MM-DD).
     Date,
+    /// ISO 8601 naive local datetime (YYYY-MM-DDThh:mm:ss).
+    DateTime,
     /// Integer or floating-point number.
     Number,
     /// Boolean (`true` / `false`).
@@ -298,6 +300,19 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                 }
                 Ok(PropertyConstraint::Date)
             }
+            "datetime" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::DateTime)
+            }
             "number" => {
                 if raw.pattern.is_some() {
                     return Err(format!(
@@ -364,7 +379,7 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
             }
             other => Err(format!(
                 "unknown property constraint type '{other}': expected one of \
-                 string, date, number, boolean, list, enum, string-list"
+                 string, date, datetime, number, boolean, list, enum, string-list"
             )),
         }
     }
@@ -777,6 +792,31 @@ required-sections = [\"# Title\", \"## Tasks\"]
         let cfg = parse_cfg(toml).expect("should parse");
         let ts = &cfg.types["note"];
         assert_eq!(ts.required_sections, vec!["# Title", "## Tasks"]);
+    }
+
+    #[test]
+    fn parse_datetime_constraint() {
+        let toml = r#"
+[schema.types.note.properties.when]
+type = "datetime"
+"#;
+        let cfg = parse_cfg(toml).expect("should parse");
+        assert!(matches!(
+            cfg.types["note"].properties.get("when"),
+            Some(PropertyConstraint::DateTime)
+        ));
+    }
+
+    #[test]
+    fn reject_pattern_on_datetime() {
+        let toml = r#"
+[schema.types.note.properties.when]
+type = "datetime"
+pattern = "foo"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("'pattern'"));
+        assert!(err.contains("datetime"));
     }
 
     #[test]

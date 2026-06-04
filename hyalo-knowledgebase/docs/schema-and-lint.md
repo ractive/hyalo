@@ -52,6 +52,7 @@ type = "list"
 |-----------|-----------|
 | `string`  | Any string; optional `pattern` (regex) |
 | `date`    | ISO 8601 date (YYYY-MM-DD) |
+| `datetime` | ISO 8601 naive local datetime (YYYY-MM-DDThh:mm:ss); no `Z`/offset/fractional seconds |
 | `number`  | Integer or float |
 | `boolean` | true/false |
 | `list`    | YAML sequence |

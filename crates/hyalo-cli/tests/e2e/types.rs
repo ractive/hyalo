@@ -250,6 +250,50 @@ fn types_set_property_type_date() {
     assert!(toml_content.contains("type = \"date\""));
 }
 
+#[test]
+fn types_set_property_type_datetime() {
+    let tmp = setup_with_type();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "note", "--property-type", "when=datetime"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let toml_content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        toml_content.contains("type = \"datetime\""),
+        "expected datetime constraint in TOML, got: {toml_content}"
+    );
+
+    // types show should surface the datetime constraint in JSON.
+    let show = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "note", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(show.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(json["results"]["properties"]["when"]["type"], "datetime");
+
+    // Text rendering should mention `datetime` too.
+    let show_text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "note", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(show_text.status.success());
+    let stdout = String::from_utf8_lossy(&show_text.stdout);
+    assert!(
+        stdout.contains("datetime"),
+        "expected 'datetime' in text output, got: {stdout}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // types set --property-values (enum)
 // ---------------------------------------------------------------------------

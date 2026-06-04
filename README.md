@@ -201,6 +201,8 @@ type = "enum"
 values = ["planned", "in-progress", "completed", "superseded"]
 ```
 
+Supported property types: `string` (with optional `pattern`), `date` (`YYYY-MM-DD`), `datetime` (naive local ISO 8601 — `YYYY-MM-DDThh:mm:ss`, no timezone), `number`, `boolean`, `list`, `enum` (with `values`), and `string-list` (with optional `item_pattern`).
+
 See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to validate your vault against them.
 
 ### CWD-aware behaviour

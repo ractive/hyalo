@@ -65,6 +65,44 @@ pub fn is_iso8601_date(s: &str) -> bool {
     day <= days_in_month
 }
 
+/// Returns `true` for strings that are both `YYYY-MM-DDThh:mm:ss` formatted
+/// **and** represent a valid calendar date plus a real wall-clock time
+/// (hour 0–23, minute and second 0–59). The accepted grammar is intentionally
+/// strict: no `Z` suffix, no timezone offset, no fractional seconds.
+///
+/// Purely shape-matching strings like `"2026-13-50T25:99:99"` return `false`.
+pub fn is_iso8601_datetime(s: &str) -> bool {
+    if s.len() != 19 {
+        return false;
+    }
+    let b = s.as_bytes();
+    if b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return false;
+    }
+    if !b[..4].iter().all(u8::is_ascii_digit)
+        || !b[5..7].iter().all(u8::is_ascii_digit)
+        || !b[8..10].iter().all(u8::is_ascii_digit)
+        || !b[11..13].iter().all(u8::is_ascii_digit)
+        || !b[14..16].iter().all(u8::is_ascii_digit)
+        || !b[17..19].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+
+    // Re-use the calendar-date validator for the date portion.
+    if !is_iso8601_date(&s[..10]) {
+        return false;
+    }
+
+    // The digit-check above means these parses succeed in practice; on any
+    // unexpected failure, the sentinel 99 falls through to the range check
+    // below and is rejected as out-of-range.
+    let hour: u32 = s[11..13].parse().unwrap_or(99);
+    let minute: u32 = s[14..16].parse().unwrap_or(99);
+    let second: u32 = s[17..19].parse().unwrap_or(99);
+    hour < 24 && minute < 60 && second < 60
+}
+
 /// Returns the number of days in the given month of the given year.
 /// Months outside 1–12 return 0.
 fn days_in_month(year: u32, month: u32) -> u32 {
@@ -125,6 +163,29 @@ mod tests {
         assert!(is_iso8601_date("2024-02-29")); // leap year
         assert!(is_iso8601_date("2000-02-29")); // 400-year leap
         assert!(is_iso8601_date("2026-12-31")); // last day of year
+    }
+
+    #[test]
+    fn iso8601_datetime_valid() {
+        assert!(is_iso8601_datetime("2026-06-04T14:30:00"));
+        assert!(is_iso8601_datetime("2024-02-29T23:59:59")); // leap year + end of day
+        assert!(is_iso8601_datetime("1970-01-01T00:00:00")); // epoch
+    }
+
+    #[test]
+    fn iso8601_datetime_invalid() {
+        assert!(!is_iso8601_datetime(""));
+        assert!(!is_iso8601_datetime("2026-06-04")); // no time part
+        assert!(!is_iso8601_datetime("2026-06-04T14:30")); // missing seconds
+        assert!(!is_iso8601_datetime("2026-06-04 14:30:00")); // space, not T
+        assert!(!is_iso8601_datetime("2026-06-04T14:30:00Z")); // Z suffix rejected
+        assert!(!is_iso8601_datetime("2026-06-04T14:30:00+02:00")); // offset rejected
+        assert!(!is_iso8601_datetime("2026-13-04T14:30:00")); // bad month
+        assert!(!is_iso8601_datetime("2026-02-30T14:30:00")); // bad day
+        assert!(!is_iso8601_datetime("2026-06-04T24:00:00")); // hour 24
+        assert!(!is_iso8601_datetime("2026-06-04T14:60:00")); // minute 60
+        assert!(!is_iso8601_datetime("2026-06-04T14:30:60")); // second 60
+        assert!(!is_iso8601_datetime("2023-02-29T00:00:00")); // 2023 not a leap year
     }
 
     #[test]
