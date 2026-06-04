@@ -1001,18 +1001,20 @@ Repeatable (AND).\n\
             FRONTMATTER PASS: schema violations from `[schema.default]` / `[schema.types.*]`.\n\
             - error: missing required property, wrong type, invalid enum value, pattern mismatch,\n\
             \u{00a0}         `item_pattern` violation on `string-list` items, missing `required-sections`,\n\
-            \u{00a0}         empty value on a list-typed required property (see REQUIRED + LIST below)\n\
+            \u{00a0}         empty value on a required property (see REQUIRED EMPTINESS below)\n\
             - warn:  no 'type' property, property not declared in schema\n\
             When no `[schema]` section exists, this pass exits 0 with zero violations.\n\
             Schema extensions `item_pattern` (per-item regex on `string-list` properties) and\n\
             `required-sections` (required body outline on type schemas) are validated here.\n\n\
-            REQUIRED + LIST: when a property is both listed in `required` AND declared with\n\
-            `type = \"list\"` or `type = \"string-list\"`, the value must contain at least one\n\
-            item. An empty `[]` is treated as semantically equivalent to absent and reported\n\
-            as an error (e.g. `required property \"tags\" must not be empty`). Atomic-typed\n\
-            required properties (`string`, `date`, `number`, ...) only need to be present —\n\
-            an empty string or zero satisfies them. To require tags on a document type,\n\
-            list `tags` in that type's `required` array; no separate `min_items` knob needed.\n\n\
+            REQUIRED EMPTINESS: a required property whose value is YAML null (`tags: ~`) or\n\
+            an empty array (`tags: []`) is treated as semantically equivalent to absent and\n\
+            reported as an error (e.g. `required property \"tags\" must not be empty`). The\n\
+            rule fires regardless of declared constraint type — vacuous values convey no\n\
+            information for a required field. Atomic-typed required properties (`string`,\n\
+            `date`, `number`, ...) are unaffected: an empty string or zero still satisfies\n\
+            them (checking those is a separate constraint not done here). To require tags on\n\
+            a document type, list `tags` in that type's `required` array; no separate\n\
+            `min_items` knob needed.\n\n\
             BODY PASS: ~14 default-on stock rules from mdbook-lint plus two HYALO native\n\
             cross-cutting rules:\n\
             \u{00a0} - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\

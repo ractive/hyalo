@@ -27,12 +27,16 @@ adding `tags: []` to every file or deleting all schema types.
 Users who *do* want tags enforced already have a precise tool: add
 `tags` to the relevant type's `required` array. That promotes a missing
 key to a hard error and is exactly the kind of opt-in the schema system
-is designed for. As part of this iteration, `required` on a list-typed
-property is also tightened to mean "must carry at least one item" — an
-empty `[]` no longer satisfies it. This matches the intuition that an
-empty list is semantically equivalent to absent for sequence-shaped
-properties, and makes `required = ["tags"]` actually do what users
-expect without needing a separate `min_items` constraint.
+is designed for. As part of this iteration, `required` is also tightened
+to mean "must carry a meaningful value": YAML null (`tags: ~`) and an
+empty array (`tags: []`) are treated as semantically equivalent to
+absent and fail the required gate the same way a missing key does. This
+matches the intuition that a vacuous value conveys no information for a
+required field, and makes `required = ["tags"]` (with `tags` typed as a
+list) do what users expect without needing a separate `min_items`
+constraint. Atomic-typed required properties (`string`, `date`,
+`number`, ...) only need to be present — an empty string or zero still
+satisfies them.
 
 ## Scope
 
@@ -63,12 +67,15 @@ expect without needing a separate `min_items` constraint.
 
 ## Tasks
 
-- [x] Tighten the `required` check in `lint.rs::validate_properties` so a
-      list-typed required property satisfied by an empty `[]` becomes an
-      error. Atomic-typed required properties are unaffected.
-- [x] Add unit tests for both directions: empty list under
-      `required` → error; empty atomic value under `required` → no error
-      (existing required-presence semantics preserved).
+- [x] Tighten the `required` check in `lint.rs::validate_properties` so
+      any required property whose value is YAML null or an empty array
+      becomes an error. Atomic-typed required properties are unaffected
+      (an empty string or zero still satisfies them). The rule is
+      value-shape driven; no special-casing of declared constraint type.
+- [x] Add unit tests covering all three directions: empty array under
+      `required` → error; null value under `required` → error; empty
+      atomic value under `required` → no error (existing
+      required-presence semantics preserved for atomics).
 - [x] Delete the warning emission block in `lint.rs::validate_properties`.
 - [x] Update the surrounding stale comment that referenced the warning.
 - [x] Remove the `has_tags` parameter from `validate_properties`.
@@ -83,24 +90,25 @@ expect without needing a separate `min_items` constraint.
 - [x] Update `hyalo-knowledgebase/docs/schema-and-lint.md` example
       output and severity-level list; mention `required = ["tags"]` as
       the opt-in path.
-- [ ] Run quality gates: `cargo fmt`,
+- [x] Run quality gates: `cargo fmt`,
       `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`.
 
 ## Acceptance criteria
 
-- [ ] `hyalo lint` against a file with `type: …` set but no `tags`
+- [x] `hyalo lint` against a file with `type: …` set but no `tags`
       property produces zero violations under the project's default
       schema.
-- [ ] A schema that declares `required = ["tags"]` for a `list`-typed
+- [x] A schema that declares `required = ["tags"]` for a `list`-typed
       `tags` property raises a hard error when a file of that type has
       `tags: []` (new behavior) or omits the key entirely (preserved).
-- [ ] A schema with `required = ["title"]` and a `string`-typed `title`
+      A YAML null value (`tags: ~`) is also treated as empty.
+- [x] A schema with `required = ["title"]` and a `string`-typed `title`
       property accepts `title: ""` without error (atomic-required
-      semantics unchanged — non-empty-list check is sequence-only).
-- [ ] `hyalo lint --strict` no longer produces a "no tags defined" warn
+      semantics unchanged — the empty-value check is sequence/null-only).
+- [x] `hyalo lint --strict` no longer produces a "no tags defined" warn
       for any file in this repo's knowledgebase.
-- [ ] `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace -q`
+- [x] `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace -q`
       all pass.
 - [ ] README, schema-and-lint doc, skill template, and `--help` no
       longer advertise the removed warning.

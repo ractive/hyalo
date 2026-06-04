@@ -5,9 +5,10 @@
 /// levels:
 ///
 ///   - **error**  — schema violation (missing required field, wrong value type,
-///     invalid enum value, failed pattern match)
-///   - **warn**   — soft issue (no `type` property, no `tags` property, property
-///     not declared in schema)
+///     invalid enum value, failed pattern match, empty value on a list-typed
+///     required property)
+///   - **warn**   — soft issue (no `type` property, property not declared in
+///     schema)
 ///
 /// Exit code: 0 = clean, 1 = errors found, 2 = internal error.
 use std::collections::HashMap;
@@ -436,7 +437,7 @@ pub fn lint_counts_only(
 ///
 /// Used by `hyalo summary` to avoid re-reading files from disk.
 /// The `index_entries` iterator yields `(rel_path, properties)` tuples.
-pub fn lint_counts_from_properties<'a>(
+pub(crate) fn lint_counts_from_properties<'a>(
     entries: impl Iterator<Item = (&'a str, &'a IndexMap<String, Value>)>,
     schema: &SchemaConfig,
 ) -> LintCounts {
@@ -883,11 +884,13 @@ fn validate_properties(
 
     // Check required properties.
     //
-    // A list-typed required property must also be non-empty: an empty `[]` is
-    // semantically equivalent to absent for sequence-shaped properties (the
-    // user has declared "this document categorically must carry at least one
-    // entry"). Atomic-typed required properties only need to be present —
-    // checking emptiness on strings/numbers is a separate constraint.
+    // A required property must be both present AND carry a meaningful value.
+    // Null (`tags: ~`) and an empty array (`tags: []`) are treated as
+    // semantically equivalent to absent — they convey no information and a
+    // required key whose value is "nothing here" should fail the same gate as
+    // a missing key. Atomic-typed required properties only need to be present
+    // (an empty string or zero satisfies them); checking those is a separate
+    // constraint and not handled here.
     let type_hint = doc_type
         .as_deref()
         .map(|t| format!(" (type: {t})"))
@@ -901,19 +904,12 @@ fn validate_properties(
                     message: format!("missing required property \"{req}\"{type_hint}"),
                 });
             }
-            Some(Value::Array(items)) if items.is_empty() => {
-                if matches!(
-                    effective_schema.properties.get(req.as_str()),
-                    Some(PropertyConstraint::List | PropertyConstraint::StringList { .. })
-                ) {
-                    violations.push(Violation {
-                        severity: Severity::Error,
-                        kind: None,
-                        message: format!(
-                            "required property \"{req}\" must not be empty{type_hint}"
-                        ),
-                    });
-                }
+            Some(v) if v.is_null() || v.as_array().is_some_and(Vec::is_empty) => {
+                violations.push(Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("required property \"{req}\" must not be empty{type_hint}"),
+                });
             }
             _ => {}
         }
@@ -2772,11 +2768,12 @@ mod tests {
         );
     }
 
-    /// A required list-typed property satisfied by an empty `[]` is an error:
-    /// for sequence-shaped properties, `required` means "must carry at least
-    /// one item", not just "key present".
+    /// A required property whose value is an empty `[]` is an error: an empty
+    /// list is semantically equivalent to absent for a required field. The
+    /// rule is value-shape driven and fires whether or not the property has a
+    /// List constraint declared.
     #[test]
-    fn required_list_property_must_be_non_empty() {
+    fn required_property_empty_array_is_error() {
         use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
 
         let dir = tempfile::tempdir().unwrap();
@@ -2806,7 +2803,38 @@ mod tests {
         };
         assert!(
             body.contains("must not be empty") && body.contains("tags"),
-            "expected non-empty-list error mentioning tags in output, got: {body}"
+            "expected empty-required error mentioning tags in output, got: {body}"
+        );
+    }
+
+    /// A required property explicitly set to YAML null (`tags: ~`) is also
+    /// treated as empty — null carries no information, same as an absent key.
+    /// Without this, a typo or stripped value silently passes the required gate.
+    #[test]
+    fn required_property_null_value_is_error() {
+        use hyalo_core::schema::{SchemaConfig, TypeSchema};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("null_tags.md");
+        std::fs::write(&path, "---\ntitle: Hello\ntype: note\ntags: ~\n---\nBody\n").unwrap();
+
+        let schema = {
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("tags".to_owned());
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (outcome, counts) = lint_extended_strict(&path, "null_tags.md", &schema, false);
+        assert!(counts.errors > 0, "null required property should error");
+        let body = match outcome {
+            crate::output::CommandOutcome::Success { output, .. } => output,
+            other => panic!("expected Success outcome, got: {other:?}"),
+        };
+        assert!(
+            body.contains("must not be empty") && body.contains("tags"),
+            "expected empty-required error mentioning tags in output, got: {body}"
         );
     }
 

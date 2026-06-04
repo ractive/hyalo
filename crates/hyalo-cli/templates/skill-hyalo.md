@@ -331,9 +331,9 @@ type = "string"
 pattern = "^iter-\\d+/"
 ```
 
-Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `number`, `boolean`, `list`, `enum` (with `values`).
+Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `datetime` (YYYY-MM-DDThh:mm:ss), `number`, `boolean`, `list`, `string-list` (optional `item_pattern` regex), `enum` (with `values`).
 
-**`required` semantics for list-typed properties:** if a property is in `required` AND its constraint is `type = "list"` (or `type = "string-list"`), the value must contain at least one item — an empty `[]` is an error (`required property "tags" must not be empty`). Atomic-typed required properties only need to be present. So `required = ["tags"]` + `type = "list"` is the idiomatic way to enforce non-empty tags; no separate `min_items` knob exists.
+**`required` empty-value semantics:** a required property whose value is YAML null (`tags: ~`) or an empty array (`tags: []`) is an error (`required property "tags" must not be empty`). Vacuous values convey no information for a required field, so they're treated as semantically equivalent to absent. This fires regardless of declared constraint type. Atomic-typed required properties (`string`, `date`, `number`, ...) only need to be present — an empty string or zero still satisfies them. So `required = ["tags"]` + `type = "list"` is the idiomatic way to enforce non-empty tags; no separate `min_items` knob exists.
 
 When no `[schema]` block exists, lint exits 0 with zero violations (backwards compatible).
 

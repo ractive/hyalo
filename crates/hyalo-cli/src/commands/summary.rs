@@ -328,6 +328,9 @@ pub fn summary(
     let lint_summary: Option<LintSummary> = if schema.is_empty() {
         None
     } else {
+        // IndexEntry::tags is derived from the same `properties` map by
+        // extract_tags, so passing properties alone is sufficient for the
+        // lint pass — there is no `tags` data unreachable through properties.
         let lint_entries = entries.iter().map(|e| (e.rel_path.as_str(), &e.properties));
         let counts = lint_counts_from_properties(lint_entries, schema);
         Some(LintSummary {

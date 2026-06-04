@@ -90,12 +90,12 @@ hyalo lint --format json
 ```
 iterations/iteration-101-bm25.md:
   error  missing required property "foo" (type: iteration)
-  warn   status "planed" not in [planned, in-progress, completed, ...] (did you mean "planned"?)
+  error  property "status" value "planed" not in [planned, in-progress, completed, ...] (did you mean "planned"?)
 
 research/karpathy-llm-wiki.md:
   error  property "date" expected date (YYYY-MM-DD), got "April 9"
 
-3 files checked, 2 with issues (2 errors, 1 warning)
+3 files checked, 2 with issues (3 errors, 0 warnings)
 ```
 
 ### Severity Levels
@@ -105,9 +105,10 @@ research/karpathy-llm-wiki.md:
 
 To require `tags` on a given document type, list it in that type's `required` array
 (e.g. `required = ["title", "tags"]`) — a missing `tags` key then becomes an error.
-For list-typed required properties (`tags` is `type = "list"`), an empty `[]` is
-also an error: `required` on a sequence means "must carry at least one item",
-not just "key present".
+A YAML null value (`tags: ~`) or an empty array (`tags: []`) also fails: vacuous
+values are treated as semantically equivalent to absent for required properties.
+Atomic-typed required properties (`string`, `date`, `number`, ...) only need to
+be present — an empty string or zero still satisfies them.
 
 ## Summary Integration
 
