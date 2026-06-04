@@ -289,8 +289,8 @@ Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detai
 
 **Strict mode:** `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`)
 promotes the "no `type` property" and "undeclared property in frontmatter" warnings to
-errors, so lint exits non-zero on those cases. Other warnings (no tags, etc.) stay as
-warnings. Useful in CI and `/hyalo-tidy` to fail fast on schema drift.
+errors, so lint exits non-zero on those cases. Useful in CI and `/hyalo-tidy` to fail
+fast on schema drift.
 
 **Tune which rules run with `hyalo lint-rules`** (list / show / set / remove). Reach for it when a rule is too noisy on your KB style — disable it or change its severity rather than living with the warnings:
 

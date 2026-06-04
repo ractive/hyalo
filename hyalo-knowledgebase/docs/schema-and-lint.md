@@ -94,15 +94,17 @@ iterations/iteration-101-bm25.md:
 
 research/karpathy-llm-wiki.md:
   error  property "date" expected date (YYYY-MM-DD), got "April 9"
-  warn   no tags defined
 
-3 files checked, 2 with issues (2 errors, 2 warnings)
+3 files checked, 2 with issues (2 errors, 1 warning)
 ```
 
 ### Severity Levels
 
 - **error** — schema violation (missing required property, wrong value type, invalid enum value, pattern mismatch)
-- **warn** — soft issue (no `type` property, no `tags`, property not declared in schema)
+- **warn** — soft issue (no `type` property, property not declared in schema)
+
+To require `tags` on a given document type, list it in that type's `required` array
+(e.g. `required = ["title", "tags"]`) — a missing `tags` key then becomes an error.
 
 ## Summary Integration
 
