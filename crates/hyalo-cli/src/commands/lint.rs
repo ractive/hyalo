@@ -1034,6 +1034,27 @@ fn validate_constraint(
             }
             vec![]
         }
+        PropertyConstraint::DateTime => {
+            let Some(s) = value_as_str(value) else {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!(
+                        "property \"{name}\" expected datetime (YYYY-MM-DDThh:mm:ss), got {value}"
+                    ),
+                }];
+            };
+            if !hyalo_core::util::is_iso8601_datetime(s) {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!(
+                        "property \"{name}\" expected datetime (YYYY-MM-DDThh:mm:ss), got \"{s}\""
+                    ),
+                }];
+            }
+            vec![]
+        }
         PropertyConstraint::Number => {
             if !matches!(value, Value::Number(_)) {
                 return vec![Violation {
@@ -1947,6 +1968,47 @@ fn lint_one_file_extended(
         };
         violations_by_rule
             .entry("HYALO003".to_owned())
+            .or_default()
+            .push(InternalViolation {
+                line: diag.line,
+                column: diag.column,
+                message: diag.message,
+                severity: sev.to_owned(),
+                fix: None,
+                fixed: false,
+            });
+    }
+
+    // HYALO004 — datetime-format: schema-declared datetime properties must
+    // hold `YYYY-MM-DDThh:mm:ss` values.
+    let doc_type_for_dt: Option<&str> = properties.get("type").and_then(|v| v.as_str());
+    let effective_schema_for_dt: TypeSchema = match doc_type_for_dt {
+        Some(t) => schema.merged_schema_for_type(t),
+        None => schema.default_schema().clone(),
+    };
+    let datetime_pairs: Vec<(&str, &str)> = effective_schema_for_dt
+        .properties
+        .iter()
+        .filter(|(_, c)| matches!(c, PropertyConstraint::DateTime))
+        .filter_map(|(name, _)| {
+            let v = properties.get(name.as_str())?;
+            let s = v.as_str()?;
+            Some((name.as_str(), s))
+        })
+        .collect();
+    for diag in engine.lint_frontmatter_hyalo004(
+        rel_path,
+        &datetime_pairs,
+        md_lint_config,
+        rule_filter,
+        strict,
+    ) {
+        let sev = match diag.severity {
+            hyalo_mdlint::DiagSeverity::Error => "error",
+            hyalo_mdlint::DiagSeverity::Warn => "warn",
+        };
+        violations_by_rule
+            .entry("HYALO004".to_owned())
             .or_default()
             .push(InternalViolation {
                 line: diag.line,

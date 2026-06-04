@@ -95,6 +95,7 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
             }
         }
         PropertyConstraint::Date => serde_json::json!({"type": "date"}),
+        PropertyConstraint::DateTime => serde_json::json!({"type": "datetime"}),
         PropertyConstraint::Number => serde_json::json!({"type": "number"}),
         PropertyConstraint::Boolean => serde_json::json!({"type": "boolean"}),
         PropertyConstraint::List => serde_json::json!({"type": "list"}),
@@ -158,12 +159,13 @@ fn parse_property_type_str(s: &str) -> Result<&'static str, String> {
     match s {
         "string" => Ok("string"),
         "date" => Ok("date"),
+        "datetime" => Ok("datetime"),
         "number" => Ok("number"),
         "boolean" => Ok("boolean"),
         "list" => Ok("list"),
         "enum" => Ok("enum"),
         other => Err(format!(
-            "invalid property type '{other}': must be one of string, date, number, boolean, list, enum"
+            "invalid property type '{other}': must be one of string, date, datetime, number, boolean, list, enum"
         )),
     }
 }
@@ -1042,6 +1044,7 @@ mod tests {
     fn parse_property_type_valid() {
         assert_eq!(parse_property_type_str("string"), Ok("string"));
         assert_eq!(parse_property_type_str("date"), Ok("date"));
+        assert_eq!(parse_property_type_str("datetime"), Ok("datetime"));
         assert_eq!(parse_property_type_str("number"), Ok("number"));
         assert_eq!(parse_property_type_str("boolean"), Ok("boolean"));
         assert_eq!(parse_property_type_str("list"), Ok("list"));

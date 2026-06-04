@@ -986,6 +986,136 @@ fn lint_hyalo003_checks_all_date_keys() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// HYALO004 — datetime-format lint rule
+// ---------------------------------------------------------------------------
+
+/// A schema-declared `datetime` property with a valid `YYYY-MM-DDThh:mm:ss`
+/// value should not trigger HYALO004.
+#[test]
+fn lint_hyalo004_valid_datetime_no_violation() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.event]
+required = ["title"]
+
+[schema.types.event.properties.when]
+type = "datetime"
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "ev.md",
+        "---\ntype: event\ntitle: Launch\nwhen: 2026-06-04T14:30:00\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO004", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "expected clean run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let with_violations = json["results"]["files_with_violations"]
+        .as_u64()
+        .unwrap_or(0);
+    assert_eq!(with_violations, 0);
+}
+
+/// A date-only value in a schema-declared `datetime` property fires HYALO004.
+#[test]
+fn lint_hyalo004_date_only_fires() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.event]
+required = ["title"]
+
+[schema.types.event.properties.when]
+type = "datetime"
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "ev.md",
+        "---\ntype: event\ntitle: Launch\nwhen: 2026-06-04\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO004", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let files = json["results"]["files"]
+        .as_array()
+        .expect("results.files array");
+    let found = files.iter().any(|f| {
+        f["rule_groups"]
+            .as_array()
+            .is_some_and(|rgs| rgs.iter().any(|rg| rg["rule"] == "HYALO004"))
+    });
+    assert!(found, "expected HYALO004 in output, stdout: {stdout}");
+
+    // The message should name the offending property.
+    let any_msg = files.iter().any(|f| {
+        f["rule_groups"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter(|rg| rg["rule"] == "HYALO004")
+            .flat_map(|rg| rg["violations"].as_array().unwrap_or(&vec![]).clone())
+            .any(|v| v["message"].as_str().is_some_and(|m| m.contains("when")))
+    });
+    assert!(
+        any_msg,
+        "expected `when` in violation message, stdout: {stdout}"
+    );
+}
+
+/// HYALO004 is promoted to error under `--strict`.
+#[test]
+fn lint_hyalo004_strict_promotes_to_error() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.event]
+required = ["title"]
+
+[schema.types.event.properties.when]
+type = "datetime"
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "ev.md",
+        "---\ntype: event\ntitle: Launch\nwhen: not-a-datetime\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--rule", "HYALO004"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "expected exit 1 under --strict, stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("HYALO004"),
+        "expected HYALO004 in output, stdout: {stdout}"
+    );
+}
+
 /// HYALO003 appears in `lint-rules list`.
 #[test]
 fn lint_rules_list_includes_hyalo003() {

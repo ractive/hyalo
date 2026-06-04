@@ -39,6 +39,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     ("HYALO001", DiagSeverity::Error),
     ("HYALO002", DiagSeverity::Error),
     ("HYALO003", DiagSeverity::Warn),
+    ("HYALO004", DiagSeverity::Warn),
 ];
 
 /// Rules that are **default-on** (cheap, structural, low false-positive).
@@ -46,7 +47,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
 static DEFAULT_ON: &[&str] = &[
     "MD001", "MD009", "MD010", "MD011", "MD012", "MD018", "MD019", "MD022", "MD023", "MD031",
     "MD034", "MD040", "MD042", "MD047", // HYALO rules are always default-on
-    "HYALO001", "HYALO002", "HYALO003",
+    "HYALO001", "HYALO002", "HYALO003", "HYALO004",
 ];
 
 // ---------------------------------------------------------------------------
@@ -137,6 +138,15 @@ impl HyaloLintEngine {
                 autofixable: false,
                 source: "hyalo-mdlint".to_owned(),
             },
+            RuleCatalogEntry {
+                id: "HYALO004".to_owned(),
+                name: "datetime-format".to_owned(),
+                description: "Schema-declared datetime property has a value that is not a valid ISO 8601 datetime (YYYY-MM-DDThh:mm:ss)".to_owned(),
+                default_severity: DiagSeverity::Warn,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint".to_owned(),
+            },
         ];
         catalog.extend_from_slice(&hyalo_entries);
         catalog
@@ -221,6 +231,67 @@ impl HyaloLintEngine {
                 rule_name: "date-format".to_owned(),
                 message: format!(
                     "property `{key}` has value {bad_val:?} which is not a valid ISO 8601 date (YYYY-MM-DD)"
+                ),
+                line: 1,
+                column: 1,
+                severity: sev,
+                fix: None,
+            })
+            .collect()
+    }
+
+    /// Check HYALO004 (datetime-format) against schema-declared datetime
+    /// properties present in frontmatter.
+    ///
+    /// The caller is responsible for filtering `properties` against the
+    /// effective schema so that only schema-declared `datetime` fields with
+    /// string values are passed in. Pairs whose value is not a string are
+    /// ignored (a separate SCHEMA-level violation covers type mismatches).
+    pub fn lint_frontmatter_hyalo004(
+        &self,
+        _rel_path: &str,
+        datetime_pairs: &[(&str, &str)],
+        config: &LintConfig,
+        rule_filter: &[String],
+        strict: bool,
+    ) -> Vec<Diagnostic> {
+        use crate::rules::hyalo004::check_datetime_properties;
+
+        let enabled = if let Some(ov) = config.rules.get("HYALO004")
+            && let Some(b) = ov.enabled()
+        {
+            b
+        } else {
+            DEFAULT_ON.contains(&"HYALO004")
+        };
+        if !enabled {
+            return vec![];
+        }
+
+        if !rule_filter.is_empty() && !rule_filter.iter().any(|r| r == "HYALO004") {
+            return vec![];
+        }
+
+        let sev = if let Some(ov) = config.rules.get("HYALO004")
+            && let Some(sev_str) = ov.severity()
+        {
+            match sev_str {
+                "error" => DiagSeverity::Error,
+                _ => DiagSeverity::Warn,
+            }
+        } else if strict {
+            DiagSeverity::Error
+        } else {
+            DiagSeverity::Warn
+        };
+
+        check_datetime_properties(datetime_pairs)
+            .into_iter()
+            .map(|(key, bad_val)| Diagnostic {
+                rule_id: "HYALO004".to_owned(),
+                rule_name: "datetime-format".to_owned(),
+                message: format!(
+                    "property `{key}` has value {bad_val:?} which is not a valid ISO 8601 datetime (YYYY-MM-DDThh:mm:ss)"
                 ),
                 line: 1,
                 column: 1,
@@ -440,6 +511,7 @@ mod tests {
         assert!(rules.iter().any(|r| r.id == "HYALO001"));
         assert!(rules.iter().any(|r| r.id == "HYALO002"));
         assert!(rules.iter().any(|r| r.id == "HYALO003"));
+        assert!(rules.iter().any(|r| r.id == "HYALO004"));
     }
 
     #[test]

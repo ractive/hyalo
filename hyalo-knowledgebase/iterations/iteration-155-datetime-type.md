@@ -2,8 +2,13 @@
 title: "Iteration 155: Introduce datetime property type"
 type: iteration
 date: 2026-06-04
-tags: [iteration, schema, frontmatter, linting, obsidian-parity]
-status: planned
+tags:
+  - iteration
+  - schema
+  - frontmatter
+  - linting
+  - obsidian-parity
+status: completed
 branch: iter-155/datetime-type
 ---
 
@@ -46,36 +51,36 @@ gap so users can declare `datetime` properties for Obsidian parity.
 
 ## Tasks
 
-- [ ] Add `DateTime` variant to `PropertyConstraint` in
+- [x] Add `DateTime` variant to `PropertyConstraint` in
       `crates/hyalo-core/src/schema.rs` (around line 209-227), mirroring
       `Date`. Update `RawPropertyConstraint::try_from` (line 255-370) so
       the TOML form `type = "datetime"` round-trips.
-- [ ] Wire `datetime` through the schema-driven frontmatter validator so
+- [x] Wire `datetime` through the schema-driven frontmatter validator so
       that a property declared `datetime` is parsed via the existing
       `parse_value(..., forced_type="datetime")` branch in
       `crates/hyalo-core/src/frontmatter/types.rs` (lines 87-92).
-- [ ] Extend `parse_property_type_str()` in
+- [x] Extend `parse_property_type_str()` in
       `crates/hyalo-cli/src/commands/types.rs` (~line 157) to accept
       `datetime`, and update the CLI help text listing valid types
       (~line 166).
-- [ ] Update `constraint_to_json()` in
+- [x] Update `constraint_to_json()` in
       `crates/hyalo-cli/src/commands/types.rs` (lines 87-111) to emit
       `{"type": "datetime"}` and update the text renderer accordingly.
-- [ ] Add lint rule **HYALO004 — datetime-format** in
+- [x] Add lint rule **HYALO004 — datetime-format** in
       `crates/hyalo-mdlint/src/rules/`. Fires when a property declared
       as `datetime` (or with a conventional datetime key — keep the key
       list small and explicit to avoid false positives) does not match
       `is_datetime()`. Use `hyalo_core::util` for the validator
       (add `is_iso8601_datetime()` next to `is_iso8601_date()` in
       `crates/hyalo-core/src/util.rs` if not already exposed).
-- [ ] Register HYALO004 in the lint engine, enabled by default, promoted
+- [x] Register HYALO004 in the lint engine, enabled by default, promoted
       to error under `--strict` — match the wiring used for HYALO003 in
       `crates/hyalo-mdlint/src/engine.rs` (lines 131-139).
-- [ ] Update `crates/hyalo-cli/tests/e2e/types.rs` with end-to-end
+- [x] Update `crates/hyalo-cli/tests/e2e/types.rs` with end-to-end
       coverage: `types set foo --property-type when=datetime`, then
       `types show foo` (text + JSON), then a frontmatter sample that
       fails lint with HYALO004 and another that passes.
-- [ ] Add unit tests:
+- [x] Add unit tests:
       - `schema.rs`: TOML round-trip of `type = "datetime"` constraint.
       - `frontmatter/types.rs`: `parse_value` with `forced_type=datetime`
         accepts valid and rejects malformed inputs.
@@ -83,32 +88,32 @@ gap so users can declare `datetime` properties for Obsidian parity.
         month, day, hour, minute, second; leap year already covered for
         date).
       - `hyalo003.rs` / new `hyalo004.rs`: lint fires/clears as expected.
-- [ ] Update docs:
+- [x] Update docs:
       - `README.md` schema section (~line 195-201) to list `datetime`
         alongside `date` with a short example.
       - `hyalo-knowledgebase/` reference pages that enumerate property
         types (search with `hyalo find "property type"`).
       - `.claude/rules/knowledgebase.md` if it lists supported types.
-- [ ] Run quality gates in order: `cargo fmt`,
+- [x] Run quality gates in order: `cargo fmt`,
       `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`.
-- [ ] Dogfood: build release, declare a `datetime` field in this
+- [x] Dogfood: build release, declare a `datetime` field in this
       iteration's frontmatter (or a scratch doc), and verify
       `hyalo lint`, `hyalo types show`, and `hyalo set` all behave.
 
 ## Acceptance criteria
 
-- [ ] `hyalo types set foo --property-type when=datetime` succeeds and
+- [x] `hyalo types set foo --property-type when=datetime` succeeds and
       persists; `hyalo types show foo` (text + JSON) reports `datetime`.
-- [ ] A `.md` file whose frontmatter declares a `datetime` property with
+- [x] A `.md` file whose frontmatter declares a `datetime` property with
       a valid `YYYY-MM-DDThh:mm:ss` value passes `hyalo lint`.
-- [ ] Same file with a `YYYY-MM-DD` value (no time) fails HYALO004 with a
+- [x] Same file with a `YYYY-MM-DD` value (no time) fails HYALO004 with a
       clear error message naming the offending property.
-- [ ] Existing `date`-typed fields and HYALO003 behaviour are unchanged
+- [x] Existing `date`-typed fields and HYALO003 behaviour are unchanged
       (regression-tested).
-- [ ] README and knowledgebase reference docs document `datetime` next
+- [x] README and knowledgebase reference docs document `datetime` next
       to `date`, including the accepted grammar.
-- [ ] `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace -q`
+- [x] `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace -q`
       all pass.
 
 ## Open questions
