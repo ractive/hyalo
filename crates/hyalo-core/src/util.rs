@@ -94,7 +94,9 @@ pub fn is_iso8601_datetime(s: &str) -> bool {
         return false;
     }
 
-    // SAFETY: digit-check above guarantees parse cannot fail.
+    // The digit-check above means these parses succeed in practice; on any
+    // unexpected failure, the sentinel 99 falls through to the range check
+    // below and is rejected as out-of-range.
     let hour: u32 = s[11..13].parse().unwrap_or(99);
     let minute: u32 = s[14..16].parse().unwrap_or(99);
     let second: u32 = s[17..19].parse().unwrap_or(99);

@@ -194,9 +194,9 @@ fn synthesise_content(
             Some(PropertyConstraint::Date) => {
                 PropValue::Str(default_val.unwrap_or_else(today_iso8601))
             }
-            Some(PropertyConstraint::DateTime) => {
-                PropValue::Str(default_val.unwrap_or_else(|| "TBD".to_owned()))
-            }
+            Some(PropertyConstraint::DateTime) => PropValue::Str(
+                default_val.unwrap_or_else(|| format!("{}T00:00:00", today_iso8601())),
+            ),
             Some(PropertyConstraint::Number) => match default_val {
                 Some(s) => s
                     .parse::<i64>()
