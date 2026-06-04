@@ -2,8 +2,12 @@
 title: "Iteration 156: Drop hardcoded 'no tags defined' lint warning"
 type: iteration
 date: 2026-06-04
-tags: [iteration, lint, schema, dx]
-status: in-progress
+tags:
+  - iteration
+  - lint
+  - schema
+  - dx
+status: completed
 branch: iter-156/drop-no-tags-warning
 ---
 
