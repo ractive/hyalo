@@ -203,6 +203,8 @@ values = ["planned", "in-progress", "completed", "superseded"]
 
 Supported property types: `string` (with optional `pattern`), `date` (`YYYY-MM-DD`), `datetime` (naive local ISO 8601 — `YYYY-MM-DDThh:mm:ss`, no timezone), `number`, `boolean`, `list`, `enum` (with `values`), and `string-list` (with optional `item_pattern`).
 
+A required property whose value is YAML null (`tags: ~`) or an empty array (`tags: []`) is reported as `required property "tags" must not be empty` — vacuous values are treated as semantically equivalent to absent. This fires regardless of declared constraint type, so `required = ["tags"]` (with `tags` typed as `list`) is the idiomatic way to enforce non-empty tags; there's no separate `min_items` knob. Atomic-typed required properties (`string`, `date`, `number`, ...) only need to be present — an empty string or zero still satisfies them.
+
 See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to validate your vault against them.
 
 ### CWD-aware behaviour

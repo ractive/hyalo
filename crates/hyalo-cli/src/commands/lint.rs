@@ -5,9 +5,10 @@
 /// levels:
 ///
 ///   - **error**  — schema violation (missing required field, wrong value type,
-///     invalid enum value, failed pattern match)
-///   - **warn**   — soft issue (no `type` property, no `tags` property, property
-///     not declared in schema)
+///     invalid enum value, failed pattern match, empty value on a list-typed
+///     required property)
+///   - **warn**   — soft issue (no `type` property, property not declared in
+///     schema)
 ///
 /// Exit code: 0 = clean, 1 = errors found, 2 = internal error.
 use std::collections::HashMap;
@@ -435,14 +436,14 @@ pub fn lint_counts_only(
 /// Compute lint counts from pre-indexed `IndexEntry` properties.
 ///
 /// Used by `hyalo summary` to avoid re-reading files from disk.
-/// The `index_entries` iterator yields `(rel_path, properties, has_tags)` tuples.
-pub fn lint_counts_from_properties<'a>(
-    entries: impl Iterator<Item = (&'a str, &'a IndexMap<String, Value>, bool)>,
+/// The `index_entries` iterator yields `(rel_path, properties)` tuples.
+pub(crate) fn lint_counts_from_properties<'a>(
+    entries: impl Iterator<Item = (&'a str, &'a IndexMap<String, Value>)>,
     schema: &SchemaConfig,
 ) -> LintCounts {
     let mut counts = LintCounts::default();
-    for (rel_path, properties, has_tags) in entries {
-        let violations = validate_properties(rel_path, properties, has_tags, schema);
+    for (rel_path, properties) in entries {
+        let violations = validate_properties(rel_path, properties, schema);
         for v in &violations {
             match v.severity {
                 Severity::Error => counts.errors += 1,
@@ -507,8 +508,7 @@ fn lint_file_with_fix(
         (properties, Vec::new())
     };
 
-    let has_tags = final_props.contains_key("tags");
-    let mut violations = validate_properties(rel_path, &final_props, has_tags, schema);
+    let mut violations = validate_properties(rel_path, &final_props, schema);
 
     // Validate required_sections against the body outline.
     let doc_type: Option<String> = final_props.get("type").and_then(|v| match v {
@@ -843,7 +843,6 @@ fn normalize_date(s: &str) -> Option<String> {
 fn validate_properties(
     _rel_path: &str,
     properties: &IndexMap<String, Value>,
-    has_tags: bool,
     schema: &SchemaConfig,
 ) -> Vec<Violation> {
     let mut violations: Vec<Violation> = Vec::new();
@@ -884,27 +883,36 @@ fn validate_properties(
     };
 
     // Check required properties.
+    //
+    // A required property must be both present AND carry a meaningful value.
+    // Null (`tags: ~`) and an empty array (`tags: []`) are treated as
+    // semantically equivalent to absent — they convey no information and a
+    // required key whose value is "nothing here" should fail the same gate as
+    // a missing key. Atomic-typed required properties only need to be present
+    // (an empty string or zero satisfies them); checking those is a separate
+    // constraint and not handled here.
+    let type_hint = doc_type
+        .as_deref()
+        .map(|t| format!(" (type: {t})"))
+        .unwrap_or_default();
     for req in &effective_schema.required {
-        if !properties.contains_key(req.as_str()) {
-            let type_hint = doc_type
-                .as_deref()
-                .map(|t| format!(" (type: {t})"))
-                .unwrap_or_default();
-            violations.push(Violation {
-                severity: Severity::Error,
-                kind: None,
-                message: format!("missing required property \"{req}\"{type_hint}"),
-            });
+        match properties.get(req.as_str()) {
+            None => {
+                violations.push(Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("missing required property \"{req}\"{type_hint}"),
+                });
+            }
+            Some(v) if v.is_null() || v.as_array().is_some_and(Vec::is_empty) => {
+                violations.push(Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("required property \"{req}\" must not be empty{type_hint}"),
+                });
+            }
+            _ => {}
         }
-    }
-
-    // Warn when no `tags` property is present and the schema has at least one type defined.
-    if !has_tags && !schema.types.is_empty() {
-        violations.push(Violation {
-            severity: Severity::Warn,
-            kind: None,
-            message: "no tags defined".to_owned(),
-        });
     }
 
     // Build a per-call regex cache so the same pattern isn't recompiled across
@@ -914,9 +922,9 @@ fn validate_properties(
 
     // Type-specific property constraint validation.
     for (name, value) in properties {
-        // `tags` is validated against its declared constraint if present, but we
-        // never emit an "undeclared property" warning for it (it has its own
-        // "no tags defined" warning above).
+        // `tags` is validated against its declared constraint if present, but it
+        // is never reported as an undeclared property: presence of a `tags` key
+        // without a schema entry for it is intentional, not a misconfiguration.
         if name == "tags" {
             if let Some(constraint) = effective_schema.properties.get(name.as_str()) {
                 violations.extend(validate_constraint(
@@ -1908,8 +1916,7 @@ fn lint_one_file_extended(
             .iter()
             .any(|r| r.starts_with("FRONTMATTER") || r == "SCHEMA");
     if should_include_frontmatter {
-        let has_tags = properties.contains_key("tags");
-        let mut fm_violations = validate_properties(rel_path, &properties, has_tags, schema);
+        let mut fm_violations = validate_properties(rel_path, &properties, schema);
 
         // Under --strict, the missing-type warning is promoted to an error.
         // `validate_properties` only emits it when the schema is non-empty, but
@@ -2053,8 +2060,7 @@ fn lint_one_file_extended(
                 // `fix_actions.len()`, which is not 1:1 with resolved
                 // diagnostics (one fix action can clear multiple violations,
                 // or insert defaults that don't clear any).
-                let has_tags_after = mutable.contains_key("tags");
-                let post = validate_properties(rel_path, &mutable, has_tags_after, schema);
+                let post = validate_properties(rel_path, &mutable, schema);
                 let remaining: Vec<InternalViolation> = post
                     .into_iter()
                     .map(|v| {
@@ -2720,7 +2726,6 @@ mod tests {
 
         let schema = make_schema_with_declared_prop();
         let (_, counts) = lint_extended_strict(&path, "no_type.md", &schema, false);
-        // The "no type" warn plus "no tags" warn.
         assert_eq!(
             counts.errors, 0,
             "non-strict: no-type should remain a warning"
@@ -2763,19 +2768,121 @@ mod tests {
         );
     }
 
-    /// Strict mode only promotes the two targeted warnings; "no tags" stays a warn.
+    /// A required property whose value is an empty `[]` is an error: an empty
+    /// list is semantically equivalent to absent for a required field. The
+    /// rule is value-shape driven and fires whether or not the property has a
+    /// List constraint declared.
     #[test]
-    fn strict_mode_leaves_no_tags_as_warn() {
+    fn required_property_empty_array_is_error() {
+        use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty_tags.md");
+        std::fs::write(
+            &path,
+            "---\ntitle: Hello\ntype: note\ntags: []\n---\nBody\n",
+        )
+        .unwrap();
+
+        let schema = {
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("title".to_owned());
+            ts.required.push("tags".to_owned());
+            ts.properties
+                .insert("tags".to_owned(), PropertyConstraint::List);
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (outcome, counts) = lint_extended_strict(&path, "empty_tags.md", &schema, false);
+        assert!(counts.errors > 0, "empty required list should error");
+        let body = match outcome {
+            crate::output::CommandOutcome::Success { output, .. } => output,
+            other => panic!("expected Success outcome, got: {other:?}"),
+        };
+        assert!(
+            body.contains("must not be empty") && body.contains("tags"),
+            "expected empty-required error mentioning tags in output, got: {body}"
+        );
+    }
+
+    /// A required property explicitly set to YAML null (`tags: ~`) is also
+    /// treated as empty — null carries no information, same as an absent key.
+    /// Without this, a typo or stripped value silently passes the required gate.
+    #[test]
+    fn required_property_null_value_is_error() {
+        use hyalo_core::schema::{SchemaConfig, TypeSchema};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("null_tags.md");
+        std::fs::write(&path, "---\ntitle: Hello\ntype: note\ntags: ~\n---\nBody\n").unwrap();
+
+        let schema = {
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("tags".to_owned());
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (outcome, counts) = lint_extended_strict(&path, "null_tags.md", &schema, false);
+        assert!(counts.errors > 0, "null required property should error");
+        let body = match outcome {
+            crate::output::CommandOutcome::Success { output, .. } => output,
+            other => panic!("expected Success outcome, got: {other:?}"),
+        };
+        assert!(
+            body.contains("must not be empty") && body.contains("tags"),
+            "expected empty-required error mentioning tags in output, got: {body}"
+        );
+    }
+
+    /// A required atomic-typed property satisfied by any value (including a
+    /// zero-ish one like `0` or `""`) is *not* an error from the
+    /// non-empty-list check — only sequence-typed required properties get the
+    /// extra emptiness gate.
+    #[test]
+    fn required_non_list_property_is_unaffected_by_empty_check() {
+        use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty_title.md");
+        std::fs::write(&path, "---\ntitle: \"\"\ntype: note\n---\nBody\n").unwrap();
+
+        let schema = {
+            let mut schema = SchemaConfig::default();
+            let mut ts = TypeSchema::default();
+            ts.required.push("title".to_owned());
+            ts.properties.insert(
+                "title".to_owned(),
+                PropertyConstraint::String { pattern: None },
+            );
+            schema.types.insert("note".to_owned(), ts);
+            schema
+        };
+
+        let (_, counts) = lint_extended_strict(&path, "empty_title.md", &schema, false);
+        assert_eq!(
+            counts.errors, 0,
+            "empty required string is not flagged here"
+        );
+    }
+
+    /// A file with `type` but no `tags` produces zero violations against a
+    /// schema that doesn't require `tags`. The previously-hardcoded "no tags
+    /// defined" warning was removed in iter-156 — opt in via `required` if you
+    /// want enforcement.
+    #[test]
+    fn missing_tags_is_not_a_violation_by_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("no_tags.md");
-        // Has type, no tags — triggers "no tags defined" warning.
         std::fs::write(&path, "---\ntitle: Hello\ntype: note\n---\nBody\n").unwrap();
 
         let schema = make_schema_with_declared_prop();
-        let (_, counts) = lint_extended_strict(&path, "no_tags.md", &schema, true);
-        // "no tags" should still be a warning, not an error.
-        assert_eq!(counts.errors, 0, "strict: no-tags should stay as warn");
-        assert!(counts.warnings > 0, "strict: no-tags warning still present");
+        let (_, counts) = lint_extended_strict(&path, "no_tags.md", &schema, false);
+        assert_eq!(counts.errors, 0, "missing tags should not be an error");
+        assert_eq!(counts.warnings, 0, "missing tags should not warn");
     }
 
     #[test]

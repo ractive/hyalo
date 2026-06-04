@@ -90,19 +90,25 @@ hyalo lint --format json
 ```
 iterations/iteration-101-bm25.md:
   error  missing required property "foo" (type: iteration)
-  warn   status "planed" not in [planned, in-progress, completed, ...] (did you mean "planned"?)
+  error  property "status" value "planed" not in [planned, in-progress, completed, ...] (did you mean "planned"?)
 
 research/karpathy-llm-wiki.md:
   error  property "date" expected date (YYYY-MM-DD), got "April 9"
-  warn   no tags defined
 
-3 files checked, 2 with issues (2 errors, 2 warnings)
+3 files checked, 2 with issues (3 errors, 0 warnings)
 ```
 
 ### Severity Levels
 
 - **error** — schema violation (missing required property, wrong value type, invalid enum value, pattern mismatch)
-- **warn** — soft issue (no `type` property, no `tags`, property not declared in schema)
+- **warn** — soft issue (no `type` property, property not declared in schema)
+
+To require `tags` on a given document type, list it in that type's `required` array
+(e.g. `required = ["title", "tags"]`) — a missing `tags` key then becomes an error.
+A YAML null value (`tags: ~`) or an empty array (`tags: []`) also fails: vacuous
+values are treated as semantically equivalent to absent for required properties.
+Atomic-typed required properties (`string`, `date`, `number`, ...) only need to
+be present — an empty string or zero still satisfies them.
 
 ## Summary Integration
 
