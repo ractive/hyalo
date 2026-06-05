@@ -108,35 +108,56 @@ e2e coverage in PR #180 (since merged), so it was already locked down.
 
 ## Findings on firefox
 
-### F-1: Index load dominates short-query latency (MEDIUM, perf)
+### F-1: Index load dominates short-query latency (MEDIUM, perf) — **FIXED** in iter-157
 
-The firefox snapshot index is **24 MB** for 2621 files. Loading it costs
-~2.7 s of wall time, and that cost is paid on every CLI invocation regardless
-of how trivial the query is:
+**Original framing was wrong** — the cost was never the MessagePack load (~0.04 s
+for 24 MB) but an unconditional vault-wide disk walk in
+`dispatch.rs::build_case_index_from_dir` to populate a stem map used for
+case-insensitive / Obsidian short-form wikilink resolution. Every CLI
+invocation paid the ~2.7 s walk on a 2621-file tree, even commands that never
+resolve a wikilink.
 
-| Command (indexed)                       | Wall time |
-|-----------------------------------------|-----------|
-| `find --limit 1`                        | 2.98 s    |
-| `find webextension --limit 5`           | 2.93 s    |
-| `summary`                               | 2.88 s    |
-| `find --property title`                 | 2.84 s    |
-| `find --orphan --limit 5`               | 2.71 s    |
-| `lint`                                  | 3.45 s    |
+[[iterations/done/iteration-157-lazy-stem-map]] fixed this in two parts:
 
-Body-search comparison:
+- **Part A** — `maybe_case_index` gained a `needs_stem_map: bool` parameter
+  computed inline at each of the four call sites (Find, Summary, Links, Views)
+  from local flag state, mirroring the existing `needs_full_vault` /
+  `needs_body` pattern at `dispatch.rs:498-507`. For `Find`, only
+  `--orphan`/`--broken-links`/`--backlinks`/`--dead-end` set the bool true;
+  everything else (~70% of CLI invocations) skips the walk entirely.
+- **Part B** — when a snapshot index is passed (`--index-file`),
+  `build_case_index_from_snapshot(snap)` seeds the stem map from the index's
+  `rel_path` entries in microseconds instead of re-walking the disk. This
+  closes the gap for the remaining link-aware commands when an index is
+  available.
 
-| Command          | Indexed | Disk scan |
-|------------------|---------|-----------|
-| `find "wptrunner"` | 2.4 s | 5.8 s     |
+Re-measured on the same firefox tree (2621 files, 24 MB snapshot index):
 
-Index gives a real **2.4× speedup on the work**, but the fixed ~2.7 s load
-cost makes that invisible for short queries. For batch/pipeline use, perfectly
-fine; for interactive use on a tree this size, the floor is noticeable.
+| Command                          | Before | After  | Speedup |
+|----------------------------------|-------:|-------:|--------:|
+| `find --limit 1`                 | 2.77 s | 0.11 s | 25×     |
+| `find body "webkit" --limit 5`   | 2.81 s | 0.11 s | 26×     |
+| `find --property title --limit 1`| 2.84 s | 0.11 s | 26×     |
+| `tags`                           | ~2.7 s | 0.12 s | 23×     |
+| `properties`                     | ~2.7 s | 0.11 s | 25×     |
+| `find --orphan --limit 5` ✨     | 2.71 s | 0.16 s | 17×     |
+| `find --broken-links --limit 5` ✨| ~2.7 s | 0.14 s | 19×     |
+| `summary` ✨                     | 2.88 s | 0.15 s | 19×     |
+| `lint`                           | 3.45 s | 3.21 s | 1.07× (n/a — lint never used the stem map; remaining time is the body MD lint pass) |
 
-Possible mitigations to consider: mmap-style lazy load (was tried and reverted
-on macOS per [[project_perf_architecture]]), smaller index variant for the
-"just need file list" case, or just documenting "index helps below ~1 s only
-for vaults under a few hundred files."
+✨ = Part B wins (only fires when `--index-file` is passed). Without an index,
+predicate-true commands still walk disk by necessity (and the disk scan they're
+doing anyway for the query subsumes the stem-map cost):
+
+| Command (no `--index-file`) | Time   | Notes                                 |
+|-----------------------------|-------:|---------------------------------------|
+| `find --orphan`             | 4.96 s | Full disk scan — unavoidable          |
+| `summary`                   | 5.35 s | Same                                  |
+
+The interactive floor went from "noticeable lag every command" to "instant"
+on multi-thousand-file vaults. The third option considered (persisting the
+stem map directly in the snapshot index) was rejected — it offered no
+additional speedup over Part B but required a breaking format change.
 
 ### F-2: Broken-link reporting on mdbook/sphinx trees is noisy (LOW, by-design but worth a knob)
 
@@ -273,13 +294,13 @@ whether a streamable / partial-load format pays off.
 ## Verdict
 
 Two HIGH/MEDIUM open bugs from the prior report are gone. iter-155 and iter-156
-both work end-to-end on synthetic schemas. The new findings from firefox are
-all UX-flavored — none of them are correctness bugs, and the dominant ones
-(F-1 index load floor, F-2 mdbook noise) are real but cleanly addressable with
-configuration knobs rather than refactors.
+both work end-to-end on synthetic schemas.
 
-The most actionable items, in order: **F-3** (double error on datetime
+**F-1 was diagnosed and fixed in [[iterations/done/iteration-157-lazy-stem-map]]
+during this dogfood session.** The remaining new findings are all UX-flavored —
+none of them are correctness bugs.
+
+The remaining actionable items, in order: **F-3** (double error on datetime
 mismatch) is the only one that risks misleading a user. **F-2** (link-noise
 knob) would meaningfully improve the experience of pointing hyalo at any
-mdbook/sphinx tree. **F-1** (index load floor) is a perf ceiling, not a bug,
-but worth keeping in mind before adding more index-resident features.
+mdbook/sphinx tree.
