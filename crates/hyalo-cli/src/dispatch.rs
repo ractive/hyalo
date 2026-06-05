@@ -67,15 +67,37 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
     idx
 }
 
+/// Predicate: does a `Commands::Find` invocation with these flags need the
+/// wikilink stem map?
+///
+/// Outbound-link resolution (the `links` field, `--broken-links`, `--orphan`,
+/// `--dead-end`, sort-by-link-count) goes through `discovery::resolve_target`,
+/// which consults the case/stem index. Backlinks (field + sort) come from the
+/// pre-built link graph and do NOT use the case index, so backlinks-only
+/// queries can skip the vault-wide disk walk.
+///
+/// This is the single source of truth for the predicate — both the dispatch
+/// `Commands::Find` branch and the test matrix call into this function so
+/// they cannot drift.
+#[allow(clippy::fn_params_excessive_bools)]
+pub(crate) fn find_needs_stem_map(
+    broken_links: bool,
+    orphan: bool,
+    dead_end: bool,
+    fields_links: bool,
+    sort_links: bool,
+) -> bool {
+    broken_links || orphan || dead_end || fields_links || sort_links
+}
+
 /// Resolve a [`CaseInsensitiveIndex`] for the current command.
 ///
 /// Behaviour by parameter:
 /// - `needs_stem_map = false` → returns an empty index without touching disk.
-///   Commands that never resolve wikilinks (e.g. `tags`, `properties`,
-///   `lint`, `read`, `set`) pass `false` here to skip the vault-wide walk.
-///   An empty `CaseInsensitiveIndex` behaves identically to the
-///   `EMPTY_CASE_INDEX` fallback used in `link_rewrite` — lookups return
-///   `None` and callers degrade gracefully.
+///   Callers that never resolve wikilinks pass `false` here to skip the
+///   vault-wide walk. An empty `CaseInsensitiveIndex` behaves identically
+///   to the `EMPTY_CASE_INDEX` fallback used in `link_rewrite` — lookups
+///   return `None` and callers degrade gracefully.
 /// - `needs_stem_map = true` AND a `snapshot` is provided → seeds the stem
 ///   map from the snapshot's `rel_path` list (microseconds).
 /// - `needs_stem_map = true` AND no snapshot → falls back to the full
@@ -540,18 +562,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // The link graph is only built when scan_body is true, so
             // backlinks / backlink-sort always require body scanning.
             let scan_body = needs_body || needs_full_vault;
-            // Wikilink/stem-map resolution is needed whenever `find` either
-            // filters on link state (orphan / broken_links / dead_end) or
-            // emits link info (links / backlinks field, or sort by link
-            // counts). Otherwise `find` never reads the case index and we
-            // skip the vault-wide disk walk entirely.
-            let needs_stem_map = broken_links
-                || orphan
-                || dead_end
-                || parsed_fields.links
-                || parsed_fields.backlinks
-                || sort_needs_links
-                || sort_needs_backlinks;
+            let needs_stem_map = find_needs_stem_map(
+                broken_links,
+                orphan,
+                dead_end,
+                parsed_fields.links,
+                sort_needs_links,
+            );
             match resolve_index(
                 snapshot_index.as_ref(),
                 dir,
@@ -2014,57 +2031,16 @@ mod tests {
     use super::*;
     use hyalo_core::index::{ScanOptions, ScannedIndex};
 
-    /// The four `Commands::Find` flag combinations that determine
-    /// whether the stem map is needed. Kept inline so any future Find
-    /// flag that should flip the predicate has a single, well-trodden
-    /// edit site (the `needs_stem_map` literal at dispatch.rs:Find).
-    #[allow(clippy::fn_params_excessive_bools)]
-    fn find_needs_stem_map(
-        broken_links: bool,
-        orphan: bool,
-        dead_end: bool,
-        fields_links: bool,
-        fields_backlinks: bool,
-        sort_links: bool,
-        sort_backlinks: bool,
-    ) -> bool {
-        broken_links
-            || orphan
-            || dead_end
-            || fields_links
-            || fields_backlinks
-            || sort_links
-            || sort_backlinks
-    }
-
     #[test]
     fn find_needs_stem_map_matrix() {
         // No link-related flag → no stem map needed.
-        assert!(!find_needs_stem_map(
-            false, false, false, false, false, false, false
-        ));
+        assert!(!find_needs_stem_map(false, false, false, false, false));
         // Each flag independently turns it on.
-        assert!(find_needs_stem_map(
-            true, false, false, false, false, false, false
-        ));
-        assert!(find_needs_stem_map(
-            false, true, false, false, false, false, false
-        ));
-        assert!(find_needs_stem_map(
-            false, false, true, false, false, false, false
-        ));
-        assert!(find_needs_stem_map(
-            false, false, false, true, false, false, false
-        ));
-        assert!(find_needs_stem_map(
-            false, false, false, false, true, false, false
-        ));
-        assert!(find_needs_stem_map(
-            false, false, false, false, false, true, false
-        ));
-        assert!(find_needs_stem_map(
-            false, false, false, false, false, false, true
-        ));
+        assert!(find_needs_stem_map(true, false, false, false, false));
+        assert!(find_needs_stem_map(false, true, false, false, false));
+        assert!(find_needs_stem_map(false, false, true, false, false));
+        assert!(find_needs_stem_map(false, false, false, true, false));
+        assert!(find_needs_stem_map(false, false, false, false, true));
     }
 
     fn write(dir: &std::path::Path, rel: &str, body: &str) {
