@@ -2101,3 +2101,93 @@ fn create_index_no_stale_warning_when_output_redirected() {
         "should not warn about stale default index when -o redirected; stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-157: lazy stem-map — verify index-seeded link resolution matches
+// disk-walked link resolution byte-for-byte across the link-traversal paths.
+// ---------------------------------------------------------------------------
+
+fn setup_wikilink_vault() -> TempDir {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // a → b (resolved), a → missing (broken)
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n[[b]] and [[missing]]\n",
+    );
+    // b is referenced by a but has no outbound links → dead end
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\nContent only.\n");
+    // c is completely isolated → orphan
+    write_md(tmp.path(), "c.md", "---\ntitle: C\n---\nIsolated.\n");
+    // d references b (short-form wikilink resolution path)
+    write_md(tmp.path(), "sub/d.md", "---\ntitle: D\n---\n[[b]]\n");
+    tmp
+}
+
+fn run_cmd(tmp: &TempDir, extra: &[&str]) -> serde_json::Value {
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(extra);
+    cmd.args(["--format", "json"]);
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "cmd {:?} failed: {}",
+        extra,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON for {extra:?}: {e}"))
+}
+
+#[test]
+fn iter157_find_orphan_index_matches_disk() {
+    let tmp = setup_wikilink_vault();
+    let disk = run_cmd(&tmp, &["find", "--orphan"]);
+    create_default_index(&tmp);
+    let indexed = run_cmd(&tmp, &["find", "--orphan", "--index"]);
+    assert_eq!(disk, indexed, "orphan: index-seeded result must match disk");
+}
+
+#[test]
+fn iter157_find_broken_links_index_matches_disk() {
+    let tmp = setup_wikilink_vault();
+    let disk = run_cmd(&tmp, &["find", "--broken-links"]);
+    create_default_index(&tmp);
+    let indexed = run_cmd(&tmp, &["find", "--broken-links", "--index"]);
+    assert_eq!(
+        disk, indexed,
+        "broken-links: index-seeded result must match disk"
+    );
+}
+
+#[test]
+fn iter157_summary_index_orphan_count_matches_disk() {
+    let tmp = setup_wikilink_vault();
+    let disk = run_cmd(&tmp, &["summary"]);
+    create_default_index(&tmp);
+    let indexed = run_cmd(&tmp, &["summary", "--index"]);
+    // Compare just the link-derived counts (which are what the stem map drives).
+    assert_eq!(
+        disk["results"]["links"], indexed["results"]["links"],
+        "links section mismatch"
+    );
+}
+
+#[test]
+fn iter157_find_without_link_flags_works_with_empty_stem_map() {
+    // Stem map is skipped entirely when no link-traversal flag is set.
+    // Verify ordinary `find` still returns correct results.
+    let tmp = setup_wikilink_vault();
+    let json = run_cmd(&tmp, &["find"]);
+    let files: Vec<String> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(files.contains(&"a.md".to_string()));
+    assert!(files.contains(&"b.md".to_string()));
+    assert!(files.contains(&"c.md".to_string()));
+    assert!(files.contains(&"sub/d.md".to_string()));
+}
