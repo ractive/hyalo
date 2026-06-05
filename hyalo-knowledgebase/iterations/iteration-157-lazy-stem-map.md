@@ -2,8 +2,12 @@
 title: "Iteration 157: Eliminate the per-invocation stem-map disk walk"
 type: iteration
 date: 2026-06-05
-tags: [iteration, perf, dispatch, link-resolution]
-status: planned
+tags:
+  - iteration
+  - perf
+  - dispatch
+  - link-resolution
+status: completed
 branch: iter-157/lazy-stem-map
 ---
 
@@ -283,11 +287,11 @@ for any vault with an index and for ~70% of unindexed invocations.
 
 ## Tasks
 
-- [ ] **Part A:** Add `needs_stem_map: bool` parameter to
+- [x] **Part A:** Add `needs_stem_map: bool` parameter to
       `maybe_case_index` in `crates/hyalo-cli/src/dispatch.rs`. When
       `false`, return `Some(CaseInsensitiveIndex::new())` (empty
       index) without calling `build_case_index_from_dir`.
-- [ ] **Part B:** Add `snapshot: Option<&SnapshotIndex>` parameter to
+- [x] **Part B:** Add `snapshot: Option<&SnapshotIndex>` parameter to
       `maybe_case_index`. When `needs_stem_map` is true AND a
       snapshot is provided, build the stem map from the snapshot's
       entries instead of walking disk. Add
@@ -297,7 +301,7 @@ for any vault with an index and for ~70% of unindexed invocations.
       `CaseInsensitiveIndex`. When no snapshot is provided
       (`ResolvedIndex::Scanned` branch), keep the disk walk
       unchanged.
-- [ ] Update the four call sites at `dispatch.rs:524, 1015, 1344,
+- [x] Update the four call sites at `dispatch.rs:524, 1015, 1344,
       1854` to compute `needs_stem_map` inline from local flag state
       AND pass the snapshot reference from the surrounding
       `IndexResolution::Resolved(ResolvedIndex::Snapshot(idx))` (or
@@ -312,84 +316,84 @@ for any vault with an index and for ~70% of unindexed invocations.
       - **Summary (1015):** `needs_stem_map = true`.
       - **Links (1344):** `needs_stem_map = true`.
       - **Views (1854):** `needs_stem_map = true`.
-- [ ] Verify empty-index semantics: confirm none of the four
+- [x] Verify empty-index semantics: confirm none of the four
       consumers (`find_commands::find`, `summary`, `links`, `views`)
       crashes when handed an empty `CaseInsensitiveIndex`. Several
       already accept `Option<&CaseInsensitiveIndex>` and
       `link_rewrite.rs:593` defines `EMPTY_CASE_INDEX` as the
       established fallback — the empty `CaseInsensitiveIndex::new()`
       should behave identically.
-- [ ] Unit test: parameterise the `Find`-flag computation as a free
+- [x] Unit test: parameterise the `Find`-flag computation as a free
       function (or inline closure with a test entry point) and assert
       one row per `(flag combination, expected bool)` pair —
       `--orphan`, `--broken-links`, `--backlinks X`, `--dead-end`,
       plain `find`, `find --property foo`, `find body-text`. Cheap
       regression guard for the inline literal.
-- [ ] E2E test (Part A): on a synthetic large vault (≥1000 files,
+- [x] E2E test (Part A): on a synthetic large vault (≥1000 files,
       no wikilinks needed), `hyalo find --limit 1` completes under
       500 ms. Catches the Part A regression directly.
-- [ ] E2E test (Part A): `find --orphan`, `find --broken-links`,
+- [x] E2E test (Part A): `find --orphan`, `find --broken-links`,
       `find --backlinks <file>`, `links fix`, `summary` orphan count
       produce byte-identical JSON envelopes before and after on a
       fixture vault that exercises wikilink resolution. These are the
       `needs_stem_map=true` paths; output must be unchanged.
-- [ ] E2E test (Part A): a wikilink-using vault where `find`
+- [x] E2E test (Part A): a wikilink-using vault where `find`
       (without link-traversal flags) returns correct results even
       though the stem map is empty — i.e. the absence of stem-map
       data must not corrupt non-link queries.
-- [ ] E2E test (Part B): on the same fixture vault (≥1000 files
+- [x] E2E test (Part B): on the same fixture vault (≥1000 files
       with wikilinks), `hyalo find --orphan --index-file <idx>` and
       `summary --index-file <idx>` both complete under 500 ms (vs
       the multi-second floor today). Output must match the disk-walk
       branch byte-for-byte.
-- [ ] Unit test (Part B): `build_case_index_from_snapshot` on a
+- [x] Unit test (Part B): `build_case_index_from_snapshot` on a
       handcrafted `SnapshotIndex` with a few entries returns the same
       `CaseInsensitiveIndex` (same stem map, same case-folded set)
       as `build_case_index_from_dir` on the corresponding on-disk
       vault. Anchors the equivalence claim.
-- [ ] Update `dispatch.rs:29-66` doc-comments on
+- [x] Update `dispatch.rs:29-66` doc-comments on
       `build_case_index_from_dir` and `maybe_case_index` to document
       the new `needs_stem_map` parameter and remove the "always
       returns Some" / "cheap to build" claims that are no longer
       accurate.
-- [ ] Dogfood: re-run the firefox-tree timing matrix from
+- [x] Dogfood: re-run the firefox-tree timing matrix from
       [[dogfood-results/dogfood-v0160-firefox]] §F-1 and confirm the
       ~3 s → ~0.1 s drop on the predicate-false rows; record results
       in a follow-up dogfood note or update F-1 status.
-- [ ] Run quality gates: `cargo fmt`,
+- [x] Run quality gates: `cargo fmt`,
       `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`.
 
 ## Acceptance criteria
 
-- [ ] `hyalo find --limit 1 --index-file <idx>` on a vault of ≥2000
+- [x] `hyalo find --limit 1 --index-file <idx>` on a vault of ≥2000
       files completes in under 500 ms on a developer machine (was
       ~2.7 s on firefox tree before).
-- [ ] `hyalo find --orphan --index-file <idx>` and
+- [x] `hyalo find --orphan --index-file <idx>` and
       `hyalo summary --index-file <idx>` on the same vault also
       complete in under 500 ms (Part B). Without `--index-file`,
       these commands still take their disk-walk-bound time — which
       is acceptable because without an index they're already paying
       for a full disk scan anyway.
-- [ ] `hyalo find --orphan`, `find --broken-links`,
+- [x] `hyalo find --orphan`, `find --broken-links`,
       `find --backlinks <file>`, `links fix`, and `summary` all
       produce byte-identical JSON envelopes before and after on a
       fixture vault that exercises wikilink resolution. (Verified by
       e2e diff test.) Same JSON whether the stem map came from disk
       walk or snapshot seed.
-- [ ] Each of the four `maybe_case_index` callsites in `dispatch.rs`
+- [x] Each of the four `maybe_case_index` callsites in `dispatch.rs`
       computes `needs_stem_map` inline from local flag state and
       passes the snapshot reference when available, matching the
       shape of the existing `needs_full_vault` / `needs_body`
       bindings. No centralised predicate; the decision lives next to
       the flags that drive it (matches the codebase's established
       "needs_full_vault" pattern at `dispatch.rs:498-507`).
-- [ ] No new public API surface; `build_case_index_from_dir`,
+- [x] No new public API surface; `build_case_index_from_dir`,
       `build_case_index_from_snapshot`, and `maybe_case_index` all
       remain `pub(crate)`.
-- [ ] No `.hyalo-index` format change. Existing indices work without
+- [x] No `.hyalo-index` format change. Existing indices work without
       rebuild.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, and `cargo test --workspace -q` all pass.
 
 ## Open questions

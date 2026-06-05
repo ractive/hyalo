@@ -37,6 +37,10 @@ pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 50;
 ///
 /// Errors during discovery are silently ignored (the index will just be less
 /// complete, which degrades gracefully to no case-insensitive fallback).
+///
+/// On large vaults this disk walk is expensive (~2.7 s for ~2600 files), so
+/// callers should only invoke it when wikilink/stem-map resolution is
+/// actually needed — see [`maybe_case_index`]'s `needs_stem_map` parameter.
 pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiveIndex {
     use hyalo_core::discovery;
     let mut idx = CaseInsensitiveIndex::new();
@@ -49,18 +53,71 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
     idx
 }
 
-/// Build a [`CaseInsensitiveIndex`] from a full vault directory scan and set
-/// case-insensitive path lookups according to `mode`. Always returns
-/// `Some(index)` — the stem map (used for Obsidian short-form wikilink
-/// resolution) is needed regardless of case-insensitive path mode, and the
-/// index is cheap to build. The `Option` return type is kept for API
-/// compatibility with the many call sites that historically expected `None`.
+/// Build a [`CaseInsensitiveIndex`] from an in-memory snapshot index.
+///
+/// Equivalent to [`build_case_index_from_dir`] but seeds the stem map from
+/// the snapshot's entries (`rel_path` list) instead of walking the disk.
+/// Cost is a linear scan over `snap.entries()`, expected to be microseconds
+/// vs seconds for the disk-walk variant on large vaults.
+pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsensitiveIndex {
+    let mut idx = CaseInsensitiveIndex::new();
+    for entry in snap.entries() {
+        idx.insert(&entry.rel_path);
+    }
+    idx
+}
+
+/// Predicate: does a `Commands::Find` invocation with these flags need the
+/// wikilink stem map?
+///
+/// Outbound-link resolution (the `links` field, `--broken-links`, `--orphan`,
+/// `--dead-end`, sort-by-link-count) goes through `discovery::resolve_target`,
+/// which consults the case/stem index. Backlinks (field + sort) come from the
+/// pre-built link graph and do NOT use the case index, so backlinks-only
+/// queries can skip the vault-wide disk walk.
+///
+/// This is the single source of truth for the predicate — both the dispatch
+/// `Commands::Find` branch and the test matrix call into this function so
+/// they cannot drift.
+#[allow(clippy::fn_params_excessive_bools)]
+pub(crate) fn find_needs_stem_map(
+    broken_links: bool,
+    orphan: bool,
+    dead_end: bool,
+    fields_links: bool,
+    sort_links: bool,
+) -> bool {
+    broken_links || orphan || dead_end || fields_links || sort_links
+}
+
+/// Resolve a [`CaseInsensitiveIndex`] for the current command.
+///
+/// Behaviour by parameter:
+/// - `needs_stem_map = false` → returns an empty index without touching disk.
+///   Callers that never resolve wikilinks pass `false` here to skip the
+///   vault-wide walk. An empty `CaseInsensitiveIndex` behaves identically
+///   to the `EMPTY_CASE_INDEX` fallback used in `link_rewrite` — lookups
+///   return `None` and callers degrade gracefully.
+/// - `needs_stem_map = true` AND a `snapshot` is provided → seeds the stem
+///   map from the snapshot's `rel_path` list (microseconds).
+/// - `needs_stem_map = true` AND no snapshot → falls back to the full
+///   disk walk via [`build_case_index_from_dir`].
+///
+/// In all cases case-insensitive path lookups are configured per `mode`.
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn maybe_case_index(
     mode: CaseInsensitiveMode,
     dir: &std::path::Path,
+    needs_stem_map: bool,
+    snapshot: Option<&SnapshotIndex>,
 ) -> Option<CaseInsensitiveIndex> {
-    let mut idx = build_case_index_from_dir(dir);
+    let mut idx = if !needs_stem_map {
+        CaseInsensitiveIndex::new()
+    } else if let Some(snap) = snapshot {
+        build_case_index_from_snapshot(snap)
+    } else {
+        build_case_index_from_dir(dir)
+    };
     idx.set_case_insensitive_paths(mode_enabled(mode, dir));
     Some(idx)
 }
@@ -505,6 +562,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // The link graph is only built when scan_body is true, so
             // backlinks / backlink-sort always require body scanning.
             let scan_body = needs_body || needs_full_vault;
+            let needs_stem_map = find_needs_stem_map(
+                broken_links,
+                orphan,
+                dead_end,
+                parsed_fields.links,
+                sort_needs_links,
+            );
             match resolve_index(
                 snapshot_index.as_ref(),
                 dir,
@@ -521,7 +585,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 },
             )? {
                 IndexResolution::Resolved(resolved) => {
-                    let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                    let ci = maybe_case_index(
+                        ctx.case_insensitive_mode,
+                        dir,
+                        needs_stem_map,
+                        resolved.as_snapshot(),
+                    );
                     find_commands::find(
                         resolved.as_index(),
                         dir,
@@ -1012,7 +1081,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             },
         )? {
             IndexResolution::Resolved(resolved) => {
-                let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                // Summary always reports orphan/dead-end counts which rely on
+                // wikilink resolution, so the stem map is always needed.
+                let ci =
+                    maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
                 summary_commands::summary(
                     dir,
                     resolved.as_index(),
@@ -1341,7 +1413,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     },
                 )? {
                     IndexResolution::Resolved(resolved) => {
-                        let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                        // `links fix` is entirely about link resolution.
+                        let ci = maybe_case_index(
+                            ctx.case_insensitive_mode,
+                            dir,
+                            true,
+                            resolved.as_snapshot(),
+                        );
                         links_commands::links_fix(
                             resolved.as_index(),
                             dir,
@@ -1851,7 +1929,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         },
                     )? {
                         IndexResolution::Resolved(resolved) => {
-                            let ci = maybe_case_index(ctx.case_insensitive_mode, dir);
+                            // Views may invoke any find flag combination, so be
+                            // conservative and always seed the stem map. Cheap
+                            // when a snapshot index is available.
+                            let ci = maybe_case_index(
+                                ctx.case_insensitive_mode,
+                                dir,
+                                true,
+                                resolved.as_snapshot(),
+                            );
                             find_commands::find(
                                 resolved.as_index(),
                                 dir,
@@ -1937,5 +2023,95 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         ),
         // Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config => unreachable!("Config command is handled before dispatch"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyalo_core::index::{ScanOptions, ScannedIndex};
+
+    #[test]
+    fn find_needs_stem_map_matrix() {
+        // No link-related flag → no stem map needed.
+        assert!(!find_needs_stem_map(false, false, false, false, false));
+        // Each flag independently turns it on.
+        assert!(find_needs_stem_map(true, false, false, false, false));
+        assert!(find_needs_stem_map(false, true, false, false, false));
+        assert!(find_needs_stem_map(false, false, true, false, false));
+        assert!(find_needs_stem_map(false, false, false, true, false));
+        assert!(find_needs_stem_map(false, false, false, false, true));
+    }
+
+    fn write(dir: &std::path::Path, rel: &str, body: &str) {
+        let p = dir.join(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, body).unwrap();
+    }
+
+    #[test]
+    fn snapshot_seeded_case_index_matches_disk_walk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "alpha.md", "# alpha\n");
+        write(dir, "beta.md", "# beta\n");
+        write(dir, "sub/gamma.md", "# gamma\n");
+
+        let files = hyalo_core::discovery::discover_files(dir).unwrap();
+        let pairs: Vec<(std::path::PathBuf, String)> = files
+            .iter()
+            .map(|p| (p.clone(), hyalo_core::discovery::relative_path(dir, p)))
+            .collect();
+        let build = ScannedIndex::build(
+            &pairs,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+
+        let snap_dir = tempfile::tempdir().unwrap();
+        let snap_path = snap_dir.path().join(".hyalo-index");
+        SnapshotIndex::save(&build.index, &snap_path, &dir.to_string_lossy(), None, None).unwrap();
+        let snap = SnapshotIndex::load(&snap_path).unwrap().unwrap();
+
+        let from_disk = build_case_index_from_dir(dir);
+        let from_snap = build_case_index_from_snapshot(&snap);
+
+        assert_eq!(from_disk.lookup_stem("alpha"), Some("alpha.md"));
+        assert_eq!(from_snap.lookup_stem("alpha"), Some("alpha.md"));
+        assert_eq!(
+            from_snap.lookup_stem("gamma"),
+            from_disk.lookup_stem("gamma")
+        );
+        assert_eq!(from_snap.lookup_stem("beta"), from_disk.lookup_stem("beta"));
+        assert!(from_snap.lookup_stem("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn maybe_case_index_skips_walk_when_not_needed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "alpha.md", "# alpha\n");
+
+        let idx = maybe_case_index(CaseInsensitiveMode::Auto, dir, false, None).unwrap();
+        // Empty index — no stem map, no path lookups.
+        assert!(idx.lookup_stem("alpha").is_none());
+    }
+
+    #[test]
+    fn maybe_case_index_walks_disk_without_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write(dir, "alpha.md", "# alpha\n");
+
+        let idx = maybe_case_index(CaseInsensitiveMode::Auto, dir, true, None).unwrap();
+        assert_eq!(idx.lookup_stem("alpha"), Some("alpha.md"));
     }
 }

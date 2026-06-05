@@ -171,6 +171,17 @@ impl ResolvedIndex<'_> {
             ResolvedIndex::Scanned(build) => &build.index,
         }
     }
+
+    /// Borrow the underlying snapshot, if this came from a snapshot file.
+    /// Returns `None` for live scans — used by `maybe_case_index` to seed
+    /// the stem map from the snapshot's path list instead of re-walking
+    /// the disk.
+    pub(crate) fn as_snapshot(&self) -> Option<&SnapshotIndex> {
+        match self {
+            ResolvedIndex::Snapshot(idx) => Some(*idx),
+            ResolvedIndex::Scanned(_) => None,
+        }
+    }
 }
 
 /// Outcome of [`resolve_index`]: the index is ready, or resolution produced a
