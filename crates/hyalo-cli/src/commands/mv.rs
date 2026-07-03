@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::commands::mutation;
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::discovery::{discover_files, match_globs};
+use hyalo_core::discovery::{canonicalize_vault_dir, discover_files, match_globs};
 use hyalo_core::filter::{PropertyFilter, matches_frontmatter_filters};
 use hyalo_core::index::SnapshotIndex;
 use hyalo_core::link_rewrite::{self, Replacement, RewritePlan, SkippedAmbiguous};
@@ -382,6 +382,29 @@ fn build_rename_map(
     // Drop no-op renames (source already at destination).
     proposed.retain(|(old_rel, new_rel)| old_rel != new_rel);
 
+    // H-3: reject destinations that would escape the vault through a
+    // symlinked directory component, even when the destination's parent
+    // directories don't exist yet. Checked before any fs mutation so the
+    // whole batch fails atomically rather than escaping partway through.
+    if !proposed.is_empty() {
+        let canonical_vault = canonicalize_vault_dir(dir).map_err(|e| {
+            let out = crate::output::format_error(
+                format,
+                "failed to canonicalize vault directory",
+                Some(&e.to_string()),
+                None,
+                None,
+            );
+            CommandOutcome::UserError(out)
+        })?;
+        for (_, new_rel) in &proposed {
+            if let Err(msg) = ensure_dest_within_vault(&canonical_vault, dir, new_rel) {
+                let out = crate::output::format_error(format, &msg, Some(new_rel), None, None);
+                return Err(CommandOutcome::UserError(out));
+            }
+        }
+    }
+
     // Detect basename collisions (two sources mapping to the same dest).
     let mut dest_to_sources: HashMap<String, Vec<String>> = HashMap::new();
     for (src, dst) in &proposed {
@@ -493,6 +516,17 @@ fn build_rename_map(
 /// On failure of any rename, roll back already-applied renames.
 /// If link rewrite fails after renames succeeded, also rolls back renames.
 fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePlan]) -> Result<()> {
+    // H-3 defense-in-depth: re-verify every destination stays within the
+    // vault right before mutating the filesystem. `build_rename_map` already
+    // rejects escaping destinations, but this guard makes the invariant
+    // explicit here too and survives future refactors (mirrors the same
+    // check in `link_rewrite::execute_plans`).
+    let canonical_vault = canonicalize_vault_dir(dir)
+        .context("failed to canonicalize vault directory for write safety check")?;
+    for (_, new_rel) in renames {
+        ensure_dest_within_vault(&canonical_vault, dir, new_rel).map_err(anyhow::Error::msg)?;
+    }
+
     // Capture source mtimes upfront to detect concurrent modifications.
     let mut src_mtimes: Vec<(String, String, (std::time::SystemTime, u64))> = Vec::new();
     for (old_rel, new_rel) in renames {
@@ -570,6 +604,57 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
+
+/// Walk up from `path` to find the nearest ancestor that exists on disk.
+///
+/// Used to find a safe point to canonicalize when the destination itself
+/// (and possibly several of its parent directories) doesn't exist yet.
+fn nearest_existing_ancestor(path: &Path) -> PathBuf {
+    let mut current = path;
+    loop {
+        if current.exists() {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => current = parent,
+            _ => return current.to_path_buf(),
+        }
+    }
+}
+
+/// Verify that a prospective destination `new_rel` (relative to `dir`) stays
+/// within the vault, even when its parent directories don't exist yet or an
+/// in-vault path component is a symlink that resolves outside the vault
+/// (H-3).
+///
+/// `fs::create_dir_all` only ever creates plain directories — never symlinks
+/// — so canonicalizing the nearest *existing* ancestor of the destination and
+/// checking it resolves inside `canonical_vault` is sufficient to guarantee
+/// every path component that would be created below it also stays in the
+/// vault. Must be called before any `fs::create_dir_all`/`fs::rename` on the
+/// destination.
+fn ensure_dest_within_vault(
+    canonical_vault: &Path,
+    dir: &Path,
+    new_rel: &str,
+) -> std::result::Result<(), String> {
+    let dst = dir.join(new_rel);
+    let start = dst.parent().unwrap_or(dir);
+    let ancestor = nearest_existing_ancestor(start);
+    let canonical_ancestor = dunce::canonicalize(&ancestor).map_err(|e| {
+        format!(
+            "failed to verify destination {} stays within the vault: {e}",
+            ancestor.display()
+        )
+    })?;
+    if canonical_ancestor.starts_with(canonical_vault) {
+        Ok(())
+    } else {
+        Err(format!(
+            "target path resolves outside vault boundary: {new_rel}"
+        ))
+    }
+}
 
 /// Validate the `--to` argument for single-file mode.
 /// Returns vault-relative normalized path or a CommandOutcome error.
@@ -652,6 +737,27 @@ fn validate_target_single(
         return Err(CommandOutcome::UserError(out));
     }
 
+    // H-3: reject destinations that would escape the vault through a
+    // symlinked directory component, even when the target's parent
+    // directories don't exist yet.
+    let canonical_vault = match canonicalize_vault_dir(dir) {
+        Ok(c) => c,
+        Err(e) => {
+            let out = crate::output::format_error(
+                format,
+                "failed to canonicalize vault directory",
+                Some(&e.to_string()),
+                None,
+                None,
+            );
+            return Err(CommandOutcome::UserError(out));
+        }
+    };
+    if let Err(msg) = ensure_dest_within_vault(&canonical_vault, dir, &normalized) {
+        let out = crate::output::format_error(format, &msg, Some(&normalized), None, None);
+        return Err(CommandOutcome::UserError(out));
+    }
+
     Ok(normalized)
 }
 
@@ -727,6 +833,15 @@ fn execute_mv(
 ) -> Result<()> {
     let src = dir.join(old_rel);
     let dst = dir.join(new_rel);
+
+    // H-3 defense-in-depth: re-verify the destination stays within the vault
+    // right before mutating the filesystem. `validate_target_single` already
+    // rejects escaping destinations, but this guard makes the invariant
+    // explicit here too and survives future refactors (mirrors the same
+    // check in `link_rewrite::execute_plans`).
+    let canonical_vault = canonicalize_vault_dir(dir)
+        .context("failed to canonicalize vault directory for write safety check")?;
+    ensure_dest_within_vault(&canonical_vault, dir, new_rel).map_err(anyhow::Error::msg)?;
 
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)

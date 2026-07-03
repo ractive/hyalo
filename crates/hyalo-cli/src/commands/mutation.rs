@@ -24,7 +24,11 @@ use hyalo_core::index::{SnapshotIndex, format_modified};
 ///
 /// Extracts the new tag set from the already-updated `props`, writes
 /// `properties`, `tags`, and `modified` back into the in-memory entry, then
-/// marks `index_dirty` so the caller knows a save is needed.
+/// re-scans the file to refresh its `links` field and the persisted
+/// [`hyalo_core::link_graph::LinkGraph`] — frontmatter link properties
+/// (`related`, `depends-on`, ...) feed the graph, so a property mutation can
+/// change a file's outbound edges. Finally marks `index_dirty` so the caller
+/// knows a save is needed.
 ///
 /// This is a no-op when `snapshot_index` is `None` or when the entry for
 /// `rel_path` is not present in the index (e.g. a newly created file that
@@ -43,6 +47,7 @@ pub fn update_index_entry(
         entry.properties = props;
         entry.tags = new_tags;
         entry.modified = format_modified(full_path)?;
+        idx.refresh_links(full_path, rel_path)?;
         *index_dirty = true;
     }
     Ok(())

@@ -341,7 +341,7 @@ pub fn find(
                 break 'bm25 Some(map);
             }
 
-            // Build BM25 index from candidates.
+            // Build BM25 corpus statistics.
             //
             // Fast path: when the index has pre-tokenized data and no section filter
             // is active (section filters require scoping to specific line ranges, which
@@ -353,108 +353,133 @@ pub fn find(
             let mut pre_tok_inputs: Vec<PreTokenizedInput> = Vec::new();
             let mut doc_inputs: Vec<DocumentInput> = Vec::new();
 
-            for &idx in &candidates {
-                let entry = &scoped_entries[idx];
+            // Tokenizes a single entry into `pre_tok_inputs` or `doc_inputs`. Shared by
+            // both loops below so the two corpus-scoping strategies (candidates-only vs.
+            // full-scoped-corpus) don't duplicate the tokenization logic. Scoped to this
+            // block so the closure (and its mutable borrows of `pre_tok_inputs` /
+            // `doc_inputs`) is dropped before those vectors are consumed below.
+            {
+                let mut collect_entry = |entry: &hyalo_core::index::IndexEntry| {
+                    // Use pre-tokenized data only when:
+                    // 1. The index entry has stored tokens, AND
+                    // 2. No section filter is active (section filters require line-level body slicing), AND
+                    // 3. The cached language matches the effective language for this entry.
+                    if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
+                        let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+                        let effective_lang = resolve_language(fm_lang, language, config_language);
+                        let cached_lang_matches = entry
+                            .bm25_language
+                            .as_deref()
+                            .and_then(|s| parse_language(s).ok())
+                            == Some(effective_lang);
 
-                // Use pre-tokenized data only when:
-                // 1. The index entry has stored tokens, AND
-                // 2. No section filter is active (section filters require line-level body slicing), AND
-                // 3. The cached language matches the effective language for this entry.
-                if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
+                        if cached_lang_matches {
+                            pre_tok_inputs.push(PreTokenizedInput {
+                                rel_path: entry.rel_path.clone(),
+                                tokens: tokens.clone(),
+                            });
+                            return;
+                        }
+                        // Fall through to disk-read tokenization when language mismatches.
+                    }
+
+                    // Slow path: read the file from disk.
+                    let full_path = dir.join(&entry.rel_path);
+                    let file_content = match std::fs::read_to_string(&full_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                            return;
+                        }
+                    };
+                    // Feed only the body (after frontmatter) to BM25 so that frontmatter
+                    // YAML (including tag values) does not influence scoring.
+                    let raw_body = hyalo_core::frontmatter::body_only(&file_content);
+
+                    // When section filters are active, restrict the BM25 body to lines
+                    // that fall within the matching section scope. This preserves the
+                    // expectation that "pattern + --section X" only matches files where
+                    // the pattern appears inside section X, not elsewhere in the document.
+                    let body = if has_section_filter {
+                        let scope_ranges =
+                            build_section_scope(&entry.sections, section_filters, usize::MAX);
+                        if scope_ranges.is_empty() {
+                            // No matching section — this candidate should have been filtered
+                            // in Phase 1, but guard here just in case.
+                            return;
+                        }
+                        // Index line numbers are 1-based relative to the full file (frontmatter + body).
+                        // Count lines in the frontmatter prefix to offset body line numbers correctly.
+                        let fm_prefix_len = file_content.len() - raw_body.len();
+                        let fm_lines = file_content[..fm_prefix_len].lines().count();
+                        raw_body
+                            .lines()
+                            .enumerate()
+                            .filter_map(|(i, line)| {
+                                // body line i corresponds to file line (fm_lines + i + 1) (1-based)
+                                let file_line = fm_lines + i + 1;
+                                if in_scope(&scope_ranges, file_line) {
+                                    Some(line)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    } else {
+                        raw_body.to_owned()
+                    };
+
+                    let title_val = extract_title(&entry.properties, Some(&entry.sections));
+                    let title_str = title_val.as_str().unwrap_or("").to_owned();
                     let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
-                    let effective_lang = resolve_language(fm_lang, language, config_language);
-                    let cached_lang_matches = entry
-                        .bm25_language
-                        .as_deref()
-                        .and_then(|s| parse_language(s).ok())
-                        == Some(effective_lang);
-
-                    if cached_lang_matches {
-                        pre_tok_inputs.push(PreTokenizedInput {
-                            rel_path: entry.rel_path.clone(),
-                            tokens: tokens.clone(),
-                        });
-                        continue;
-                    }
-                    // Fall through to disk-read tokenization when language mismatches.
-                }
-
-                // Slow path: read the file from disk.
-                let full_path = dir.join(&entry.rel_path);
-                let file_content = match std::fs::read_to_string(&full_path) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
-                        continue;
-                    }
+                    let lang = resolve_language(fm_lang, language, config_language);
+                    doc_inputs.push(DocumentInput {
+                        rel_path: entry.rel_path.clone(),
+                        title: title_str,
+                        body,
+                        language: lang,
+                    });
                 };
-                // Feed only the body (after frontmatter) to BM25 so that frontmatter
-                // YAML (including tag values) does not influence scoring.
-                let raw_body = hyalo_core::frontmatter::body_only(&file_content);
 
-                // When section filters are active, restrict the BM25 body to lines
-                // that fall within the matching section scope. This preserves the
-                // expectation that "pattern + --section X" only matches files where
-                // the pattern appears inside section X, not elsewhere in the document.
-                let body = if has_section_filter {
-                    let scope_ranges =
-                        build_section_scope(&entry.sections, section_filters, usize::MAX);
-                    if scope_ranges.is_empty() {
-                        // No matching section — this candidate should have been filtered
-                        // in Phase 1, but guard here just in case.
-                        continue;
+                if has_section_filter {
+                    // Section filters require per-candidate line-range slicing, and the
+                    // persisted-index fast path above is skipped entirely whenever a section
+                    // filter is active — so both the --index and no-index runs already build
+                    // this exact candidates-only corpus. No cross-path parity gap here.
+                    for &idx in &candidates {
+                        collect_entry(scoped_entries[idx]);
                     }
-                    // Index line numbers are 1-based relative to the full file (frontmatter + body).
-                    // Count lines in the frontmatter prefix to offset body line numbers correctly.
-                    let fm_prefix_len = file_content.len() - raw_body.len();
-                    let fm_lines = file_content[..fm_prefix_len].lines().count();
-                    raw_body
-                        .lines()
-                        .enumerate()
-                        .filter_map(|(i, line)| {
-                            // body line i corresponds to file line (fm_lines + i + 1) (1-based)
-                            let file_line = fm_lines + i + 1;
-                            if in_scope(&scope_ranges, file_line) {
-                                Some(line)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
                 } else {
-                    raw_body.to_owned()
-                };
-
-                let title_val = extract_title(&entry.properties, Some(&entry.sections));
-                let title_str = title_val.as_str().unwrap_or("").to_owned();
-                let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
-                let lang = resolve_language(fm_lang, language, config_language);
-                doc_inputs.push(DocumentInput {
-                    rel_path: entry.rel_path.clone(),
-                    title: title_str,
-                    body,
-                    language: lang,
-                });
-            }
+                    // H-8 fix: build corpus statistics (N, per-term document frequency, avgdl)
+                    // over the FULL scoped corpus (all of `scoped_entries`, before metadata
+                    // filtering), not just the metadata-passing candidates. This matches what
+                    // the persisted-index path does (`bm25_idx.score` computes IDF over the
+                    // whole indexed vault) so --index and no-index runs agree on ranking.
+                    // Scoring is intersected with metadata-passing candidates below.
+                    for entry in scoped_entries.iter().copied() {
+                        collect_entry(entry);
+                    }
+                }
+            } // end collect_entry scope
 
             // Score all documents. When the corpus is a mix of pre-tokenized and
             // freshly-read documents, we build two separate corpora and merge scores.
             // This is safe because BM25 scores are relative within a corpus — mixing
             // them directly would be incorrect. However, the common case is that ALL
-            // candidates come from the same source (all pre-tokenized or all from disk),
+            // entries come from the same source (all pre-tokenized or all from disk),
             // so the mixed case only arises during a rolling index upgrade where some
             // entries were indexed before BM25 support was added.
-            let scored = if doc_inputs.is_empty() {
-                // All candidates were pre-tokenized — fast path.
+            let scored_corpus = if doc_inputs.is_empty() {
+                // All entries were pre-tokenized — fast path.
                 let corpus = Bm25InvertedIndex::build_from_tokens(pre_tok_inputs);
                 corpus.score(pat, &stemmer)
             } else if pre_tok_inputs.is_empty() {
-                // All candidates need file reads — original slow path.
+                // All entries need file reads — original slow path.
                 let corpus = Bm25InvertedIndex::build(doc_inputs);
                 corpus.score(pat, &stemmer)
             } else {
-                // Mixed: some candidates have pre-tokenized data from the index, others were
+                // Mixed: some entries have pre-tokenized data from the index, others were
                 // read from disk. Tokenize the disk-read entries and combine into a single
                 // pre-tokenized corpus so all BM25 scores are computed on the same basis.
                 let mut all_pre_tok = pre_tok_inputs;
@@ -465,7 +490,22 @@ pub fn find(
                 corpus.score(pat, &stemmer)
             };
 
+            // When no section filter is active, `scored_corpus` was scored against the
+            // full scoped corpus — intersect with metadata-passing candidates here,
+            // mirroring the persisted-index fast path above. When a section filter is
+            // active, `scored_corpus` already only contains candidates.
+            let scored: Vec<hyalo_core::bm25::Bm25Match> = if has_section_filter {
+                scored_corpus
+            } else {
+                scored_corpus
+                    .into_iter()
+                    .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
+                    .collect()
+            };
+
             // Warn if the query has low discriminative power (matches most docs with low scores).
+            // Use candidate count as denominator so the heuristic is based on the
+            // result set actually returned to the user, not the full scoped corpus.
             let total_corpus_docs = candidates.len();
             if is_low_discriminative(&scored, total_corpus_docs) {
                 crate::warn::warn(

@@ -368,7 +368,13 @@ fn inject_ext_file_result(
 
 /// Patch the snapshot index for a list of vault-relative paths that were
 /// modified on disk.  Uses `refresh_entry` to fully re-scan each file
-/// (properties, tags, links, sections, tasks), then flushes to disk once.
+/// (properties, tags, links, sections, tasks, modified timestamp), then
+/// `refresh_links` to patch the persisted `LinkGraph`'s outbound edges —
+/// `refresh_entry` alone does not touch the graph (see its doc comment),
+/// so callers whose modification rewrites body wikilinks (`links fix
+/// --apply`, `links auto --apply`) need both or `backlinks`/`find --fields
+/// links` would keep returning pre-mutation results until a full
+/// `create-index` rebuild. Flushes to disk once at the end.
 fn patch_index_for_modified_files(
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
@@ -388,6 +394,15 @@ fn patch_index_for_modified_files(
             Ok(false) => {} // not in index, nothing to update
             Err(e) => {
                 eprintln!("warning: could not refresh index entry for {rel}: {e:#}");
+                continue;
+            }
+        }
+        let full_path = dir.join(rel);
+        match idx.refresh_links(&full_path, rel) {
+            Ok(true) => dirty = true,
+            Ok(false) => {} // not in index, nothing to update
+            Err(e) => {
+                eprintln!("warning: could not refresh link graph for {rel}: {e:#}");
             }
         }
     }
@@ -471,14 +486,26 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             };
             // Parse task filter
             let task_filter = match task.as_deref().map(filter::parse_task_filter) {
                 Some(Ok(f)) => Some(f),
                 Some(Err(e)) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )));
                 }
                 None => None,
             };
@@ -486,14 +513,26 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let parsed_fields = match filter::Fields::parse(&fields) {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             };
             // Parse sort
             let sort_field = match sort.as_deref().map(filter::parse_sort) {
                 Some(Ok(f)) => Some(f),
                 Some(Err(e)) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )));
                 }
                 None => None,
             };
@@ -505,13 +544,25 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e,
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             };
 
             for t in &tag {
                 if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                    return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &msg,
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             }
 
@@ -519,15 +570,23 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             if let Some(ref lang) = language
                 && let Err(e) = parse_language(lang)
             {
-                return Ok(CommandOutcome::UserError(format!(
-                    "invalid --language value {lang:?}: {e}"
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    &format!("invalid --language value {lang:?}: {e}"),
+                    None,
+                    None,
+                    None,
                 )));
             }
             if let Some(cfg_lang) = ctx.config_language
                 && let Err(e) = parse_language(cfg_lang)
             {
-                return Ok(CommandOutcome::UserError(format!(
-                    "invalid [search].language config value {cfg_lang:?}: {e}"
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
+                    None,
+                    None,
+                    None,
                 )));
             }
 
@@ -1118,7 +1177,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e,
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             };
             let do_validate = validate || ctx.validate_on_write;
@@ -1156,7 +1221,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e,
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             };
             remove_commands::remove(
@@ -1191,7 +1262,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e,
+                        None,
+                        None,
+                        None,
+                    )));
                 }
             };
             let do_validate = validate || ctx.validate_on_write;
@@ -1284,7 +1361,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(f) => f,
-                Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+                Err(e) => {
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )));
+                }
             };
             // Build type filters as additional property filters (type=<value>)
             let type_filters: Vec<hyalo_core::filter::PropertyFilter> = {
@@ -1292,7 +1377,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 for t in &r#type {
                     match hyalo_core::filter::parse_property_filter(&format!("type={t}")) {
                         Ok(f) => tf.push(f),
-                        Err(e) => return Ok(CommandOutcome::UserError(format!("Error: {e}"))),
+                        Err(e) => {
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &e.to_string(),
+                                None,
+                                None,
+                                None,
+                            )));
+                        }
                     }
                 }
                 tf
@@ -1304,9 +1397,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let has_file = file_positional.is_some() || file.is_some();
 
             if !has_selectors && !has_file {
-                return Ok(CommandOutcome::UserError(
-                    "Error: no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)".to_string(),
-                ));
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    "no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)",
+                    None,
+                    None,
+                    None,
+                )));
             }
 
             let is_batch = has_selectors;
@@ -1315,7 +1412,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 // Validate tag filters.
                 for t in &tag {
                     if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                        return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &msg,
+                            None,
+                            None,
+                            None,
+                        )));
                     }
                 }
 
@@ -1341,7 +1444,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             } else {
                 let file = match resolve_single_file(file_positional, file) {
                     Ok(f) => f,
-                    Err(e) => return Ok(CommandOutcome::UserError(format!("{e}"))),
+                    Err(e) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
                 };
                 let effective_dry_run = dry_run;
                 mv_commands::mv(
@@ -1766,9 +1877,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     mut filters,
                 } => {
                     if pattern.is_some() && filters.regexp.is_some() {
-                        return Ok(CommandOutcome::UserError(
-                            "Error: PATTERN and --regexp are mutually exclusive".to_owned(),
-                        ));
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            "PATTERN and --regexp are mutually exclusive",
+                            None,
+                            None,
+                            None,
+                        )));
                     }
                     filters.pattern = pattern;
                     crate::commands::views::set_view(
@@ -1795,8 +1910,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             filters.merge_from(&overlay);
                         }
                         None => {
-                            return Ok(CommandOutcome::UserError(format!(
-                                "Error: unknown view '{name}'\n\n  tip: run 'hyalo views list' to see available views"
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &format!("unknown view '{name}'"),
+                                None,
+                                Some("run 'hyalo views list' to see available views"),
+                                None,
                             )));
                         }
                     }
@@ -1828,21 +1947,35 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     }
                     for t in &tag {
                         if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                            return Ok(CommandOutcome::UserError(format!("Error: {msg}")));
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &msg,
+                                None,
+                                None,
+                                None,
+                            )));
                         }
                     }
                     if let Some(ref lang) = language
                         && let Err(e) = parse_language(lang)
                     {
-                        return Ok(CommandOutcome::UserError(format!(
-                            "invalid --language value {lang:?}: {e}"
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &format!("invalid --language value {lang:?}: {e}"),
+                            None,
+                            None,
+                            None,
                         )));
                     }
                     if let Some(cfg_lang) = ctx.config_language
                         && let Err(e) = parse_language(cfg_lang)
                     {
-                        return Ok(CommandOutcome::UserError(format!(
-                            "invalid [search].language config value {cfg_lang:?}: {e}"
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
+                            None,
+                            None,
+                            None,
                         )));
                     }
                     let prop_filters: Vec<filter::PropertyFilter> = match properties
@@ -1852,26 +1985,50 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     {
                         Ok(f) => f,
                         Err(e) => {
-                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &e.to_string(),
+                                None,
+                                None,
+                                None,
+                            )));
                         }
                     };
                     let task_filter = match task.as_deref().map(filter::parse_task_filter) {
                         Some(Ok(f)) => Some(f),
                         Some(Err(e)) => {
-                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &e.to_string(),
+                                None,
+                                None,
+                                None,
+                            )));
                         }
                         None => None,
                     };
                     let parsed_fields = match filter::Fields::parse(&fields) {
                         Ok(f) => f,
                         Err(e) => {
-                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &e.to_string(),
+                                None,
+                                None,
+                                None,
+                            )));
                         }
                     };
                     let sort_field = match sort.as_deref().map(filter::parse_sort) {
                         Some(Ok(f)) => Some(f),
                         Some(Err(e)) => {
-                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &e.to_string(),
+                                None,
+                                None,
+                                None,
+                            )));
                         }
                         None => None,
                     };
@@ -1882,7 +2039,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     {
                         Ok(f) => f,
                         Err(e) => {
-                            return Ok(CommandOutcome::UserError(format!("Error: {e}")));
+                            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                                effective_format,
+                                &e,
+                                None,
+                                None,
+                                None,
+                            )));
                         }
                     };
                     let file: Vec<String> = file

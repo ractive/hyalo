@@ -11,6 +11,7 @@
 ///     schema)
 ///
 /// Exit code: 0 = clean, 1 = errors found, 2 = internal error.
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -21,7 +22,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use hyalo_core::filename_template::FilenameTemplate;
-use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter};
+use hyalo_core::frontmatter::{check_mtime, read_frontmatter, read_mtime, write_frontmatter};
 use hyalo_core::scanner;
 use hyalo_core::schema::{
     self, PropertyConstraint, SchemaConfig, TypeSchema, parse_required_section_entry,
@@ -1606,9 +1607,7 @@ pub fn lint_files_extended(
                         count: remaining,
                         shown,
                         truncated,
-                        severity: remaining_owned
-                            .first()
-                            .map_or("warn".to_owned(), |v| v.severity.clone()),
+                        severity: group_severity(&remaining_owned),
                         autofixable: true,
                         violations: body_violations,
                     });
@@ -1737,9 +1736,7 @@ pub fn lint_files_extended(
                         .find(|e| &e.id == rule_id)
                         .is_some_and(|e| e.autofixable)
                 };
-                let severity = violations
-                    .first()
-                    .map_or_else(|| "warn".to_owned(), |v| v.severity.clone());
+                let severity = group_severity(violations);
 
                 let shown = if opts.detailed {
                     violations.len()
@@ -1819,6 +1816,24 @@ struct InternalViolation {
     fixed: bool,
 }
 
+/// Severity label for a group of violations under one rule id.
+///
+/// Most rule groups hold violations that all share one severity (hyalo
+/// assigns severity per rule, not per violation), but the synthetic
+/// `"SCHEMA"` group folds together several distinct checks (missing
+/// required field, undeclared property, missing type, ...) that can mix
+/// error and warn — using `violations.first()` there mislabels the whole
+/// group whenever a warn happens to be first. Returns the max severity
+/// across the group instead, which is correct for both the uniform and
+/// mixed cases.
+fn group_severity(violations: &[InternalViolation]) -> String {
+    if violations.iter().any(|v| v.severity == "error") {
+        "error".to_owned()
+    } else {
+        "warn".to_owned()
+    }
+}
+
 /// Outcome for a single diagnostic's fix attempt (internal, used in fix-mode).
 #[derive(Debug)]
 enum FixOutcome {
@@ -1867,6 +1882,59 @@ fn lint_one_file_extended(
     max_per_rule: usize,
     strict: bool,
 ) -> Result<PerFileLintResult> {
+    // One rule's fix can expose a fresh violation for another rule (e.g. a
+    // trimmed line changing what counts as a duplicate blank line), so a
+    // single lint→fix pass over the body does not always converge. Bounds
+    // the lint→fix→re-lint loop below.
+    const MAX_BODY_FIX_PASSES: usize = 5;
+
+    // Stat before reading: oversized files are skipped rather than loaded
+    // whole into memory (mirrors `scanner::scan_file_multi`'s own guard).
+    let meta =
+        std::fs::metadata(full_path).with_context(|| format!("failed to stat {rel_path}"))?;
+    if meta.len() > scanner::MAX_FILE_SIZE {
+        eprintln!(
+            "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+            full_path.display(),
+            meta.len() / (1024 * 1024),
+            scanner::MAX_FILE_SIZE / (1024 * 1024)
+        );
+        let mut violations_by_rule = indexmap::IndexMap::new();
+        violations_by_rule.insert(
+            "FILE".to_owned(),
+            vec![InternalViolation {
+                line: 1,
+                column: 1,
+                message: format!(
+                    "file exceeds {} MiB size limit — skipped, not linted",
+                    scanner::MAX_FILE_SIZE / (1024 * 1024)
+                ),
+                severity: "warn".to_owned(),
+                fix: None,
+                fixed: false,
+            }],
+        );
+        return Ok(PerFileLintResult {
+            rel_path: rel_path.to_owned(),
+            doc_type: None,
+            violations_by_rule,
+            total_violations: 1,
+            body_modified: false,
+            fix_actions: Vec::new(),
+            body_fix_outcomes: Vec::new(),
+            post_fix_schema_remaining: None,
+        });
+    }
+
+    // Baseline mtime fingerprint for TOCTOU detection around fix-mode
+    // writes below. Derived from the stat above instead of a second
+    // `read_mtime` round-trip.
+    let mut mtime0: (std::time::SystemTime, u64) = (
+        meta.modified()
+            .with_context(|| format!("mtime not available for {rel_path}"))?,
+        meta.len(),
+    );
+
     // Read the file content once.
     let content =
         std::fs::read_to_string(full_path).with_context(|| format!("reading {rel_path}"))?;
@@ -2049,8 +2117,15 @@ fn lint_one_file_extended(
             let actions = apply_fixes(rel_path, &mut mutable, schema);
             if !actions.is_empty() {
                 if matches!(fix, FixMode::Apply) {
+                    check_mtime(full_path, mtime0)?;
                     write_frontmatter(full_path, &mutable)
                         .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
+                    // Re-baseline: the write above legitimately changed the
+                    // file's mtime, and a later body-fix write in this same
+                    // call must not mistake it for a concurrent modification.
+                    mtime0 = read_mtime(full_path).with_context(|| {
+                        format!("re-reading mtime for {rel_path} after frontmatter fix")
+                    })?;
                 }
                 fix_actions = actions;
             }
@@ -2126,8 +2201,23 @@ fn lint_one_file_extended(
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 
-    let body_diagnostics = engine.lint_body(
-        body_content,
+    // Track per-diagnostic outcomes for the new fix-mode JSON shape.
+    let mut body_fix_outcomes: Vec<(String, FixOutcome)> = Vec::new();
+    // Diagnostics that were fixed, accumulated across every pass below
+    // (each carries its own line/column, valid against the body revision it
+    // was found in — fine for display, since only `fixed`-derived counts
+    // and messages are surfaced, never the byte offsets).
+    let mut fixed_diagnostics: Vec<hyalo_mdlint::Diagnostic> = Vec::new();
+    // The body text, mutated in place across fix passes.
+    let mut working_body: String = body_content.to_owned();
+
+    // Re-lint and re-fix the working body up to `MAX_BODY_FIX_PASSES` times,
+    // or until nothing more changes — whichever comes first. Read-only mode
+    // and DryRun both run this same in-memory loop; only `FixMode::Apply`
+    // writes the result to disk (below), so DryRun still previews the
+    // fully-converged outcome.
+    let mut current_diagnostics = engine.lint_body(
+        &working_body,
         rel_path,
         frontmatter_status.as_deref(),
         schema_has_completed,
@@ -2135,62 +2225,104 @@ fn lint_one_file_extended(
         rule_filter,
     )?;
 
-    // Apply body fixes if requested.
-    // Track per-diagnostic outcomes for the new fix-mode JSON shape.
-    let mut body_fix_outcomes: Vec<(String, FixOutcome)> = Vec::new();
-    // Set of body-diagnostic indices whose fix was Applied. Used below to
-    // mark `InternalViolation.fixed`, so downstream remaining/severity
-    // accounting can filter out fixed violations.
-    let mut applied_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    if matches!(fix, FixMode::Apply | FixMode::DryRun) && !body_diagnostics.is_empty() {
+    if matches!(fix, FixMode::Apply | FixMode::DryRun) {
         let fix_all_rules = fix_rules.is_empty();
-        let fixable_indices: Vec<usize> = body_diagnostics
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| d.fix.is_some())
-            .filter(|(_, d)| fix_all_rules || fix_rules.iter().any(|r| r == &d.rule_id))
-            .map(|(i, _)| i)
-            .collect();
 
-        if !fixable_indices.is_empty() {
+        for _ in 0..MAX_BODY_FIX_PASSES {
+            if current_diagnostics.is_empty() {
+                break;
+            }
+            let fixable_indices: Vec<usize> = current_diagnostics
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.fix.is_some())
+                .filter(|(_, d)| fix_all_rules || fix_rules.iter().any(|r| r == &d.rule_id))
+                .map(|(i, _)| i)
+                .collect();
+            if fixable_indices.is_empty() {
+                break;
+            }
+
             let fixable_refs: Vec<&hyalo_mdlint::Diagnostic> = fixable_indices
                 .iter()
-                .map(|&i| &body_diagnostics[i])
+                .map(|&i| &current_diagnostics[i])
                 .collect();
-            let (new_body, outcomes) = apply_body_fixes(body_content, &fixable_refs);
+            let (new_body, outcomes) = apply_body_fixes(&working_body, &fixable_refs);
 
-            // Record per-diagnostic outcomes.
-            for (slot, orig_idx) in fixable_indices.iter().enumerate() {
-                let rule_id = body_diagnostics[*orig_idx].rule_id.clone();
-                let outcome = match &outcomes[slot] {
+            let mut applied_this_pass: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+            for (slot, &orig_idx) in fixable_indices.iter().enumerate() {
+                let rule_id = current_diagnostics[orig_idx].rule_id.clone();
+                match &outcomes[slot] {
                     FixOutcome::Applied => {
-                        applied_indices.insert(*orig_idx);
-                        FixOutcome::Applied
+                        applied_this_pass.insert(orig_idx);
+                        body_fix_outcomes.push((rule_id, FixOutcome::Applied));
                     }
-                    FixOutcome::Conflict { blocking_rule } => FixOutcome::Conflict {
-                        blocking_rule: blocking_rule.clone(),
-                    },
-                    FixOutcome::NoFix => FixOutcome::NoFix,
-                };
-                body_fix_outcomes.push((rule_id, outcome));
+                    FixOutcome::Conflict { blocking_rule } => {
+                        body_fix_outcomes.push((
+                            rule_id,
+                            FixOutcome::Conflict {
+                                blocking_rule: blocking_rule.clone(),
+                            },
+                        ));
+                    }
+                    FixOutcome::NoFix => body_fix_outcomes.push((rule_id, FixOutcome::NoFix)),
+                }
             }
 
-            if new_body != body_content && matches!(fix, FixMode::Apply) {
-                // Reconstruct full file: frontmatter + fixed body.
-                let frontmatter_part = &content[..body_start];
-                let new_content = format!("{frontmatter_part}{new_body}");
-                std::fs::write(full_path, &new_content)
-                    .with_context(|| format!("writing fixed body to {rel_path}"))?;
-                body_modified = true;
+            if applied_this_pass.is_empty() {
+                // Every fixable diagnostic this pass hit a conflict or
+                // turned out to be a no-op — no progress possible, stop.
+                break;
             }
+
+            for (i, d) in current_diagnostics.into_iter().enumerate() {
+                if applied_this_pass.contains(&i) {
+                    fixed_diagnostics.push(d);
+                }
+                // Diagnostics that weren't applied are dropped rather than
+                // carried forward: their byte offsets are stale against
+                // `new_body`, and any still-unresolved issue is rediscovered
+                // with correct positions by the re-lint below.
+            }
+
+            working_body = new_body;
+            current_diagnostics = engine.lint_body(
+                &working_body,
+                rel_path,
+                frontmatter_status.as_deref(),
+                schema_has_completed,
+                md_lint_config,
+                rule_filter,
+            )?;
         }
     }
 
-    // Group body diagnostics by rule.
-    for (i, d) in body_diagnostics.into_iter().enumerate() {
-        let sev = format!("{}", d.severity);
-        let fix_val = d.fix.as_ref().map(|f| {
+    if matches!(fix, FixMode::Apply) && working_body != body_content {
+        // Re-derive the frontmatter bytes fresh from disk when a
+        // frontmatter fix already landed above — `content[..body_start]` is
+        // a snapshot from before that write and would silently revert it if
+        // reused here.
+        let frontmatter_part: Cow<'_, str> = if fix_actions.is_empty() {
+            Cow::Borrowed(&content[..body_start])
+        } else {
+            let fresh = std::fs::read_to_string(full_path)
+                .with_context(|| format!("re-reading {rel_path} after frontmatter fix"))?;
+            let fresh_body_start = find_body_start(&fresh);
+            Cow::Owned(fresh[..fresh_body_start].to_owned())
+        };
+        check_mtime(full_path, mtime0)?;
+        let new_content = format!("{frontmatter_part}{working_body}");
+        hyalo_core::fs_util::atomic_write(full_path, new_content.as_bytes())
+            .with_context(|| format!("writing fixed body to {rel_path}"))?;
+        body_modified = true;
+    }
+
+    // Group body diagnostics by rule: violations fixed across any pass,
+    // followed by whatever remains after the loop above (or the single
+    // read-only lint pass, when fix-mode is off).
+    let diag_to_violation = |d: hyalo_mdlint::Diagnostic, fixed: bool| {
+        let fix = d.fix.as_ref().map(|f| {
             serde_json::json!({
                 "description": f.description,
                 "start": f.start,
@@ -2198,18 +2330,28 @@ fn lint_one_file_extended(
                 "replacement": f.replacement,
             })
         });
-        let fixed = applied_indices.contains(&i);
+        InternalViolation {
+            line: d.line,
+            column: d.column,
+            message: d.message,
+            severity: format!("{}", d.severity),
+            fix,
+            fixed,
+        }
+    };
+    for d in fixed_diagnostics {
+        let rule_id = d.rule_id.clone();
         violations_by_rule
-            .entry(d.rule_id.clone())
+            .entry(rule_id)
             .or_default()
-            .push(InternalViolation {
-                line: d.line,
-                column: d.column,
-                message: d.message,
-                severity: sev,
-                fix: fix_val,
-                fixed,
-            });
+            .push(diag_to_violation(d, true));
+    }
+    for d in current_diagnostics {
+        let rule_id = d.rule_id.clone();
+        violations_by_rule
+            .entry(rule_id)
+            .or_default()
+            .push(diag_to_violation(d, false));
     }
 
     let total_violations = violations_by_rule.values().map(Vec::len).sum();
@@ -2232,68 +2374,80 @@ fn lint_one_file_extended(
 ///
 /// Returns `(fixed_content, outcomes)` where `outcomes[i]` corresponds to
 /// `fixes[i]` — either `Applied`, `Conflict`, or (for diagnostics without a
-/// fix) `NoFix`.
+/// fix, a fix that lost a conflict, or a fix that turned out to be a
+/// byte-for-byte no-op) `NoFix`.
 ///
-/// Fixes are applied in descending start-offset order so that earlier ranges
-/// (lower offsets) remain valid against the partially mutated buffer.
+/// Conflict resolution and buffer mutation use two different orderings on
+/// purpose:
+/// - **Winner selection** happens in priority order (`Error` before `Warn`,
+///   then descending start offset), so a higher-severity fix (e.g. HYALO001)
+///   is never displaced by an overlapping lower-severity one (e.g. MD009)
+///   just because the latter happens to sort first by offset.
+/// - **Buffer mutation** of the resulting non-overlapping winners always
+///   proceeds in descending start-offset order, which is required for
+///   correctness: each edit's range must still be valid against the
+///   partially mutated buffer, and that only holds if edits at higher
+///   offsets (later in the string) are applied first.
 fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String, Vec<FixOutcome>) {
-    // Build (original_index, start, end) sorted by start descending.
-    let mut indexed: Vec<(usize, usize, usize)> = fixes
+    let severity_rank = |sev: hyalo_mdlint::DiagSeverity| match sev {
+        hyalo_mdlint::DiagSeverity::Error => 0,
+        hyalo_mdlint::DiagSeverity::Warn => 1,
+    };
+
+    // (original_index, start, end), ordered by selection priority.
+    let mut candidates: Vec<(usize, usize, usize)> = fixes
         .iter()
         .enumerate()
         .filter_map(|(i, d)| d.fix.as_ref().map(|f| (i, f.start, f.end)))
         .collect();
-    indexed.sort_by_key(|(_, start, _)| std::cmp::Reverse(*start));
+    candidates.sort_by(|&(ia, sa, _), &(ib, sb, _)| {
+        severity_rank(fixes[ia].severity)
+            .cmp(&severity_rank(fixes[ib].severity))
+            .then(sb.cmp(&sa))
+    });
 
-    let mut result = body.to_owned();
-    let mut applied: Vec<(usize, usize, usize)> = Vec::new(); // (orig_idx, start, end)
+    let mut winners: Vec<(usize, usize, usize)> = Vec::new(); // (orig_idx, start, end)
     let mut outcome_map: std::collections::HashMap<usize, FixOutcome> =
         std::collections::HashMap::new();
 
-    for (orig_idx, start, end) in &indexed {
-        let start = *start;
-        let end = *end;
-        // Check overlap with already-applied ranges.
-        let conflict_with = applied
-            .iter()
-            .find(|(_, as_, ae)| start < *ae && end > *as_);
+    for &(orig_idx, start, end) in &candidates {
+        let conflict_with = winners.iter().find(|(_, ws, we)| start < *we && end > *ws);
         if let Some(&(blocking_idx, _, _)) = conflict_with {
             let blocking_rule = fixes[blocking_idx].rule_id.clone();
-            outcome_map.insert(*orig_idx, FixOutcome::Conflict { blocking_rule });
+            outcome_map.insert(orig_idx, FixOutcome::Conflict { blocking_rule });
             continue;
         }
-        if end > result.len() {
-            // Out-of-bounds — treat as conflict with "bounds".
+        if end > body.len() {
             outcome_map.insert(
-                *orig_idx,
+                orig_idx,
                 FixOutcome::Conflict {
                     blocking_rule: "out-of-bounds".to_owned(),
                 },
             );
             continue;
         }
-        let replacement = fixes[*orig_idx]
+        winners.push((orig_idx, start, end));
+    }
+
+    // Mutate the buffer in descending start order (see doc comment above).
+    winners.sort_by_key(|&(_, start, _)| std::cmp::Reverse(start));
+    let mut result = body.to_owned();
+    for (orig_idx, start, end) in winners {
+        let replacement = fixes[orig_idx]
             .fix
             .as_ref()
             .map_or("", |f| f.replacement.as_str());
+        if result[start..end] == *replacement {
+            // Byte-for-byte no-op: nothing changed, don't count it as fixed.
+            outcome_map.insert(orig_idx, FixOutcome::NoFix);
+            continue;
+        }
         result.replace_range(start..end, replacement);
-        applied.push((*orig_idx, start, end));
-        outcome_map.insert(*orig_idx, FixOutcome::Applied);
+        outcome_map.insert(orig_idx, FixOutcome::Applied);
     }
 
-    // Build outcomes in original order.
     let outcomes: Vec<FixOutcome> = (0..fixes.len())
-        .map(|i| {
-            outcome_map.remove(&i).unwrap_or_else(|| {
-                if fixes[i].fix.is_some() {
-                    // Had a fix but not selected — NoFix (shouldn't happen since we
-                    // only pass fixable diagnostics, but be safe).
-                    FixOutcome::NoFix
-                } else {
-                    FixOutcome::NoFix
-                }
-            })
-        })
+        .map(|i| outcome_map.remove(&i).unwrap_or(FixOutcome::NoFix))
         .collect();
 
     (result, outcomes)
@@ -2301,8 +2455,14 @@ fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String,
 
 /// Find the byte offset where the document body starts (after the closing `---` line).
 /// Returns 0 if no frontmatter is found.
+///
+/// The opening check mirrors the shared frontmatter policy (iter-158 C-1):
+/// an optional single UTF-8 BOM, then a line that is exactly `---` — so lint
+/// splits BOM-prefixed files the same way the read/write paths do instead of
+/// treating the whole file as body.
 fn find_body_start(content: &str) -> usize {
-    if !content.starts_with("---") {
+    let rest = content.strip_prefix('\u{feff}').unwrap_or(content);
+    if !(rest.starts_with("---\n") || rest.starts_with("---\r\n") || rest == "---") {
         return 0;
     }
     // Find the second `---` delimiter.
@@ -3157,5 +3317,101 @@ mod tests {
             section_viols.is_empty(),
             "extra headings should not cause violations, got: {section_viols:?}"
         );
+    }
+
+    // --- apply_body_fixes ---
+
+    fn mk_diag(
+        rule_id: &str,
+        severity: hyalo_mdlint::DiagSeverity,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> hyalo_mdlint::Diagnostic {
+        hyalo_mdlint::Diagnostic {
+            rule_id: rule_id.to_owned(),
+            rule_name: rule_id.to_owned(),
+            message: String::new(),
+            line: 1,
+            column: 1,
+            severity,
+            fix: Some(hyalo_mdlint::DiagFix {
+                description: String::new(),
+                start,
+                end,
+                replacement: replacement.to_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn apply_body_fixes_error_wins_overlap_regardless_of_offset() {
+        // Two fixes over the same range: a Warn fix that would sort first by
+        // descending-offset (its start is >= the Error fix's start) must not
+        // beat the overlapping Error fix.
+        let warn = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 0, 10, "warn-fix");
+        let error = mk_diag(
+            "HYALO001",
+            hyalo_mdlint::DiagSeverity::Error,
+            0,
+            10,
+            "error-fix",
+        );
+        let (result, outcomes) = apply_body_fixes("0123456789", &[&warn, &error]);
+        assert_eq!(result, "error-fix");
+        assert!(matches!(outcomes[1], FixOutcome::Applied));
+        assert!(matches!(outcomes[0], FixOutcome::Conflict { .. }));
+    }
+
+    #[test]
+    fn apply_body_fixes_no_op_replacement_is_not_applied() {
+        let noop = mk_diag("MD047", hyalo_mdlint::DiagSeverity::Warn, 4, 5, "\n");
+        let (result, outcomes) = apply_body_fixes("body\n", &[&noop]);
+        assert_eq!(result, "body\n", "content must not change");
+        assert!(
+            matches!(outcomes[0], FixOutcome::NoFix),
+            "byte-for-byte no-op must not be reported as Applied: {:?}",
+            outcomes[0]
+        );
+    }
+
+    #[test]
+    fn apply_body_fixes_non_overlapping_fixes_both_apply() {
+        let a = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 0, 1, "A");
+        let b = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 2, 3, "B");
+        let (result, outcomes) = apply_body_fixes("xyz", &[&a, &b]);
+        assert_eq!(result, "AyB");
+        assert!(matches!(outcomes[0], FixOutcome::Applied));
+        assert!(matches!(outcomes[1], FixOutcome::Applied));
+    }
+
+    // --- group_severity ---
+
+    fn iv(severity: &str) -> InternalViolation {
+        InternalViolation {
+            line: 1,
+            column: 1,
+            message: String::new(),
+            severity: severity.to_owned(),
+            fix: None,
+            fixed: false,
+        }
+    }
+
+    #[test]
+    fn group_severity_is_error_when_any_violation_is_error() {
+        let violations = vec![iv("warn"), iv("error"), iv("warn")];
+        assert_eq!(group_severity(&violations), "error");
+    }
+
+    #[test]
+    fn group_severity_is_warn_when_all_warn() {
+        let violations = vec![iv("warn"), iv("warn")];
+        assert_eq!(group_severity(&violations), "warn");
+    }
+
+    #[test]
+    fn group_severity_empty_defaults_to_warn() {
+        assert_eq!(group_severity(&[]), "warn");
     }
 }

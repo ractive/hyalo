@@ -1430,3 +1430,265 @@ fn lint_required_sections_out_of_order_is_violation() {
         "expected order violation in output, got:\n{combined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-158: lint --fix pipeline fixes (byte/char columns, MD009 blank-line
+// injection, MD047 convergence, frontmatter+body combined write, severity
+// tiebreak, oversized-file skip, idempotency)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_fix_md009_does_not_inject_blank_line() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\nx   \ny\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD009"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.ends_with("x\ny\n"),
+        "MD009 fix must not insert a blank line, got: {content:?}"
+    );
+}
+
+#[test]
+fn lint_fix_md009_preserves_crlf_line_endings() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\r\ntitle: Note\r\n---\r\nx   \r\ny\r\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD009"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.ends_with("x\r\ny\r\n"),
+        "MD009 fix must keep CRLF endings uniformly, got: {content:?}"
+    );
+    assert!(
+        !content.contains("\n\r\n"),
+        "MD009 fix must not produce mixed/duplicated line endings, got: {content:?}"
+    );
+}
+
+#[test]
+fn lint_fix_hyalo001_non_ascii_line() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\n---\n\n[] café task\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "HYALO001"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("- [ ] café task"),
+        "HYALO001 fix must apply on a non-ASCII line, got: {content:?}"
+    );
+}
+
+#[test]
+fn lint_fix_md009_trailing_space_on_cjk_line() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\n---\n日本語のテキスト   \n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD009"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.ends_with("日本語のテキスト\n"),
+        "MD009 fix must strip trailing spaces on a CJK line, got: {content:?}"
+    );
+}
+
+#[test]
+fn lint_fix_md047_converges_in_one_run() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\nbody\n\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    assert_eq!(val["results"]["total_fixed"], 1);
+    assert_eq!(val["results"]["total_remaining"], 0);
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.ends_with("body\n") && !content.ends_with("body\n\n"),
+        "MD047 must converge to exactly one trailing newline in one run, got: {content:?}"
+    );
+
+    // A second run must report zero fixes — no perpetual "fixed=1" loop.
+    let output2 = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout2 = std::str::from_utf8(&output2.stdout).unwrap();
+    let val2: serde_json::Value = serde_json::from_str(stdout2).unwrap();
+    assert_eq!(val2["results"]["total_fixed"], 0);
+    assert_eq!(val2["results"]["files"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn lint_fix_frontmatter_and_body_fixes_both_persist() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[schema.default]\nrequired = [\"title\"]\n\n[schema.default.defaults]\nstatus = \"draft\"\n",
+    );
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\n---\nline with trailing space   \n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("status: draft"),
+        "frontmatter default fix must persist, got: {content:?}"
+    );
+    assert!(
+        content.contains("line with trailing space\n"),
+        "body fix must persist alongside the frontmatter fix, got: {content:?}"
+    );
+    assert!(
+        !content.contains("space   \n"),
+        "trailing spaces must actually be removed, got: {content:?}"
+    );
+}
+
+#[test]
+fn lint_fix_idempotent_second_run_is_a_no_op() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\n---\n- [] task with trailing space   \nAnother line.\n\n\n\nToo many blanks above.\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix"])
+        .assert()
+        .success();
+    let after_first = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    assert_eq!(
+        val["results"]["total_fixed"], 0,
+        "second --fix run should find nothing left to fix, got: {stdout}"
+    );
+
+    let after_second = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert_eq!(
+        after_first, after_second,
+        "file bytes must be unchanged by the second --fix run"
+    );
+}
+
+#[test]
+fn lint_fix_error_severity_wins_overlap_with_warn() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    // Bare checkbox (HYALO001, Error) with trailing whitespace on the same
+    // line (MD009, Warn) — their fix ranges overlap.
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n[] task   \n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix"])
+        .assert()
+        .success();
+
+    let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert!(
+        content.contains("- [ ] task"),
+        "HYALO001's fix must win the overlap, got: {content:?}"
+    );
+    assert!(
+        !content.contains("task   \n"),
+        "trailing spaces should also converge across passes, got: {content:?}"
+    );
+}
+
+#[test]
+fn lint_oversized_file_is_skipped_with_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    let path = tmp.path().join("big.md");
+    let file = std::fs::File::create(&path).unwrap();
+    // Sparse file: exceeds the 100 MiB scanner limit without writing real
+    // bytes to disk.
+    file.set_len(101 * 1024 * 1024).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "big.md"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("skipping") && stderr.contains("big.md"),
+        "expected a skip warning on stderr, got: {stderr}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an oversized-file skip is a warning, not an error"
+    );
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    let val: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    assert_eq!(
+        val["results"]["files_with_violations"], 1,
+        "the skipped file must be reported as not-clean, not silently dropped"
+    );
+}

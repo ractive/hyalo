@@ -1312,3 +1312,134 @@ fn set_date_rejects_non_leap_feb_29() {
         "2023-02-29 should be rejected (2023 is not a leap year), stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-158 C-1: read/write opening-delimiter predicate drift corrupted files
+// on BOM-prefixed, leading-whitespace, and CRLF documents, and rejected
+// oversized files unsafely. These are the CLI-level regression tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_bom_file_round_trips_without_duplicate_block() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "\u{feff}---\ntitle: Note\nstatus: draft\n---\nBody.\n",
+    );
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "status=done", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    let bytes = fs::read(tmp.path().join("note.md")).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "\u{feff}---\ntitle: Note\nstatus: done\n---\nBody.\n",
+        "expected the original BOM-prefixed block updated in place, not duplicated"
+    );
+}
+
+#[test]
+fn set_leading_space_file_prepends_new_block_without_corrupting_pseudo_block() {
+    let tmp = TempDir::new().unwrap();
+    let original = " ---\ntitle: Note\nstatus: draft\n---\nBody.\n";
+    write_md(tmp.path(), "note.md", original);
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "status=done", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert_eq!(
+        content,
+        format!("---\nstatus: done\n---\n{original}"),
+        "expected exactly one new frontmatter block prepended, with the old \
+         ` ---` pseudo-block preserved verbatim as body"
+    );
+
+    // The read and write paths must agree that ` ---` never opens frontmatter,
+    // so `find --property status=done` sees the newly written property.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--property", "status=done"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = envelope["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        1,
+        "find should see the newly written property: {envelope}"
+    );
+    assert_eq!(results[0]["file"], "note.md");
+}
+
+#[test]
+fn set_crlf_file_stays_uniform_crlf_after_mutation() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\r\ntitle: Note\r\nstatus: draft\r\n---\r\nBody.\r\n",
+    );
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "status=done", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["modified"].as_array().unwrap().len(), 1);
+
+    let bytes = fs::read(tmp.path().join("note.md")).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "---\r\ntitle: Note\r\nstatus: done\r\n---\r\nBody.\r\n",
+        "expected uniform CRLF line endings after mutation"
+    );
+}
+
+#[test]
+fn set_refuses_oversized_file_and_leaves_it_untouched() {
+    use std::io::Read as _;
+
+    let tmp = TempDir::new().unwrap();
+    let original = b"---\ntitle: Note\n---\nBody.\n";
+    write_md(tmp.path(), "big.md", std::str::from_utf8(original).unwrap());
+    // Sparse-extend well past the 100 MiB write guard without writing real data.
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(tmp.path().join("big.md"))
+        .unwrap();
+    file.set_len(100 * 1024 * 1024 + 1).unwrap();
+    drop(file);
+
+    let (status, _json, stderr) =
+        set_json(&tmp, &["--property", "status=done", "--file", "big.md"]);
+    assert!(
+        !status.success(),
+        "oversized file must be refused, not silently rewritten"
+    );
+    assert!(
+        stderr.contains("MiB") && stderr.contains("limit"),
+        "expected a size-limit error, got stderr: {stderr}"
+    );
+
+    let meta = fs::metadata(tmp.path().join("big.md")).unwrap();
+    assert_eq!(
+        meta.len(),
+        100 * 1024 * 1024 + 1,
+        "file size must be unchanged after a refused write"
+    );
+    let mut prefix = vec![0u8; original.len()];
+    fs::File::open(tmp.path().join("big.md"))
+        .unwrap()
+        .read_exact(&mut prefix)
+        .unwrap();
+    assert_eq!(prefix, original, "file content must be untouched");
+}

@@ -5,7 +5,11 @@ use crate::hints::{FilesFromCounterSummary, HintContext, generate_hints_with_cou
 use crate::output::{CommandOutcome, Format, apply_jq_filter_result, build_envelope_value};
 
 /// Error message for `--count` on non-list commands (shared across match arms).
-pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "Error: --count is only supported for list commands (find, tags summary, properties summary, backlinks, lint)";
+///
+/// Deliberately has no "Error: " prefix baked in — callers route it through
+/// [`crate::output::format_error`] so it renders correctly under both
+/// `--format text` (which adds the prefix) and `--format json`.
+pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "--count is only supported for list commands (find, tags summary, properties summary, backlinks, lint)";
 
 /// Encapsulates the post-command output pipeline: jq filtering, hint generation,
 /// and envelope wrapping.
@@ -84,7 +88,16 @@ impl OutputPipeline<'_> {
                         println!("{n}");
                         return 0;
                     }
-                    eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+                    eprintln!(
+                        "{}",
+                        crate::output::format_error(
+                            self.user_format,
+                            COUNT_UNSUPPORTED_ERROR,
+                            None,
+                            None,
+                            None,
+                        )
+                    );
                     return 2;
                 }
 
@@ -164,7 +177,16 @@ impl OutputPipeline<'_> {
             }
             Ok(CommandOutcome::RawOutput(output)) => {
                 if self.count {
-                    eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+                    eprintln!(
+                        "{}",
+                        crate::output::format_error(
+                            self.user_format,
+                            COUNT_UNSUPPORTED_ERROR,
+                            None,
+                            None,
+                            None,
+                        )
+                    );
                     return 2;
                 }
                 // Raw output bypasses the JSON pipeline — print directly to stdout.
@@ -172,7 +194,12 @@ impl OutputPipeline<'_> {
                 // println! matches pre-refactor behavior: the content string already ends
                 // with '\n', and the extra newline from println! preserves empty-line
                 // endings (e.g. `--lines :2` where line 2 is blank).
-                println!("{output}");
+                //
+                // Sanitized here (unlike the JSON pipeline above) because RawOutput
+                // is raw file body content that never passes through format_success/
+                // format_envelope — without this, a vault file containing ANSI escapes
+                // or other control bytes would inject them straight into the terminal.
+                println!("{}", crate::output::sanitize_control_chars(&output));
                 0
             }
             Ok(CommandOutcome::UserError(output)) => {

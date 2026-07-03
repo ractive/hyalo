@@ -1425,6 +1425,236 @@ fn task_toggle_files_from_empty_input_exits_zero() {
     assert!(status.success(), "stderr: {stderr}");
 }
 
+// ---------------------------------------------------------------------------
+// H-9: task toggle/set must be fence- and comment-aware, matching task read.
+// ---------------------------------------------------------------------------
+
+/// Fixture with a `%%` comment block containing a checkbox-looking line.
+///
+/// ```text
+/// 1: ---
+/// 2: title: Test
+/// 3: ---
+/// 4: # Tasks
+/// 5: - [ ] Real task
+/// 6: %%
+/// 7: - [ ] Inside comment
+/// 8: %%
+/// ```
+const LINE_IN_COMMENT_BLOCK: usize = 7;
+
+fn setup_comment_task_file(tmp: &tempfile::TempDir) {
+    let content = "---\ntitle: Test\n---\n# Tasks\n- [ ] Real task\n%%\n- [ ] Inside comment\n%%\n";
+    write_md(tmp.path(), "comment_tasks.md", content);
+}
+
+#[test]
+fn task_toggle_inside_code_block_exits_1_and_file_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+    let original = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+
+    let (status, _json, stderr) = run_task_toggle(&tmp, "tasks.md", LINE_IN_CODE_BLOCK);
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(1));
+    assert!(stderr.contains("not a task"), "stderr: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert_eq!(after, original, "fenced line must not be mutated");
+}
+
+#[test]
+fn task_set_status_inside_code_block_exits_1_and_file_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+    let original = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+
+    let (status, _json, stderr) = run_task_set_status(&tmp, "tasks.md", LINE_IN_CODE_BLOCK, "x");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(1));
+    assert!(stderr.contains("not a task"), "stderr: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert_eq!(after, original, "fenced line must not be mutated");
+}
+
+#[test]
+fn task_toggle_inside_comment_block_exits_1_and_file_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_comment_task_file(&tmp);
+    let original = fs::read_to_string(tmp.path().join("comment_tasks.md")).unwrap();
+
+    let (status, _json, stderr) = run_task_toggle(&tmp, "comment_tasks.md", LINE_IN_COMMENT_BLOCK);
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(1));
+    assert!(stderr.contains("not a task"), "stderr: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("comment_tasks.md")).unwrap();
+    assert_eq!(after, original, "commented line must not be mutated");
+}
+
+#[test]
+fn task_set_status_inside_comment_block_exits_1_and_file_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_comment_task_file(&tmp);
+    let original = fs::read_to_string(tmp.path().join("comment_tasks.md")).unwrap();
+
+    let (status, _json, stderr) =
+        run_task_set_status(&tmp, "comment_tasks.md", LINE_IN_COMMENT_BLOCK, "x");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(1));
+    assert!(stderr.contains("not a task"), "stderr: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("comment_tasks.md")).unwrap();
+    assert_eq!(after, original, "commented line must not be mutated");
+}
+
+#[test]
+fn task_toggle_valid_line_with_frontmatter_and_fence_untouched() {
+    // Frontmatter shifts every body line number; confirm fence-aware
+    // validation still resolves the correct physical line and leaves the
+    // fenced checkbox-looking line alone.
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+
+    let (status, json, stderr) = run_task_toggle(&tmp, "tasks.md", LINE_INCOMPLETE);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["line"], LINE_INCOMPLETE);
+    assert_eq!(json["status"], "x");
+
+    let content = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert!(content.contains("- [x] First task"));
+    assert!(
+        content.contains("- [ ] Not a real task"),
+        "fenced line must remain untouched"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M: --dry-run parity — dry-run and the real run must agree, for both the
+// failure case (fenced line) and the success case (valid line).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_dry_run_and_real_run_agree_on_fenced_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+
+    let mut dry_cmd = hyalo_no_hints();
+    dry_cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    dry_cmd.args([
+        "task",
+        "toggle",
+        "--file",
+        "tasks.md",
+        "--line",
+        &LINE_IN_CODE_BLOCK.to_string(),
+        "--dry-run",
+    ]);
+    let dry_output = dry_cmd.output().unwrap();
+    let dry_stderr = String::from_utf8_lossy(&dry_output.stderr).to_string();
+
+    let (real_status, _real_json, real_stderr) =
+        run_task_toggle(&tmp, "tasks.md", LINE_IN_CODE_BLOCK);
+
+    assert!(
+        !dry_output.status.success(),
+        "dry-run must fail on a fenced line"
+    );
+    assert!(
+        !real_status.success(),
+        "real run must fail on a fenced line"
+    );
+    assert_eq!(
+        dry_output.status.code(),
+        real_status.code(),
+        "dry-run and real run must agree on exit code"
+    );
+    assert!(
+        dry_stderr.contains("not a task"),
+        "dry-run stderr: {dry_stderr}"
+    );
+    assert!(
+        real_stderr.contains("not a task"),
+        "real stderr: {real_stderr}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("tasks.md")).unwrap();
+    assert!(
+        content.contains("- [ ] Not a real task"),
+        "fenced line must remain untouched after either run"
+    );
+}
+
+#[test]
+fn task_toggle_dry_run_predicts_real_run_on_valid_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    setup_task_file(&tmp);
+
+    let (dry_status, dry_json, dry_stderr) = run_task_cmd_json(
+        &tmp,
+        &[
+            "task",
+            "toggle",
+            "--file",
+            "tasks.md",
+            "--line",
+            &LINE_INCOMPLETE.to_string(),
+            "--dry-run",
+        ],
+    );
+    assert!(dry_status.success(), "stderr: {dry_stderr}");
+
+    let (real_status, real_json, real_stderr) = run_task_toggle(&tmp, "tasks.md", LINE_INCOMPLETE);
+    assert!(real_status.success(), "stderr: {real_stderr}");
+
+    let dry_result = &dry_json["results"];
+    assert_eq!(dry_result["line"], real_json["line"]);
+    assert_eq!(dry_result["status"], real_json["status"]);
+    assert_eq!(dry_result["done"], real_json["done"]);
+    assert_eq!(dry_result["text"], real_json["text"]);
+}
+
+// ---------------------------------------------------------------------------
+// M: oversized files must be refused (not silently skipped) and left
+// untouched — a mutation command always targets an explicit file.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn task_toggle_oversized_file_refused_and_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("big.md");
+    // Sparse file just over the scanner size cap; no real disk usage.
+    let f = fs::File::create(&path).unwrap();
+    f.set_len(hyalo_core::scanner::MAX_FILE_SIZE + 1).unwrap();
+    drop(f);
+    let before_len = fs::metadata(&path).unwrap().len();
+
+    let (status, _json, stderr) = run_task_toggle(&tmp, "big.md", 1);
+    assert!(!status.success());
+    assert!(stderr.contains("too large"), "stderr: {stderr}");
+
+    let after_len = fs::metadata(&path).unwrap().len();
+    assert_eq!(before_len, after_len, "oversized file must not be modified");
+}
+
+#[test]
+fn task_set_status_oversized_file_refused_and_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("big.md");
+    let f = fs::File::create(&path).unwrap();
+    f.set_len(hyalo_core::scanner::MAX_FILE_SIZE + 1).unwrap();
+    drop(f);
+    let before_len = fs::metadata(&path).unwrap().len();
+
+    let (status, _json, stderr) = run_task_set_status(&tmp, "big.md", 1, "x");
+    assert!(!status.success());
+    assert!(stderr.contains("too large"), "stderr: {stderr}");
+
+    let after_len = fs::metadata(&path).unwrap().len();
+    assert_eq!(before_len, after_len, "oversized file must not be modified");
+}
+
 #[test]
 fn task_toggle_glob_single_file() {
     // Passing --glob that matches exactly one file works (SingleOrMany policy).

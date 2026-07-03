@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, parse_atx_heading};
 use hyalo_core::scanner;
-use std::io::BufRead;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -138,35 +137,69 @@ fn collect_headings(body_lines: &[String]) -> Vec<String> {
 // Read body lines from file (raw, no stripping)
 // ---------------------------------------------------------------------------
 
+/// Placeholder pushed in place of a body line that exceeds
+/// [`scanner::MAX_BODY_LINE_BYTES`] (mirrors the scanner's own per-line cap;
+/// see [`scanner::read_line_capped`]).
+///
+/// A real dropped line would shift every subsequent 1-based line number, which
+/// would silently corrupt `--lines`/`--section` addressing — so the line's
+/// *position* is preserved even though its content is not.
+fn oversized_line_placeholder() -> String {
+    format!(
+        "<line skipped: exceeds {} MiB per-line limit>",
+        scanner::MAX_BODY_LINE_BYTES / (1024 * 1024)
+    )
+}
+
 /// Read the raw body lines from a markdown file, skipping frontmatter.
 /// Returns the lines with their trailing newlines stripped.
+///
+/// Uses [`scanner::read_line_capped`] rather than `BufRead::lines()` so a
+/// single pathological line (e.g. a minified blob with no newlines) cannot
+/// balloon memory — such a line is replaced with [`oversized_line_placeholder`]
+/// instead of being buffered in full.
 fn read_body_lines(path: &Path) -> Result<Vec<String>> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = std::io::BufReader::new(file);
 
-    // Read first line to check for frontmatter
+    // Read first line (capped) to check for frontmatter.
     let mut first_line = String::new();
-    let n = reader
-        .read_line(&mut first_line)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let (n, first_truncated) =
+        scanner::read_line_capped(&mut reader, &mut first_line, scanner::MAX_BODY_LINE_BYTES)
+            .with_context(|| format!("failed to read {}", path.display()))?;
     if n == 0 {
         return Ok(Vec::new());
     }
 
-    let first_trimmed = first_line.trim_end_matches(['\n', '\r']);
-    let fm_lines = frontmatter::skip_frontmatter(&mut reader, first_trimmed)?;
-
     let mut lines = Vec::new();
 
-    if fm_lines == 0 {
-        // No frontmatter — first line is body content
-        lines.push(first_trimmed.to_owned());
+    if first_truncated {
+        // A real `---` frontmatter delimiter is 3 bytes, so a line this long
+        // can only be body content.
+        lines.push(oversized_line_placeholder());
+    } else {
+        let first_trimmed = first_line.trim_end_matches(['\n', '\r']);
+        let fm_lines = frontmatter::skip_frontmatter(&mut reader, first_trimmed)?;
+        if fm_lines == 0 {
+            // No frontmatter — first line is body content
+            lines.push(first_trimmed.to_owned());
+        }
     }
 
-    for line_result in reader.lines() {
-        let line = line_result.with_context(|| format!("failed to read {}", path.display()))?;
-        lines.push(line);
+    loop {
+        let mut buf = String::new();
+        let (n, truncated) =
+            scanner::read_line_capped(&mut reader, &mut buf, scanner::MAX_BODY_LINE_BYTES)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        if truncated {
+            lines.push(oversized_line_placeholder());
+        } else {
+            lines.push(buf.trim_end_matches(['\n', '\r']).to_owned());
+        }
     }
 
     Ok(lines)
@@ -190,6 +223,27 @@ pub fn run(
         Ok(r) => r,
         Err(e) => return Ok(super::resolve_error_to_outcome(e, format)),
     };
+
+    // `read` targets one explicit file, so — unlike the read-only scanner,
+    // which silently skips oversized files across a whole vault — an
+    // oversized target here must be a hard, clear error rather than a
+    // silent skip or an unbounded read.
+    let file_size = std::fs::metadata(&full_path)
+        .with_context(|| format!("failed to stat {}", full_path.display()))?
+        .len();
+    if file_size > scanner::MAX_FILE_SIZE {
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            &format!(
+                "file too large to read ({} MiB exceeds {} MiB limit)",
+                file_size / (1024 * 1024),
+                scanner::MAX_FILE_SIZE / (1024 * 1024)
+            ),
+            Some(&rel_path),
+            None,
+            None,
+        )));
+    }
 
     // Parse line range early so we fail fast on bad input
     let line_range = if let Some(range_str) = lines {
@@ -346,6 +400,90 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- read_body_lines: per-line memory cap --
+
+    #[test]
+    fn read_body_lines_normal_file_unchanged() {
+        // Pin exact output for an ordinary small file — the capped reader must
+        // be byte-for-byte equivalent to the old `BufRead::lines()` loop.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("normal.md");
+        std::fs::write(
+            &path,
+            "---\ntitle: T\n---\nLine one\nLine two\nLine three\n",
+        )
+        .unwrap();
+
+        let lines = read_body_lines(&path).unwrap();
+        assert_eq!(lines, vec!["Line one", "Line two", "Line three"]);
+    }
+
+    #[test]
+    fn read_body_lines_no_frontmatter_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("normal.md");
+        std::fs::write(&path, "# Heading\n\nBody text\n").unwrap();
+
+        let lines = read_body_lines(&path).unwrap();
+        assert_eq!(lines, vec!["# Heading", "", "Body text"]);
+    }
+
+    #[test]
+    fn read_body_lines_oversized_middle_line_is_placeholdered() {
+        // A line exceeding MAX_BODY_LINE_BYTES must not be buffered whole —
+        // it is replaced with a placeholder, and surrounding lines survive
+        // with their positions intact (mirrors the scanner's per-line cap).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("huge-line.md");
+        let huge: String = "x".repeat(scanner::MAX_BODY_LINE_BYTES + 1);
+        let content = format!("before\n{huge}\nafter\n");
+        std::fs::write(&path, &content).unwrap();
+
+        let lines = read_body_lines(&path).unwrap();
+        assert_eq!(lines.len(), 3, "line count must be preserved: {lines:?}");
+        assert_eq!(lines[0], "before");
+        assert_ne!(lines[1], huge, "oversized line must not be buffered whole");
+        assert!(
+            lines[1].contains("skipped"),
+            "expected placeholder, got: {}",
+            lines[1]
+        );
+        assert_eq!(
+            lines[2], "after",
+            "line position after the skip must survive"
+        );
+    }
+
+    #[test]
+    fn read_body_lines_oversized_first_line_no_frontmatter_confusion() {
+        // A file whose very first line alone exceeds the cap can't possibly be
+        // a valid `---` frontmatter delimiter — it must be treated as body.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("huge-first.md");
+        let huge: String = "y".repeat(scanner::MAX_BODY_LINE_BYTES + 1);
+        std::fs::write(&path, format!("{huge}\nafter\n")).unwrap();
+
+        let lines = read_body_lines(&path).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("skipped"));
+        assert_eq!(lines[1], "after");
+    }
+
+    #[test]
+    fn read_body_lines_line_exactly_at_cap_passes_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("exact.md");
+        let exact: String = "z".repeat(scanner::MAX_BODY_LINE_BYTES);
+        std::fs::write(&path, format!("{exact}\nnext\n")).unwrap();
+
+        let lines = read_body_lines(&path).unwrap();
+        assert_eq!(
+            lines[0], exact,
+            "line at the limit must pass through intact"
+        );
+        assert_eq!(lines[1], "next");
+    }
 
     // -- parse_line_range --
 

@@ -2,6 +2,9 @@ use super::common::{hyalo_no_hints, md, write_md};
 use std::fs;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+
 // ---------------------------------------------------------------------------
 // `hyalo mv` — move/rename file with link updates
 // ---------------------------------------------------------------------------
@@ -1365,5 +1368,204 @@ fn mv_dot_slash_wikilink_unrelated_not_rewritten() {
     assert!(
         content.contains("[[./c]]"),
         "[[./c]] should not be rewritten when b.md is moved, got: {content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// H-3: `mv` must not escape the vault through a symlinked destination
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn mv_single_symlink_escape_rejected() {
+    // `vault/escapelink` is a symlink pointing outside the vault. Moving a
+    // file into it must be rejected before any filesystem mutation happens.
+    let vault = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    write_md(vault.path(), "note.md", "---\ntitle: src\n---\nbody\n");
+    unix_fs::symlink(outside.path(), vault.path().join("escapelink")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["mv", "--file", "note.md", "--to", "escapelink/escaped.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit, got success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("outside vault boundary"),
+        "expected vault-boundary error, got: {stderr}"
+    );
+
+    // Source untouched; nothing written outside the vault.
+    assert!(
+        vault.path().join("note.md").exists(),
+        "source file must remain unmoved"
+    );
+    assert!(
+        !outside.path().join("escaped.md").exists(),
+        "file must not have escaped the vault"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mv_single_symlink_escape_nested_dirs_rejected() {
+    // The destination's parent directories don't exist yet — `create_dir_all`
+    // must not be allowed to fabricate directories outside the vault by
+    // walking through the symlink.
+    let vault = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    write_md(vault.path(), "note.md", "---\ntitle: src\n---\nbody\n");
+    unix_fs::symlink(outside.path(), vault.path().join("escapelink")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "--file",
+            "note.md",
+            "--to",
+            "escapelink/deep/nested/escaped.md",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit, got success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        vault.path().join("note.md").exists(),
+        "source file must remain unmoved"
+    );
+    assert!(
+        !outside.path().join("deep").exists(),
+        "create_dir_all must not fabricate directories outside the vault"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn mv_single_symlink_free_still_works() {
+    // Sanity check: a legitimate in-vault move with no symlinks involved
+    // must continue to work after the H-3 vault-boundary check was added.
+    let vault = TempDir::new().unwrap();
+    write_md(vault.path(), "note.md", "---\ntitle: src\n---\nbody\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["mv", "--file", "note.md", "--to", "sub/dir/note.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!vault.path().join("note.md").exists());
+    assert!(vault.path().join("sub/dir/note.md").exists());
+}
+
+// ---------------------------------------------------------------------------
+// H-4: single-file `mv` must rewrite inbound frontmatter wikilinks too
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_single_file_rewrites_frontmatter_wikilink() {
+    // Regression test for H-4: single-file mv previously only rewrote body
+    // wikilinks via `plan_inbound_rewrites`, leaving frontmatter link
+    // properties (related/depends-on/supersedes/superseded-by) dangling.
+    // Mirrors `t12_frontmatter_wikilink_rewrite` (mv_batch.rs) for the
+    // single-file path.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related:
+  - "[[notes/b]]"
+---
+body [[notes/b]]
+"#),
+    );
+    write_md(tmp.path(), "notes/b.md", "---\ntitle: B\n---\nc\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "notes/b.md", "--to", "archive/b.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["total_links_updated"], 2,
+        "both the frontmatter and body wikilinks must be counted: {json}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("- \"[[archive/b]]\""),
+        "frontmatter wikilink must be rewritten: {content}"
+    );
+    assert!(
+        content.contains("body [[archive/b]]"),
+        "body wikilink must be rewritten: {content}"
+    );
+    assert!(
+        !content.contains("notes/b"),
+        "old target must be gone everywhere: {content}"
+    );
+}
+
+#[test]
+fn mv_single_file_rewrites_aliased_frontmatter_wikilink() {
+    // Aliased wikilinks (`[[path|Label]]`) inside frontmatter must preserve
+    // the alias while the path portion is rewritten.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related:
+  - "[[notes/b|My Label]]"
+---
+body.
+"#),
+    );
+    write_md(tmp.path(), "notes/b.md", "---\ntitle: B\n---\nc\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "notes/b.md", "--to", "archive/b.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[archive/b|My Label]]"),
+        "alias must be preserved while path is rewritten: {content}"
     );
 }

@@ -113,7 +113,12 @@ impl Format {
 ///
 /// Removes bytes 0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F, and 0x9B-0x9F
 /// (C0/C1 control codes minus `\n` (0x0A) and `\t` (0x09)).
-fn sanitize_control_chars(s: &str) -> String {
+///
+/// `pub(crate)` so `CommandOutcome::RawOutput` print sites (which bypass the
+/// JSON pipeline and therefore never pass through [`format_success`] /
+/// [`format_envelope`]) can sanitize file-derived content before writing it
+/// to the terminal — see `output_pipeline.rs` and `run.rs`.
+pub(crate) fn sanitize_control_chars(s: &str) -> String {
     s.chars()
         .filter(|&c| {
             // Keep printable chars, newline, and tab

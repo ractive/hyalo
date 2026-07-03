@@ -638,3 +638,40 @@ fn append_without_dry_run_has_dry_run_false() {
         "file was not written:\n{content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-158 C-1: BOM-prefixed files must round-trip through `append` without
+// a duplicate frontmatter block, with the BOM preserved.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn append_property_on_bom_file_round_trips_without_duplicate_block() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "\u{feff}---\ntitle: Note\naliases:\n  - old-name\n---\nBody.\n",
+    );
+
+    let (status, json, stderr) = append_json(
+        &tmp,
+        &["--property", "aliases=new-name", "--file", "note.md"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(json["results"]["modified"].as_array().unwrap().len(), 1);
+
+    let bytes = fs::read(tmp.path().join("note.md")).unwrap();
+    let content = String::from_utf8(bytes).unwrap();
+    assert!(
+        content.starts_with("\u{feff}---\n"),
+        "BOM must be preserved: {content}"
+    );
+    assert_eq!(
+        content.matches("\u{feff}---\n").count() + content.matches("\n---\n").count(),
+        2,
+        "expected exactly one frontmatter block (one BOM-opening + one closing), got:\n{content}"
+    );
+    assert!(content.contains("old-name"), "content:\n{content}");
+    assert!(content.contains("new-name"), "content:\n{content}");
+    assert!(content.ends_with("Body.\n"), "body corrupted:\n{content}");
+}

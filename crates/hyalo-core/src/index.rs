@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::bm25::{Bm25InvertedIndex, resolve_language, tokenize};
+use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{
@@ -372,15 +373,80 @@ impl SnapshotIndex {
     /// update the link graph separately. Returns `Ok(None)` if the file
     /// is not in the index.
     pub(crate) fn rescan_entry(&mut self, dir: &Path, rel_path: &str) -> Result<Option<FileLinks>> {
+        self.rescan_entry_at(&dir.join(rel_path), rel_path)
+    }
+
+    /// Shared implementation behind [`rescan_entry`] and [`refresh_links`]:
+    /// scan `full_path` from disk and replace the index entry for `rel_path`
+    /// wholesale. Returns the file's `FileLinks` for graph updates, or `None`
+    /// if `rel_path` is not in the index.
+    fn rescan_entry_at(&mut self, full_path: &Path, rel_path: &str) -> Result<Option<FileLinks>> {
         let Some(&idx) = self.path_index.get(rel_path) else {
             return Ok(None);
         };
-        let full_path = dir.join(rel_path);
         let fm_props = self.effective_frontmatter_link_props();
-        let (entry, file_links) =
-            scan_one_file(&full_path, rel_path, true, false, None, &fm_props)?;
+        let (entry, file_links) = scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
         self.entries[idx] = entry;
         Ok(file_links)
+    }
+
+    /// Build a case-insensitive lookup index from every path currently known
+    /// to this snapshot. Used to resolve bare-basename wikilinks (e.g.
+    /// `[[note]]` matching a unique `sub/note.md`) the same way a full
+    /// [`LinkGraph::build`] does, without persisting the case index in the
+    /// snapshot itself.
+    fn build_case_index(&self) -> CaseInsensitiveIndex {
+        let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_case_insensitive_paths(true);
+        for entry in &self.entries {
+            case_index.insert(&entry.rel_path);
+        }
+        case_index
+    }
+
+    /// Re-scan the body/frontmatter of `rel_path` (already written to disk at
+    /// `full_path`) and refresh the parts of its index entry and the
+    /// persisted [`LinkGraph`] that are derived from wikilinks: the entry's
+    /// `sections`, `tasks`, and `links` fields, plus the graph's outbound
+    /// edges for this file.
+    ///
+    /// `properties`, `tags`, and `modified` are left untouched — callers that
+    /// already know the new values in memory (e.g. `set`/`append`/`remove`)
+    /// should patch those directly, since they don't require a disk read.
+    /// `bm25_tokens`/`bm25_language` are also left untouched: those are only
+    /// populated by `create-index --bm25` and this incremental refresh never
+    /// re-tokenizes the body.
+    ///
+    /// This closes the gap where a frontmatter link property (`related`,
+    /// `depends-on`, ...) mutated via `set`/`append`/`remove`/`lint --fix`
+    /// with `--index` left the persisted link graph stale — `backlinks` and
+    /// `find --fields backlinks`/`links` would return pre-mutation results
+    /// until a full `create-index` rebuild.
+    ///
+    /// Returns `Ok(true)` if `rel_path` was found and refreshed, `Ok(false)`
+    /// if it is not in the index (a no-op).
+    pub fn refresh_links(&mut self, full_path: &Path, rel_path: &str) -> Result<bool> {
+        let Some(&idx) = self.path_index.get(rel_path) else {
+            return Ok(false);
+        };
+        let fm_props = self.effective_frontmatter_link_props();
+        let (scanned, file_links) =
+            scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
+
+        let entry = &mut self.entries[idx];
+        entry.sections = scanned.sections;
+        entry.tasks = scanned.tasks;
+        entry.links = scanned.links;
+
+        self.graph.remove_source(rel_path);
+        if let Some(fl) = file_links {
+            let case_index = self.build_case_index();
+            let site_prefix = self.header.site_prefix.clone();
+            self.graph
+                .insert_links(fl, site_prefix.as_deref(), &case_index);
+        }
+
+        Ok(true)
     }
 
     /// Re-scan a single file from disk and replace its index entry in-place.

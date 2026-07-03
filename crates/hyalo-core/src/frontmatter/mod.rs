@@ -5,6 +5,7 @@ mod types;
 
 use anyhow::Context as _;
 
+pub(crate) use parse::is_opening_delimiter;
 pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
     read_frontmatter, skip_frontmatter, write_frontmatter,
@@ -97,7 +98,10 @@ pub fn as_budget_error(err: &anyhow::Error) -> Option<&FrontmatterBudgetError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parse::{Document, detect_list_indent_style, read_frontmatter_from_reader};
+    use parse::{
+        Document, LineEnding, detect_list_indent_style, opening_delimiter,
+        read_frontmatter_from_reader,
+    };
     use serde_json::Value;
     use std::fmt::Write as _;
     use std::path::Path;
@@ -932,5 +936,307 @@ Body.
             serialized.contains("tags:\n  - a\n  - b"),
             "indented list style should be preserved: {serialized}"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Opening-delimiter policy tests (iter-158 C-1: read/write predicate drift)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn opening_delimiter_plain_lf() {
+        let d = opening_delimiter("---\n").unwrap();
+        assert!(!d.has_bom);
+        assert_eq!(d.line_ending, LineEnding::Lf);
+    }
+
+    #[test]
+    fn opening_delimiter_plain_crlf() {
+        let d = opening_delimiter("---\r\n").unwrap();
+        assert!(!d.has_bom);
+        assert_eq!(d.line_ending, LineEnding::CrLf);
+    }
+
+    #[test]
+    fn opening_delimiter_bom_lf() {
+        let d = opening_delimiter("\u{feff}---\n").unwrap();
+        assert!(d.has_bom);
+        assert_eq!(d.line_ending, LineEnding::Lf);
+    }
+
+    #[test]
+    fn opening_delimiter_bom_crlf() {
+        let d = opening_delimiter("\u{feff}---\r\n").unwrap();
+        assert!(d.has_bom);
+        assert_eq!(d.line_ending, LineEnding::CrLf);
+    }
+
+    #[test]
+    fn opening_delimiter_bare_no_terminator() {
+        // End-of-input with no trailing newline at all (e.g. a file that is
+        // exactly `---`) still opens a delimiter line; callers decide what
+        // "nothing follows" means.
+        assert!(opening_delimiter("---").is_some());
+    }
+
+    #[test]
+    fn opening_delimiter_rejects_leading_whitespace() {
+        assert!(
+            opening_delimiter(" ---\n").is_none(),
+            "leading whitespace before `---` must not open frontmatter"
+        );
+    }
+
+    #[test]
+    fn opening_delimiter_rejects_extra_dashes() {
+        assert!(opening_delimiter("----\n").is_none());
+    }
+
+    #[test]
+    fn opening_delimiter_rejects_trailing_junk() {
+        assert!(opening_delimiter("--- \n").is_none());
+        assert!(opening_delimiter("---x\n").is_none());
+    }
+
+    #[test]
+    fn opening_delimiter_rejects_non_dash_line() {
+        assert!(opening_delimiter("title: x\n").is_none());
+    }
+
+    // ---------------------------------------------------------------------------
+    // BOM handling (iter-158 C-1a)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn streaming_bom_frontmatter_is_recognized() {
+        let input = "\u{feff}---\ntitle: Note\nstatus: draft\n---\nBody.\n";
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
+        assert_eq!(props.get("title"), Some(&Value::String("Note".into())));
+        assert_eq!(props.get("status"), Some(&Value::String("draft".into())));
+    }
+
+    #[test]
+    fn extract_frontmatter_bom_matches_streaming_reader() {
+        // Document::parse (backed by extract_frontmatter) must agree with
+        // read_frontmatter_from_reader on a BOM-prefixed document: both must
+        // see the same properties, not "no frontmatter" for one and real
+        // properties for the other.
+        let content = "\u{feff}---\ntitle: Note\n---\nBody.\n";
+        let doc = Document::parse(content).unwrap();
+        let streamed = read_frontmatter_from_reader(content.as_bytes()).unwrap();
+        assert_eq!(doc.properties(), &streamed);
+        assert_eq!(
+            doc.properties().get("title"),
+            Some(&Value::String("Note".into()))
+        );
+        assert_eq!(doc.body(), "Body.\n");
+    }
+
+    #[test]
+    fn write_frontmatter_preserves_bom_and_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bom.md");
+        std::fs::write(
+            &path,
+            "\u{feff}---\ntitle: Note\nstatus: draft\n---\nBody.\n",
+        )
+        .unwrap();
+
+        let mut props = read_frontmatter(&path).unwrap();
+        assert_eq!(
+            props.get("status"),
+            Some(&Value::String("draft".into())),
+            "read path must see the real frontmatter, not treat the BOM file as empty"
+        );
+        props.insert("status".to_owned(), Value::String("done".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            bytes.starts_with("\u{feff}---\n".as_bytes()),
+            "BOM must be preserved at the start of the file"
+        );
+        let content = String::from_utf8(bytes).unwrap();
+        // Exactly one frontmatter block: only two `---` delimiter lines.
+        assert_eq!(
+            content.matches("---\n").count(),
+            2,
+            "expected exactly one frontmatter block, got:\n{content}"
+        );
+        assert!(content.contains("status: done"), "content:\n{content}");
+        assert!(content.ends_with("Body.\n"), "body corrupted:\n{content}");
+
+        // remove must also work against the BOM file and actually remove the key.
+        let mut props = read_frontmatter(&path).unwrap();
+        props.shift_remove("status");
+        write_frontmatter(&path, &props).unwrap();
+        let final_props = read_frontmatter(&path).unwrap();
+        assert!(
+            final_props.get("status").is_none(),
+            "status should have been removed: {final_props:?}"
+        );
+        let final_bytes = std::fs::read(&path).unwrap();
+        assert!(
+            final_bytes.starts_with("\u{feff}".as_bytes()),
+            "BOM must still be preserved after removing the last mutated property"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Leading-whitespace pseudo-frontmatter (iter-158 C-1b)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn streaming_leading_space_is_no_frontmatter() {
+        let input = " ---\ntitle: Note\nstatus: draft\n---\nBody.\n";
+        let props = read_frontmatter_from_reader(input.as_bytes()).unwrap();
+        assert!(
+            props.is_empty(),
+            "leading whitespace before `---` must not be treated as frontmatter: {props:?}"
+        );
+    }
+
+    #[test]
+    fn write_frontmatter_leading_space_prepends_without_duplicating() {
+        use indexmap::IndexMap;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("space.md");
+        let original = " ---\ntitle: Note\nstatus: draft\n---\nBody.\n";
+        std::fs::write(&path, original).unwrap();
+
+        // read_frontmatter must agree with write_frontmatter: no frontmatter here.
+        let props = read_frontmatter(&path).unwrap();
+        assert!(props.is_empty());
+
+        let mut new_props = IndexMap::new();
+        new_props.insert("status".to_owned(), Value::String("done".into()));
+        write_frontmatter(&path, &new_props).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        // Exactly one new frontmatter block at the very top...
+        assert!(
+            content.starts_with("---\nstatus: done\n---\n"),
+            "expected a single new frontmatter block at top:\n{content}"
+        );
+        // ...and the old pseudo-block survives untouched as body content: the
+        // whole original file (byte-for-byte) is now the tail of the new one.
+        assert!(
+            content.ends_with(original),
+            "old pseudo-block must be preserved verbatim in the body:\n{content}"
+        );
+        assert_eq!(
+            content.len(),
+            "---\nstatus: done\n---\n".len() + original.len(),
+            "new block should be prepended, not merged/duplicated:\n{content}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Bare `---` with no closing delimiter and nothing else in the file
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn write_frontmatter_bare_dash_is_not_unclosed_error() {
+        use indexmap::IndexMap;
+
+        // A file that is exactly `---\n` has no frontmatter per
+        // read_frontmatter_from_reader (see streaming_solo_dash_is_no_frontmatter).
+        // find_body_offset must agree, or write_frontmatter would spuriously
+        // fail with "unclosed frontmatter" on a file read_frontmatter reports
+        // as having no properties at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bare.md");
+        std::fs::write(&path, "---\n").unwrap();
+
+        assert!(read_frontmatter(&path).unwrap().is_empty());
+
+        let mut props = IndexMap::new();
+        props.insert("status".to_owned(), Value::String("done".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("---\nstatus: done\n---\n"), "{content}");
+        assert!(
+            content.ends_with("---\n"),
+            "original bare dash lost: {content}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // CRLF preservation (iter-158 C-1 MEDIUM)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    #[allow(clippy::naive_bytecount)] // Test-only, tiny buffer; not worth a new dependency.
+    fn write_frontmatter_crlf_round_trips_uniformly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("crlf.md");
+        std::fs::write(
+            &path,
+            "---\r\ntitle: Note\r\nstatus: draft\r\n---\r\nBody.\r\n",
+        )
+        .unwrap();
+
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("status".to_owned(), Value::String("done".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let lf_count = bytes.iter().filter(|&&b| b == b'\n').count();
+        let crlf_count = bytes.windows(2).filter(|w| w == b"\r\n").count();
+        assert_eq!(
+            lf_count,
+            crlf_count,
+            "every LF must be part of a CRLF pair: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("status: done\r\n"),
+            "content: {:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Oversized-file guard (iter-158 C-1 MEDIUM)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn write_frontmatter_rejects_oversized_file() {
+        use indexmap::IndexMap;
+        use std::io::Read as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("big.md");
+        std::fs::write(&path, "---\ntitle: Note\n---\nBody.\n").unwrap();
+        // Sparse-extend well past MAX_FILE_SIZE without writing real data.
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(crate::scanner::MAX_FILE_SIZE + 1).unwrap();
+        drop(file);
+
+        let mut props = IndexMap::new();
+        props.insert("status".to_owned(), Value::String("done".into()));
+        let result = write_frontmatter(&path, &props);
+        assert!(
+            result.is_err(),
+            "oversized file must be refused, not silently rewritten"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("MiB") && err.contains("exceeds") && err.contains("limit"),
+            "expected a size-limit error message, got: {err}"
+        );
+
+        // File must be untouched: still its original length, and the readable
+        // prefix must still be the original frontmatter (not corrupted).
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(meta.len(), crate::scanner::MAX_FILE_SIZE + 1);
+        let original = b"---\ntitle: Note\n---\nBody.\n";
+        let mut prefix = vec![0u8; original.len()];
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_exact(&mut prefix)
+            .unwrap();
+        assert_eq!(prefix, original);
     }
 }

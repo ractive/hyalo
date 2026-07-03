@@ -5,6 +5,7 @@
 //! Used by the `tasks` command family and the `summary` command.
 
 use anyhow::{Context, Result, bail};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -431,9 +432,58 @@ fn mutate_task_line(line: &str, line_num: usize, new_status: char) -> Option<(St
     Some((modified, info))
 }
 
+/// Bail with a consistent "file too large" error for mutation entry points.
+/// Mutation commands target one explicit file, so — unlike the read-only
+/// scanner, which silently skips oversized files across a whole vault — an
+/// oversized target here must be a hard error, not a silent no-op.
+fn bail_if_too_large(path: &Path, file_size: u64) -> Result<()> {
+    if file_size > scanner::MAX_FILE_SIZE {
+        bail!(
+            "file too large to modify ({} MiB exceeds {} MiB limit): {}",
+            file_size / (1024 * 1024),
+            scanner::MAX_FILE_SIZE / (1024 * 1024),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Compute the set of 1-based line numbers that are valid task checkboxes,
+/// i.e. the same lines `read_task` and `find_task_lines` would recognize.
+/// Skips frontmatter, fenced code blocks, and `%%` comment blocks so that
+/// mutation entry points reject exactly the lines the read path rejects.
+fn valid_task_line_set(content: &[u8]) -> Result<HashSet<usize>> {
+    let mut extractor = TaskExtractor::new();
+    scanner::scan_slice_multi(content, &mut [&mut extractor])?;
+    Ok(extractor.into_tasks().into_iter().map(|t| t.line).collect())
+}
+
+/// Validate that `line` is in range and refers to an actual task checkbox —
+/// not frontmatter, a fenced code block, or a `%%` comment block. Returns the
+/// raw line text on success.
+fn validate_task_line<'a>(
+    file_lines: &[&'a str],
+    line_count: usize,
+    valid_lines: &HashSet<usize>,
+    line: usize,
+) -> Result<&'a str> {
+    if line == 0 || line > line_count {
+        bail!("line {line} is out of range (file has {line_count} lines)");
+    }
+    if !valid_lines.contains(&line) {
+        bail!("line {line} is not a task");
+    }
+    Ok(file_lines[line - 1])
+}
+
 /// Toggle task completion: `[ ]` → `[x]`, `[x]`/`[X]` → `[ ]`, custom → `[x]`.
 /// Returns the updated `TaskInfo`. Writes the file in-place.
 pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
+    let file_size = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len();
+    bail_if_too_large(path, file_size)?;
+
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let lines: Vec<&str> = content.split('\n').collect();
@@ -445,13 +495,10 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
         lines.len()
     };
 
-    if line == 0 || line > line_count {
-        bail!("line {line} is out of range (file has {line_count} lines)");
-    }
-
-    let target = lines[line - 1];
-    let (current_status, _done) = detect_task_checkbox(target)
-        .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
+    let valid_lines = valid_task_line_set(content.as_bytes())?;
+    let target = validate_task_line(&lines, line_count, &valid_lines, line)?;
+    let (current_status, _done) =
+        detect_task_checkbox(target).ok_or_else(|| anyhow::anyhow!("line {line} is not a task"))?;
 
     let new_status = if current_status == 'x' || current_status == 'X' {
         ' '
@@ -472,6 +519,11 @@ pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
 /// Set a custom status character on a task.
 /// Returns the updated `TaskInfo`. Writes the file in-place.
 pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInfo> {
+    let file_size = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .len();
+    bail_if_too_large(path, file_size)?;
+
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let lines: Vec<&str> = content.split('\n').collect();
@@ -481,14 +533,8 @@ pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInf
         lines.len()
     };
 
-    if line == 0 || line > line_count {
-        bail!("line {line} is out of range (file has {line_count} lines)");
-    }
-
-    let target = lines[line - 1];
-    // Validate that the line is a task
-    detect_task_checkbox(target)
-        .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
+    let valid_lines = valid_task_line_set(content.as_bytes())?;
+    let target = validate_task_line(&lines, line_count, &valid_lines, line)?;
 
     let (modified_line, info) = mutate_task_line(target, line, status)
         .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
@@ -513,6 +559,8 @@ pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
 /// Errors if any line is not a task checkbox.
 pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
     let mtime = frontmatter::read_mtime(path)?;
+    bail_if_too_large(path, mtime.1)?;
+
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let file_lines: Vec<&str> = content.split('\n').collect();
@@ -521,6 +569,7 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
     } else {
         file_lines.len()
     };
+    let valid_lines = valid_task_line_set(content.as_bytes())?;
 
     let mut deduped = lines.to_vec();
     deduped.sort_unstable();
@@ -530,12 +579,9 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
     let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
 
     for &line in &deduped {
-        if line == 0 || line > line_count {
-            bail!("line {line} is out of range (file has {line_count} lines)");
-        }
-        let target = file_lines[line - 1];
+        let target = validate_task_line(&file_lines, line_count, &valid_lines, line)?;
         let (current_status, _done) = detect_task_checkbox(target)
-            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
+            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task"))?;
         let new_status = if current_status == 'x' || current_status == 'X' {
             ' '
         } else {
@@ -560,6 +606,8 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
 /// Lines are 1-based. Errors if any line is not a task checkbox.
 pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Vec<TaskInfo>> {
     let mtime = frontmatter::read_mtime(path)?;
+    bail_if_too_large(path, mtime.1)?;
+
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     let file_lines: Vec<&str> = content.split('\n').collect();
@@ -568,6 +616,7 @@ pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Ve
     } else {
         file_lines.len()
     };
+    let valid_lines = valid_task_line_set(content.as_bytes())?;
 
     let mut deduped = lines.to_vec();
     deduped.sort_unstable();
@@ -577,12 +626,7 @@ pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Ve
     let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
 
     for &line in &deduped {
-        if line == 0 || line > line_count {
-            bail!("line {line} is out of range (file has {line_count} lines)");
-        }
-        let target = file_lines[line - 1];
-        detect_task_checkbox(target)
-            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task checkbox"))?;
+        let target = validate_task_line(&file_lines, line_count, &valid_lines, line)?;
         let (modified_line, info) = mutate_task_line(target, line, status)
             .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
         replacements.push((line, modified_line));
@@ -1102,5 +1146,220 @@ Regular text.
         // Line 1 is the opening comment fence — not a task
         let task = read_task(&path, 1).unwrap();
         assert!(task.is_none());
+    }
+
+    // -----------------------------------------------------------------
+    // H-9: mutation entry points must reject fenced/comment-block lines
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn toggle_task_rejects_line_inside_code_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "```\n- [ ] Inside code\n```\n- [ ] Real task\n";
+        fs::write(&path, original).unwrap();
+
+        let result = toggle_task(&path, 2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "fenced line must not be mutated");
+    }
+
+    #[test]
+    fn toggle_task_rejects_line_inside_comment_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "%%\n- [ ] Inside comment\n%%\n- [ ] Real task\n";
+        fs::write(&path, original).unwrap();
+
+        let result = toggle_task(&path, 2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "commented line must not be mutated");
+    }
+
+    #[test]
+    fn set_task_status_rejects_line_inside_code_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "```\n- [ ] Inside code\n```\n- [ ] Real task\n";
+        fs::write(&path, original).unwrap();
+
+        let result = set_task_status(&path, 2, 'x');
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "fenced line must not be mutated");
+    }
+
+    #[test]
+    fn toggle_tasks_rejects_line_inside_code_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "- [ ] Real task\n```\n- [ ] Inside code\n```\n";
+        fs::write(&path, original).unwrap();
+
+        let result = toggle_tasks(&path, &[3]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "fenced line must not be mutated");
+    }
+
+    #[test]
+    fn toggle_tasks_rejects_line_inside_comment_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "- [ ] Real task\n%%\n- [ ] Inside comment\n%%\n";
+        fs::write(&path, original).unwrap();
+
+        let result = toggle_tasks(&path, &[3]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "commented line must not be mutated");
+    }
+
+    #[test]
+    fn toggle_tasks_bulk_call_rejects_whole_batch_when_one_line_is_fenced() {
+        // A mixed batch with one valid and one fenced line must fail atomically —
+        // the valid line must not be toggled either.
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "- [ ] Real task\n```\n- [ ] Inside code\n```\n";
+        fs::write(&path, original).unwrap();
+
+        let result = toggle_tasks(&path, &[1, 3]);
+        assert!(result.is_err());
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            content, original,
+            "no line should be mutated when the batch contains an invalid line"
+        );
+    }
+
+    #[test]
+    fn set_tasks_status_rejects_line_inside_code_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "- [ ] Real task\n```\n- [ ] Inside code\n```\n";
+        fs::write(&path, original).unwrap();
+
+        let result = set_tasks_status(&path, &[3], 'x');
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "fenced line must not be mutated");
+    }
+
+    #[test]
+    fn set_tasks_status_rejects_line_inside_comment_block() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        let original = "- [ ] Real task\n%%\n- [ ] Inside comment\n%%\n";
+        fs::write(&path, original).unwrap();
+
+        let result = set_tasks_status(&path, &[3], 'x');
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a task"));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original, "commented line must not be mutated");
+    }
+
+    #[test]
+    fn toggle_tasks_valid_line_with_frontmatter_toggles_correct_physical_line() {
+        // Frontmatter offsets the body by a fixed number of lines; make sure
+        // fence-aware validation still resolves to the right physical line.
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("tasks.md");
+        fs::write(
+            &path,
+            md!(r"
+---
+title: Test
+---
+```
+- [ ] Not a task (fenced)
+```
+- [ ] Real task
+"),
+        )
+        .unwrap();
+
+        // Physical lines: 1 `---`, 2 `title:`, 3 `---`, 4 ` ``` `, 5 fenced task,
+        // 6 ` ``` `, 7 real task.
+        let infos = toggle_tasks(&path, &[7]).unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].line, 7);
+        assert_eq!(infos[0].text, "Real task");
+        assert_eq!(infos[0].status, 'x');
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("- [x] Real task"));
+        // The fenced line must remain untouched.
+        assert!(content.contains("- [ ] Not a task (fenced)"));
+    }
+
+    // -----------------------------------------------------------------
+    // M: mutation entry points must refuse oversized files without
+    // reading them into memory.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn toggle_task_rejects_oversized_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("big.md");
+        let f = fs::File::create(&path).unwrap();
+        f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
+
+        let result = toggle_task(&path, 1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
+    }
+
+    #[test]
+    fn set_task_status_rejects_oversized_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("big.md");
+        let f = fs::File::create(&path).unwrap();
+        f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
+
+        let result = set_task_status(&path, 1, 'x');
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
+    }
+
+    #[test]
+    fn toggle_tasks_rejects_oversized_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("big.md");
+        let f = fs::File::create(&path).unwrap();
+        f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
+
+        let result = toggle_tasks(&path, &[1]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
+    }
+
+    #[test]
+    fn set_tasks_status_rejects_oversized_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("big.md");
+        let f = fs::File::create(&path).unwrap();
+        f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
+
+        let result = set_tasks_status(&path, &[1], 'x');
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
     }
 }

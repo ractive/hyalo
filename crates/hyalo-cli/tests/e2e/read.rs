@@ -1,4 +1,5 @@
 use super::common::{hyalo_no_hints, md, write_md};
+use std::fs;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -720,4 +721,148 @@ fn read_files_from_single_file_succeeds() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(stdout.contains("Heading One"), "expected file content");
+}
+
+// ---------------------------------------------------------------------------
+// Memory caps: oversized file refused, oversized single line handled safely.
+// ---------------------------------------------------------------------------
+
+/// `read` targets one explicit file — an oversized target must be a hard,
+/// clear error (not a silent skip, and not an unbounded read).
+#[test]
+fn read_oversized_file_refused() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("big.md");
+    // Sparse file just over the scanner size cap; no real disk usage.
+    let f = fs::File::create(&path).unwrap();
+    f.set_len(hyalo_core::scanner::MAX_FILE_SIZE + 1).unwrap();
+    drop(f);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "big.md"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("too large") && stderr.contains("exceeds"),
+        "stderr: {stderr}"
+    );
+}
+
+/// Same oversized-file refusal under `--format json` must still produce a
+/// valid, parseable JSON error (not a raw panic or plain-text leak).
+#[test]
+fn read_oversized_file_refused_json_format() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("big.md");
+    let f = fs::File::create(&path).unwrap();
+    f.set_len(hyalo_core::scanner::MAX_FILE_SIZE + 1).unwrap();
+    drop(f);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "big.md", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let combined = if output.stdout.is_empty() {
+        &output.stderr
+    } else {
+        &output.stdout
+    };
+    let json: serde_json::Value = serde_json::from_slice(combined).unwrap_or_else(|e| {
+        panic!(
+            "expected valid JSON error, got error {e}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    let err_text = json
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("expected top-level 'error' field in JSON error output: {json}"));
+    assert!(err_text.contains("too large"), "error text: {err_text}");
+}
+
+/// A single line larger than the per-line cap must not be buffered whole —
+/// the file (well under the whole-file size cap) is still readable, and the
+/// oversized line is replaced with a placeholder instead of hanging or
+/// ballooning memory. Uses a sparse file (mostly NUL bytes, which are valid
+/// UTF-8) so the test stays fast without writing real megabytes of data.
+#[test]
+fn read_oversized_single_line_is_placeholdered_not_buffered() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("huge-line.md");
+    // 2 MiB single line (no newline at all) — over the 1 MiB per-line cap,
+    // but comfortably under the 100 MiB whole-file cap.
+    let f = fs::File::create(&path).unwrap();
+    f.set_len(2 * 1024 * 1024).unwrap();
+    drop(f);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "huge-line.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        stdout.contains("skipped"),
+        "expected placeholder text, got: {stdout:?}"
+    );
+    // Behavioral proxy for "not buffered whole": output is tiny, not ~2 MiB.
+    assert!(
+        stdout.len() < 4096,
+        "output suspiciously large ({} bytes) — oversized line may have leaked through",
+        stdout.len()
+    );
+}
+
+/// Pin exact output for an ordinary small file across the fix — the capped
+/// reader must remain byte-for-byte equivalent to the previous
+/// `BufRead::lines()` based implementation for normal input.
+#[test]
+fn read_normal_file_output_byte_identical() {
+    let tmp = setup();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "note.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "# Heading One\n\
+\n\
+First paragraph.\n\
+\n\
+## Problem\n\
+\n\
+Problem text line 1.\n\
+Problem text line 2.\n\
+\n\
+## Solution\n\
+\n\
+Solution text.\n\
+\n\
+### Details\n\
+\n\
+Nested details.\n\
+\n\
+## Problem\n\
+\n\
+Second problem section.\n\
+\n"
+    );
 }

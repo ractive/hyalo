@@ -5,6 +5,9 @@ use super::common::{hyalo_no_hints, md, write_md};
 use std::fs;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1000,4 +1003,44 @@ Content of foo.
         ref_content.contains("[[foo|My Alias]]"),
         "alias must be preserved in short-form link, got: {ref_content}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// H-3: batch `mv` must not escape the vault through a symlinked destination
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn mv_batch_symlink_escape_rejected() {
+    // `vault/escapelink` is a symlink pointing outside the vault. A batch
+    // move targeting it must be rejected before any of the matched files
+    // are renamed.
+    let vault = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    write_md(vault.path(), "note.md", "---\nstatus: x\n---\nbody\n");
+    write_md(vault.path(), "note2.md", "---\nstatus: x\n---\nbody\n");
+    unix_fs::symlink(outside.path(), vault.path().join("escapelink")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["mv", "--glob", "*.md", "--to", "escapelink", "--apply"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit, got success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("outside vault boundary"),
+        "expected vault-boundary error, got: {stderr}"
+    );
+
+    // No source file was moved and nothing was written outside the vault.
+    assert!(vault.path().join("note.md").exists());
+    assert!(vault.path().join("note2.md").exists());
+    assert!(!outside.path().join("note.md").exists());
+    assert!(!outside.path().join("note2.md").exists());
 }

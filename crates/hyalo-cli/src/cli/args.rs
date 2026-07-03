@@ -849,6 +849,10 @@ Repeatable (AND).\n\
             read/write files on disk but also patch the index in-place after each\n\
             mutation — keeping it current for subsequent queries. This is safe as\n\
             long as no external tool modifies vault files while the index is active.\n\n\
+            PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
+            (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
+            without an index, because BM25 relevance is ranked against full-vault\n\
+            statistics. On large vaults, create an index for this workload.\n\n\
             OUTPUT: JSON object with `path`, `files_indexed`, and `warnings`.\n\
             SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir).\n\n\
             FLAG ALIASES: on this subcommand, `--index-file PATH` (the global flag) is\n\
