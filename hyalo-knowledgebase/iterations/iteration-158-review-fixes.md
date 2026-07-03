@@ -7,7 +7,7 @@ tags:
   - review
   - security
   - correctness
-status: in-progress
+status: completed
 branch: iter-158/review-fixes-2026-06
 ---
 
