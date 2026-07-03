@@ -612,3 +612,50 @@ count (>500 files) as the signal for the large-vault summary hint.
   lifecycle silently. Lint and hints surface the suggestion; the user runs
   `create-index`.
 - CPU time: misses I/O wait, doesn't reflect user-perceived latency.
+
+## DEC-046: One Shared Frontmatter Opening-Delimiter Policy (2026-07-03)
+
+**Decision:** A single predicate (`opening_delimiter` in `frontmatter/parse.rs`)
+decides whether a line opens a frontmatter block, and every parse path in the
+workspace uses it: the streaming reader, `find_body_offset` (write path),
+`extract_frontmatter`, `skip_frontmatter` (`read`/`task read`), both scanner
+entry points (`find` etc.), and lint's body split. The policy: an optional
+single UTF-8 BOM, then a line that is exactly `---` followed by a line
+terminator or EOF. Leading whitespace never opens frontmatter. A BOM is
+preserved byte-for-byte on rewrite. The frontmatter block is re-emitted with
+the file's own line-ending style (CRLF stays CRLF).
+
+**Why:** iter-158's two critical findings were both caused by parse paths
+disagreeing on this check — the read path accepted what the write path
+rejected (BOM, leading space), so `set`/`remove`/`append` prepended a second
+frontmatter block and silently demoted the real one to body (data loss,
+reported as success). Two follow-up rounds (dogfooding, then PR review) found
+the same drift in the scanner and in `skip_frontmatter`, proving hand-rolled
+copies of this check *will* drift. Matching Obsidian/Jekyll (no leading
+whitespace) keeps the rule unambiguous.
+
+**Rule for future code:** never hand-roll an opening-`---` check; call the
+shared predicate (`is_opening_delimiter` is crate-visible in hyalo-core).
+
+## DEC-047: Per-Rule Column Units for mdlint Fix Conversion (2026-07-03)
+
+**Decision:** `line_col_to_byte` in hyalo-mdlint selects its column unit per
+rule via an explicit allowlist (`rule_uses_byte_columns`): rules verified to
+emit byte-based columns (MD009, HYALO001) get a byte-length walk; every other
+rule gets a char-index walk. MD011 additionally gets a guarded +1 on its end
+column (upstream emits the inclusive position of the closing `]`), applied
+only when the byte at that offset really is `]`.
+
+**Why:** upstream mdbook-lint rules are inconsistent about what a fix column
+means — MD009 computes columns from `line.len()` (bytes) while MD034/MD011
+index into a `Vec<char>` (chars). On any line containing multibyte UTF-8 the
+two units diverge, and using the wrong one either drops the fix (byte target
+unreachable by char walk — the pre-iter-158 bug) or lands on the wrong byte
+and corrupts the file (char target overshot by byte walk — the regression the
+iter-158 PR review caught). The failure modes are asymmetric, so the default
+for unaudited rules is the char walk: its worst case is a dropped fix,
+never corruption.
+
+**Rule for future code:** before adding a rule to the byte-column allowlist,
+verify its column math in the upstream source and add a multibyte-line
+regression test (see `md034_fix_correct_on_line_with_multibyte_prefix`).

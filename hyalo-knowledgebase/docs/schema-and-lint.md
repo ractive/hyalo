@@ -143,6 +143,23 @@ hyalo lint --fix iterations/iteration-101-bm25.md
 
 **Note:** `--dry-run` requires `--fix` — it has no effect on a plain `hyalo lint` (which is already read-only).
 
+### Fix guarantees (since iter-158)
+
+- **Atomic writes.** Every fixed file is written via temp-file-plus-rename, and
+  a modification-time guard aborts if another process changed the file between
+  read and write — the same guarantees `set`/`remove`/`append` give. A crash
+  mid-fix can never truncate a document.
+- **Single-run convergence.** Body fixes are applied in internal passes until a
+  fixpoint, so one `--fix` run finishes the job; a second run reports zero
+  fixes and changes no bytes. `--dry-run` previews the fully converged result.
+- **Severity wins conflicts.** When two rules' fixes overlap on the same byte
+  range, the higher-severity fix (error over warn) is applied and the other is
+  reported as a conflict.
+- **Line endings are preserved.** Fixes on CRLF files emit CRLF; a fix never
+  flips a file's line-ending style.
+- **Size cap.** Files larger than 100 MiB are skipped with a warning (reported
+  as a `FILE` group) instead of being read into memory.
+
 ### Fix categories
 
 | Category | What it does |
