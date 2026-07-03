@@ -7,7 +7,7 @@ tags:
   - review
   - security
   - correctness
-status: planned
+status: in-progress
 branch: iter-158/review-fixes-2026-06
 ---
 
@@ -43,11 +43,12 @@ rejects (a UTF-8 BOM, or a leading space before `---`), `write_frontmatter` prep
 new frontmatter block on top of the original file and demotes the real frontmatter to
 body — reported as success (exit 0). Affects `set`/`remove`/`append`.
 
-- [ ] Reconcile the three opening-delimiter predicates so the reader and `find_body_offset` always agree on where the frontmatter ends
-- [ ] Strip a leading UTF-8 BOM once at all three entry points (mirror `files_from.rs:43`)
-- [ ] Test: BOM-prefixed file round-trips through `set`/`remove`/`append` with no duplicate block and no data demoted to body
-- [ ] Test: leading-whitespace `---` either parses consistently or is rejected — never silently duplicated
-- [ ] Test: `remove --property X` on these files actually removes X (not leaves it in a buried block)
+- [x] Reconcile the three opening-delimiter predicates so the reader and `find_body_offset` always agree on where the frontmatter ends
+- [x] Strip a leading UTF-8 BOM once at all three entry points (mirror `files_from.rs:43`)
+- [x] Test: BOM-prefixed file round-trips through `set`/`remove`/`append` with no duplicate block and no data demoted to body
+- [x] Test: leading-whitespace `---` either parses consistently or is rejected — never silently duplicated
+- [x] Test: `remove --property X` on these files actually removes X (not leaves it in a buried block)
+- [x] Extend the shared policy to the scanner and lint's body split (dogfood found `find` still blind to BOM frontmatter; `scanner/mod.rs` had two more hand-rolled opening checks, `lint.rs` `find_body_start` a third)
 
 ## High
 
@@ -58,12 +59,12 @@ rules + HYALO001 emit *byte* columns. Plus whole-file rules (MD047) are fed body
 text. Consequences: MD009 injects a spurious blank line; autofix is silently dropped for
 any non-ASCII line; MD047 never converges (reports `fixed=1` forever).
 
-- [ ] Make `line_col_to_byte` advance by `ch.len_utf8()` (treat columns as byte offsets)
-- [ ] Treat an end column of `line_len+1` as past-the-newline so an MD009 replacement that re-adds `\n` does not duplicate it
-- [ ] Run whole-file rules (MD047) against full file content, or adjust offsets for the body split
-- [ ] Test: MD009 fix removes trailing spaces without adding a blank line
-- [ ] Test: bare `[]` / trailing spaces on a line containing non-ASCII (e.g. `café`, CJK, emoji) are actually fixed
-- [ ] Test: MD047 converges to a single trailing newline and stops reporting a fix
+- [x] Make `line_col_to_byte` advance by `ch.len_utf8()` (treat columns as byte offsets)
+- [x] Treat an end column of `line_len+1` as past-the-newline so an MD009 replacement that re-adds `\n` does not duplicate it
+- [x] Run whole-file rules (MD047) against full file content, or adjust offsets for the body split
+- [x] Test: MD009 fix removes trailing spaces without adding a blank line
+- [x] Test: bare `[]` / trailing spaces on a line containing non-ASCII (e.g. `café`, CJK, emoji) are actually fixed
+- [x] Test: MD047 converges to a single trailing newline and stops reporting a fix
 
 ### H-2 — `lint --fix` body write is non-atomic and reverts the frontmatter fix
 
@@ -72,10 +73,10 @@ and reconstructs the file from the *stale* pre-fix frontmatter slice captured at
 ~1871, clobbering a frontmatter fix written earlier in the same run. No mtime guard exists
 in `lint_one_file_extended`.
 
-- [ ] Reconstruct the body write from post-frontmatter-fix on-disk content (ideally a single combined frontmatter+body write)
-- [ ] Route the body write through `fs_util::atomic_write`
-- [ ] Add the `read_mtime` → `check_mtime` guard before the write (parity with `set`/`remove`/`append`/`task`)
-- [ ] Test: a file needing both a schema/frontmatter fix and a body fix ends with both applied
+- [x] Reconstruct the body write from post-frontmatter-fix on-disk content (ideally a single combined frontmatter+body write)
+- [x] Route the body write through `fs_util::atomic_write`
+- [x] Add the `read_mtime` → `check_mtime` guard before the write (parity with `set`/`remove`/`append`/`task`)
+- [x] Test: a file needing both a schema/frontmatter fix and a body fix ends with both applied
 
 ### H-3 — `hyalo mv` escapes the vault through a symlinked destination
 
@@ -83,8 +84,8 @@ in `lint_one_file_extended`.
 destination or calls `ensure_within_vault`; only literal `..`/absolute components are
 rejected. A symlinked destination directory inside the vault relocates the file outside.
 
-- [ ] Canonicalize the destination's nearest existing ancestor and `ensure_within_vault` before any fs mutation, in `execute_mv` and `execute_batch_mv`
-- [ ] Test: `mv` into a symlink-that-points-outside is rejected (mirror `resolve_file_rejects_symlink_escape`)
+- [x] Canonicalize the destination's nearest existing ancestor and `ensure_within_vault` before any fs mutation, in `execute_mv` and `execute_batch_mv`
+- [x] Test: `mv` into a symlink-that-points-outside is rejected (mirror `resolve_file_rejects_symlink_escape`)
 
 ### H-4 — Single-file `mv` leaves dangling frontmatter wikilinks
 
@@ -93,8 +94,8 @@ rejected. A symlinked destination directory inside the vault relocates the file 
 frontmatter link properties). Single-file moves leave `related`/`depends-on`/etc.
 pointing at the old path.
 
-- [ ] Make `plan_mv` rewrite frontmatter link-property wikilinks (call `plan_inbound_rewrites_with_fm` or fold the branch in)
-- [ ] Test: single-file `mv` rewrites inbound frontmatter wikilinks (mirror batch `t12_frontmatter_wikilink_rewrite`)
+- [x] Make `plan_mv` rewrite frontmatter link-property wikilinks (call `plan_inbound_rewrites_with_fm` or fold the branch in)
+- [x] Test: single-file `mv` rewrites inbound frontmatter wikilinks (mirror batch `t12_frontmatter_wikilink_rewrite`)
 
 ### H-5 — `lint` and `read` read whole files into memory with no size cap
 
@@ -102,9 +103,9 @@ pointing at the old path.
 and `crates/hyalo-cli/src/commands/read.rs:160` (`Vec<String>`, no per-line cap) bypass
 the scanner's 100 MiB `MAX_FILE_SIZE`. Measured 1.7–2.7 GiB RSS on large inputs.
 
-- [ ] `lint_one_file_extended`: stat-and-skip on `scanner::MAX_FILE_SIZE` before `read_to_string` (emit the scanner's stderr warning)
-- [ ] `read_body_lines`: stat-and-skip on `MAX_FILE_SIZE` and replace `reader.lines()` with `read_line_capped` (per-line `MAX_BODY_LINE_BYTES`)
-- [ ] Test: oversized file is skipped/refused by `lint` and `read` instead of OOMing
+- [x] `lint_one_file_extended`: stat-and-skip on `scanner::MAX_FILE_SIZE` before `read_to_string` (emit the scanner's stderr warning)
+- [x] `read_body_lines`: stat-and-skip on `MAX_FILE_SIZE` and replace `reader.lines()` with `read_line_capped` (per-line `MAX_BODY_LINE_BYTES`)
+- [x] Test: oversized file is skipped/refused by `lint` and `read` instead of OOMing
 
 ### H-6 — Error output is not JSON under `--format json`
 
@@ -114,9 +115,9 @@ at ~18 sites (find: 474/481/489/496/508/514; mutation/lint/mv/links:
 default piped mode) this emits plain text, breaking the documented `{"error": …}`
 envelope. Sibling commands via `format_error` are already correct.
 
-- [ ] Route every `dispatch.rs` `UserError(format!("Error: …"))` site through `crate::output::format_error(format, …)`
-- [ ] Make `AppError::User`/`AppError::Exit` format-aware in `run.rs:338` instead of bare `eprintln!`
-- [ ] Test: `find --task '???'`, `set --where-property 'p~=/[/'`, `find --tag 'has space'`, etc. under `--format json` produce stderr parseable as JSON with an `.error` field
+- [x] Route every `dispatch.rs` `UserError(format!("Error: …"))` site through `crate::output::format_error(format, …)`
+- [x] Make `AppError::User`/`AppError::Exit` format-aware in `run.rs:338` instead of bare `eprintln!`
+- [x] Test: `find --task '???'`, `set --where-property 'p~=/[/'`, `find --tag 'has space'`, etc. under `--format json` produce stderr parseable as JSON with an `.error` field
 
 ### H-7 — `--index` mutations corrupt the persisted link graph
 
@@ -125,8 +126,8 @@ envelope. Sibling commands via `format_error` are already correct.
 `entry.links` and the snapshot `LinkGraph` are never refreshed, so a persisted-wrong
 backlink graph survives until a full `create-index`.
 
-- [ ] Route `update_index_entry` through `refresh_entry` (re-scan links) plus a link-graph update for the source path (mirror `rename_index_entry`)
-- [ ] Test: `set --file X --property related='[[foo]]' --index` then `backlinks foo --index` matches the live scan
+- [x] Route `update_index_entry` through `refresh_entry` (re-scan links) plus a link-graph update for the source path (mirror `rename_index_entry`)
+- [x] Test: `set --file X --property related='[[foo]]' --index` then `backlinks foo --index` matches the live scan
 
 ### H-8 — BM25 ranking diverges between `--index` and default paths under a metadata filter
 
@@ -135,8 +136,8 @@ the metadata-passing candidates (IDF over the filtered subset) while the persist
 path (`:318-341`) computes IDF over the full vault. Same query+filter ranks differently
 depending on `--index`.
 
-- [ ] Seed the candidate-only corpus with full-vault corpus statistics (N, document frequencies, avgdl), or score over all scoped entries then intersect
-- [ ] Test: identical ranking for a body query + metadata filter with and without `--index`
+- [x] Seed the candidate-only corpus with full-vault corpus statistics (N, document frequencies, avgdl), or score over all scoped entries then intersect
+- [x] Test: identical ranking for a body query + metadata filter with and without `--index`
 
 ### H-9 — `task toggle/set --line N` mutates checkbox lines inside code fences
 
@@ -145,18 +146,18 @@ resolve `--line` by raw indexing and validate only with `detect_task_checkbox`, 
 fence/comment state — unlike every other task path. Contradicts the documented contract
 and the `task_read_inside_code_block_exits_1` guard on the read path.
 
-- [ ] Make `toggle_tasks`/`set_tasks_status` fence/comment-aware (resolve valid task lines via the scanner) and reject `--line` inside a fence/`%%` with the existing "line N is not a task" error
-- [ ] Test: `task toggle --line N` inside a code fence exits 1 (mirror the read-path test)
+- [x] Make `toggle_tasks`/`set_tasks_status` fence/comment-aware (resolve valid task lines via the scanner) and reject `--line` inside a fence/`%%` with the existing "line N is not a task" error
+- [x] Test: `task toggle --line N` inside a code fence exits 1 (mirror the read-path test)
 
 ## Key medium (folded in — same root cause / cheap once nearby)
 
-- [ ] **CRLF frontmatter preserved**, not silently converted to LF (`crates/hyalo-core/src/frontmatter/parse.rs:285`); also covers MD009-on-CRLF (`engine.rs:460`) once H-1 lands
-- [ ] **`lint --fix` idempotency** (`crates/hyalo-cli/src/commands/lint.rs:2146`): re-lint after applying until a fixpoint (or guarantee single-pass convergence); mostly resolved by H-1 but verify a second pass changes nothing
-- [ ] **Fix conflict resolution severity tiebreak** (`lint.rs:2239`): an Error fix must win over an overlapping Warn fix on the same range
-- [ ] **`--dry-run` matches the real toggle for fenced `--line`** (`commands/tasks.rs:185` vs `:235`) — resolved by H-9; add a test asserting parity
-- [ ] **Schema lint group severity = max, not first violation** (`lint.rs:1741`): a genuine schema error must not be labelled `warn` because of ordering
-- [ ] **`read` text output control-byte sanitization** (`output_pipeline.rs:175`, `run.rs:561/571/599`): route the `RawOutput` body through `sanitize_control_chars` (extend iter-122)
-- [ ] **Size caps on remaining mutation paths**: `tasks.rs:437` and `frontmatter/parse.rs:262` (`write_frontmatter`) read whole files with no `MAX_FILE_SIZE` gate
+- [x] **CRLF frontmatter preserved**, not silently converted to LF (`crates/hyalo-core/src/frontmatter/parse.rs:285`); also covers MD009-on-CRLF (`engine.rs:460`) once H-1 lands
+- [x] **`lint --fix` idempotency** (`crates/hyalo-cli/src/commands/lint.rs:2146`): re-lint after applying until a fixpoint (or guarantee single-pass convergence); mostly resolved by H-1 but verify a second pass changes nothing
+- [x] **Fix conflict resolution severity tiebreak** (`lint.rs:2239`): an Error fix must win over an overlapping Warn fix on the same range
+- [x] **`--dry-run` matches the real toggle for fenced `--line`** (`commands/tasks.rs:185` vs `:235`) — resolved by H-9; add a test asserting parity
+- [x] **Schema lint group severity = max, not first violation** (`lint.rs:1741`): a genuine schema error must not be labelled `warn` because of ordering
+- [x] **`read` text output control-byte sanitization** (`output_pipeline.rs:175`, `run.rs:561/571/599`): route the `RawOutput` body through `sanitize_control_chars` (extend iter-122)
+- [x] **Size caps on remaining mutation paths**: `tasks.rs:437` and `frontmatter/parse.rs:262` (`write_frontmatter`) read whole files with no `MAX_FILE_SIZE` gate
 
 ## Deferred (follow-up iteration / backlog)
 
@@ -171,23 +172,31 @@ Not in scope for this iteration — captured here so they aren't lost:
 - iter-157 stem-map behaviour change doc note (`dispatch.rs:62`)
 - Rust nits: clone in `link_graph.rs:416`; duplicate intersection in `bm25.rs:693`; copy-pasted task dispatch (`dispatch.rs:911`); mdlint per-call allocations (`engine.rs:327`)
 
+Discovered during this iteration's implementation:
+
+- Oversized file inside a `--glob` mutation batch aborts the whole batch instead of per-file skip (set/remove/append treat the new `write_frontmatter` size error as fatal, not skippable)
+- `plan_frontmatter_wikilink_rewrites` doesn't strip `#fragment` — anchored frontmatter wikilinks like `supersedes: "[[b#sec]]"` are not rewritten by `mv` in either single or batch mode (pre-existing, verified on both paths)
+- `lint --fix` cosmetic: a fix that loses a pass-1 conflict but applies cleanly in pass 2 still counts in `total_conflicts` even though nothing remains unresolved (`fixed`/`remaining` counts are accurate)
+- `rename_index_entry` (mv `--index` path) still uses `refresh_entry` for rewritten files, so their graph edges go stale — same class as H-7; `SnapshotIndex::refresh_links` is the ready building block
+- Live-scan BM25 with a narrow metadata filter + body query now costs the same as an unfiltered query (correct global IDF requires reading the full scoped corpus) — documented in `create-index --help`; consider a runtime hint suggesting `--index` when filter selectivity is high
+
 ## Quality Gates
 
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace -q`
+- [x] `cargo fmt`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace -q`
 
 ## Acceptance Criteria
 
-- [ ] C-1: BOM and leading-whitespace files survive `set`/`remove`/`append` with no duplicated frontmatter block and no data loss
-- [ ] H-1: MD009 adds no blank line; non-ASCII lines are fixed; MD047 converges
-- [ ] H-2: combined frontmatter+body `--fix` keeps both fixes; body write is atomic with an mtime guard
-- [ ] H-3: `mv` into a symlink escaping the vault is rejected
-- [ ] H-4: single-file `mv` rewrites frontmatter wikilinks
-- [ ] H-5: `lint` and `read` refuse/skip oversized files instead of exhausting memory
-- [ ] H-6: invalid-filter errors emit valid JSON under `--format json` across find/set/remove/append/lint/mv/links
-- [ ] H-7: `--index` mutation keeps the persisted link graph correct
-- [ ] H-8: BM25 ranking is identical with and without `--index` under a metadata filter
-- [ ] H-9: `task toggle/set --line` refuses lines inside code fences
-- [ ] Documentation (help text, README, knowledgebase) updated where behaviour changes
-- [ ] All quality gates pass
+- [x] C-1: BOM and leading-whitespace files survive `set`/`remove`/`append` with no duplicated frontmatter block and no data loss
+- [x] H-1: MD009 adds no blank line; non-ASCII lines are fixed; MD047 converges
+- [x] H-2: combined frontmatter+body `--fix` keeps both fixes; body write is atomic with an mtime guard
+- [x] H-3: `mv` into a symlink escaping the vault is rejected
+- [x] H-4: single-file `mv` rewrites frontmatter wikilinks
+- [x] H-5: `lint` and `read` refuse/skip oversized files instead of exhausting memory
+- [x] H-6: invalid-filter errors emit valid JSON under `--format json` across find/set/remove/append/lint/mv/links
+- [x] H-7: `--index` mutation keeps the persisted link graph correct
+- [x] H-8: BM25 ranking is identical with and without `--index` under a metadata filter
+- [x] H-9: `task toggle/set --line` refuses lines inside code fences
+- [x] Documentation (help text, README, knowledgebase) updated where behaviour changes
+- [x] All quality gates pass

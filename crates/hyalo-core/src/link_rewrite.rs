@@ -412,15 +412,20 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
 // Inbound rewrite planning
 // ---------------------------------------------------------------------------
 
-/// Walk every body line in `content` and return [`Replacement`]s for links
-/// that target the moved file, plus any [`SkippedAmbiguous`] entries for
-/// links that were skipped due to ambiguity (NEW-3).
+/// Walk every line in `content` — including YAML frontmatter — and return
+/// [`Replacement`]s for links that target the moved file, plus any
+/// [`SkippedAmbiguous`] entries for links that were skipped due to ambiguity
+/// (NEW-3).
 ///
-/// Uses [`LinkResolver`] to match links and [`LinkWriter`] to emit the new
-/// target in the user's original written form (BUG-1 fix: `[[sub/target]]`
-/// stays path-form after rename, not collapsed to `[[renamed]]`).
+/// Body links are matched via [`LinkResolver`] and rewritten with
+/// [`LinkWriter`] so the new target is emitted in the user's original written
+/// form (BUG-1 fix: `[[sub/target]]` stays path-form after rename, not
+/// collapsed to `[[renamed]]`). Wikilinks found inside YAML frontmatter link
+/// properties (`related`, `depends-on`, `supersedes`, `superseded-by`) are
+/// also rewritten (H-4 fix: previously only the batch mv path did this,
+/// leaving single-file mv with dangling frontmatter wikilinks).
 ///
-/// When `allow_ambiguous` is `false`, bare wikilinks whose stem matches
+/// When `allow_ambiguous` is `false`, bare body wikilinks whose stem matches
 /// multiple vault files are skipped with a stderr warning instead of being
 /// silently rewritten to an incorrect target (BUG-2 fix).
 #[allow(clippy::too_many_arguments)]
@@ -430,7 +435,7 @@ fn plan_inbound_rewrites(
     old_rel: &str,
     old_stem: &str,
     new_rel: &str,
-    _new_stem: &str,
+    new_stem: &str,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
     allow_ambiguous: bool,
@@ -459,7 +464,15 @@ fn plan_inbound_rewrites(
                 if line.trim() == "---" {
                     in_frontmatter = false;
                     frontmatter_done = true;
+                    continue;
                 }
+                // H-4: also rewrite wikilinks inside frontmatter link
+                // properties so single-file mv doesn't leave dangling
+                // frontmatter links (previously only the batch path did this).
+                let fm_repls = plan_frontmatter_wikilink_rewrites(
+                    line, line_num, old_rel, old_stem, new_rel, new_stem, case_index,
+                );
+                replacements.extend(fm_repls);
                 continue;
             }
             // No frontmatter block found; mark done.
@@ -953,7 +966,7 @@ pub fn plan_batch_mv(
 
         let mut all_replacements = Vec::new();
         for (old_rel, old_stem, new_rel, new_stem) in move_pairs {
-            let repls = plan_inbound_rewrites_with_fm(
+            let (repls, skipped) = plan_inbound_rewrites(
                 &content,
                 source_rel,
                 old_rel,
@@ -964,6 +977,20 @@ pub fn plan_batch_mv(
                 Some(&case_index),
                 allow_ambiguous,
             );
+            // Batch mode doesn't surface skipped-ambiguous links in a JSON
+            // envelope (unlike single-file `plan_mv`) — preserve the prior
+            // stderr-only warning behavior here.
+            for s in skipped {
+                eprintln!(
+                    "warning: skipping ambiguous bare wikilink [[{}]] in {}:{} — matches {} \
+                     files: {}. Use --allow-ambiguous to rewrite anyway.",
+                    s.target,
+                    s.source,
+                    s.line,
+                    s.candidates.len(),
+                    s.candidates.join(", ")
+                );
+            }
             all_replacements.extend(repls);
         }
 
@@ -1072,174 +1099,6 @@ pub fn plan_batch_mv(
     }
 
     Ok(plans.into_values().collect())
-}
-
-/// Walk every line (including frontmatter) in `content` and return
-/// [`Replacement`]s for links targeting the moved file.
-///
-/// Unlike `plan_inbound_rewrites`, this function also rewrites wikilinks
-/// found inside YAML frontmatter values for the configured link properties
-/// (`related`, `depends-on`, `supersedes`, `superseded-by`).
-///
-/// Uses [`LinkResolver`] + [`LinkWriter`] for consistent form-preserving
-/// rewrites (BUG-1/BUG-2 fix).
-#[allow(clippy::too_many_arguments)]
-fn plan_inbound_rewrites_with_fm(
-    content: &str,
-    source_rel: &str,
-    old_rel: &str,
-    old_stem: &str,
-    new_rel: &str,
-    new_stem: &str,
-    site_prefix: Option<&str>,
-    case_index: Option<&CaseInsensitiveIndex>,
-    allow_ambiguous: bool,
-) -> Vec<Replacement> {
-    let resolver_idx = case_index.unwrap_or(&EMPTY_CASE_INDEX);
-    let resolver = LinkResolver::new(resolver_idx, site_prefix);
-
-    let mut replacements = Vec::new();
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
-
-    for line in content.split('\n') {
-        line_num += 1;
-
-        // ---- Frontmatter handling ----
-        if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                    continue;
-                }
-                // Scan for wikilinks inside frontmatter link properties.
-                let fm_repls = plan_frontmatter_wikilink_rewrites(
-                    line, line_num, old_rel, old_stem, new_rel, new_stem, case_index,
-                );
-                replacements.extend(fm_repls);
-                continue;
-            }
-            frontmatter_done = true;
-        }
-
-        // ---- Comment fence ----
-        if in_comment_fence {
-            if is_comment_fence(line) {
-                in_comment_fence = false;
-            }
-            continue;
-        }
-
-        // ---- Fenced code block ----
-        if fence.process_line(line) {
-            continue;
-        }
-
-        // ---- Comment fence opening ----
-        if is_comment_fence(line) {
-            in_comment_fence = true;
-            continue;
-        }
-
-        // ---- Body links ----
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
-        let spans = extract_link_spans_with_original(&cleaned, line);
-
-        for span in spans {
-            // BUG-2: bare wikilink ambiguity check (same as plan_inbound_rewrites).
-            let mut bare_ambiguous_match = false;
-            if span.kind == LinkKind::Wikilink {
-                let t = &span.link.target;
-                let normalized = if let Some(wo) = t.strip_prefix("./") {
-                    std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
-                } else {
-                    std::borrow::Cow::Borrowed(t.as_str())
-                };
-                let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
-                if is_bare && case_index.is_some() {
-                    let t_norm = normalized.to_ascii_lowercase();
-                    let stem = if std::path::Path::new(&t_norm)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                    {
-                        &t_norm[..t_norm.len() - 3]
-                    } else {
-                        &t_norm
-                    };
-                    let res = resolver.resolve_stem(stem);
-                    match res {
-                        Resolution::Hit { ref vault_path } => {
-                            let matches_old = vault_path == old_rel
-                                || vault_path == old_stem
-                                || vault_path.strip_suffix(".md") == Some(old_stem);
-                            if !matches_old {
-                                continue;
-                            }
-                        }
-                        Resolution::Ambiguous(ref candidates) => {
-                            if !allow_ambiguous {
-                                eprintln!(
-                                    "warning: skipping ambiguous bare wikilink [[{t}]] in \
-                                     {source_rel}:{line_num} — matches {} files: {}. \
-                                     Use --allow-ambiguous to rewrite anyway.",
-                                    candidates.len(),
-                                    candidates.join(", ")
-                                );
-                                continue;
-                            }
-                            let matches_old = candidates.iter().any(|c| {
-                                c == old_rel
-                                    || c == old_stem
-                                    || c.strip_suffix(".md") == Some(old_stem)
-                            });
-                            if !matches_old {
-                                continue;
-                            }
-                            bare_ambiguous_match = true;
-                        }
-                        Resolution::Broken => continue,
-                    }
-                }
-            }
-
-            if !bare_ambiguous_match
-                && !resolver.matches_target(&span, source_rel, old_rel, old_stem)
-            {
-                continue;
-            }
-
-            if let Some(SpanReplacement {
-                byte_offset,
-                old_text,
-                new_text,
-            }) = LinkWriter::rewrite(
-                &span,
-                line,
-                new_rel,
-                source_rel,
-                PreserveForm::Preserve,
-                site_prefix,
-            ) {
-                replacements.push(Replacement {
-                    line: line_num,
-                    byte_offset,
-                    old_text,
-                    new_text,
-                });
-            }
-        }
-    }
-
-    replacements
 }
 
 /// Find and plan wikilink replacements inside a single frontmatter YAML line.
@@ -1818,8 +1677,9 @@ mod tests {
     }
 
     #[test]
-    fn plan_mv_frontmatter_links_untouched() {
-        // Links inside frontmatter must not be rewritten.
+    fn plan_mv_frontmatter_links_rewritten() {
+        // H-4: single-file mv must rewrite wikilinks inside frontmatter link
+        // properties (e.g. `related`), not just in the document body.
         let vault = create_vault(&[
             ("a.md", "---\nrelated: \"[[sub/b]]\"\n---\nBody [[sub/b]]\n"),
             ("sub/b.md", "Content\n"),
@@ -1828,8 +1688,13 @@ mod tests {
             .unwrap()
             .plans;
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].replacements.len(), 1);
-        assert_eq!(plans[0].replacements[0].line, 4); // Body line
+        assert_eq!(plans[0].replacements.len(), 2);
+        let lines: Vec<usize> = plans[0].replacements.iter().map(|r| r.line).collect();
+        assert!(
+            lines.contains(&2),
+            "frontmatter line not rewritten: {plans:?}"
+        );
+        assert!(lines.contains(&4), "body line not rewritten: {plans:?}");
     }
 
     #[test]

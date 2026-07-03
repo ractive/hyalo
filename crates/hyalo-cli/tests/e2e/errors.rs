@@ -397,8 +397,11 @@ title: Test
     );
     let file_path = tmp.path().join("note.md");
 
+    // Explicit --format text: this test checks the human-readable message.
+    // (Default piped output is JSON — see json_errors.rs for that coverage.)
     let output = hyalo_no_hints()
         .args(["--dir", file_path.to_str().unwrap()])
+        .args(["--format", "text"])
         .args(["find"])
         .output()
         .unwrap();

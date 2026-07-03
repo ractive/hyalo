@@ -14,7 +14,7 @@ use tempfile::NamedTempFile;
 /// When `path` already exists, the original file's permissions are preserved.
 /// `NamedTempFile` defaults to mode `0600`, so without this step rewrites
 /// would silently tighten file permissions on every mutation.
-pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .context("cannot determine parent directory for atomic write")?;

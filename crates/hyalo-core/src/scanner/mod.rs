@@ -20,7 +20,6 @@ use crate::frontmatter::hyalo_options;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde_json::Value;
-#[cfg(test)]
 use std::io::BufRead;
 use std::path::Path;
 
@@ -167,7 +166,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
 
-    let (mut fm_props, fm_lines) = if first_line.trim() == "---" {
+    let (mut fm_props, fm_lines) = if crate::frontmatter::is_opening_delimiter(first_line) {
         use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         let mut yaml = if any_needs_fm {
@@ -343,7 +342,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
 
     // Try to parse frontmatter
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
-    let (mut fm_props, fm_lines) = if first_trimmed.trim() == "---" {
+    let (mut fm_props, fm_lines) = if crate::frontmatter::is_opening_delimiter(&first_trimmed) {
         use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         // Read past frontmatter lines, optionally collecting YAML content
@@ -491,7 +490,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
 /// Lines longer than this are skipped (the line counter still advances).
 /// 1 MiB is ample for any real Markdown line; files with no newlines (e.g.
 /// accidentally-added minified blobs) would otherwise exhaust memory.
-const MAX_BODY_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
+pub const MAX_BODY_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// Read one newline-terminated line into `buf`, but stop after `limit` bytes.
 ///
@@ -499,8 +498,11 @@ const MAX_BODY_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
 /// reader is positioned just after where the logical line ended (i.e. excess
 /// bytes are drained until the next `\n` or EOF), and the caller should treat
 /// the line as skipped.
-#[cfg(test)]
-fn read_line_capped<R: BufRead>(
+///
+/// Exposed beyond `#[cfg(test)]` so other crates (e.g. `hyalo-cli`'s `read`
+/// command) can stream a single file with the same per-line memory bound the
+/// scanner enforces, instead of an uncapped `BufRead::lines()`.
+pub fn read_line_capped<R: BufRead>(
     reader: &mut R,
     buf: &mut String,
     limit: usize,
@@ -531,7 +533,19 @@ fn read_line_capped<R: BufRead>(
         };
 
         if buf.len() >= limit {
-            // Already over quota — just drain.
+            // Quota was exactly filled by a previous iteration. If the very
+            // next byte is the newline (`pos == 0`), the line's content is
+            // exactly `limit` bytes — nothing was actually discarded, so this
+            // is not a truncation, just a line landing on the boundary.
+            if newline_pos == Some(0) {
+                reader.consume(1);
+                total += 1;
+                // Keep parity with the other non-truncated paths, which
+                // include the terminating newline in `buf`.
+                buf.push('\n');
+                return Ok((total, false));
+            }
+            // Otherwise there is more line content beyond the quota — drain it.
             reader.consume(consume);
             total += consume;
             if newline_pos.is_some() {
@@ -581,7 +595,6 @@ fn read_line_capped<R: BufRead>(
 }
 
 /// Consume bytes from `reader` until (and including) a `\n`, or until EOF.
-#[cfg(test)]
 fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
     loop {
         let available = match reader.fill_buf() {
@@ -716,6 +729,29 @@ Second line
         assert_eq!(lines[0].1, 1);
         assert_eq!(lines[1].0, "Second line");
         assert_eq!(lines[1].1, 2);
+    }
+
+    #[test]
+    fn bom_prefixed_frontmatter_is_recognized() {
+        // Shares the opening-delimiter policy with the read/write paths
+        // (iter-158 C-1): a single UTF-8 BOM before `---` still opens
+        // frontmatter, so the block is skipped instead of scanned as body.
+        let input = "\u{feff}---\ntitle: Test\n---\nHello world\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].0, "Hello world");
+        assert_eq!(lines[0].1, 4);
+    }
+
+    #[test]
+    fn leading_whitespace_dashes_are_not_frontmatter() {
+        // ` ---` does not open frontmatter (same policy as read/write paths),
+        // so every line is body content.
+        let input = " ---\ntitle: Test\n---\nHello world\n";
+        let lines = collect_lines(input);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0].0, " ---");
+        assert_eq!(lines[3].0, "Hello world");
     }
 
     #[test]
@@ -1644,5 +1680,57 @@ code only
         let lines = collect_lines(&input);
         assert_eq!(lines[0].0, exactly, "line at limit must pass through");
         assert_eq!(lines[1].0, "next");
+    }
+
+    // -- read_line_capped: direct boundary regression test --
+    //
+    // `body_line_limit_exact_boundary_passes` above exercises the same
+    // boundary through `scan_reader`, which has its own (separate) line
+    // splitting logic. `read_line_capped` is exercised here directly with a
+    // small `BufReader` capacity to force the exact-limit newline to land at
+    // the very start of a freshly-filled internal buffer — the case that
+    // previously tripped the `buf.len() >= limit` quota check into reporting
+    // a spurious truncation even though no content was actually discarded.
+    #[test]
+    fn read_line_capped_exact_boundary_not_truncated() {
+        let limit = 16usize;
+        let chunk_cap = 4usize; // forces multiple fill_buf() calls before the limit
+        let line: String = "a".repeat(limit);
+        let input = format!("{line}\nnext\n");
+        let mut reader = std::io::BufReader::with_capacity(chunk_cap, input.as_bytes());
+
+        let mut buf = String::new();
+        let (n, truncated) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert!(
+            !truncated,
+            "line exactly at the limit must not be truncated"
+        );
+        assert_eq!(buf, format!("{line}\n"));
+        assert_eq!(n, limit + 1);
+
+        buf.clear();
+        let (_, truncated2) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert!(!truncated2, "subsequent line must be read normally");
+        assert_eq!(buf, "next\n");
+    }
+
+    #[test]
+    fn read_line_capped_one_byte_over_is_truncated() {
+        // Sanity check alongside the exact-boundary test: one byte *past* the
+        // limit must still be reported as truncated.
+        let limit = 16usize;
+        let chunk_cap = 4usize;
+        let line: String = "a".repeat(limit + 1);
+        let input = format!("{line}\nnext\n");
+        let mut reader = std::io::BufReader::with_capacity(chunk_cap, input.as_bytes());
+
+        let mut buf = String::new();
+        let (_, truncated) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert!(truncated, "line one byte over the limit must be truncated");
+
+        buf.clear();
+        let (_, truncated2) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert!(!truncated2, "subsequent line must be read normally");
+        assert_eq!(buf, "next\n");
     }
 }

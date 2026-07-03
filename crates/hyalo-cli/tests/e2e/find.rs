@@ -3921,6 +3921,110 @@ fn find_desc_alias_for_reverse() {
 // UX-6: `find ""` matches all files; combined with --tag still filters (iter-133)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// H-8: BM25 score/rank parity between the persisted --index path and the
+// default live-scan path when a --property filter narrows the candidate set.
+// ---------------------------------------------------------------------------
+
+fn setup_h8_parity_vault() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "k1.md",
+        md!(r"
+---
+status: keep
+---
+# k1
+alpha alpha content
+"),
+    );
+    write_md(
+        tmp.path(),
+        "k2.md",
+        md!(r"
+---
+status: keep
+---
+# k2
+beta beta content
+"),
+    );
+    for i in 1..=10 {
+        write_md(
+            tmp.path(),
+            &format!("s{i}.md"),
+            &format!("---\nstatus: skip\n---\n# s{i}\nbeta beta beta filler {i}\n"),
+        );
+    }
+    tmp
+}
+
+#[test]
+fn find_index_parity_rank_and_score_match_no_index_with_property_filter() {
+    let tmp = setup_h8_parity_vault();
+
+    // Live-scan path (no --index): a --property filter narrows 12 files down
+    // to 2 candidates before BM25 scoring.
+    let (status, json_no_index, stderr) =
+        find_json(&tmp, &["alpha OR beta", "--property", "status=keep"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let no_index_results = unwrap_results(&json_no_index);
+
+    // Persisted-index path: build the snapshot, then re-run the same query
+    // with --index.
+    let create_index_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        create_index_output.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&create_index_output.stderr)
+    );
+
+    let (status, json_index, stderr) = find_json(
+        &tmp,
+        &["alpha OR beta", "--property", "status=keep", "--index"],
+    );
+    assert!(status.success(), "stderr: {stderr}");
+    let index_results = unwrap_results(&json_index);
+
+    let no_index_files: Vec<&str> = no_index_results
+        .iter()
+        .map(|r| r["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
+    let index_files: Vec<&str> = index_results
+        .iter()
+        .map(|r| r["file"].as_str().expect("field 'file' should be a string"))
+        .collect();
+    assert_eq!(
+        no_index_files, index_files,
+        "rank order must match between --index and no-index runs: \
+         no_index={no_index_results:?} index={index_results:?}"
+    );
+
+    for (a, b) in no_index_results.iter().zip(index_results.iter()) {
+        let score_a = a["score"].as_f64().expect("score field should be a number");
+        let score_b = b["score"].as_f64().expect("score field should be a number");
+        assert!(
+            (score_a - score_b).abs() < 1e-9,
+            "score mismatch for {}: no-index={score_a} index={score_b}",
+            a["file"]
+        );
+    }
+
+    // Sanity: the filter actually narrowed the corpus to 2 of 12 files, and
+    // the rare term ("alpha", 1 of 12 files) outranks the common term
+    // ("beta", 11 of 12 files) under full-corpus IDF.
+    assert_eq!(no_index_files.len(), 2, "expected exactly 2 candidates");
+    assert_eq!(
+        no_index_files[0], "k1.md",
+        "k1.md (rare term) should outrank k2.md (common term) under full-corpus IDF"
+    );
+}
+
 #[test]
 fn find_empty_pattern_with_tag_filter_still_applies_tag() {
     let tmp = setup_vault();
@@ -3939,5 +4043,43 @@ fn find_empty_pattern_with_tag_filter_still_applies_tag() {
     assert_eq!(
         json["total"], 0,
         "empty pattern + nonexistent tag should return 0 results, got: {json}"
+    );
+}
+
+#[test]
+fn find_sees_frontmatter_of_bom_prefixed_file() {
+    // iter-158 C-1 follow-through: the scanner shares the opening-delimiter
+    // policy with the read/write paths, so a UTF-8 BOM before `---` must not
+    // hide a file's frontmatter from `find`.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("bom.md"),
+        b"\xEF\xBB\xBF---\ntitle: Bom Note\nstatus: bom-draft\n---\n\nBody text.\n",
+    )
+    .unwrap();
+    // Control: leading whitespace before `---` is NOT frontmatter.
+    std::fs::write(
+        tmp.path().join("lead.md"),
+        b" ---\ntitle: Lead\nstatus: bom-draft\n---\nBody.\n",
+    )
+    .unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--property", "status=bom-draft", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        files,
+        vec!["bom.md"],
+        "BOM file's frontmatter must be visible; leading-space pseudo-frontmatter must not"
     );
 }

@@ -1118,6 +1118,188 @@ fn chained_mutations_with_index_keep_index_consistent() {
 }
 
 // ---------------------------------------------------------------------------
+// H-7: mutating a frontmatter link property with --index must patch the
+// persisted LinkGraph, not just the entry's properties/tags/modified.
+// ---------------------------------------------------------------------------
+
+/// Two notes with no initial link between them, used to verify that
+/// `set`/`remove` on a frontmatter link property (`depends-on`) keeps the
+/// persisted link graph in sync when run with `--index`.
+fn setup_link_mutation_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        md!(r"
+---
+title: Note
+---
+# Note
+"),
+    );
+    write_md(
+        tmp.path(),
+        "foo.md",
+        md!(r"
+---
+title: Foo
+---
+"),
+    );
+    tmp
+}
+
+/// Run `hyalo backlinks --file <target>` and return the sorted list of
+/// backlink source paths. `use_index` toggles the bare `--index` flag.
+fn backlink_sources(tmp: &TempDir, target: &str, use_index: bool) -> Vec<String> {
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["backlinks", "--file", target]);
+    if use_index {
+        cmd.arg("--index");
+    }
+    let output = cmd.output().unwrap();
+    assert!(
+        output.status.success(),
+        "backlinks failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut sources: Vec<String> = json["results"]["backlinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["source"].as_str().unwrap().to_owned())
+        .collect();
+    sources.sort();
+    sources
+}
+
+#[test]
+fn set_frontmatter_link_property_with_index_updates_persisted_graph() {
+    let tmp = setup_link_mutation_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Before the mutation, foo.md has no backlinks.
+    assert!(
+        backlink_sources(&tmp, "foo.md", true).is_empty(),
+        "foo.md should have no backlinks before the mutation"
+    );
+
+    // Set a frontmatter link property (`depends-on`) via --index. This writes
+    // note.md to disk and, per the IndexFlags contract, must patch the
+    // persisted index so subsequent --index queries stay accurate.
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "set",
+            "--property",
+            "depends-on=[[foo]]",
+            "--file",
+            "note.md",
+        ],
+    );
+
+    // A FRESH process reading the persisted index must see the new backlink.
+    // Before the fix this returned [] (H-7).
+    assert_eq!(
+        backlink_sources(&tmp, "foo.md", true),
+        vec!["note.md".to_owned()],
+        "persisted graph must reflect the new depends-on link"
+    );
+
+    // Ground truth: a live disk scan must agree with the index.
+    assert_eq!(
+        backlink_sources(&tmp, "foo.md", true),
+        backlink_sources(&tmp, "foo.md", false),
+        "index-based and disk-scan backlinks must agree after the mutation"
+    );
+}
+
+#[test]
+fn remove_frontmatter_link_property_with_index_updates_persisted_graph() {
+    let tmp = setup_link_mutation_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Seed a depends-on link via --index first.
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "set",
+            "--property",
+            "depends-on=[[foo]]",
+            "--file",
+            "note.md",
+        ],
+    );
+    assert_eq!(
+        backlink_sources(&tmp, "foo.md", true),
+        vec!["note.md".to_owned()],
+        "sanity check: depends-on link should be indexed before removal"
+    );
+
+    // Now remove the property via --index.
+    run_with_index(
+        &tmp,
+        &index_path,
+        &["remove", "--property", "depends-on", "--file", "note.md"],
+    );
+
+    // The persisted graph must no longer report the backlink.
+    assert!(
+        backlink_sources(&tmp, "foo.md", true).is_empty(),
+        "removing depends-on must clear the persisted backlink"
+    );
+    assert_eq!(
+        backlink_sources(&tmp, "foo.md", true),
+        backlink_sources(&tmp, "foo.md", false),
+        "index-based and disk-scan backlinks must agree after removal"
+    );
+}
+
+#[test]
+fn find_fields_links_with_index_reflects_new_target_after_mutation() {
+    let tmp = setup_link_mutation_vault();
+    let index_path = create_default_index(&tmp);
+
+    // Before the mutation, note.md has no outbound links.
+    let before = run_find(&tmp, &["--file", "note.md", "--fields", "links", "--index"]);
+    assert!(
+        unwrap_results(&before)[0]["links"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "note.md should have no outbound links before the mutation"
+    );
+
+    run_with_index(
+        &tmp,
+        &index_path,
+        &[
+            "set",
+            "--property",
+            "depends-on=[[foo]]",
+            "--file",
+            "note.md",
+        ],
+    );
+
+    let after = run_find(&tmp, &["--file", "note.md", "--fields", "links", "--index"]);
+    let targets: Vec<&str> = unwrap_results(&after)[0]["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["target"].as_str().unwrap())
+        .collect();
+    assert!(
+        targets.contains(&"foo"),
+        "note.md's `links` field should include the new depends-on target; got: {targets:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Regression: --property regex filter with YAML array values
 // ---------------------------------------------------------------------------
 

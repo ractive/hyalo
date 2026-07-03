@@ -494,6 +494,101 @@ fn find_pattern_includes_score_field() {
 }
 
 #[test]
+fn find_property_filter_bm25_uses_full_corpus_idf_not_candidate_only() {
+    // H-8 regression: with a --property filter narrowing candidates down to 2
+    // files, one containing a term rare across the whole vault ("alpha",
+    // present in only 1 of 12 files) and the other containing a term common
+    // across the vault ("beta", present in 11 of 12 files), BM25 IDF must be
+    // computed over the full scoped corpus, not just the 2 candidates.
+    //
+    // Pre-fix, the candidate-only corpus saw each of "alpha" and "beta"
+    // appear in exactly 1 of the 2 candidates, producing identical (tied)
+    // IDF — and therefore identical scores — for both files, which also
+    // diverged from the persisted `--index` path (which always scores
+    // against the full vault). Post-fix, the rare term must clearly outrank
+    // the common one, matching standard BM25 semantics and persisted-index
+    // parity.
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join("k1.md"),
+        md!(r"
+---
+status: keep
+---
+# k1
+alpha alpha content
+"),
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("k2.md"),
+        md!(r"
+---
+status: keep
+---
+# k2
+beta beta content
+"),
+    )
+    .unwrap();
+    for i in 1..=10 {
+        fs::write(
+            tmp.path().join(format!("s{i}.md")),
+            format!("---\nstatus: skip\n---\n# s{i}\nbeta beta beta filler {i}\n"),
+        )
+        .unwrap();
+    }
+
+    let filters = vec![hyalo_core::filter::parse_property_filter("status=keep").unwrap()];
+    let fields = Fields::default();
+    let out = unwrap_success(
+        run_find(
+            tmp.path(),
+            None,
+            Some("alpha OR beta"),
+            None,
+            &filters,
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &fields,
+            None,
+            false,
+            None,
+            false,
+            None,
+            Format::Json,
+        )
+        .unwrap(),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let arr = parsed.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "expected exactly 2 candidates: {arr:?}");
+
+    let score_of = |file: &str| -> f64 {
+        arr.iter()
+            .find(|r| r["file"] == file)
+            .unwrap_or_else(|| panic!("missing {file} in results: {arr:?}"))["score"]
+            .as_f64()
+            .unwrap()
+    };
+    let k1_score = score_of("k1.md");
+    let k2_score = score_of("k2.md");
+    assert!(
+        k1_score > k2_score,
+        "k1.md (rare term 'alpha' across the full vault) should outrank k2.md \
+         (common term 'beta') under full-corpus IDF; got k1={k1_score} k2={k2_score}"
+    );
+    assert!(
+        (k1_score - k2_score).abs() > 0.5,
+        "expected a clear score gap between rare- and common-term matches \
+         (a candidate-only corpus would tie these); got k1={k1_score} k2={k2_score}"
+    );
+}
+
+#[test]
 fn find_no_pattern_no_matches_field() {
     let tmp = setup_vault();
     let fields = Fields::default();

@@ -661,3 +661,45 @@ fn remove_without_dry_run_has_dry_run_false() {
         "file was not written:\n{content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-158 C-1: BOM-prefixed files must round-trip through `remove` without
+// corruption, and the property must actually be removed (not just appear to
+// be, per the bug report's note that BOM files falsely reported success).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_property_on_bom_file_actually_removes_it() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "\u{feff}---\ntitle: Note\nstatus: draft\n---\nBody.\n",
+    );
+
+    let (status, json, stderr) = remove_json(&tmp, &["--property", "status", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        json["modified"].as_array().unwrap().len(),
+        1,
+        "expected the property to be reported as removed: {json}"
+    );
+
+    let bytes = fs::read(tmp.path().join("note.md")).unwrap();
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        "\u{feff}---\ntitle: Note\n---\nBody.\n",
+        "expected status removed in place, BOM preserved, no duplicate block"
+    );
+
+    // Verify the removal is real, not just reported: re-reading the file
+    // must no longer see `status` at all.
+    let (status2, json2, stderr2) =
+        remove_json(&tmp, &["--property", "status", "--file", "note.md"]);
+    assert!(status2.success(), "stderr: {stderr2}");
+    assert_eq!(
+        json2["skipped"].as_array().unwrap().len(),
+        1,
+        "status should already be gone: {json2}"
+    );
+}

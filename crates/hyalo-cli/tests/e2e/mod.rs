@@ -19,6 +19,7 @@ mod hyalo_config;
 mod index;
 mod init;
 mod jq;
+mod json_errors;
 mod links;
 mod links_iter136;
 mod lint;

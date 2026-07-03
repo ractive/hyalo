@@ -310,6 +310,43 @@ impl LinkGraph {
             }
         }
     }
+
+    /// Remove every outbound edge whose source is `rel_path`, across all
+    /// target keys. Target keys left with no remaining entries are dropped
+    /// entirely, matching the invariant `backlinks()` relies on (an absent
+    /// key means "no linkers").
+    ///
+    /// `rel_path` is compared against each edge's source normalized to
+    /// forward slashes, so this matches sources stored with either the
+    /// platform separator (entries from a full vault scan) or a literal
+    /// forward slash (entries from [`LinkGraph::insert_links`]) — see
+    /// [`LinkGraph::all_sources`] for the same normalization.
+    ///
+    /// Used to clear a file's stale edges before re-inserting fresh ones
+    /// after an incremental re-scan (`set`/`append`/`remove`/`lint --fix`
+    /// with `--index`).
+    pub(crate) fn remove_source(&mut self, rel_path: &str) {
+        self.index.retain(|_, entries| {
+            entries.retain(|e| e.source.to_string_lossy().replace('\\', "/") != rel_path);
+            !entries.is_empty()
+        });
+    }
+
+    /// Insert one file's freshly-scanned links into the graph.
+    ///
+    /// This does **not** remove any existing edges for the file's source —
+    /// callers refreshing a file's edges after a mutation should call
+    /// [`remove_source`] first to clear the old ones, then this method to
+    /// insert the new ones (mirroring how a full index build populates the
+    /// graph from every file's [`FileLinks`], one file at a time).
+    pub(crate) fn insert_links(
+        &mut self,
+        file_links: FileLinks,
+        site_prefix: Option<&str>,
+        case_index: &CaseInsensitiveIndex,
+    ) {
+        insert_file_links(&mut self.index, file_links, site_prefix, case_index);
+    }
 }
 
 /// Returns `true` when `entry` is a self-link — i.e. the source file and the
@@ -1250,6 +1287,125 @@ mod tests {
             src_fwd, "notes/new.md",
             "source path must be updated to new path"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // H-7: remove_source / insert_links — incremental edge replacement
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn remove_source_clears_all_edges_for_a_file() {
+        // "source.md" links to both "a" (wikilink) and "b.md" (markdown), plus a
+        // self-link. remove_source must clear all three edges and leave "other.md"
+        // untouched.
+        let vault = create_vault(&[
+            ("source.md", "See [[a]], [link](b.md), and [[source]].\n"),
+            ("other.md", "See [[a]]\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let mut graph = build.graph;
+
+        assert_eq!(
+            graph.backlinks("a").len(),
+            2,
+            "a should have 2 backlinks before removal"
+        );
+        assert_eq!(graph.backlinks("b.md").len(), 1);
+
+        graph.remove_source("source.md");
+
+        // source.md's edges are gone, but other.md's edge to "a" survives.
+        let bl_a = graph.backlinks("a");
+        assert_eq!(bl_a.len(), 1, "only other.md's edge to 'a' should remain");
+        assert_eq!(bl_a[0].source, PathBuf::from("other.md"));
+        assert!(
+            graph.backlinks("b.md").is_empty(),
+            "source.md's only edge to b.md must be gone"
+        );
+        assert!(
+            graph.backlinks("source").is_empty(),
+            "source.md's self-link must be gone"
+        );
+    }
+
+    #[test]
+    fn insert_links_adds_edges_without_touching_other_sources() {
+        let mut graph = LinkGraph::default();
+        let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_case_insensitive_paths(true);
+        case_index.insert("note.md");
+        case_index.insert("target.md");
+
+        graph.insert_links(
+            FileLinks {
+                source: PathBuf::from("note.md"),
+                links: vec![(
+                    1,
+                    Link {
+                        target: "target".to_owned(),
+                        label: None,
+                        kind: LinkKind::Wikilink,
+                    },
+                )],
+            },
+            None,
+            &case_index,
+        );
+
+        let bl = graph.backlinks("target");
+        assert_eq!(bl.len(), 1);
+        assert_eq!(bl[0].source, PathBuf::from("note.md"));
+    }
+
+    #[test]
+    fn remove_source_then_insert_links_replaces_edges() {
+        // Mirrors the incremental-refresh path used by `set`/`append`/`remove`
+        // with `--index`: a file's old edges are removed, then its freshly
+        // scanned links are inserted — the graph must reflect only the new
+        // state afterward, matching what a full rebuild would produce.
+        let vault = create_vault(&[
+            ("note.md", "---\ndepends-on: '[[old-dep]]'\n---\nBody\n"),
+            ("old-dep.md", "Content\n"),
+            ("new-dep.md", "Content\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let mut graph = build.graph;
+        assert_eq!(
+            graph.backlinks("old-dep").len(),
+            1,
+            "sanity: old dep linked"
+        );
+
+        let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_case_insensitive_paths(true);
+        for p in ["note.md", "old-dep.md", "new-dep.md"] {
+            case_index.insert(p);
+        }
+
+        graph.remove_source("note.md");
+        graph.insert_links(
+            FileLinks {
+                source: PathBuf::from("note.md"),
+                links: vec![(
+                    1,
+                    Link {
+                        target: "new-dep".to_owned(),
+                        label: None,
+                        kind: LinkKind::Wikilink,
+                    },
+                )],
+            },
+            None,
+            &case_index,
+        );
+
+        assert!(
+            graph.backlinks("old-dep").is_empty(),
+            "stale edge to old-dep must be gone after replacement"
+        );
+        let bl_new = graph.backlinks("new-dep");
+        assert_eq!(bl_new.len(), 1, "new edge to new-dep must be present");
+        assert_eq!(bl_new[0].source, PathBuf::from("note.md"));
     }
 
     // ---------------------------------------------------------------------------

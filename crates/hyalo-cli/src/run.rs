@@ -29,6 +29,27 @@ pub(crate) fn resolve_format_by_tty(is_tty: bool) -> Format {
     if is_tty { Format::Text } else { Format::Json }
 }
 
+/// Best-effort output format for errors raised while resolving `--dir`,
+/// before the full format-resolution block (which needs the final `dir`/
+/// `config` and therefore runs later) has executed.
+///
+/// Mirrors that later precedence — explicit `--format` > `--jq` forcing
+/// JSON > config `format` > TTY detection — using whichever config is
+/// already in scope at the call site. For an invalid `--dir` (missing or a
+/// file) there is no target config to reload anyway, so the ambient config
+/// is the only one that could plausibly apply; this is not an approximation
+/// in that case, just an early evaluation of the same rule.
+fn early_format(
+    cli_format: Option<Format>,
+    jq_present: bool,
+    config_format: Option<&str>,
+) -> Format {
+    cli_format
+        .or(if jq_present { Some(Format::Json) } else { None })
+        .or_else(|| config_format.and_then(Format::from_str_opt))
+        .unwrap_or_else(|| resolve_format_by_tty(std::io::stdout().is_terminal()))
+}
+
 /// Extract the effective index path from whichever subcommand is active.
 ///
 /// Walks the command tree and retrieves `IndexFlags` from the matching arm,
@@ -551,14 +572,21 @@ fn run_inner() -> Result<(), AppError> {
                 | Commands::Config
         )
     {
-        eprintln!("{COUNT_UNSUPPORTED_ERROR}");
+        let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+        eprintln!(
+            "{}",
+            crate::output::format_error(fmt, COUNT_UNSUPPORTED_ERROR, None, None, None)
+        );
         return Err(AppError::Exit(2));
     }
     if let Commands::Init { claude } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
         match init_commands::run_init(init_dir, claude) {
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
-                println!("{output}");
+                // Sanitized because RawOutput content may echo raw file text (init/deinit
+                // summaries can include vault-derived strings) that never passes through
+                // the JSON pipeline's own sanitization.
+                println!("{}", crate::output::sanitize_control_chars(&output));
                 return Ok(());
             }
             Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
@@ -568,7 +596,10 @@ fn run_inner() -> Result<(), AppError> {
     if let Commands::Deinit = cli.command {
         match init_commands::run_deinit() {
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
-                println!("{output}");
+                // Sanitized because RawOutput content may echo raw file text (init/deinit
+                // summaries can include vault-derived strings) that never passes through
+                // the JSON pipeline's own sanitization.
+                println!("{}", crate::output::sanitize_control_chars(&output));
                 return Ok(());
             }
             Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
@@ -596,7 +627,10 @@ fn run_inner() -> Result<(), AppError> {
             crate::commands::config::collect_config_report(&cwd).map_err(AppError::Internal)?;
         match crate::commands::config::run_config(&report, format) {
             CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
-                print!("{output}");
+                // Sanitized because the text-mode RawOutput branch echoes the raw
+                // .hyalo.toml contents (`report.raw_contents`), which never passes
+                // through the JSON pipeline's own sanitization.
+                print!("{}", crate::output::sanitize_control_chars(&output));
                 return Ok(());
             }
             CommandOutcome::UserError(output) => return Err(AppError::User(output)),
@@ -633,15 +667,26 @@ fn run_inner() -> Result<(), AppError> {
     let (dir, config) = if let Some(cli_dir) = cli.dir {
         // Validate before loading config to avoid misleading file-read warnings.
         if !cli_dir.exists() {
-            return Err(AppError::User(format!(
-                "Error: --dir path '{}' does not exist.",
-                cli_dir.display()
+            let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+            return Err(AppError::User(crate::output::format_error(
+                fmt,
+                &format!("--dir path '{}' does not exist.", cli_dir.display()),
+                None,
+                None,
+                None,
             )));
         }
         if cli_dir.is_file() {
-            return Err(AppError::User(format!(
-                "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
-                cli_dir.display()
+            let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+            return Err(AppError::User(crate::output::format_error(
+                fmt,
+                &format!(
+                    "--dir path '{}' is a file, not a directory. Use --file to target a single file.",
+                    cli_dir.display()
+                ),
+                None,
+                None,
+                None,
             )));
         }
         let target_config = crate::config::load_config_from(&cli_dir);
@@ -674,15 +719,26 @@ fn run_inner() -> Result<(), AppError> {
     // Validate that the resolved dir exists and is a directory (for the
     // non-CLI case where dir comes from .hyalo.toml).
     if !dir.exists() {
-        return Err(AppError::User(format!(
-            "Error: --dir path '{}' does not exist.",
-            dir.display()
+        let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+        return Err(AppError::User(crate::output::format_error(
+            fmt,
+            &format!("--dir path '{}' does not exist.", dir.display()),
+            None,
+            None,
+            None,
         )));
     }
     if dir.is_file() {
-        return Err(AppError::User(format!(
-            "Error: --dir path '{}' is a file, not a directory. Use --file to target a single file.",
-            dir.display()
+        let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+        return Err(AppError::User(crate::output::format_error(
+            fmt,
+            &format!(
+                "--dir path '{}' is a file, not a directory. Use --file to target a single file.",
+                dir.display()
+            ),
+            None,
+            None,
+            None,
         )));
     }
 
@@ -789,15 +845,16 @@ fn run_inner() -> Result<(), AppError> {
                 .min_by_key(|(d, _)| *d)
                 .map(|(_, k)| k);
             let tip = if let Some(s) = suggestion {
-                format!(
-                    "  did you mean: hyalo find --view {s}\n  \
-                     tip: run 'hyalo views list' to see all views"
-                )
+                format!("did you mean: hyalo find --view {s}?")
             } else {
-                "  tip: run 'hyalo views list' to see available views".to_owned()
+                "run 'hyalo views list' to see available views".to_owned()
             };
-            return Err(AppError::User(format!(
-                "Error: unknown view '{view_name}'\n\n{tip}"
+            return Err(AppError::User(crate::output::format_error(
+                format,
+                &format!("unknown view '{view_name}'"),
+                None,
+                Some(&tip),
+                None,
             )));
         }
     }
@@ -832,15 +889,31 @@ fn run_inner() -> Result<(), AppError> {
     };
     // --count replaces the entire output pipeline, so check its conflicts first.
     if cli.count && jq_filter.is_some() {
-        eprintln!("Error: --count cannot be combined with --jq");
         eprintln!(
-            "  --count prints the bare total; --jq applies a custom filter — use one or the other"
+            "{}",
+            crate::output::format_error(
+                format,
+                "--count cannot be combined with --jq",
+                None,
+                Some(
+                    "--count prints the bare total; --jq applies a custom filter — use one or the other"
+                ),
+                None,
+            )
         );
         return Err(AppError::Exit(2));
     }
     if jq_filter.is_some() && format != Format::Json {
-        eprintln!("Error: --jq cannot be combined with --format {format}");
-        eprintln!("  --jq always operates on JSON output; drop --format or use --format json");
+        eprintln!(
+            "{}",
+            crate::output::format_error(
+                format,
+                &format!("--jq cannot be combined with --format {format}"),
+                None,
+                Some("--jq always operates on JSON output; drop --format or use --format json"),
+                None,
+            )
+        );
         return Err(AppError::Exit(2));
     }
     // Always force JSON internally so the output pipeline can wrap results in the
