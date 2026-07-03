@@ -396,7 +396,7 @@ impl HyaloLintEngine {
                     let fix = if *rule_id == "MD047" {
                         md047_fix(body_content)
                     } else {
-                        convert_fix(&v, body_content)
+                        convert_fix(&v, body_content, rule_id)
                     };
                     diagnostics.push(Diagnostic {
                         rule_id: rule_id.to_string(),
@@ -420,7 +420,7 @@ impl HyaloLintEngine {
                 .check(&doc)
                 .with_context(|| format!("running HYALO001 on {rel_path}"))?;
             for v in violations {
-                let fix = convert_fix(&v, body_content);
+                let fix = convert_fix(&v, body_content, "HYALO001");
                 diagnostics.push(Diagnostic {
                     rule_id: "HYALO001".to_owned(),
                     rule_name: v.rule_name.clone(),
@@ -459,16 +459,41 @@ impl HyaloLintEngine {
     }
 }
 
+/// Upstream rules disagree on what a `Fix` column means: some compute
+/// columns from byte lengths (`line.len() + 1` style — MD009, and our own
+/// HYALO001), others index into a `Vec<char>` and emit char positions (at
+/// least MD034 and MD011). Using the wrong unit on a line with multibyte
+/// UTF-8 lands the fix on the wrong byte offset and corrupts the file, so
+/// the walk must be chosen per rule. Only rules whose column math has been
+/// verified byte-based belong here; everything else gets the char-based
+/// walk, whose worst case is a dropped fix rather than corruption.
+fn rule_uses_byte_columns(rule_id: &str) -> bool {
+    matches!(rule_id, "MD009" | "HYALO001")
+}
+
 /// Convert an upstream `Fix` (line/column positions) to a byte-offset `DiagFix`.
 ///
+/// The column unit is selected per rule (see [`rule_uses_byte_columns`]).
 /// The conversion from line+column to byte offsets is best-effort; if
 /// conversion fails the fix is silently dropped (the violation is still
 /// reported without a fix).
-fn convert_fix(v: &mdbook_lint_core::Violation, content: &str) -> Option<DiagFix> {
+fn convert_fix(v: &mdbook_lint_core::Violation, content: &str, rule_id: &str) -> Option<DiagFix> {
+    let byte_columns = rule_uses_byte_columns(rule_id);
     let fix = v.fix.as_ref()?;
-    let start = line_col_to_byte(content, fix.start.line, fix.start.column)?;
-    let mut end = line_col_to_byte(content, fix.end.line, fix.end.column)?;
+    let start = line_col_to_byte(content, fix.start.line, fix.start.column, byte_columns)?;
+    let mut end = line_col_to_byte(content, fix.end.line, fix.end.column, byte_columns)?;
     let mut replacement = fix.replacement.clone().unwrap_or_default();
+
+    // Upstream MD011 emits its end column as the 1-based position OF the
+    // closing ']' (its own source comments "+1 because end_pos is 0-based
+    // position of ']'"), i.e. inclusive — one short as an exclusive end, so
+    // applying the fix as-is leaves a stray ']' behind on every line, ASCII
+    // included. Extend the range by one, but only when the byte at `end`
+    // really is the ']' the range claims to cover, so a future upstream
+    // correction cannot make this overshoot.
+    if rule_id == "MD011" && content[end..].starts_with(']') {
+        end += 1;
+    }
 
     // Some upstream rules (MD009, MD023, ...) express "replace this whole
     // line" with an end column of `line_len + 1` and a replacement that
@@ -523,6 +548,9 @@ fn convert_fix(v: &mdbook_lint_core::Violation, content: &str) -> Option<DiagFix
 /// length instead, so any number of trailing newlines converges to exactly
 /// one in a single application.
 fn md047_fix(body: &str) -> Option<DiagFix> {
+    // Match the body's own line-ending style so the fix never flips a CRLF
+    // file to LF (or vice versa).
+    let nl = if body.contains("\r\n") { "\r\n" } else { "\n" };
     if body.is_empty() {
         return Some(DiagFix {
             description: "Add newline at end of file".to_owned(),
@@ -536,22 +564,33 @@ fn md047_fix(body: &str) -> Option<DiagFix> {
             description: "Add newline at end of file".to_owned(),
             start: body.len(),
             end: body.len(),
-            replacement: "\n".to_owned(),
+            replacement: nl.to_owned(),
         });
     }
-    let trailing = body
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|&&b| b == b'\n')
-        .count();
-    if trailing <= 1 {
+    // Count trailing line terminators, treating each CRLF pair as one.
+    let bytes = body.as_bytes();
+    let mut content_end = bytes.len();
+    let mut terminators = 0usize;
+    while content_end > 0 && bytes[content_end - 1] == b'\n' {
+        content_end -= if content_end >= 2 && bytes[content_end - 2] == b'\r' {
+            2
+        } else {
+            1
+        };
+        terminators += 1;
+    }
+    if terminators <= 1 {
         return None; // MD047 would not have fired.
     }
-    let keep_one_at = body.len() - trailing + 1;
+    // Keep the first terminator after the content, drop the rest.
+    let first_terminator_len = if bytes.get(content_end) == Some(&b'\r') {
+        2
+    } else {
+        1
+    };
     Some(DiagFix {
         description: "Remove extra trailing newlines".to_owned(),
-        start: keep_one_at,
+        start: content_end + first_terminator_len,
         end: body.len(),
         replacement: String::new(),
     })
@@ -559,12 +598,21 @@ fn md047_fix(body: &str) -> Option<DiagFix> {
 
 /// Convert a 1-based (line, column) pair to a 0-based byte offset.
 ///
-/// Columns are 1-based **byte** positions within the line (matching how
-/// upstream rules compute them, e.g. `line.len() - trailing + 1`), so the
-/// walk advances by each character's UTF-8 byte length rather than by one
-/// per character — otherwise any line containing multibyte UTF-8 causes
-/// byte columns to overshoot character columns and the walk never matches.
-fn line_col_to_byte(text: &str, target_line: usize, target_col: usize) -> Option<usize> {
+/// `byte_columns` selects the column unit (see [`rule_uses_byte_columns`]):
+/// when `true`, columns are 1-based **byte** positions within the line
+/// (`line.len() - trailing + 1` style) and the walk advances by each
+/// character's UTF-8 byte length; when `false`, columns are 1-based **char**
+/// positions (`Vec<char>` indices) and the walk advances by one per
+/// character. Using the wrong unit on a multibyte line either drops the fix
+/// (byte target unreachable by char walk) or lands on the wrong byte
+/// (char target overshot by byte walk) — the latter corrupts content, which
+/// is why unverified rules default to the char walk.
+fn line_col_to_byte(
+    text: &str,
+    target_line: usize,
+    target_col: usize,
+    byte_columns: bool,
+) -> Option<usize> {
     let mut cur_line = 1;
     let mut cur_col = 1;
     for (offset, ch) in text.char_indices() {
@@ -575,7 +623,7 @@ fn line_col_to_byte(text: &str, target_line: usize, target_col: usize) -> Option
             cur_line += 1;
             cur_col = 1;
         } else {
-            cur_col += ch.len_utf8();
+            cur_col += if byte_columns { ch.len_utf8() } else { 1 };
         }
     }
     if cur_line == target_line && cur_col == target_col {
@@ -644,7 +692,9 @@ mod tests {
         let text = "café\n";
         // Byte column 6 is the position right after 'é' (byte offset 5,
         // since c=1,a=1,f=1,é=2 bytes -> line is 5 bytes long).
-        assert_eq!(line_col_to_byte(text, 1, 6), Some(5));
+        assert_eq!(line_col_to_byte(text, 1, 6, true), Some(5));
+        // Char column 5 is the same position under the char convention.
+        assert_eq!(line_col_to_byte(text, 1, 5, false), Some(5));
     }
 
     #[test]
@@ -682,6 +732,68 @@ mod tests {
         let fix = d.fix.as_ref().expect("MD009 fix should not be dropped");
         let fixed = apply(body, fix);
         assert_eq!(fixed, "日本語のテキスト\n");
+    }
+
+    // --- Char-column rules (MD034, MD011) must not be corrupted by the
+    // byte-column walk when multibyte UTF-8 precedes the flagged span ---
+
+    #[test]
+    fn md034_fix_correct_on_line_with_multibyte_prefix() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "café http://example.com is a site.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD034")
+            .expect("MD034 should fire on a bare URL");
+        let fix = d.fix.as_ref().expect("MD034 fix should convert");
+        let fixed = apply(body, fix);
+        // The byte-column walk used to eat the space before the URL and
+        // leave a stray fragment: "café<http://example.com>m is a site."
+        assert_eq!(fixed, "café <http://example.com> is a site.\n");
+    }
+
+    #[test]
+    fn md011_fix_correct_on_line_with_multibyte_prefix() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "café (some text)[http://example.com] end.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD011".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD011")
+            .expect("MD011 should fire on a reversed link");
+        let fix = d.fix.as_ref().expect("MD011 fix should convert");
+        let fixed = apply(body, fix);
+        assert_eq!(fixed, "café [some text](http://example.com) end.\n");
+    }
+
+    // --- md047_fix must handle CRLF terminators ---
+
+    #[test]
+    fn md047_fix_crlf_removes_extra_trailing_newlines_in_one_pass() {
+        let body = "body\r\n\r\n\r\n";
+        let fix = md047_fix(body).expect("multiple trailing CRLF should produce a fix");
+        let fixed = apply(body, &fix);
+        assert_eq!(fixed, "body\r\n");
+    }
+
+    #[test]
+    fn md047_fix_crlf_adds_matching_terminator() {
+        let body = "line one\r\nlast line";
+        let fix = md047_fix(body).expect("missing trailing newline should produce a fix");
+        let fixed = apply(body, &fix);
+        assert_eq!(fixed, "line one\r\nlast line\r\n");
+    }
+
+    #[test]
+    fn md047_fix_crlf_single_trailing_newline_is_clean() {
+        assert!(md047_fix("body\r\n").is_none());
     }
 
     // --- H-1b: MD009 must not duplicate the line terminator ---

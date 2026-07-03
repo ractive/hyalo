@@ -409,6 +409,32 @@ Body.
         assert_eq!(doc.properties(), &streamed);
     }
 
+    // --- skip_frontmatter must share the opening-delimiter policy ---
+
+    #[test]
+    fn skip_frontmatter_recognizes_bom_prefixed_opening() {
+        let input = "\u{feff}---\ntitle: Note\n---\nBody.\n";
+        let mut reader = input.as_bytes();
+        let mut first_line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
+        let consumed = skip_frontmatter(&mut reader, &first_line).unwrap();
+        assert_eq!(consumed, 3, "BOM + `---` must open frontmatter");
+        // Reader is positioned at the body.
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut body).unwrap();
+        assert_eq!(body, "Body.\n");
+    }
+
+    #[test]
+    fn skip_frontmatter_rejects_leading_whitespace_opening() {
+        let input = " ---\ntitle: Note\n---\nBody.\n";
+        let mut reader = input.as_bytes();
+        let mut first_line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
+        let consumed = skip_frontmatter(&mut reader, &first_line).unwrap();
+        assert_eq!(consumed, 0, "` ---` must NOT open frontmatter");
+    }
+
     // --- Budget boundary tests for skip_frontmatter ---
 
     fn make_frontmatter_with_n_lines(n: usize) -> String {

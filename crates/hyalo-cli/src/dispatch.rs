@@ -367,11 +367,10 @@ fn inject_ext_file_result(
 }
 
 /// Patch the snapshot index for a list of vault-relative paths that were
-/// modified on disk.  Uses `refresh_entry` to fully re-scan each file
-/// (properties, tags, links, sections, tasks, modified timestamp), then
-/// `refresh_links` to patch the persisted `LinkGraph`'s outbound edges —
-/// `refresh_entry` alone does not touch the graph (see its doc comment),
-/// so callers whose modification rewrites body wikilinks (`links fix
+/// modified on disk.  Uses `refresh_entry_and_links` to re-scan each file
+/// once, refreshing the full entry (properties, tags, links, sections,
+/// tasks, modified timestamp) AND the persisted `LinkGraph`'s outbound
+/// edges — callers whose modification rewrites body wikilinks (`links fix
 /// --apply`, `links auto --apply`) need both or `backlinks`/`find --fields
 /// links` would keep returning pre-mutation results until a full
 /// `create-index` rebuild. Flushes to disk once at the end.
@@ -389,20 +388,11 @@ fn patch_index_for_modified_files(
     };
     let mut dirty = false;
     for rel in modified_files {
-        match idx.refresh_entry(dir, rel) {
+        match idx.refresh_entry_and_links(dir, rel) {
             Ok(true) => dirty = true,
             Ok(false) => {} // not in index, nothing to update
             Err(e) => {
                 eprintln!("warning: could not refresh index entry for {rel}: {e:#}");
-                continue;
-            }
-        }
-        let full_path = dir.join(rel);
-        match idx.refresh_links(&full_path, rel) {
-            Ok(true) => dirty = true,
-            Ok(false) => {} // not in index, nothing to update
-            Err(e) => {
-                eprintln!("warning: could not refresh link graph for {rel}: {e:#}");
             }
         }
     }

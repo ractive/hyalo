@@ -2471,8 +2471,12 @@ fn find_body_start(content: &str) -> usize {
     if let Some(pos) = rest.find("\n---") {
         // Skip past `\n---\n` or `\n---` at end.
         let abs = after_first + pos + 4; // skip \n---
-        // Skip the trailing newline after `---`.
-        if abs < content.len() && content.as_bytes()[abs] == b'\n' {
+        // Skip the terminator after the closing `---` — LF or CRLF, so the
+        // body slice never starts with a stray carriage return on CRLF files.
+        let bytes = content.as_bytes();
+        if bytes.get(abs) == Some(&b'\r') && bytes.get(abs + 1) == Some(&b'\n') {
+            abs + 2
+        } else if bytes.get(abs) == Some(&b'\n') {
             abs + 1
         } else {
             abs
@@ -3383,6 +3387,38 @@ mod tests {
         assert_eq!(result, "AyB");
         assert!(matches!(outcomes[0], FixOutcome::Applied));
         assert!(matches!(outcomes[1], FixOutcome::Applied));
+    }
+
+    #[test]
+    fn apply_body_fixes_adjacent_touching_ranges_both_apply() {
+        // end == start is NOT an overlap (strict inequalities in the
+        // conflict check): [0,2) and [2,4) must both apply.
+        let a = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 0, 2, "AA");
+        let b = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 2, 4, "BB");
+        let (result, outcomes) = apply_body_fixes("wxyz", &[&a, &b]);
+        assert_eq!(result, "AABB");
+        assert!(matches!(outcomes[0], FixOutcome::Applied));
+        assert!(matches!(outcomes[1], FixOutcome::Applied));
+    }
+
+    // --- find_body_start line-ending handling ---
+
+    #[test]
+    fn find_body_start_skips_crlf_after_closing_delimiter() {
+        let content = "---\r\ntitle: T\r\n---\r\nbody line\r\n";
+        let start = find_body_start(content);
+        assert_eq!(
+            &content[start..],
+            "body line\r\n",
+            "body must not start with a stray CR on CRLF files"
+        );
+    }
+
+    #[test]
+    fn find_body_start_bom_prefixed_frontmatter_is_split() {
+        let content = "\u{feff}---\ntitle: T\n---\nbody line\n";
+        let start = find_body_start(content);
+        assert_eq!(&content[start..], "body line\n");
     }
 
     // --- group_severity ---

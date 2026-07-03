@@ -562,7 +562,7 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
 /// (including the opening and closing `---` delimiters). Returns 0 if no frontmatter is present.
 /// The reader is left positioned at the first line after the closing `---`.
 pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<usize> {
-    if first_line.trim() != "---" {
+    if opening_delimiter(first_line).is_none() {
         return Ok(0);
     }
 

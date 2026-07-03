@@ -308,6 +308,13 @@ pub struct SnapshotIndex {
     /// [`SnapshotIndex::set_frontmatter_link_props`]; `None` falls back to
     /// [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
     frontmatter_link_props: Option<Vec<String>>,
+    /// Lazily built case-insensitive path lookup used by incremental link
+    /// refreshes ([`refresh_links`](Self::refresh_links)). Rebuilding it per
+    /// refreshed file would be O(entries × refreshed files) in bulk loops
+    /// (`lint --fix --index`, `links fix --apply`), so it is cached here and
+    /// invalidated whenever the set of indexed paths changes
+    /// ([`rebuild_path_index`](Self::rebuild_path_index)). Not persisted.
+    case_index_cache: Option<CaseInsensitiveIndex>,
 }
 
 impl SnapshotIndex {
@@ -440,12 +447,43 @@ impl SnapshotIndex {
 
         self.graph.remove_source(rel_path);
         if let Some(fl) = file_links {
-            let case_index = self.build_case_index();
-            let site_prefix = self.header.site_prefix.clone();
-            self.graph
-                .insert_links(fl, site_prefix.as_deref(), &case_index);
+            self.insert_graph_links(fl);
         }
 
+        Ok(true)
+    }
+
+    /// Insert a file's outbound links into the graph, using (and lazily
+    /// building) the cached case-insensitive index. The cache is taken out
+    /// and put back so `self.graph` and `self.header` can be borrowed
+    /// alongside it.
+    fn insert_graph_links(&mut self, fl: FileLinks) {
+        let case_index = self
+            .case_index_cache
+            .take()
+            .unwrap_or_else(|| self.build_case_index());
+        self.graph
+            .insert_links(fl, self.header.site_prefix.as_deref(), &case_index);
+        self.case_index_cache = Some(case_index);
+    }
+
+    /// Re-scan `rel_path` once and refresh both its full index entry (like
+    /// [`Self::refresh_entry`]) and the persisted link graph (like
+    /// [`Self::refresh_links`]) — one disk read instead of two for callers
+    /// that need both, e.g. `links fix --apply --index` patching every
+    /// rewritten file.
+    ///
+    /// Returns `Ok(true)` if `rel_path` was found and refreshed, `Ok(false)`
+    /// if it is not in the index (a no-op).
+    pub fn refresh_entry_and_links(&mut self, dir: &Path, rel_path: &str) -> Result<bool> {
+        if !self.path_index.contains_key(rel_path) {
+            return Ok(false);
+        }
+        let file_links = self.rescan_entry(dir, rel_path)?;
+        self.graph.remove_source(rel_path);
+        if let Some(fl) = file_links {
+            self.insert_graph_links(fl);
+        }
         Ok(true)
     }
 
@@ -534,7 +572,12 @@ impl SnapshotIndex {
     }
 
     /// Rebuild the path → index lookup after insertions/removals.
+    ///
+    /// Also drops the cached case-insensitive index: every code path that
+    /// changes the set of indexed paths funnels through here, so this is the
+    /// single invalidation point for [`Self::case_index_cache`].
     fn rebuild_path_index(&mut self) {
+        self.case_index_cache = None;
         self.path_index = self
             .entries
             .iter()
@@ -689,6 +732,7 @@ impl SnapshotIndex {
                     header: data.header,
                     bm25_index: data.bm25_index,
                     frontmatter_link_props: None,
+                    case_index_cache: None,
                 })
             }
             Err(e) => {

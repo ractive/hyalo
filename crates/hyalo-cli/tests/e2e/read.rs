@@ -866,3 +866,55 @@ Second problem section.\n\
 \n"
     );
 }
+
+// ---------------------------------------------------------------------------
+// skip_frontmatter shares the opening-delimiter policy (iter-158 review fix)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_bom_file_shows_body_not_frontmatter() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("bom.md"),
+        b"\xEF\xBB\xBF---\ntitle: Note\nstatus: draft\n---\nBody line one.\nBody line two.\n",
+    )
+    .unwrap();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "bom.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let content = json["results"]["content"].as_str().unwrap();
+    assert!(
+        !content.contains("title: Note"),
+        "frontmatter must not be dumped as body content, got: {content:?}"
+    );
+    assert!(content.contains("Body line one."));
+    assert!(content.contains("Body line two."));
+}
+
+#[test]
+fn read_leading_space_dashes_file_shows_full_content() {
+    // ` ---` never opens frontmatter, so every line is body — nothing may be
+    // silently swallowed as pseudo-frontmatter.
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("lead.md"),
+        b" ---\nsome: body\ntext: here\n---\nreal body line.\n",
+    )
+    .unwrap();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "lead.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let content = json["results"]["content"].as_str().unwrap();
+    assert!(
+        content.contains("some: body") && content.contains("real body line."),
+        "no lines may be swallowed as pseudo-frontmatter, got: {content:?}"
+    );
+}
