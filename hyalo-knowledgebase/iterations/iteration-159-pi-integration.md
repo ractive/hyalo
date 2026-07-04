@@ -48,9 +48,9 @@ Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring
   - [x] Write descriptive commit message
   - [x] Push to remote
 
-- [ ] Create PR on GitHub
-  - [ ] Review diff for any issues
-  - [ ] Ensure all tests pass
+- [x] Create PR on GitHub
+  - [x] Review diff for any issues
+  - [x] Ensure all tests pass
 
 - [ ] Dogfood: Migrate personal pi skills from `~/.claude/skills/` to `~/.pi/skills/`:
   - [x] Create `~/.pi/skills/create-pr/SKILL.md`

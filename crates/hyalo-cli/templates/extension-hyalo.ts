@@ -1,4 +1,4 @@
-import type { ExtensionAPI, Tool, ToolContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolContext } from "@earendil-works/pi-coding-agent";
 
 interface HyaloToolArgs {
   /** The hyalo subcommand (find, read, set, etc.) */
