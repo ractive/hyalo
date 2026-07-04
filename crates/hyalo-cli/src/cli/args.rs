@@ -816,24 +816,29 @@ Repeatable (AND).\n\
     },
     /// Initialize hyalo configuration and optional tool integrations
     #[command(
-        long_about = "Create .hyalo.toml and optionally set up Claude Code integration.\n\n\
+        long_about = "Create .hyalo.toml and optionally set up Claude Code and pi integrations.\n\n\
             Without flags, creates a .hyalo.toml config file.\n\
-            With --claude, also installs the hyalo skill for Claude Code.\n\n\
+            With --claude, also installs the hyalo skill for Claude Code.\n\
+            With --pi, also installs the hyalo skill for pi.\n\n\
             Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo init\n\
             \u{00a0} hyalo --dir kb init\n\
-            \u{00a0} hyalo --dir kb init --claude"
+            \u{00a0} hyalo --dir kb init --claude\n\
+            \u{00a0} hyalo --dir kb init --pi"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
         #[arg(long)]
         claude: bool,
+        /// Set up pi integration (skill + extension)
+        #[arg(long)]
+        pi: bool,
     },
-    /// Remove hyalo configuration and Claude Code integration artifacts
+    /// Remove hyalo configuration and tool integration artifacts
     #[command(
-        long_about = "Remove .hyalo.toml and all Claude Code integration artifacts created by `init`.\n\n\
-            Removes skills, rules, and the managed section from .claude/CLAUDE.md.\n\
+        long_about = "Remove .hyalo.toml and all Claude Code / pi integration artifacts created by `init`.\n\n\
+            Removes skills, rules, and the managed section from .claude/CLAUDE.md, and .pi/ directory.\n\
             Safe to run when artifacts are already absent (idempotent)."
     )]
     Deinit,

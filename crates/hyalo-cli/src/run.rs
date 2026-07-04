@@ -565,7 +565,7 @@ fn run_inner() -> Result<(), AppError> {
     // Reject --count early — init is not a list command.
     if cli.count
         && matches!(
-            cli.command,
+            &cli.command,
             Commands::Init { .. }
                 | Commands::Deinit
                 | Commands::Completion { .. }
@@ -579,9 +579,9 @@ fn run_inner() -> Result<(), AppError> {
         );
         return Err(AppError::Exit(2));
     }
-    if let Commands::Init { claude } = cli.command {
+    if let Commands::Init { claude, pi } = &mut cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        match init_commands::run_init(init_dir, claude) {
+        match init_commands::run_init(init_dir, *claude, *pi) {
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 // Sanitized because RawOutput content may echo raw file text (init/deinit
                 // summaries can include vault-derived strings) that never passes through
@@ -593,7 +593,7 @@ fn run_inner() -> Result<(), AppError> {
             Err(e) => return Err(AppError::Internal(e)),
         }
     }
-    if let Commands::Deinit = cli.command {
+    if let Commands::Deinit = &mut cli.command {
         match init_commands::run_deinit() {
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 // Sanitized because RawOutput content may echo raw file text (init/deinit
@@ -606,14 +606,14 @@ fn run_inner() -> Result<(), AppError> {
             Err(e) => return Err(AppError::Internal(e)),
         }
     }
-    if let Commands::Completion { shell } = cli.command {
+    if let Commands::Completion { shell } = &mut cli.command {
         let mut cmd = Cli::command();
-        clap_complete::generate(shell, &mut cmd, "hyalo", &mut std::io::stdout());
+        clap_complete::generate(*shell, &mut cmd, "hyalo", &mut std::io::stdout());
         return Ok(());
     }
     // `config` inspects CWD directly and does not need normal pipeline setup.
     // Dispatch before config validation (dir-doesn't-exist check) so it always works.
-    if let Commands::Config = cli.command {
+    if let Commands::Config = &mut cli.command {
         // Determine output format (respect --format if given; otherwise default to Text
         // since this command is read-only introspection, not a pipeline command).
         let format = cli.format.unwrap_or_else(|| {
@@ -823,10 +823,10 @@ fn run_inner() -> Result<(), AppError> {
 
     // Resolve --view: load the named view from .hyalo.toml and merge CLI overrides.
     if let Commands::Find {
-        view: Some(ref view_name),
-        ref mut filters,
+        view: Some(view_name),
+        filters,
         ..
-    } = cli.command
+    } = &mut cli.command
     {
         let views = crate::commands::views::load_views(&config_dir);
         if let Some(base) = views.get(view_name) {
@@ -863,10 +863,8 @@ fn run_inner() -> Result<(), AppError> {
     // Skip when --regexp is active — BM25 pattern and regex are mutually exclusive
     // (clap enforces this for CLI args, but a view's pattern bypasses clap).
     if let Commands::Find {
-        ref mut pattern,
-        ref filters,
-        ..
-    } = cli.command
+        pattern, filters, ..
+    } = &mut cli.command
         && pattern.is_none()
         && filters.regexp.is_none()
         && let Some(ref view_pattern) = filters.pattern
@@ -879,14 +877,13 @@ fn run_inner() -> Result<(), AppError> {
 
     // `read` defaults to text output (unlike other commands which default to json).
     // Skip the override when --jq is active (jq needs JSON).
-    let format = if !format_from_cli
-        && jq_filter.is_none()
-        && matches!(cli.command, Commands::Read { .. })
-    {
-        Format::Text
-    } else {
-        format
-    };
+    let format =
+        if !format_from_cli && jq_filter.is_none() && matches!(&cli.command, Commands::Read { .. })
+        {
+            Format::Text
+        } else {
+            format
+        };
     // --count replaces the entire output pipeline, so check its conflicts first.
     if cli.count && jq_filter.is_some() {
         eprintln!(
@@ -1316,9 +1313,9 @@ fn run_inner() -> Result<(), AppError> {
     // subcommand's `-o / --output` field.  Both are synonyms on this subcommand.
     // If both are provided and differ, return a clear user error.
     if let Commands::CreateIndex {
-        ref mut output,
+        output,
         allow_outside_vault: _,
-    } = cli.command
+    } = &mut cli.command
         && let Some(global_path) = cli.index_file.as_ref()
     {
         match output.as_ref() {

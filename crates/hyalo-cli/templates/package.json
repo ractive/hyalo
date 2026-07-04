@@ -1,0 +1,12 @@
+{
+  "name": "hyalo-pi",
+  "version": "0.1.0",
+  "keywords": ["pi-package", "hyalo", "knowledgebase", "markdown", "frontmatter"],
+  "description": "Hyalo integration for pi - tools and skills for working with markdown knowledgebases",
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": [],
+    "themes": []
+  }
+}
