@@ -579,9 +579,9 @@ fn run_inner() -> Result<(), AppError> {
         );
         return Err(AppError::Exit(2));
     }
-    if let Commands::Init { claude } = cli.command {
+    if let Commands::Init { claude, pi } = cli.command {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        match init_commands::run_init(init_dir, claude) {
+        match init_commands::run_init(init_dir, claude, pi) {
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 // Sanitized because RawOutput content may echo raw file text (init/deinit
                 // summaries can include vault-derived strings) that never passes through

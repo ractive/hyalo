@@ -15,6 +15,11 @@ const SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo.md");
 const TIDY_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-tidy.md");
 const RULE_TEMPLATE: &str = include_str!("../../templates/rule-knowledgebase.md");
 
+const PI_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-pi.md");
+const PI_TIDY_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-tidy-pi.md");
+const PI_EXTENSION_CONTENT: &str = include_str!("../../templates/extension-hyalo.ts");
+const PI_PACKAGE_JSON_CONTENT: &str = include_str!("../../templates/package.json");
+
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations.\n\
 Examples: `hyalo find --property status=planned --format text`, `hyalo find \"search text\"`, `hyalo find --property 'title~=pattern'`.\n\
 Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly output.";
@@ -29,18 +34,20 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 // Public command entry point
 // ---------------------------------------------------------------------------
 
-/// Initialize hyalo configuration and optional Claude Code integration.
+/// Initialize hyalo configuration and optional Claude Code and pi integrations.
 ///
 /// - `dir`: explicit value for the `dir` key in `.hyalo.toml`; when `None` the
 ///   function auto-detects a common doc directory.
 /// - `claude`: when `true`, also installs the hyalo and hyalo-tidy skills and
 ///   writes a managed section to `.claude/CLAUDE.md`.
-pub fn run_init(dir: Option<&str>, claude: bool) -> Result<CommandOutcome> {
+/// - `pi`: when `true`, also installs the hyalo and hyalo-tidy skills for pi,
+///   the hyalo extension, and a package.json.
+pub fn run_init(dir: Option<&str>, claude: bool, pi: bool) -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
-    run_init_in(dir, claude, &cwd)
+    run_init_in(dir, claude, pi, &cwd)
 }
 
-fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOutcome> {
+fn run_init_in(dir: Option<&str>, claude: bool, pi: bool, cwd: &Path) -> Result<CommandOutcome> {
     let mut summary = String::new();
 
     // Resolve the directory value once, so we can use it both for .hyalo.toml
@@ -116,102 +123,184 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
         }
     }
 
-    if !claude {
+    if !claude && !pi {
         return Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()));
     }
 
     // ------------------------------------------------------------------
-    // Step 2: write (overwrite) .claude/skills/hyalo/SKILL.md
+    // Claude Code integration steps
     // ------------------------------------------------------------------
-    let skill_path = cwd
-        .join(".claude")
-        .join("skills")
-        .join("hyalo")
-        .join("SKILL.md");
-    let skill_existed = skill_path.exists();
-    let skill_dir = skill_path
-        .parent()
-        .context("skill path has no parent directory")?;
-    fs::create_dir_all(skill_dir)
-        .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
-    fs::write(
-        &skill_path,
-        parameterize_template(SKILL_CONTENT, &dir_value),
-    )
-    .with_context(|| format!("failed to write {}", skill_path.display()))?;
-    if skill_existed {
-        writeln!(summary, "updated  .claude/skills/hyalo/SKILL.md").unwrap();
-    } else {
-        writeln!(summary, "created  .claude/skills/hyalo/SKILL.md").unwrap();
-    }
-
-    // ------------------------------------------------------------------
-    // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
-    // ------------------------------------------------------------------
-    let tidy_skill_path = cwd
-        .join(".claude")
-        .join("skills")
-        .join("hyalo-tidy")
-        .join("SKILL.md");
-    let tidy_skill_existed = tidy_skill_path.exists();
-    let tidy_skill_dir = tidy_skill_path
-        .parent()
-        .context("tidy skill path has no parent directory")?;
-    fs::create_dir_all(tidy_skill_dir)
-        .with_context(|| format!("failed to create directory {}", tidy_skill_dir.display()))?;
-    fs::write(
-        &tidy_skill_path,
-        parameterize_template(TIDY_SKILL_CONTENT, &dir_value),
-    )
-    .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
-    if tidy_skill_existed {
-        writeln!(summary, "updated  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
-    } else {
-        writeln!(summary, "created  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
-    }
-
-    // ------------------------------------------------------------------
-    // Step 4: write (overwrite) .claude/rules/knowledgebase.md
-    // ------------------------------------------------------------------
-    let rules_path = cwd.join(".claude").join("rules").join("knowledgebase.md");
-    let rules_existed = rules_path.exists();
-    let rules_dir = rules_path
-        .parent()
-        .context("rules path has no parent directory")?;
-    fs::create_dir_all(rules_dir)
-        .with_context(|| format!("failed to create directory {}", rules_dir.display()))?;
-    let rule_content = parameterize_rule(RULE_TEMPLATE, &dir_value);
-    fs::write(&rules_path, &rule_content)
-        .with_context(|| format!("failed to write {}", rules_path.display()))?;
-    if rules_existed {
-        writeln!(summary, "updated  .claude/rules/knowledgebase.md").unwrap();
-    } else {
-        writeln!(summary, "created  .claude/rules/knowledgebase.md").unwrap();
-    }
-
-    // ------------------------------------------------------------------
-    // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md
-    // ------------------------------------------------------------------
-    let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
-    let managed_section = format!("{SECTION_START}\n{CLAUDE_MD_HINT}\n{SECTION_END}");
-    if claude_md_path.exists() {
-        let existing = fs::read_to_string(&claude_md_path)
-            .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
-        let (new_content, action) = upsert_managed_section(&existing, &managed_section);
-        fs::write(&claude_md_path, &new_content)
-            .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-        writeln!(summary, "updated  .claude/CLAUDE.md ({action})").unwrap();
-    } else {
-        // Create the file and any parent directories.
-        let claude_dir = claude_md_path
+    if claude {
+        // Step 2: write (overwrite) .claude/skills/hyalo/SKILL.md
+        let skill_path = cwd
+            .join(".claude")
+            .join("skills")
+            .join("hyalo")
+            .join("SKILL.md");
+        let skill_existed = skill_path.exists();
+        let skill_dir = skill_path
             .parent()
-            .context("CLAUDE.md path has no parent directory")?;
-        fs::create_dir_all(claude_dir)
-            .with_context(|| format!("failed to create directory {}", claude_dir.display()))?;
-        let content = format!("{managed_section}\n");
-        fs::write(&claude_md_path, content)
-            .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-        writeln!(summary, "created  .claude/CLAUDE.md (with managed section)").unwrap();
+            .context("skill path has no parent directory")?;
+        fs::create_dir_all(skill_dir)
+            .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
+        fs::write(
+            &skill_path,
+            parameterize_template(SKILL_CONTENT, &dir_value),
+        )
+        .with_context(|| format!("failed to write {}", skill_path.display()))?;
+        if skill_existed {
+            writeln!(summary, "updated  .claude/skills/hyalo/SKILL.md").unwrap();
+        } else {
+            writeln!(summary, "created  .claude/skills/hyalo/SKILL.md").unwrap();
+        }
+
+        // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
+        let tidy_skill_path = cwd
+            .join(".claude")
+            .join("skills")
+            .join("hyalo-tidy")
+            .join("SKILL.md");
+        let tidy_skill_existed = tidy_skill_path.exists();
+        let tidy_skill_dir = tidy_skill_path
+            .parent()
+            .context("tidy skill path has no parent directory")?;
+        fs::create_dir_all(tidy_skill_dir)
+            .with_context(|| format!("failed to create directory {}", tidy_skill_dir.display()))?;
+        fs::write(
+            &tidy_skill_path,
+            parameterize_template(TIDY_SKILL_CONTENT, &dir_value),
+        )
+        .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
+        if tidy_skill_existed {
+            writeln!(summary, "updated  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
+        } else {
+            writeln!(summary, "created  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
+        }
+
+        // Step 4: write (overwrite) .claude/rules/knowledgebase.md
+        let rules_path = cwd.join(".claude").join("rules").join("knowledgebase.md");
+        let rules_existed = rules_path.exists();
+        let rules_dir = rules_path
+            .parent()
+            .context("rules path has no parent directory")?;
+        fs::create_dir_all(rules_dir)
+            .with_context(|| format!("failed to create directory {}", rules_dir.display()))?;
+        let rule_content = parameterize_rule(RULE_TEMPLATE, &dir_value);
+        fs::write(&rules_path, &rule_content)
+            .with_context(|| format!("failed to write {}", rules_path.display()))?;
+        if rules_existed {
+            writeln!(summary, "updated  .claude/rules/knowledgebase.md").unwrap();
+        } else {
+            writeln!(summary, "created  .claude/rules/knowledgebase.md").unwrap();
+        }
+
+        // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md
+        let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
+        let managed_section = format!("{SECTION_START}\n{CLAUDE_MD_HINT}\n{SECTION_END}");
+        if claude_md_path.exists() {
+            let existing = fs::read_to_string(&claude_md_path)
+                .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
+            let (new_content, action) = upsert_managed_section(&existing, &managed_section);
+            fs::write(&claude_md_path, &new_content)
+                .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
+            writeln!(summary, "updated  .claude/CLAUDE.md ({action})").unwrap();
+        } else {
+            // Create the file and any parent directories.
+            let claude_dir = claude_md_path
+                .parent()
+                .context("CLAUDE.md path has no parent directory")?;
+            fs::create_dir_all(claude_dir)
+                .with_context(|| format!("failed to create directory {}", claude_dir.display()))?;
+            let content = format!("{managed_section}\n");
+            fs::write(&claude_md_path, content)
+                .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
+            writeln!(summary, "created  .claude/CLAUDE.md (with managed section)").unwrap();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // pi integration steps
+    // ------------------------------------------------------------------
+    if pi {
+        // Step 6: write (overwrite) .pi/skills/hyalo/SKILL.md
+        let pi_skill_path = cwd
+            .join(".pi")
+            .join("skills")
+            .join("hyalo")
+            .join("SKILL.md");
+        let pi_skill_existed = pi_skill_path.exists();
+        let pi_skill_dir = pi_skill_path
+            .parent()
+            .context("pi skill path has no parent directory")?;
+        fs::create_dir_all(pi_skill_dir)
+            .with_context(|| format!("failed to create directory {}", pi_skill_dir.display()))?;
+        fs::write(
+            &pi_skill_path,
+            parameterize_template(PI_SKILL_CONTENT, &dir_value),
+        )
+        .with_context(|| format!("failed to write {}", pi_skill_path.display()))?;
+        if pi_skill_existed {
+            writeln!(summary, "updated  .pi/skills/hyalo/SKILL.md").unwrap();
+        } else {
+            writeln!(summary, "created  .pi/skills/hyalo/SKILL.md").unwrap();
+        }
+
+        // Step 7: write (overwrite) .pi/skills/hyalo-tidy/SKILL.md
+        let pi_tidy_skill_path = cwd
+            .join(".pi")
+            .join("skills")
+            .join("hyalo-tidy")
+            .join("SKILL.md");
+        let pi_tidy_skill_existed = pi_tidy_skill_path.exists();
+        let pi_tidy_skill_dir = pi_tidy_skill_path
+            .parent()
+            .context("pi tidy skill path has no parent directory")?;
+        fs::create_dir_all(pi_tidy_skill_dir).with_context(|| {
+            format!("failed to create directory {}", pi_tidy_skill_dir.display())
+        })?;
+        fs::write(
+            &pi_tidy_skill_path,
+            parameterize_template(PI_TIDY_SKILL_CONTENT, &dir_value),
+        )
+        .with_context(|| format!("failed to write {}", pi_tidy_skill_path.display()))?;
+        if pi_tidy_skill_existed {
+            writeln!(summary, "updated  .pi/skills/hyalo-tidy/SKILL.md").unwrap();
+        } else {
+            writeln!(summary, "created  .pi/skills/hyalo-tidy/SKILL.md").unwrap();
+        }
+
+        // Step 8: write (overwrite) .pi/extensions/hyalo.ts
+        let pi_extension_path = cwd.join(".pi").join("extensions").join("hyalo.ts");
+        let pi_extension_existed = pi_extension_path.exists();
+        let pi_extension_dir = pi_extension_path
+            .parent()
+            .context("pi extension path has no parent directory")?;
+        fs::create_dir_all(pi_extension_dir).with_context(|| {
+            format!("failed to create directory {}", pi_extension_dir.display())
+        })?;
+        fs::write(&pi_extension_path, PI_EXTENSION_CONTENT)
+            .with_context(|| format!("failed to write {}", pi_extension_path.display()))?;
+        if pi_extension_existed {
+            writeln!(summary, "updated  .pi/extensions/hyalo.ts").unwrap();
+        } else {
+            writeln!(summary, "created  .pi/extensions/hyalo.ts").unwrap();
+        }
+
+        // Step 9: write (overwrite) .pi/package.json
+        let pi_package_path = cwd.join(".pi").join("package.json");
+        let pi_package_existed = pi_package_path.exists();
+        let pi_package_dir = pi_package_path
+            .parent()
+            .context("pi package.json path has no parent directory")?;
+        fs::create_dir_all(pi_package_dir)
+            .with_context(|| format!("failed to create directory {}", pi_package_dir.display()))?;
+        fs::write(&pi_package_path, PI_PACKAGE_JSON_CONTENT)
+            .with_context(|| format!("failed to write {}", pi_package_path.display()))?;
+        if pi_package_existed {
+            writeln!(summary, "updated  .pi/package.json").unwrap();
+        } else {
+            writeln!(summary, "created  .pi/package.json").unwrap();
+        }
     }
 
     Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()))
@@ -221,7 +310,7 @@ fn run_init_in(dir: Option<&str>, claude: bool, cwd: &Path) -> Result<CommandOut
 // Deinit command
 // ---------------------------------------------------------------------------
 
-/// Remove hyalo configuration and Claude Code integration artifacts.
+/// Remove hyalo configuration and Claude Code / pi integration artifacts.
 pub fn run_deinit() -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
     run_deinit_in(&cwd)
@@ -305,7 +394,56 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
     let claude_dir = cwd.join(".claude");
     remove_dir_if_empty(&claude_dir, ".claude/", &mut summary)?;
 
-    // Step 6: Remove .hyalo.toml.
+    // Step 6: Remove pi artifacts
+    // Remove .pi/skills/hyalo/SKILL.md and parent dir if empty.
+    let pi_skill_path = cwd
+        .join(".pi")
+        .join("skills")
+        .join("hyalo")
+        .join("SKILL.md");
+    remove_artifact(&pi_skill_path, ".pi/skills/hyalo/SKILL.md", &mut summary)?;
+    let pi_skill_dir = pi_skill_path
+        .parent()
+        .context("pi skill path has no parent directory")?;
+    remove_dir_if_empty(pi_skill_dir, ".pi/skills/hyalo/", &mut summary)?;
+
+    // Remove .pi/skills/hyalo-tidy/SKILL.md and parent dir if empty.
+    let pi_tidy_skill_path = cwd
+        .join(".pi")
+        .join("skills")
+        .join("hyalo-tidy")
+        .join("SKILL.md");
+    remove_artifact(
+        &pi_tidy_skill_path,
+        ".pi/skills/hyalo-tidy/SKILL.md",
+        &mut summary,
+    )?;
+    let pi_tidy_skill_dir = pi_tidy_skill_path
+        .parent()
+        .context("pi tidy skill path has no parent directory")?;
+    remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut summary)?;
+
+    // Remove .pi/extensions/hyalo.ts
+    let pi_extension_path = cwd.join(".pi").join("extensions").join("hyalo.ts");
+    remove_artifact(&pi_extension_path, ".pi/extensions/hyalo.ts", &mut summary)?;
+    let pi_extension_dir = pi_extension_path
+        .parent()
+        .context("pi extension path has no parent directory")?;
+    remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut summary)?;
+
+    // Remove .pi/package.json
+    let pi_package_path = cwd.join(".pi").join("package.json");
+    remove_artifact(&pi_package_path, ".pi/package.json", &mut summary)?;
+    let pi_package_dir = pi_package_path
+        .parent()
+        .context("pi package.json path has no parent directory")?;
+    remove_dir_if_empty(pi_package_dir, ".pi/", &mut summary)?;
+
+    // Remove .pi/ if empty.
+    let pi_dir = cwd.join(".pi");
+    remove_dir_if_empty(&pi_dir, ".pi/", &mut summary)?;
+
+    // Step 7: Remove .hyalo.toml.
     let toml_path = cwd.join(".hyalo.toml");
     remove_artifact(&toml_path, ".hyalo.toml", &mut summary)?;
 
@@ -988,7 +1126,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // First run
-        let outcome1 = run_init_in(Some("docs"), true, tmp.path()).unwrap();
+        let outcome1 = run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out1) = outcome1 else {
             panic!("expected success");
         };
@@ -997,7 +1135,7 @@ mod tests {
         assert!(out1.contains("created  .claude/rules/knowledgebase.md"));
 
         // Second run — should say "updated", not "created"
-        let outcome2 = run_init_in(Some("docs"), true, tmp.path()).unwrap();
+        let outcome2 = run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out2) = outcome2 else {
             panic!("expected success");
         };
@@ -1013,7 +1151,7 @@ mod tests {
         // Create initial .hyalo.toml
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let outcome = run_init_in(Some("newdir"), false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("newdir"), false, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected success");
         };
@@ -1035,7 +1173,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = run_init_in(Some("newdir"), false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("newdir"), false, false, tmp.path()).unwrap();
         assert!(matches!(outcome, CommandOutcome::RawOutput(_)));
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
@@ -1051,7 +1189,7 @@ mod tests {
 
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let outcome = run_init_in(None, false, tmp.path()).unwrap();
+        let outcome = run_init_in(None, false, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected success");
         };
@@ -1066,7 +1204,7 @@ mod tests {
     fn run_init_rule_uses_detected_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
 
-        let outcome = run_init_in(Some("my-notes"), true, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("my-notes"), true, false, tmp.path()).unwrap();
         assert!(matches!(outcome, CommandOutcome::RawOutput(_)));
 
         let rule_content = fs::read_to_string(
@@ -1152,7 +1290,7 @@ mod tests {
     #[test]
     fn run_init_creates_missing_dir_when_explicit() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_init_in(Some("my-new-docs"), false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("my-new-docs"), false, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected RawOutput");
         };
@@ -1170,7 +1308,7 @@ mod tests {
     fn run_init_does_not_create_dir_when_auto_detected() {
         let tmp = tempfile::TempDir::new().unwrap();
         // No --dir flag, auto-detection falls back to "."
-        let outcome = run_init_in(None, false, tmp.path()).unwrap();
+        let outcome = run_init_in(None, false, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected RawOutput");
         };
@@ -1188,7 +1326,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
 
-        let outcome = run_init_in(Some("docs"), false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("docs"), false, false, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected success");
         };
@@ -1261,7 +1399,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // Set up all artifacts that init --claude would create.
-        run_init_in(Some("docs"), true, tmp.path()).unwrap();
+        run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
 
         let outcome = run_deinit_in(tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
@@ -1309,7 +1447,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // First run with artifacts present.
-        run_init_in(Some("docs"), true, tmp.path()).unwrap();
+        run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
         run_deinit_in(tmp.path()).unwrap();
 
         // Second run — no artifacts; must not error and must say "skipped".
