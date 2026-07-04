@@ -51,6 +51,25 @@ first_only = true
   word (dictionary/stopword heuristic) suggesting it be excluded — the noise
   source here is inherent to titles like "permissions", not vault-specific.
 
+## Prior art (existing exclusion mechanisms)
+
+Per-invocation excludes are widespread; persistent ones have exactly one precedent:
+
+| Mechanism | Commands | Persistent? |
+|-----------|----------|-------------|
+| `--glob '!pattern'` negation | find, lint, mv, set, remove, append (feature-matrix-enforced) | no |
+| `-term` body-query negation | find (BM25) | no |
+| `K!=V`, `!K` property filters | find, `--where-property` on mutations | no |
+| `--exclude-title`, `--exclude-target-glob` | links auto | no |
+| `--ignore-target <substring>` | links fix | no |
+| `.gitignore` respected by discovery | all (file discovery) | yes (file-level) |
+| `lint-rules set <ID> --enabled false` → `[lint]` in `.hyalo.toml` | lint | **yes — the config precedent** |
+
+Design should follow the `lint-rules` precedent for persistence and the
+`exclude_*` naming already used by `links auto` itself. Naming nit while in
+the area: `links fix` calls the same concept `--ignore-target` — consider
+aligning (alias, keep backwards compat).
+
 ## Acceptance criteria
 
 - [ ] `[links.auto] exclude_titles` suppresses matches without any CLI flags
