@@ -7,7 +7,7 @@ tags:
 - cli
 - integration
 - pi
-status: in-progress
+status: completed
 branch: pi-integration
 ---
 
