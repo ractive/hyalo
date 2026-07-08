@@ -1,3 +1,4 @@
+mod broken_pipe;
 mod cli;
 pub mod commands;
 pub mod config;

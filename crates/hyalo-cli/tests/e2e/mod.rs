@@ -3,6 +3,7 @@ mod common;
 mod append;
 mod backlinks;
 mod bm25;
+mod broken_pipe;
 mod completion;
 mod config;
 mod config_dir;

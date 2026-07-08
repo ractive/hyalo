@@ -349,6 +349,7 @@ fn resolve_files_from_for_command(
 
 #[allow(clippy::too_many_lines)]
 pub fn run() {
+    crate::broken_pipe::install();
     match run_inner() {
         Ok(()) => {
             crate::warn::flush_summary();
