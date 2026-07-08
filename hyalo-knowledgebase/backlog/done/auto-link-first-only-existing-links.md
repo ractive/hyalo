@@ -7,7 +7,7 @@ tags:
   - links
   - auto-link
   - bug
-status: planned
+status: completed
 priority: medium
 origin: external-user dogfood 2026-07-04 (third-party vault)
 ---
@@ -47,8 +47,8 @@ current behavior is what the flag's help text arguably promises against:
 
 ## Acceptance criteria
 
-- [ ] File already containing `[[target]]`: `--first-only` emits zero matches for that target in that file
-- [ ] File without an existing link: behavior unchanged (first plain mention linked)
-- [ ] Case-insensitive: existing `[[Fake-Login]]` suppresses mentions of "fake-login" per the vault's case mode
-- [ ] Aliased existing links (`[[target|label]]`) count as existing links to the target
-- [ ] Help text updated to state the semantics explicitly; e2e test for the adjacent-mention case
+- [x] File already containing `[[target]]`: `--first-only` emits zero matches for that target in that file
+- [x] File without an existing link: behavior unchanged (first plain mention linked)
+- [x] Case-insensitive: existing `[[Fake-Login]]` suppresses mentions of "fake-login" per the vault's case mode
+- [x] Aliased existing links (`[[target|label]]`) count as existing links to the target
+- [x] Help text updated to state the semantics explicitly; e2e test for the adjacent-mention case
