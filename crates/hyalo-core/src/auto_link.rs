@@ -15,7 +15,7 @@ use globset::{GlobBuilder, GlobSetBuilder};
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault, match_globs};
 use crate::fs_util::atomic_write;
 use crate::index::{IndexEntry, VaultIndex};
-use crate::links::extract_link_spans_with_original;
+use crate::links::{extract_link_spans_with_original, strip_wikilink_md_suffix};
 use crate::scanner::{
     FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
 };
@@ -394,6 +394,10 @@ pub fn auto_link(
     // 4. Scan each file.
     let mut all_matches: Vec<AutoLinkMatch> = Vec::new();
     let mut scanned_content: HashMap<String, String> = HashMap::new();
+    // Per-file set of link_targets that already have an existing [[wikilink]]
+    // somewhere in that file. Only populated when --first-only is active,
+    // since that's the only consumer (see step 4b).
+    let mut existing_linked_targets: HashMap<String, HashSet<String>> = HashMap::new();
     let scanned = paths_to_scan.len();
 
     for (abs_path, rel_path) in &paths_to_scan {
@@ -415,6 +419,13 @@ pub fn auto_link(
 
         let file_matches = scan_file_for_matches(&content, rel_path, &ac, &patterns_sorted);
 
+        if opts.first_only {
+            let targets = resolve_existing_link_targets(&content, &title_map);
+            if !targets.is_empty() {
+                existing_linked_targets.insert(rel_path.clone(), targets);
+            }
+        }
+
         // Only retain file content when we'll actually need it for writing.
         let has_matches = !file_matches.is_empty();
         all_matches.extend(file_matches);
@@ -425,11 +436,23 @@ pub fn auto_link(
 
     // 4b. Apply --first-only: keep only the lowest-offset match per (source_file, target_title).
     //     Two-pass approach: intern strings as integer IDs to avoid cloning per match,
-    //     then filter using the precomputed keep-mask.
+    //     then filter using the precomputed keep-mask. A target that already has an
+    //     existing [[wikilink]] anywhere in the file has its slot pre-seeded as "seen" —
+    //     the existing link counts as the first mention, so no new match is kept for it.
     if opts.first_only {
         let mut file_ids: HashMap<&str, usize> = HashMap::new();
         let mut target_ids: HashMap<&str, usize> = HashMap::new();
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
+
+        for (file, targets) in &existing_linked_targets {
+            let n = file_ids.len();
+            let fid = *file_ids.entry(file.as_str()).or_insert(n);
+            for target in targets {
+                let n = target_ids.len();
+                let tid = *target_ids.entry(target.as_str()).or_insert(n);
+                seen.insert((fid, tid));
+            }
+        }
 
         let keep: Vec<bool> = all_matches
             .iter()
@@ -459,6 +482,91 @@ pub fn auto_link(
         ambiguous_titles,
         applied: opts.apply,
     })
+}
+
+/// Scan a file's content for existing `[[wikilinks]]` (and `[markdown](links)`)
+/// and resolve each one's target to a known `link_target` (file stem), used to
+/// pre-seed the `--first-only` keep-mask so an existing link counts as the
+/// first mention of its target.
+///
+/// Mirrors the zone-skipping in [`scan_file_for_matches`] for frontmatter,
+/// fenced code blocks, and comment fences (`%%`) — link syntax inside those is
+/// inert. Unlike that function, heading lines are *not* skipped: a link inside
+/// a heading is a real, rendered link.
+fn resolve_existing_link_targets(
+    content: &str,
+    title_map: &HashMap<String, TitleEntry>,
+) -> HashSet<String> {
+    let mut targets = HashSet::new();
+
+    let mut fence = FenceTracker::new();
+    let mut in_comment_fence = false;
+    let mut in_frontmatter = false;
+    let mut frontmatter_done = false;
+    let mut line_num = 0usize;
+
+    for line in content.split('\n') {
+        line_num += 1;
+
+        // ---- Frontmatter handling ----
+        if !frontmatter_done {
+            if line_num == 1 && line.trim() == "---" {
+                in_frontmatter = true;
+                continue;
+            }
+            if in_frontmatter {
+                if line.trim() == "---" {
+                    in_frontmatter = false;
+                    frontmatter_done = true;
+                }
+                continue;
+            }
+            frontmatter_done = true;
+        }
+
+        // ---- Fenced code block ----
+        if fence.process_line(line) {
+            continue;
+        }
+
+        // ---- Comment fence (Obsidian %% blocks) ----
+        if !fence.in_fence() && is_comment_fence(line) {
+            in_comment_fence = !in_comment_fence;
+            continue;
+        }
+        if in_comment_fence {
+            continue;
+        }
+
+        // ---- Strip inline code and inline comments ----
+        let stripped_code = strip_inline_code(line);
+        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        let cleaned_str: &str = cleaned.as_ref();
+
+        for span in extract_link_spans_with_original(cleaned_str, line) {
+            // Resolve the written target the same way plain-text mentions are
+            // resolved: case-insensitive lookup against the title inventory
+            // (titles, stems, aliases). Also try the last path segment as a
+            // stem, so `[[dir/target]]` resolves like `[[target]]` does.
+            //
+            // Markdown links (`[text](target.md)`) keep their `.md` suffix —
+            // `parse_markdown_link` only strips the fragment — while wikilink
+            // targets already had it stripped by `parse_wikilink`. Stripping
+            // it again here is a no-op for wikilinks and required for
+            // markdown links, since `title_map` keys are extension-less.
+            let raw = strip_wikilink_md_suffix(&span.link.target);
+            if let Some(entry) = title_map.get(&raw.to_ascii_lowercase()) {
+                targets.insert(entry.link_target.clone());
+            } else if let Some(stem) = raw.rsplit('/').next()
+                && stem != raw
+                && let Some(entry) = title_map.get(&stem.to_ascii_lowercase())
+            {
+                targets.insert(entry.link_target.clone());
+            }
+        }
+    }
+
+    targets
 }
 
 /// Scan a single file's content for unlinked title mentions, returning all
@@ -1267,6 +1375,286 @@ mod tests {
             alice_matches.len(),
             1,
             "with first_only, expected 1 Alice match"
+        );
+    }
+
+    #[test]
+    fn test_first_only_existing_link_suppresses_new_matches() {
+        // A file that already contains [[alice]] plus a later plain-text
+        // mention: --first-only must emit zero new matches, since the
+        // existing link is the first mention (regression test for the
+        // "the [[fake-login]] envVars block from [[fake-login]]" bug).
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nThe [[alice]] page mentions Alice again in this sentence.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "existing [[alice]] link should suppress the later plain mention, got: {alice_matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_no_existing_link_unaffected() {
+        // A file with no pre-existing link to the target: behavior should be
+        // unchanged from the pre-fix first-only semantics (first plain mention
+        // is still linked, later ones are suppressed).
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nAlice went to the park. Later Alice came back.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert_eq!(
+            alice_matches.len(),
+            1,
+            "without a pre-existing link, the first plain mention should still be linked"
+        );
+    }
+
+    #[test]
+    fn test_first_only_existing_link_case_insensitive() {
+        // An existing [[Fake-Login]] (different case) should still suppress
+        // mentions of "fake-login" — matches the case-insensitive Aho-Corasick
+        // matching used for plain-text mentions.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry(
+                "fake-login.md",
+                vec![("title", Value::String("Fake Login".into()))],
+            ),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(
+            &tmp,
+            "fake-login.md",
+            "---\ntitle: Fake Login\n---\nFake login page.\n",
+        );
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nThe [[Fake-Login]] page and the fake-login flow are related.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "fake-login")
+            .collect();
+        assert!(
+            matches.is_empty(),
+            "existing [[Fake-Login]] link should suppress 'fake-login' mention case-insensitively, got: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_aliased_existing_link_counts() {
+        // An aliased existing link [[alice|A]] still counts as an existing
+        // link to "alice" and should suppress a later plain mention.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nSee [[alice|A]] for details. Alice is also mentioned here.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "aliased existing link [[alice|A]] should suppress the later plain mention, got: {alice_matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_existing_markdown_link_counts() {
+        // A markdown-style existing link [Text](alice.md) keeps its `.md`
+        // suffix through parsing (parse_markdown_link only strips the
+        // fragment) — resolve_existing_link_targets must strip it before
+        // the title_map lookup, or the link is invisible to --first-only.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nSee [Alice](alice.md) for details. Alice is also mentioned here.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "existing markdown link [Alice](alice.md) should suppress the later plain mention, got: {alice_matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_existing_markdown_link_path_form_counts() {
+        // Same as above but with a directory-qualified target
+        // [Text](dir/alice.md) — must fall back to the last path segment
+        // (after stripping .md) to resolve against the bare-stem title_map key.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry(
+                "people/alice.md",
+                vec![("title", Value::String("Alice".into()))],
+            ),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(
+            &tmp,
+            "people/alice.md",
+            "---\ntitle: Alice\n---\nAlice bio.\n",
+        );
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nSee [Alice](people/alice.md) for details. Alice is also mentioned here.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "existing markdown link [Alice](people/alice.md) should suppress the later plain mention, got: {alice_matches:?}"
         );
     }
 
