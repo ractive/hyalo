@@ -424,8 +424,8 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
     remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut summary)?;
 
     // Remove .pi/skills/ if empty (after removing hyalo and hyalo-tidy subdirectories)
-    let pi_skills_dir = cwd.join(".pi").join("skills");
-    remove_dir_if_empty(&pi_skills_dir, ".pi/skills/", &mut summary)?;
+    let pi_skills_parent_dir = cwd.join(".pi").join("skills");
+    remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut summary)?;
 
     // Remove .pi/extensions/hyalo.ts
     let pi_extension_path = cwd.join(".pi").join("extensions").join("hyalo.ts");
