@@ -1986,6 +1986,65 @@ Alice went to the park. Later Alice came back.
 }
 
 #[test]
+fn links_auto_first_only_respects_existing_link_in_same_sentence() {
+    // Regression test: a file that already contains [[fake-login]] plus a
+    // plain-text mention of the same title later in the same sentence must
+    // NOT gain a second link with --first-only — the existing wikilink IS
+    // the first mention. Previously this produced
+    // "the [[fake-login]] envVars block from [[fake-login]]".
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "fake-login.md",
+        md!(r"
+---
+title: Fake Login
+---
+Fake login fixture page.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+Read the [[fake-login]] envVars block from fake-login before continuing.
+"),
+    );
+
+    let results = run_links_auto(tmp.path(), &["--first-only", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    let fake_login_matches: Vec<_> = matches
+        .iter()
+        .filter(|m| {
+            m["file"].as_str() == Some("notes.md")
+                && m["link_target"].as_str() == Some("fake-login")
+        })
+        .collect();
+    assert!(
+        fake_login_matches.is_empty(),
+        "existing [[fake-login]] link should suppress the plain-text mention, got: {fake_login_matches:?}"
+    );
+
+    // --apply should leave the file with exactly one link and the plain
+    // mention untouched (not converted, not duplicated).
+    let apply_results =
+        run_links_auto(tmp.path(), &["--first-only", "--apply", "--format", "json"]);
+    assert_eq!(apply_results["applied"].as_bool(), Some(true));
+    let content = fs::read_to_string(tmp.path().join("notes.md")).unwrap();
+    let link_count = content.matches("[[fake-login").count();
+    assert_eq!(
+        link_count, 1,
+        "should still have exactly one [[fake-login]] link after apply, content: {content}"
+    );
+}
+
+#[test]
 fn links_auto_exclude_target_glob() {
     let tmp = TempDir::new().expect("tempdir creation should succeed");
 

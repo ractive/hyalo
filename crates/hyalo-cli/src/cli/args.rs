@@ -1450,7 +1450,11 @@ pub(crate) enum LinksAction {
             Exclusion zones: frontmatter, fenced code blocks, inline code,\n\
             existing [[wikilinks]] and [markdown](links), headings, comment fences (%%), self-links.\n\n\
             Filtering options:\n\
-            --first-only          Only emit the first mention of each target per source file\n\
+            --first-only          Only emit the first mention of each target per source file. An\n\
+            \u{00a0}                      existing [[wikilink]] (or aliased [[target|label]]) to a target\n\
+            \u{00a0}                      anywhere in the file counts as its first mention, case-insensitively\n\
+            \u{00a0}                      — no new match is emitted for that target in that file even if a\n\
+            \u{00a0}                      plain-text mention appears earlier in the file than the link.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
@@ -1475,7 +1479,9 @@ pub(crate) enum LinksAction {
         /// Titles to exclude from matching (repeatable, case-insensitive)
         #[arg(long)]
         exclude_title: Vec<String>,
-        /// Only emit the first match of each target title per source file
+        /// Only emit the first match of each target title per source file.
+        /// An existing [[wikilink]] to a target anywhere in the file counts
+        /// as its first mention (case-insensitive; aliased links count too).
         #[arg(long)]
         first_only: bool,
         /// Exclude target pages whose vault-relative path matches a glob pattern (repeatable)
