@@ -11,6 +11,7 @@
 #![cfg(unix)]
 
 use std::io::Read;
+use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Command, Stdio};
 
 use super::common::write_md;
@@ -67,4 +68,33 @@ fn find_does_not_panic_when_reader_closes_pipe_early() {
         !stderr.contains("panicked at"),
         "hyalo should not panic when the downstream reader closes the pipe, stderr: {stderr}"
     );
+
+    // Exit status must reflect one of the two non-panic outcomes:
+    // - killed by SIGPIPE at the kernel level (signal 13) — the SIGPIPE-reset path, or
+    // - exited with code 141 (128+SIGPIPE) — the panic-hook backstop path, or
+    // - ran to completion successfully (the reader closed after all output was already written).
+    // A raw exit code 101 (Rust's default panic exit code) would mean the panic
+    // escaped both layers of the fix.
+    let status = output.status;
+    let killed_by_sigpipe = status.signal() == Some(13);
+    let exited_broken_pipe_code = status.code() == Some(broken_pipe_exit_code());
+    let succeeded = status.success();
+    assert!(
+        killed_by_sigpipe || exited_broken_pipe_code || succeeded,
+        "expected success, SIGPIPE-killed (signal 13), or exit code {}, got status: {status:?}, stderr: {stderr}",
+        broken_pipe_exit_code(),
+    );
+    assert_ne!(
+        status.code(),
+        Some(101),
+        "hyalo must not exit with Rust's default panic exit code (101), status: {status:?}, stderr: {stderr}"
+    );
+}
+
+/// The exit code `hyalo`'s panic-hook backstop uses for a broken-pipe write
+/// failure (`hyalo_cli::broken_pipe::BROKEN_PIPE_EXIT_CODE`). Duplicated here
+/// as a literal since e2e tests exercise the built binary as a subprocess and
+/// don't link against the crate's internals.
+fn broken_pipe_exit_code() -> i32 {
+    141
 }

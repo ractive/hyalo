@@ -15,7 +15,7 @@ use globset::{GlobBuilder, GlobSetBuilder};
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault, match_globs};
 use crate::fs_util::atomic_write;
 use crate::index::{IndexEntry, VaultIndex};
-use crate::links::extract_link_spans_with_original;
+use crate::links::{extract_link_spans_with_original, strip_wikilink_md_suffix};
 use crate::scanner::{
     FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
 };
@@ -548,7 +548,13 @@ fn resolve_existing_link_targets(
             // resolved: case-insensitive lookup against the title inventory
             // (titles, stems, aliases). Also try the last path segment as a
             // stem, so `[[dir/target]]` resolves like `[[target]]` does.
-            let raw = span.link.target;
+            //
+            // Markdown links (`[text](target.md)`) keep their `.md` suffix —
+            // `parse_markdown_link` only strips the fragment — while wikilink
+            // targets already had it stripped by `parse_wikilink`. Stripping
+            // it again here is a no-op for wikilinks and required for
+            // markdown links, since `title_map` keys are extension-less.
+            let raw = strip_wikilink_md_suffix(&span.link.target);
             if let Some(entry) = title_map.get(&raw.to_ascii_lowercase()) {
                 targets.insert(entry.link_target.clone());
             } else if let Some(stem) = raw.rsplit('/').next()
@@ -1553,6 +1559,102 @@ mod tests {
         assert!(
             alice_matches.is_empty(),
             "aliased existing link [[alice|A]] should suppress the later plain mention, got: {alice_matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_existing_markdown_link_counts() {
+        // A markdown-style existing link [Text](alice.md) keeps its `.md`
+        // suffix through parsing (parse_markdown_link only strips the
+        // fragment) — resolve_existing_link_targets must strip it before
+        // the title_map lookup, or the link is invisible to --first-only.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nSee [Alice](alice.md) for details. Alice is also mentioned here.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "existing markdown link [Alice](alice.md) should suppress the later plain mention, got: {alice_matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_first_only_existing_markdown_link_path_form_counts() {
+        // Same as above but with a directory-qualified target
+        // [Text](dir/alice.md) — must fall back to the last path segment
+        // (after stripping .md) to resolve against the bare-stem title_map key.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry(
+                "people/alice.md",
+                vec![("title", Value::String("Alice".into()))],
+            ),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(
+            &tmp,
+            "people/alice.md",
+            "---\ntitle: Alice\n---\nAlice bio.\n",
+        );
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nSee [Alice](people/alice.md) for details. Alice is also mentioned here.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "existing markdown link [Alice](people/alice.md) should suppress the later plain mention, got: {alice_matches:?}"
         );
     }
 
