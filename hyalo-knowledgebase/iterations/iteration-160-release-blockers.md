@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 160 — Release blockers: lint-rules panic + links fix frontmatter no-op"
 date: 2026-07-10
-status: in-progress
+status: completed
 branch: iter-160/release-blockers
 tags:
   - iteration
