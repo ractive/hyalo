@@ -4,7 +4,16 @@
 # Runs automatically in the release workflow as a quality gate.
 
 [advisories]
-ignore = []
+ignore = [
+    # bincode 1.x is unmaintained; pulled in via comrak -> syntect (syntax
+    # highlighting caches). No safe upgrade on the syntect 5.x line; not
+    # exposed to untrusted input in our usage. Mirrors cargo-audit, which
+    # reports unmaintained as a warning, not an error.
+    "RUSTSEC-2025-0141",
+    # yaml-rust is unmaintained; same comrak -> syntect dependency chain,
+    # used only to parse syntect's bundled theme/syntax definitions.
+    "RUSTSEC-2024-0320",
+]
 
 [licenses]
 allow = [
@@ -22,6 +31,14 @@ confidence-threshold = 0.8
 
 [licenses.private]
 ignore = true
+
+# mdbook is MPL-2.0 (file-level weak copyleft). We consume it unmodified as a
+# library dependency of mdbook-lint-core; MPL obligations attach to the MPL'd
+# source files themselves, which remain available upstream. Scoped exception
+# instead of a blanket MPL-2.0 allow so new MPL deps still get flagged.
+[[licenses.exceptions]]
+name = "mdbook"
+allow = ["MPL-2.0"]
 
 [bans]
 multiple-versions = "warn"
