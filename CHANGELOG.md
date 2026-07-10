@@ -1,8 +1,59 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 — 2026-07-10
 
-### Fixed
+### Highlights since 2026-06 (iter-149 … iter-160, PR #186)
+
+#### Fixed
+
+- **iter-160 (CRITICAL)**: `lint-rules set --severity/--enabled` no longer
+  panics (SIGABRT) when `.hyalo.toml` carries `lint` as a non-table scalar —
+  clean JSON error, exit 1, config file untouched.
+- **iter-160 (HIGH)**: `links fix --apply` now rewrites `[[wikilinks]]` inside
+  frontmatter link properties. Previously frontmatter fixes were reported as
+  applied but never written, so fix loops never converged. The JSON envelope
+  gains `applied_fixes` / `unapplied` / `unapplied_fixes`, all derived from
+  what actually landed on disk; BOM-prefixed files are handled.
+- **PR #186**: `hyalo … | head` exits quietly on a broken pipe (SIGPIPE reset
+  on Unix + panic-hook backstop, exit 141) instead of panicking.
+- **PR #186**: `links auto --first-only` treats an existing `[[wikilink]]` or
+  `[markdown](link)` to a target as that target's first mention — plain-text
+  mentions after an existing link are no longer double-linked.
+- **iter-158** hardening (full-codebase review): BOM/leading-whitespace
+  frontmatter corruption on `set`/`remove`/`append`; `lint --fix`
+  line/column→byte conversion and non-atomic body writes; `mv` vault escape
+  through a symlinked destination; missing file-size caps on `lint`/`read`;
+  non-JSON error output under `--format json`; snapshot-index link-graph
+  corruption on mutation; BM25 ranking divergence between indexed and scan
+  paths; `task toggle --line` mutating checkbox lines inside code fences.
+- **iter-152**: frontmatter exceeding the size budget produces a clear
+  diagnostic instead of silently dropping the file from all queries.
+- **iter-153**: unicode/emoji tags written by `set`/`append` are queryable
+  via `find --tag` (write/query symmetry).
+- **iter-154 / iter-149**: `mv` and `new` patch an existing snapshot index in
+  place instead of leaving it stale.
+
+#### Added
+
+- **iter-159**: `hyalo init --pi` installs pi skill artifacts
+  (`.pi/skills/{hyalo,hyalo-tidy}`, `.pi/extensions/hyalo.ts`,
+  `.pi/package.json`); `hyalo deinit` removes them.
+- **iter-155**: `datetime` schema property type
+  (`YYYY-MM-DDThh:mm:ss`), with `$today` expansion in defaults.
+- **iter-156**: `required` properties now reject empty values (`[]`, `~`,
+  `""`) — a required `tags` must be non-empty, no separate knob needed.
+
+#### Performance
+
+- **iter-157**: the wikilink stem map is lazy and index-seeded — indexed
+  queries no longer walk the vault on every invocation (MDN `summary`:
+  2.9 s → 0.6 s on a 114 MB index).
+- **iter-150**: link-handling refactor unifying wikilink written-form
+  preservation across `mv`/`links fix`.
+
+### Earlier 0.16.0 development (up to iter-148)
+
+#### Fixed
 
 - **iter-148** (NEW-3): `--files-from` now correctly strips a multi-segment
   `--dir` prefix from repo-relative paths when `--dir` is passed explicitly on
@@ -16,7 +67,7 @@
   prepended (highest priority) rather than appended, so it is visible on real
   large vaults like MDN where health-hint pressure is highest.
 
-### Changed
+#### Changed
 
 - **iter-148** (NEW-5): `hyalo summary --format json` no longer duplicates the
   `dir` field inside `results`. It is now present only at the top-level
@@ -27,7 +78,7 @@
   sentence. Previously only `--glob` was mentioned; the flag itself already
   worked.
 
-### Added
+#### Added
 
 - **iter-147**: Hardened `--files-from` on `task toggle` / `task set`.
   `--line` is now rejected at clap parse time when combined with
@@ -46,7 +97,7 @@
   single-file policy). `--glob` is explicitly rejected with a clear error
   for these commands.
 
-### Changed
+#### Changed
 
 - **iter-146**: `hyalo --version` now includes the git short-sha and commit
   date — e.g. `hyalo 0.16.0 (abc123def456 2026-05-26)`. A `+dirty` suffix is
@@ -73,7 +124,7 @@
   Both hints count toward the existing `MAX_HINTS` cap and are suppressed
   by `--no-hints` like all other hints.
 
-### Changed
+#### Changed
 
 - **iter-143**: New `hyalo lint` hint — when SCHEMA violations land on a file
   with a declared `type:`, `hyalo types show <T>` is surfaced as the
@@ -88,7 +139,7 @@
   `<N> input path(s) were outside the vault`. Prepended so the `MAX_HINTS`
   cap doesn't crowd them out behind generic next-step hints.
 
-### Fixed
+#### Fixed
 
 - **iter-143**: `--index --files-from` now consults the snapshot for
   membership instead of falling through to `is_file()`. Paths that exist on
@@ -132,7 +183,7 @@
   (results is an object) they are inserted directly; for `find` (results was a bare array)
   the array is promoted to `{"files": [...], "files_missing": N, ...}`.
 
-### Added
+#### Added
 
 - **Quality-gate xtask** (`cargo run -p xtask -- check-ac-fidelity | check-feature-fanout | check-help-drift`): three PR-time guards that catch partial implementations (AC-fidelity), cross-command flag inconsistency (feature-fanout matrix), and help-text drift before merge. Wired into a new `quality-gates.yml` CI workflow.
 
@@ -160,9 +211,9 @@
   sections, all values `TBD` / type-appropriate empties). Designed to produce a
   file that fails lint — the lint loop is the agent feedback mechanism.
 
-## 0.16.0 — 2026-05-23
+### Earlier 0.16.0 development (up to 2026-05-23)
 
-### Breaking changes
+#### Breaking changes
 
 - The hybrid `--index [=PATH]` flag has been split into two orthogonal flags:
   - `--index` is now a pure boolean; no value accepted.
@@ -184,7 +235,7 @@
   (integer) instead of `skipped` (array). This is a breaking change for
   consumers that parse the JSON output.
 
-### Added
+#### Added
 
 - `properties rename --dry-run` and `tags rename --dry-run` — preview which
   files would be modified without writing to disk.
@@ -211,7 +262,7 @@
 - Security: snapshot index files larger than 512 MB are rejected to prevent
   OOM from crafted files.
 
-### Changed
+#### Changed
 
 - `--index` semantics: bare `--index` now unambiguously uses `.hyalo-index`
   in the vault directory. Use `--index-file <PATH>` for a non-default path.
@@ -221,7 +272,7 @@
   the snapshot index. See [decision-log DEC-042] and
   `research/miri-unsafe-audit.md`.
 
-### Fixed
+#### Fixed
 
 - `hyalo backlinks <target.md>` now finds incoming short-form `[[basename]]`
   wikilinks that unambiguously resolve to the target — previously they were
@@ -237,7 +288,7 @@
   the on-disk filename as `LinkCaseMismatch` (was `ShortFormStemMismatch`).
   Same user intent — fix the casing — and now consistent across platforms.
 
-### Internal
+#### Internal
 
 - Miri scaffolding: `justfile` recipes (`just miri`, `just miri-filter`,
   `just miri-all`) and `#[cfg(not(miri))]` gates around `rayon::par_iter`
