@@ -4,13 +4,14 @@
 
 ### Fixed
 
-- `--version` in released binaries reported a stale commit sha/date (v0.16.0
-  shipped showing a June commit): a restored CI cache carried an old
-  build-script output whose mtime beat the fresh checkout, so cargo skipped
-  `build.rs`. Release builds now inject `GIT_COMMIT`/`GIT_COMMIT_DATE`
-  (hermetic provenance path, `rerun-if-env-changed` forces the build script
-  past stale caches), with `Cross.toml` passthrough for containerized cross
-  builds.
+- Release builds now inject `GIT_COMMIT`/`GIT_COMMIT_DATE` (the hermetic
+  provenance path in `build.rs`; `rerun-if-env-changed` forces the build
+  script past stale caches), with `Cross.toml` passthrough for containerized
+  cross builds. Correction: this was released as a fix for v0.16.0 binaries
+  reporting a stale June sha, but the shipped v0.16.0 binaries were verified
+  correct after the fact — the report traced to a PATH-shadowed local
+  `cargo install` binary. The hardening stands as prevention; the shell-out
+  path remains the fallback for local builds.
 
 ### Internal
 
