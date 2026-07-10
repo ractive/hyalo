@@ -178,7 +178,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
         run: |
           output=$(cargo publish --package hyalo-core --locked 2>&1) && exit 0
-          if echo "$output" | grep -q 'already uploaded'; then
+          if echo "$output" | grep -qE 'already (uploaded|exists)'; then
             echo "hyalo-core already published, skipping."
           else
             echo "$output" >&2
@@ -200,7 +200,7 @@ jobs:
               exit 0
             fi
             echo "$output"
-            if echo "$output" | grep -q 'already uploaded'; then
+            if echo "$output" | grep -qE 'already (uploaded|exists)'; then
               echo "hyalo-mdlint already published, skipping."
               exit 0
             fi
