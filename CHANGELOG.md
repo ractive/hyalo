@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.16.1 — 2026-07-10
+
+### Fixed
+
+- `--version` in released binaries reported a stale commit sha/date (v0.16.0
+  shipped showing a June commit): a restored CI cache carried an old
+  build-script output whose mtime beat the fresh checkout, so cargo skipped
+  `build.rs`. Release builds now inject `GIT_COMMIT`/`GIT_COMMIT_DATE`
+  (hermetic provenance path, `rerun-if-env-changed` forces the build script
+  past stale caches), with `Cross.toml` passthrough for containerized cross
+  builds.
+
+### Internal
+
+- Release pipeline hardening from the v0.16.0 rollout: `hyalo-mdlint` is now
+  published to crates.io (between `hyalo-core` and `hyalo-cli`), duplicate
+  publishes are treated as success ("already exists"), a per-target
+  `rust-cache` key stops cross containers restoring host-glibc build scripts,
+  and a manually-dispatchable `publish-crates.yml` can resume a partial
+  crates.io publish without re-running the release matrix.
+
 ## 0.16.0 — 2026-07-10
 
 ### Highlights since 2026-06 (iter-149 … iter-160, PR #186)
