@@ -185,6 +185,39 @@ jobs:
             exit 1
           fi
 
+      - name: Publish hyalo-mdlint to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+        run: |
+          set -euo pipefail
+          max_attempts=10
+          delay=15
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "Publishing hyalo-mdlint (attempt $attempt/$max_attempts)..."
+            if output=$(cargo publish --package hyalo-mdlint --locked 2>&1); then
+              echo "$output"
+              echo "hyalo-mdlint published successfully."
+              exit 0
+            fi
+            echo "$output"
+            if echo "$output" | grep -q 'already uploaded'; then
+              echo "hyalo-mdlint already published, skipping."
+              exit 0
+            fi
+            if echo "$output" | grep -qiE 'failed to select a version|no matching package named|depends on'; then
+              if [ "$attempt" -eq "$max_attempts" ]; then
+                echo "ERROR: giving up after $max_attempts attempts" >&2
+                exit 1
+              fi
+              echo "Index not yet updated, waiting ${delay}s..."
+              sleep "$delay"
+              delay=$((delay * 2))
+            else
+              echo "ERROR: cargo publish failed with a non-index error" >&2
+              exit 1
+            fi
+          done
+
       - name: Publish hyalo-cli to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
