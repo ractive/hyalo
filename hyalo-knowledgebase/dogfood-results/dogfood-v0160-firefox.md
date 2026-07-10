@@ -6,10 +6,10 @@ status: active
 tags: [dogfooding, iter-152, iter-153, iter-154, iter-155, iter-156]
 related:
   - "[[dogfood-results/dogfood-v0160-iter-150-crazy]]"
-  - "[[iterations/done/iteration-152-frontmatter-size-budget]]"
+  - "[[iterations/iteration-152-frontmatter-size-budget]]"
   - "[[iterations/done/iteration-153-unicode-tag-symmetry]]"
   - "[[iterations/done/iteration-154-mv-index-patch]]"
-  - "[[iterations/done/iteration-155-datetime-type]]"
+  - "[[iterations/iteration-155-datetime-type]]"
   - "[[iterations/done/iteration-156-drop-no-tags-warning]]"
 ---
 
@@ -117,7 +117,7 @@ case-insensitive / Obsidian short-form wikilink resolution. Every CLI
 invocation paid the ~2.7 s walk on a 2621-file tree, even commands that never
 resolve a wikilink.
 
-[[iterations/done/iteration-157-lazy-stem-map]] fixed this in two parts:
+[[iterations/iteration-157-lazy-stem-map]] fixed this in two parts:
 
 - **Part A** — `maybe_case_index` gained a `needs_stem_map: bool` parameter
   computed inline at each of the four call sites (Find, Summary, Links, Views)
@@ -296,7 +296,7 @@ whether a streamable / partial-load format pays off.
 Two HIGH/MEDIUM open bugs from the prior report are gone. iter-155 and iter-156
 both work end-to-end on synthetic schemas.
 
-**F-1 was diagnosed and fixed in [[iterations/done/iteration-157-lazy-stem-map]]
+**F-1 was diagnosed and fixed in [[iterations/iteration-157-lazy-stem-map]]
 during this dogfood session.** The remaining new findings are all UX-flavored —
 none of them are correctness bugs.
 
