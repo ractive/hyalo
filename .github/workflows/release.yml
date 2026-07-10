@@ -85,6 +85,13 @@ jobs:
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # Without a per-target key every matrix job shares one cache (same
+          # github.job + same lockfile hash), and the cross-container builds
+          # restore host-glibc build-script binaries from the native x86_64
+          # job — which then fail inside the older-glibc cross image with
+          # "version `GLIBC_2.28' not found".
+          key: ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.cross

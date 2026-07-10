@@ -626,6 +626,13 @@ Body
 ///
 /// BUG-3 regression test.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the write-budget refusal needs a >64 KiB property value in one \
+              argument, which exceeds Windows' 32 KiB process command-line \
+              limit — the spawn fails before hyalo runs (users hit the same \
+              wall, so the path is untestable AND unreachable there)"
+)]
 fn bug_iter149_3_set_over_budget_refused() {
     let tmp = TempDir::new().unwrap();
     write_md(
@@ -696,6 +703,13 @@ Body
 
 /// `hyalo append` with an over-budget value must also be rejected.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the write-budget refusal needs a >64 KiB property value in one \
+              argument, which exceeds Windows' 32 KiB process command-line \
+              limit — the spawn fails before hyalo runs (users hit the same \
+              wall, so the path is untestable AND unreachable there)"
+)]
 fn bug_iter149_3_append_over_budget_refused() {
     let tmp = TempDir::new().unwrap();
     write_md(
