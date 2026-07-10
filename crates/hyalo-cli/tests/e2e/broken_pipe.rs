@@ -33,6 +33,12 @@ fn setup_many_files(dir: &std::path::Path) {
 }
 
 #[test]
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "aarch64"),
+    ignore = "needs a raw std::process spawn (real OS pipe with an early-closing \
+              reader), which bypasses the cross/qemu target runner in the aarch64 \
+              release matrix and cannot exec the target-arch binary"
+)]
 fn find_does_not_panic_when_reader_closes_pipe_early() {
     let tmp = tempfile::tempdir().unwrap();
     setup_many_files(tmp.path());

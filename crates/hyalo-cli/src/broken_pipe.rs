@@ -120,16 +120,22 @@ mod tests {
 
     #[test]
     fn recognizes_stdout_broken_pipe_message() {
-        assert!(is_broken_pipe_panic(
-            "failed printing to stdout: Broken pipe (os error 32)"
-        ));
+        // Build the message from the running platform's own code list so this
+        // passes on Unix (32) and Windows (109/232) alike.
+        for code in BROKEN_PIPE_OS_ERROR_CODES {
+            assert!(is_broken_pipe_panic(&format!(
+                "failed printing to stdout: Broken pipe (os error {code})"
+            )));
+        }
     }
 
     #[test]
     fn recognizes_stderr_broken_pipe_message() {
-        assert!(is_broken_pipe_panic(
-            "failed printing to stderr: Broken pipe (os error 32)"
-        ));
+        for code in BROKEN_PIPE_OS_ERROR_CODES {
+            assert!(is_broken_pipe_panic(&format!(
+                "failed printing to stderr: Broken pipe (os error {code})"
+            )));
+        }
     }
 
     #[test]

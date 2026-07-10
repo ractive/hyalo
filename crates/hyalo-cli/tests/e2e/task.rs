@@ -1149,17 +1149,15 @@ fn task_toggle_files_from_list_file() {
 
 #[test]
 fn task_toggle_files_from_stdin() {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
     let tmp = tempfile::tempdir().unwrap();
     setup_bulk_file(&tmp);
 
-    // Pass file list via stdin using "-" as the source.
-    // Use std::process::Command directly since assert_cmd::Command doesn't
-    // expose stdin piping.
-    let hyalo_bin = assert_cmd::cargo::cargo_bin("hyalo");
-    let mut child = Command::new(&hyalo_bin)
+    // Pass file list via stdin using "-" as the source. assert_cmd's
+    // write_stdin also keeps the spawn behind the CARGO_TARGET_*_RUNNER that
+    // cross/qemu configures in the aarch64 release matrix — a raw
+    // std::process::Command spawn bypasses the runner and fails there.
+    let output = assert_cmd::Command::cargo_bin("hyalo")
+        .unwrap()
         .args([
             "--dir",
             tmp.path().to_str().unwrap(),
@@ -1171,14 +1169,9 @@ fn task_toggle_files_from_stdin() {
             "--section",
             "Tasks",
         ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .write_stdin("bulk.md\n")
+        .output()
         .unwrap();
-
-    child.stdin.take().unwrap().write_all(b"bulk.md\n").unwrap();
-    let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 

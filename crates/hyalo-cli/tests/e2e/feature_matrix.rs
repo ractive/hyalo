@@ -5,7 +5,6 @@
 //! JSON envelope has the expected counter keys under `.results`.
 
 use super::common::{md, write_md};
-use std::io::Write as _;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -52,22 +51,7 @@ Some content.
 
 /// Run `hyalo --dir <dir> <args...> --format json` with stdin input and return parsed JSON.
 fn run_with_stdin(dir: &std::path::Path, cmd_args: &[&str], stdin_data: &str) -> serde_json::Value {
-    use std::process::Stdio;
-
-    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("hyalo"))
-        .args(["--no-hints", "--dir", dir.to_str().unwrap()])
-        .args(cmd_args)
-        .args(["--format", "json"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn hyalo");
-
-    if let Some(mut stdin) = child.stdin.take() {
-        write!(stdin, "{stdin_data}").unwrap();
-    }
-    let out = child.wait_with_output().expect("failed to wait for hyalo");
+    let out = run_mutation_with_stdin(dir, cmd_args, stdin_data);
     assert!(
         out.status.success(),
         "hyalo exited non-zero\nstdout: {}\nstderr: {}",
@@ -83,28 +67,25 @@ fn run_with_stdin(dir: &std::path::Path, cmd_args: &[&str], stdin_data: &str) ->
     })
 }
 
-/// Run a mutation command (set/remove/append) with stdin and return exit status (not JSON).
+/// Run a command with `stdin_data` piped in and return the raw output.
+///
+/// Goes through `assert_cmd::Command` (not raw `std::process::Command`)
+/// because assert_cmd honors the `CARGO_TARGET_<TRIPLE>_RUNNER` configured by
+/// cross/qemu in the aarch64 release matrix — a raw spawn of the target-arch
+/// binary bypasses the runner and fails with `Exec format error` there.
 fn run_mutation_with_stdin(
     dir: &std::path::Path,
     cmd_args: &[&str],
     stdin_data: &str,
 ) -> std::process::Output {
-    use std::process::Stdio;
-
-    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("hyalo"))
+    assert_cmd::Command::cargo_bin("hyalo")
+        .expect("hyalo binary")
         .args(["--no-hints", "--dir", dir.to_str().unwrap()])
         .args(cmd_args)
         .args(["--format", "json"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn hyalo");
-
-    if let Some(mut stdin) = child.stdin.take() {
-        write!(stdin, "{stdin_data}").unwrap();
-    }
-    child.wait_with_output().expect("failed to wait for hyalo")
+        .write_stdin(stdin_data)
+        .output()
+        .expect("failed to run hyalo")
 }
 
 // ---------------------------------------------------------------------------

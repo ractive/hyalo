@@ -74,8 +74,11 @@ fn resolve_provenance() -> (String, String) {
         _ => return (String::new(), String::new()),
     };
 
-    let date = match run_git(&["show", "-s", "--format=%cs", "HEAD"]) {
-        Some(s) if !s.is_empty() => s,
+    // `--date=short --format=%cd` instead of `%cs`: `%cs` was only added in
+    // git 2.25, and older gits (e.g. inside cross build containers) echo the
+    // unknown specifier literally, baking "%cs" into --version output.
+    let date = match run_git(&["show", "-s", "--date=short", "--format=%cd", "HEAD"]) {
+        Some(s) if is_iso_date(&s) => s,
         _ => return (String::new(), String::new()),
     };
 
@@ -88,6 +91,20 @@ fn resolve_provenance() -> (String, String) {
     let sha = if dirty { format!("{sha}+dirty") } else { sha };
 
     (sha, date)
+}
+
+/// `YYYY-MM-DD` shape check — anything else (old-git literal `%cd`, locale
+/// formats) degrades to the bare `hyalo <semver>` form instead of leaking
+/// garbage into `--version`.
+fn is_iso_date(s: &str) -> bool {
+    s.len() == 10
+        && s.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
 }
 
 fn run_git(args: &[&str]) -> Option<String> {
