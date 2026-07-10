@@ -21,9 +21,12 @@ This iteration turns them on for hyalo, following the pattern already
 validated in hoppy (`hoppy-cli/Cargo.toml`'s `[package.metadata.deb]` /
 `[package.metadata.generate-rpm]`).
 
-hyalo ships no shell completions and no man pages, so — unlike hoppy — there
-is no `pre-package-command` needed and no completions/man asset lines in the
-package metadata. Packages ship just the binary plus `LICENSE`/`README.md`.
+hyalo has a `hyalo completion <shell>` subcommand (clap_complete) that the
+release pipeline never packaged. This iteration also fixes that: a
+`pre-package-command` generates bash/zsh/fish completions, ships them in the
+archives (`extra-archive-paths`), and installs them via deb/rpm asset lines
+(hoppy's path conventions). No man pages — hyalo has no clap_mangen and man
+pages are explicitly out of scope for now.
 
 ## Goal
 
@@ -37,6 +40,12 @@ release flow.
 - [x] Add `[package.metadata.deb]` and `[package.metadata.generate-rpm]` to
       `crates/hyalo-cli/Cargo.toml` (binary `hyalo`; assets: binary +
       LICENSE + README only, no completions/man)
+- [x] Package shell completions: `pre-package-command` generates
+      bash/zsh/fish via `hyalo completion` (host build fallback for cross
+      targets), `extra-archive-paths: completions`, and completion asset
+      lines in both package metadata sections; verified locally via
+      `cargo deb`/`cargo generate-rpm` (deb lists all three completion
+      files at hoppy-convention paths)
 - [x] Enable `enable-linux-packages: true`, `linux-package-crate: hyalo-cli`,
       and `cloudsmith-repo: ractive/ractive-pkgs` in
       `.github/workflows/release.yml`
