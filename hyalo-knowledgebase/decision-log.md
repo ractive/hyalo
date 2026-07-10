@@ -685,7 +685,9 @@ its cargo-workspace support is weak and all three repos publish 2–3 crates
 change release-workflows, let its selftest validate, tag a new version via
 `gh release create`, then bump the `@vX.Y.Z` pin in the callers. Before
 merging a caller change, run the dry-run dispatch on the branch
-(`gh workflow run release.yml --ref <branch>`); it caught four real bugs
+(`gh workflow run release.yml --ref <branch>`); it caught five real bugs
 during the migration (multi-line pre-package-command flattening, cargo run
 --bin ambiguity, linux-packages binary path, hoppy's Windows-only test
-stack overflow) that lint and the fixture selftest could not.
+stack overflow, hoppy's debug xtask man-page generation overflowing the
+Windows stack) that lint and the fixture selftest could not. All three
+repos' dry-runs were green on v0.1.3 before merge.

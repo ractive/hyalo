@@ -154,7 +154,11 @@ Phase 2 was implemented first, same day (see [[decision-log]] DEC-048):
   SBOM coverage regression (ff-rdp ships two crate SBOMs → `sbom-packages`
   input), multi-line `pre-package-command` flattening (→ `eval`),
   `cargo run -p` ambiguity for multi-binary packages (→ `--bin`), and
-  linux-packages binary path (→ exported `BIN_PATH`).
+  linux-packages binary path (→ exported `BIN_PATH`). hoppy's man-page
+  generation additionally had to stay off Windows (debug xtask overflows
+  the 1 MB MSVC stack — parity with its old pipeline).
+- Final verification: dry-run releases green on v0.1.3 for all three
+  repos (hyalo run 29125077604, ff-rdp 29125085623, hoppy 29126525364).
 - Migration PRs (each with a `workflow_dispatch` dry-run trigger):
   hyalo [#188](https://github.com/ractive/hyalo/pull/188),
   hoppy [#91](https://github.com/ractive/hoppy/pull/91),
