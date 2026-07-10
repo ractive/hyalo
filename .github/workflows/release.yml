@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   release:
-    uses: ractive/release-workflows/.github/workflows/release.yml@v0.1.1
+    uses: ractive/release-workflows/.github/workflows/release.yml@v0.1.2
     secrets: inherit
     with:
       bin-name: hyalo
