@@ -110,6 +110,11 @@ pub fn links_fix(
     let ambiguous_count = ambiguous.len();
 
     let mut modified_files = Vec::new();
+    // Fixes that were part of the plan but produced no on-disk change (e.g. a
+    // frontmatter occurrence whose text no longer matched what detection saw).
+    // Empty in dry-run mode: nothing has been attempted yet, so nothing can
+    // be reported as unapplied.
+    let mut unapplied_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
 
     if !dry_run {
         // Merge broken-link fixes and case-mismatch fixes into a single batch
@@ -119,14 +124,50 @@ pub fn links_fix(
         let mut all_fixes = fix_report.fixes.clone();
         all_fixes.extend(case_mismatches.iter().cloned());
         if !all_fixes.is_empty() {
-            apply_fixes(dir, &all_fixes, site_prefix)?;
+            let (plans, unapplied) = apply_fixes(dir, &all_fixes, site_prefix)?;
+            unapplied_fixes = unapplied;
 
-            // Collect unique modified files for the caller to patch the index.
-            let deduped: std::collections::HashSet<&str> =
-                all_fixes.iter().map(|f| f.source.as_str()).collect();
-            modified_files = deduped.into_iter().map(str::to_owned).collect();
+            // Only files that actually received a rewrite are "modified" —
+            // do not patch the index for files whose fixes were all unapplied.
+            modified_files = plans.into_iter().map(|p| p.rel_path).collect();
         }
     }
+    let unapplied_count = unapplied_fixes.len();
+
+    // Fixes actually written to disk this run (or, in dry-run, the full
+    // plan — nothing has been attempted yet so "applied" is meaningless).
+    // Reporting only the successfully-applied subset here is what makes
+    // "Applied: yes" honest: a fix that never landed on disk must not appear
+    // as if it did, or a fix-loop driven by this count will never converge.
+    let applied_fixes: Vec<_> = if dry_run {
+        Vec::new()
+    } else {
+        let unapplied_keys: std::collections::HashSet<(&str, usize, &str, &str)> = unapplied_fixes
+            .iter()
+            .map(|f| {
+                (
+                    f.source.as_str(),
+                    f.line,
+                    f.old_target.as_str(),
+                    f.new_target.as_str(),
+                )
+            })
+            .collect();
+        fix_report
+            .fixes
+            .iter()
+            .chain(case_mismatches.iter())
+            .filter(|f| {
+                !unapplied_keys.contains(&(
+                    f.source.as_str(),
+                    f.line,
+                    f.old_target.as_str(),
+                    f.new_target.as_str(),
+                ))
+            })
+            .cloned()
+            .collect()
+    };
 
     let output = serde_json::json!({
         "broken": broken.len(),
@@ -136,6 +177,9 @@ pub fn links_fix(
         "fixes": fix_report.fixes,
         "unfixable_links": fix_report.unfixable,
         "applied": !dry_run,
+        "applied_fixes": applied_fixes,
+        "unapplied": unapplied_count,
+        "unapplied_fixes": unapplied_fixes,
         "case_mismatches": case_mismatch_count,
         "case_mismatch_fixes": case_mismatches,
         "ambiguous": ambiguous_count,

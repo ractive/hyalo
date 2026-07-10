@@ -2829,3 +2829,193 @@ See [[Corina]] for details.
         "--apply --expand-short-form must rewrite [[Corina]] to [[sub/Corina]]; content: {content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// links fix: frontmatter wikilinks (H-bug — frontmatter fixes were reported
+// as applied but never written to disk; see iteration-160)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_apply_rewrites_frontmatter_and_body_wikilinks() {
+    // Minimal repro from the bug report: a broken target referenced both in
+    // a frontmatter `related:` list and in the body of the same file.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sub/real-target.md",
+        md!(r"
+---
+title: Real Target
+---
+Body.
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related: ["[[wrong/real-target]]"]
+---
+Body also links [[wrong/real-target]].
+"#),
+    );
+
+    let apply_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix --apply should run");
+    assert!(
+        apply_output.status.success(),
+        "links fix --apply exited non-zero: {}",
+        String::from_utf8_lossy(&apply_output.stderr)
+    );
+
+    let apply_json: serde_json::Value =
+        serde_json::from_slice(&apply_output.stdout).expect("apply stdout should be valid JSON");
+
+    assert_eq!(
+        apply_json["results"]["broken"].as_u64(),
+        Some(2),
+        "expected 2 broken links (frontmatter + body): {apply_json}"
+    );
+    assert_eq!(
+        apply_json["results"]["fixable"].as_u64(),
+        Some(2),
+        "expected both occurrences to be fixable: {apply_json}"
+    );
+    assert_eq!(
+        apply_json["results"]["unapplied"].as_u64(),
+        Some(0),
+        "no fix should be reported unapplied: {apply_json}"
+    );
+    let applied_fixes = apply_json["results"]["applied_fixes"]
+        .as_array()
+        .expect("'applied_fixes' should be an array");
+    assert_eq!(
+        applied_fixes.len(),
+        2,
+        "both the frontmatter and body fix must be reported as applied: {apply_json}"
+    );
+
+    // The actual assertion that matters: both occurrences must be rewritten
+    // on disk, not just reported as applied.
+    let written = fs::read_to_string(tmp.path().join("a.md")).expect("a.md should be readable");
+    assert!(
+        !written.contains("wrong/real-target"),
+        "broken target must not remain anywhere in the file, got:\n{written}"
+    );
+    assert_eq!(
+        written.matches("[[sub/real-target]]").count(),
+        2,
+        "both frontmatter and body wikilinks must be rewritten, got:\n{written}"
+    );
+
+    // Re-running must report the fix-loop has converged: 0 broken, 0 fixable.
+    // Before the fix, the frontmatter occurrence was reported as applied but
+    // never written, so a re-run kept reporting it as fixable forever.
+    let rerun_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix (dry-run) should run after apply");
+    assert!(rerun_output.status.success());
+
+    let rerun_json: serde_json::Value =
+        serde_json::from_slice(&rerun_output.stdout).expect("rerun stdout should be valid JSON");
+    assert_eq!(
+        rerun_json["results"]["broken"].as_u64(),
+        Some(0),
+        "fix-loop must converge — no broken links should remain: {rerun_json}"
+    );
+    assert_eq!(
+        rerun_json["results"]["fixable"].as_u64(),
+        Some(0),
+        "fix-loop must converge — no fixable links should remain: {rerun_json}"
+    );
+}
+
+#[test]
+fn links_fix_dry_run_does_not_write_frontmatter() {
+    // Dry-run must remain plan-only: no file should be touched, and the
+    // 'applied' flag must be false with no unapplied/applied_fixes noise.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    write_md(
+        tmp.path(),
+        "sub/real-target.md",
+        md!(r"
+---
+title: Real Target
+---
+Body.
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related: ["[[wrong/real-target]]"]
+---
+Body also links [[wrong/real-target]].
+"#),
+    );
+
+    let before = fs::read_to_string(tmp.path().join("a.md")).expect("a.md should be readable");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix (dry-run) should run");
+    assert!(output.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    assert_eq!(json["results"]["applied"].as_bool(), Some(false));
+    assert_eq!(
+        json["results"]["unapplied"].as_u64(),
+        Some(0),
+        "dry-run has attempted nothing, so nothing can be unapplied: {json}"
+    );
+    assert_eq!(
+        json["results"]["applied_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "dry-run must not report any fix as applied: {json}"
+    );
+
+    let after = fs::read_to_string(tmp.path().join("a.md")).expect("a.md should be readable");
+    assert_eq!(before, after, "dry-run must not modify the file");
+}
