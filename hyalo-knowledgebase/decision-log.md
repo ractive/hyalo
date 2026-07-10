@@ -659,3 +659,33 @@ never corruption.
 **Rule for future code:** before adding a rule to the byte-column allowlist,
 verify its column math in the upstream source and add a multibyte-line
 regression test (see `md034_fix_correct_on_line_with_multibyte_prefix`).
+
+## DEC-048: Shared Release Pipeline in ractive/release-workflows (2026-07-10)
+
+**Decision:** hyalo, hoppy, and ff-rdp release via one reusable GitHub
+Actions workflow in [ractive/release-workflows](https://github.com/ractive/release-workflows),
+pinned by tag (`@v0.1.3`). Each repo keeps only a thin caller
+(`.github/workflows/release.yml`) with repo-specific inputs, plus a
+`workflow_dispatch` trigger that runs the whole pipeline in dry-run mode.
+The shared repo tests itself: actionlint + zizmor on every push, and an
+end-to-end selftest that runs the real pipeline against a bundled fixture
+crate on four targets.
+
+**Why:** the three pipelines were copy-paste descendants that had already
+drifted (only hoppy had deb/rpm and man pages; only ff-rdp had SBOM and
+attestations; only hyalo/ff-rdp had winget) and fixes did not propagate.
+A reusable workflow converges everyone on the union of features, keeps
+battle-tested logic (crates.io retry, per-target cache keys, hermetic
+GIT_COMMIT provenance), and gives uniform attestation identity (GitHub's
+SLSA-L3-style trusted-builder pattern). GoReleaser was the runner-up but
+its cargo-workspace support is weak and all three repos publish 2–3 crates
+(see [[research/release-pipeline-unification]]).
+
+**Rule for future changes:** never edit release logic in an app repo —
+change release-workflows, let its selftest validate, tag a new version via
+`gh release create`, then bump the `@vX.Y.Z` pin in the callers. Before
+merging a caller change, run the dry-run dispatch on the branch
+(`gh workflow run release.yml --ref <branch>`); it caught four real bugs
+during the migration (multi-line pre-package-command flattening, cargo run
+--bin ambiguity, linux-packages binary path, hoppy's Windows-only test
+stack overflow) that lint and the fixture selftest could not.

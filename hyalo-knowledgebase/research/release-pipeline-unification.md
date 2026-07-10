@@ -141,6 +141,33 @@ Phased B-over-A:
 GoReleaser remains the fallback if the shared workflow grows unwieldy,
 re-evaluate once its workspace support matures.
 
+## Outcome (2026-07-10)
+
+Phase 2 was implemented first, same day (see [[decision-log]] DEC-048):
+
+- <https://github.com/ractive/release-workflows> created — reusable
+  `release.yml` + `publish-crates.yml`, actionlint + zizmor CI, and an
+  end-to-end selftest (dry-run against a bundled fixture crate, 4 targets,
+  incl. deb/rpm + SBOM + multi-line pre-package-command + BIN_PATH).
+- Released v0.1.0 → v0.1.3 within hours; each bump fixed a real bug found
+  by dry-run verification: eager reusable-workflow permission validation,
+  SBOM coverage regression (ff-rdp ships two crate SBOMs → `sbom-packages`
+  input), multi-line `pre-package-command` flattening (→ `eval`),
+  `cargo run -p` ambiguity for multi-binary packages (→ `--bin`), and
+  linux-packages binary path (→ exported `BIN_PATH`).
+- Migration PRs (each with a `workflow_dispatch` dry-run trigger):
+  hyalo [#188](https://github.com/ractive/hyalo/pull/188),
+  hoppy [#91](https://github.com/ractive/hoppy/pull/91),
+  ff-rdp [#157](https://github.com/ractive/ff-rdp/pull/157).
+- Pre-existing bugs fixed by the PRs: hoppy and ff-rdp both lacked
+  `Cross.toml` passthrough for `GIT_COMMIT`/`GIT_COMMIT_DATE`, so their
+  cross-compiled binaries embedded container-local provenance; hoppy's
+  Windows CLI tests overflow the default MSVC stack (its release matrix
+  never ran tests — parity preserved, fix tracked separately).
+- Phase 1 (deb/rpm for hyalo + ff-rdp) is now a per-repo flag flip:
+  `enable-linux-packages: true` + `[package.metadata.deb]` /
+  `[package.metadata.generate-rpm]` sections.
+
 ## Key sources
 
 - GoReleaser Rust builder: <https://goreleaser.com/customization/builds/rust/>
