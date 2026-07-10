@@ -10,8 +10,8 @@ tags:
 status: completed
 branch: iter-103/boolean-search
 related:
-  - "[[iterations/iteration-101-bm25-ranked-search]]"
-  - "[[iterations/iteration-101b-bm25-serializable-index]]"
+  - "[[iterations/done/iteration-101-bm25-ranked-search]]"
+  - "[[iterations/done/iteration-101b-bm25-serializable-index]]"
   - "[[research/benchmark-iter101-bm25]]"
 ---
 

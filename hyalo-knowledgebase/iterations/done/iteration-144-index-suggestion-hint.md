@@ -10,8 +10,8 @@ tags:
   - performance
   - index
 related:
-  - "[[backlog/index-suggestion-hint]]"
-  - "[[iterations/iteration-143-hint-and-files-from-polish]]"
+  - "[[backlog/done/index-suggestion-hint]]"
+  - "[[iterations/done/iteration-143-hint-and-files-from-polish]]"
 ---
 
 ## Goal

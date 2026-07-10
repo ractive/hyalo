@@ -11,7 +11,7 @@ tags:
   - cross-platform
   - testing
 related:
-  - "[[backlog/cross-platform-link-resolution-failures]]"
+  - "[[backlog/done/cross-platform-link-resolution-failures]]"
   - "[[iterations/done/iteration-134-links-fix-short-form-wikilinks]]"
   - "[[iterations/done/iteration-136-wikilink-md-suffix-and-short-form-mv]]"
 ---

@@ -11,7 +11,7 @@ tags:
 status: completed
 branch: iter-101/bm25-index-integration
 related:
-  - "[[iterations/iteration-101-bm25-ranked-search]]"
+  - "[[iterations/done/iteration-101-bm25-ranked-search]]"
   - "[[research/bm25-index-persistence]]"
 ---
 

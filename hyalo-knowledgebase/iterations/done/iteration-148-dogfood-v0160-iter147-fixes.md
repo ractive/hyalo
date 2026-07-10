@@ -15,7 +15,7 @@ related:
   - "[[dogfood-results/dogfood-v0160-deep]]"
   - "[[iterations/done/iteration-144-index-suggestion-hint]]"
   - "[[iterations/done/iteration-145-unified-input-resolution]]"
-  - "[[iterations/iteration-147-task-files-from]]"
+  - "[[iterations/done/iteration-147-task-files-from]]"
 ---
 
 ## Goal

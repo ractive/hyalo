@@ -1101,6 +1101,54 @@ pub fn plan_batch_mv(
     Ok(plans.into_values().collect())
 }
 
+/// A single `[[...]]` occurrence found on a YAML frontmatter line.
+///
+/// `target` is the raw text between the brackets, alias included (e.g.
+/// `path/to/file|My Alias`). Offsets are byte offsets into the original line.
+pub(crate) struct FrontmatterWikilinkOccurrence<'a> {
+    pub target: &'a str,
+    pub full_start: usize,
+    pub full_end: usize,
+}
+
+/// Find every `[[...]]` occurrence in a single frontmatter YAML line.
+///
+/// Matches patterns like `  - "[[path/to/file]]"` or `  - [[path/to/file]]`
+/// (YAML list items containing Obsidian wikilinks), as well as inline
+/// flow-sequence forms like `related: ["[[a]]", "[[b]]"]`. This is a raw
+/// bracket scan (not YAML-aware) shared by `mv`'s frontmatter rewriter and
+/// `links fix`'s frontmatter replacement builder so both stay symmetric.
+pub(crate) fn find_frontmatter_wikilinks(line: &str) -> Vec<FrontmatterWikilinkOccurrence<'_>> {
+    let mut occurrences = Vec::new();
+    let mut search = line;
+    let mut base_offset = 0usize;
+    while let Some(open) = search.find("[[") {
+        let after_open = open + 2;
+        if after_open >= search.len() {
+            break;
+        }
+        if let Some(close) = search[after_open..].find("]]") {
+            let target_start = after_open;
+            let target_end = after_open + close;
+            let full_start = open;
+            let full_end = target_end + 2;
+
+            occurrences.push(FrontmatterWikilinkOccurrence {
+                target: &search[target_start..target_end],
+                full_start: base_offset + full_start,
+                full_end: base_offset + full_end,
+            });
+
+            let advance = full_end;
+            base_offset += advance;
+            search = &search[advance..];
+        } else {
+            break;
+        }
+    }
+    occurrences
+}
+
 /// Find and plan wikilink replacements inside a single frontmatter YAML line.
 ///
 /// Matches patterns like `  - "[[path/to/file]]"` or `  - [[path/to/file]]`
@@ -1123,68 +1171,46 @@ fn plan_frontmatter_wikilink_rewrites(
 
     let mut replacements = Vec::new();
 
-    // Find all [[...]] occurrences in the line (may appear in quoted strings).
-    let mut search = line;
-    let mut base_offset = 0usize;
-    while let Some(open) = search.find("[[") {
-        let after_open = open + 2;
-        if after_open >= search.len() {
-            break;
-        }
-        if let Some(close) = search[after_open..].find("]]") {
-            let target_start = after_open;
-            let target_end = after_open + close;
-            let full_start = open;
-            let full_end = target_end + 2;
+    for occ in find_frontmatter_wikilinks(line) {
+        let target = occ.target;
+        // Strip alias suffix (e.g. `path|alias` → `path`)
+        let target_path = target.split('|').next().unwrap_or(target).trim();
 
-            let target = &search[target_start..target_end];
-            // Strip alias suffix (e.g. `path|alias` → `path`)
-            let target_path = target.split('|').next().unwrap_or(target).trim();
-
-            let matches = if target_path == old_stem || target_path == old_rel {
-                true
-            } else if let Some(idx) = case_index {
-                let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
-                let canonical = idx.lookup_unique(&t_norm).or_else(|| {
-                    let with_md = format!("{t_norm}.md");
-                    idx.lookup_unique(&with_md)
-                });
-                canonical == Some(old_rel) || canonical == Some(old_stem)
-            } else {
-                false
-            };
-
-            if matches {
-                let old_text = format!("[[{target}]]");
-                // Detect written form of the target path (before alias).
-                // Preserve alias if present (e.g. `path|My Alias` → `new_target|My Alias`).
-                let alias_suffix = target.find('|').map_or("", |i| &target[i..]);
-                // Preserve the user's written form: path-form → path-form, bare → bare.
-                let new_wikilink_target = if target_path.contains('/') || target_path.contains('\\')
-                {
-                    // Path-form wikilink: preserve path-form with new stem (BUG-1 fix).
-                    new_stem.to_string()
-                } else {
-                    // Bare wikilink: preserve bare form (just the basename).
-                    new_basename_stem.to_string()
-                };
-                let new_text = format!("[[{new_wikilink_target}{alias_suffix}]]");
-                if old_text != new_text {
-                    replacements.push(Replacement {
-                        line: line_num,
-                        byte_offset: base_offset + full_start,
-                        old_text,
-                        new_text,
-                    });
-                }
-            }
-
-            // Advance past this `]]`
-            let advance = full_end;
-            base_offset += advance;
-            search = &search[advance..];
+        let matches = if target_path == old_stem || target_path == old_rel {
+            true
+        } else if let Some(idx) = case_index {
+            let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
+            let canonical = idx.lookup_unique(&t_norm).or_else(|| {
+                let with_md = format!("{t_norm}.md");
+                idx.lookup_unique(&with_md)
+            });
+            canonical == Some(old_rel) || canonical == Some(old_stem)
         } else {
-            break;
+            false
+        };
+
+        if matches {
+            let old_text = format!("[[{target}]]");
+            // Detect written form of the target path (before alias).
+            // Preserve alias if present (e.g. `path|My Alias` → `new_target|My Alias`).
+            let alias_suffix = target.find('|').map_or("", |i| &target[i..]);
+            // Preserve the user's written form: path-form → path-form, bare → bare.
+            let new_wikilink_target = if target_path.contains('/') || target_path.contains('\\') {
+                // Path-form wikilink: preserve path-form with new stem (BUG-1 fix).
+                new_stem.to_string()
+            } else {
+                // Bare wikilink: preserve bare form (just the basename).
+                new_basename_stem.to_string()
+            };
+            let new_text = format!("[[{new_wikilink_target}{alias_suffix}]]");
+            if old_text != new_text {
+                replacements.push(Replacement {
+                    line: line_num,
+                    byte_offset: occ.full_start,
+                    old_text,
+                    new_text,
+                });
+            }
         }
     }
 

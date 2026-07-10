@@ -6,7 +6,7 @@ status: active
 tags: [dogfooding, iter-148]
 related:
   - "[[dogfood-results/dogfood-v0160-iter-144-147]]"
-  - "[[iterations/iteration-148-dogfood-v0160-iter147-fixes]]"
+  - "[[iterations/done/iteration-148-dogfood-v0160-iter147-fixes]]"
 ---
 
 # Dogfood v0.16.0 — iter-148 fix verification

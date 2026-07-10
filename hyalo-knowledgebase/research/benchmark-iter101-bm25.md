@@ -8,7 +8,7 @@ tags:
   - search
   - benchmarking
 related:
-  - "[[iterations/iteration-101-bm25-ranked-search]]"
+  - "[[iterations/done/iteration-101-bm25-ranked-search]]"
 status: archived
 ---
 

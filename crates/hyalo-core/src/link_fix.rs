@@ -26,8 +26,10 @@ use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::resolve_target;
 use crate::index::VaultIndex;
 use crate::link_graph::{FileLinks, normalize_target};
-use crate::link_rewrite::{Replacement, RewritePlan, apply_replacements, execute_plans};
-use crate::links::{LinkKind, extract_link_spans_with_original};
+use crate::link_rewrite::{
+    Replacement, RewritePlan, apply_replacements, execute_plans, find_frontmatter_wikilinks,
+};
+use crate::links::{LinkKind, extract_link_spans_with_original, parse_wikilink};
 use crate::scanner::{
     FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
 };
@@ -857,15 +859,20 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
 /// Convert fix plans to [`RewritePlan`]s and apply them to disk.
 ///
 /// Groups fixes by source file, reads each file once, builds [`Replacement`]s
-/// for every fix in that file, applies them via [`apply_replacements`], and
-/// writes back via [`execute_plans`].
+/// for every fix in that file (both body links and frontmatter link-property
+/// wikilinks), applies them via [`apply_replacements`], and writes back via
+/// [`execute_plans`].
 ///
-/// Returns the list of [`RewritePlan`]s for reporting.
+/// Returns `(plans, unapplied)` where `plans` are the [`RewritePlan`]s
+/// actually written to disk, and `unapplied` lists the input [`FixPlan`]s
+/// that produced no [`Replacement`] (e.g. because the on-disk text no longer
+/// matches what detection saw). Callers should treat `unapplied` fixes as
+/// NOT applied when reporting results — do not assume every input fix landed.
 pub fn apply_fixes(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<Vec<RewritePlan>> {
+) -> Result<(Vec<RewritePlan>, Vec<FixPlan>)> {
     // Group fixes by source file.
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
@@ -873,6 +880,7 @@ pub fn apply_fixes(
     }
 
     let mut plans: Vec<RewritePlan> = Vec::new();
+    let mut unapplied: Vec<FixPlan> = Vec::new();
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
@@ -886,6 +894,7 @@ pub fn apply_fixes(
                 file_size / (1024 * 1024),
                 MAX_FILE_SIZE / (1024 * 1024)
             );
+            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
             continue;
         }
         let file_mtime = meta
@@ -896,8 +905,14 @@ pub fn apply_fixes(
         let content = std::fs::read_to_string(&abs_path)
             .with_context(|| format!("reading {}", abs_path.display()))?;
 
-        let replacements =
+        let (replacements, satisfied) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
+
+        for (idx, fix) in file_fixes.iter().enumerate() {
+            if !satisfied.contains(&idx) {
+                unapplied.push((*fix).clone());
+            }
+        }
 
         if !replacements.is_empty() {
             let rewritten_content = apply_replacements(&content, &replacements);
@@ -913,37 +928,62 @@ pub fn apply_fixes(
 
     execute_plans(dir, &plans)?;
 
-    Ok(plans)
+    Ok((plans, unapplied))
 }
 
-/// Walk `content` line by line (skipping frontmatter, code fences, comment
-/// fences) and build [`Replacement`]s for all link fixes that apply to this
-/// file.
+/// Walk `content` line by line and build [`Replacement`]s for all link fixes
+/// that apply to this file — both `[[wikilink]]`s inside YAML frontmatter
+/// link properties and links in the document body (code fences and Obsidian
+/// comment fences are skipped for the latter).
+///
+/// Returns `(replacements, satisfied)` where `satisfied` holds the indices
+/// (into `fixes`) of plans that were matched to an on-disk occurrence and
+/// rewritten. Tracking is per-occurrence: each on-disk match consumes the
+/// first not-yet-satisfied plan with that target, so duplicate plans for the
+/// same `(line, old_target)` — a legitimate case when the same broken target
+/// appears twice — are only satisfied by distinct occurrences. Callers use
+/// the unsatisfied remainder to detect fixes whose on-disk text no longer
+/// matches what detection saw (stale plan) so they are never misreported as
+/// applied.
 fn build_replacements_for_file(
     content: &str,
     source_rel: &str,
     fixes: &[&FixPlan],
     _site_prefix: Option<&str>,
-) -> Vec<Replacement> {
-    // Index fixes by line number for O(1) lookup during the scan.
-    let mut fixes_by_line: HashMap<usize, Vec<&FixPlan>> = HashMap::new();
-    for fix in fixes {
-        fixes_by_line.entry(fix.line).or_default().push(fix);
+) -> (Vec<Replacement>, std::collections::HashSet<usize>) {
+    // Index fixes by line number for O(1) lookup during the scan, carrying
+    // each plan's index into `fixes` for per-occurrence satisfaction
+    // tracking.
+    let mut fixes_by_line: HashMap<usize, Vec<(usize, &FixPlan)>> = HashMap::new();
+    for (idx, fix) in fixes.iter().enumerate() {
+        fixes_by_line.entry(fix.line).or_default().push((idx, fix));
     }
 
     let mut replacements = Vec::new();
+    let mut satisfied: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut fence = FenceTracker::new();
     let mut in_comment_fence = false;
     let mut in_frontmatter = false;
     let mut frontmatter_done = false;
     let mut line_num = 0usize;
 
+    // Frontmatter-derived FixPlans always carry `line: 1` (see
+    // `LinkGraphVisitor::extract_frontmatter_wikilinks`, which has no
+    // meaningful per-line info once YAML is parsed into a `Value`). Look
+    // them up once and match by `old_target` against every `[[...]]`
+    // occurrence anywhere in the frontmatter block, regardless of which
+    // physical line it sits on.
+    let frontmatter_fixes: &[(usize, &FixPlan)] = fixes_by_line.get(&1).map_or(&[], Vec::as_slice);
+
     for line in content.split('\n') {
         line_num += 1;
 
         // --- Frontmatter ---
         if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
+            // BOM-aware: detection (scanner) enters frontmatter via the same
+            // predicate, so the rewrite path must too or BOM-prefixed files
+            // silently keep their broken frontmatter links.
+            if line_num == 1 && crate::frontmatter::is_opening_delimiter(line) {
                 in_frontmatter = true;
                 continue;
             }
@@ -951,6 +991,56 @@ fn build_replacements_for_file(
                 if line.trim() == "---" {
                     in_frontmatter = false;
                     frontmatter_done = true;
+                    continue;
+                }
+                if !frontmatter_fixes.is_empty() {
+                    for occ in find_frontmatter_wikilinks(line) {
+                        let Some(link) = parse_wikilink(occ.target) else {
+                            continue;
+                        };
+                        // Prefer a not-yet-satisfied plan so duplicate plans
+                        // for the same target are consumed one occurrence
+                        // each; fall back to an already-satisfied one so
+                        // extra on-disk occurrences still get rewritten.
+                        let matching = || {
+                            frontmatter_fixes
+                                .iter()
+                                .filter(|(_, f)| f.old_target == link.target)
+                        };
+                        let Some(&(fix_idx, fix)) = matching()
+                            .find(|(idx, _)| !satisfied.contains(idx))
+                            .or_else(|| matching().next())
+                        else {
+                            continue;
+                        };
+
+                        // Preserve alias (`path|Label`) and written form
+                        // (path-form vs bare stem), mirroring `mv`'s
+                        // frontmatter rewriter.
+                        let alias_suffix = occ.target.find('|').map_or("", |i| &occ.target[i..]);
+                        let new_stem = fix
+                            .new_target
+                            .strip_suffix(".md")
+                            .unwrap_or(&fix.new_target);
+                        let new_wikilink_target =
+                            if link.target.contains('/') || link.target.contains('\\') {
+                                new_stem.to_string()
+                            } else {
+                                new_stem.rsplit('/').next().unwrap_or(new_stem).to_string()
+                            };
+
+                        let old_text = line[occ.full_start..occ.full_end].to_string();
+                        let new_text = format!("[[{new_wikilink_target}{alias_suffix}]]");
+                        if old_text != new_text {
+                            replacements.push(Replacement {
+                                line: line_num,
+                                byte_offset: occ.full_start,
+                                old_text,
+                                new_text,
+                            });
+                        }
+                        satisfied.insert(fix_idx);
+                    }
                 }
                 continue;
             }
@@ -997,10 +1087,19 @@ fn build_replacements_for_file(
                 }
             };
 
-            // Find the fix for this particular span.
-            let Some(fix) = line_fixes.iter().find(|f| {
-                f.old_target == normalized_span_target || f.old_target == span.link.target
-            }) else {
+            // Find the fix for this particular span, preferring a
+            // not-yet-satisfied plan (duplicate plans for the same target are
+            // consumed one occurrence each) and falling back to an
+            // already-satisfied one so extra occurrences still get rewritten.
+            let matching = || {
+                line_fixes.iter().filter(|(_, f)| {
+                    f.old_target == normalized_span_target || f.old_target == span.link.target
+                })
+            };
+            let Some(&(fix_idx, fix)) = matching()
+                .find(|(idx, _)| !satisfied.contains(idx))
+                .or_else(|| matching().next())
+            else {
                 continue;
             };
 
@@ -1046,10 +1145,11 @@ fn build_replacements_for_file(
                     new_text,
                 });
             }
+            satisfied.insert(fix_idx);
         }
     }
 
-    replacements
+    (replacements, satisfied)
 }
 
 // ---------------------------------------------------------------------------
@@ -1346,9 +1446,13 @@ mod tests {
             confidence: 0.9,
         }];
 
-        let plans = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
         let written = fs::read_to_string(tmp.path().join("index.md")).unwrap();
         assert!(
             written.contains("[[correct-name]]"),
@@ -1374,14 +1478,339 @@ mod tests {
             confidence: 1.0,
         }];
 
-        let plans = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
         let written = fs::read_to_string(tmp.path().join("index.md")).unwrap();
         assert!(
             written.contains("[text](correct.md)"),
             "expected rewritten link, got: {written}"
         );
+    }
+
+    // --- apply_fixes: frontmatter wikilink rewrite (H-bug: frontmatter fixes
+    // were silently no-op'd — see iteration-160 fix) ---
+
+    #[test]
+    fn apply_fixes_rewrites_frontmatter_only_wikilink() {
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "---\ntitle: A\nrelated: [\"[[wrong/real-target]]\"]\n---\nBody.\n",
+            ),
+            ("sub/real-target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/real-target".to_string(),
+            new_target: "sub/real-target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1, "frontmatter fix must produce a RewritePlan");
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(
+            written.contains("[[sub/real-target]]"),
+            "frontmatter wikilink was not rewritten, got: {written}"
+        );
+        assert!(!written.contains("wrong/real-target"), "got: {written}");
+    }
+
+    #[test]
+    fn apply_fixes_rewrites_body_only_wikilink_line_one() {
+        // Regression guard: when the fix is on physical line 1 but there is
+        // NO frontmatter block, the body-link scan must still run — the
+        // frontmatter-lookup-by-line-1 shortcut must not swallow body fixes.
+        let tmp = vault_with_files(&[
+            ("a.md", "See [[wrong/real-target]] here.\n"),
+            ("sub/real-target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/real-target".to_string(),
+            new_target: "sub/real-target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(written.contains("[[sub/real-target]]"), "got: {written}");
+    }
+
+    #[test]
+    fn apply_fixes_rewrites_frontmatter_and_body_both_occurrences() {
+        // The exact bug report repro: same broken target in both frontmatter
+        // `related:` and the body. Both must be rewritten and both must be
+        // reported (no dedup collapsing the two).
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "---\ntitle: A\nrelated: [\"[[wrong/real-target]]\"]\n---\nBody also links [[wrong/real-target]].\n",
+            ),
+            ("sub/real-target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![
+            FixPlan {
+                source: "a.md".to_string(),
+                line: 1,
+                old_target: "wrong/real-target".to_string(),
+                new_target: "sub/real-target.md".to_string(),
+                strategy: FixStrategy::ShortestPath,
+                confidence: 0.95,
+            },
+            FixPlan {
+                source: "a.md".to_string(),
+                line: 5,
+                old_target: "wrong/real-target".to_string(),
+                new_target: "sub/real-target.md".to_string(),
+                strategy: FixStrategy::ShortestPath,
+                confidence: 0.95,
+            },
+        ];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
+        assert_eq!(
+            plans[0].replacements.len(),
+            2,
+            "both frontmatter and body occurrences must be rewritten: {:?}",
+            plans[0].replacements
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(!written.contains("wrong/real-target"), "got: {written}");
+        assert_eq!(
+            written.matches("[[sub/real-target]]").count(),
+            2,
+            "got: {written}"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_frontmatter_block_list_form() {
+        // YAML block-list form (not inline flow-sequence):
+        //   related:
+        //     - "[[wrong/target]]"
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "---\ntitle: A\nrelated:\n  - \"[[wrong/target]]\"\n---\nBody.\n",
+            ),
+            ("target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/target".to_string(),
+            new_target: "target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(written.contains("[[target]]"), "got: {written}");
+    }
+
+    #[test]
+    fn apply_fixes_frontmatter_wikilink_alias_preserved() {
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "---\ntitle: A\nrelated: [\"[[wrong/target|My Label]]\"]\n---\nBody.\n",
+            ),
+            ("target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/target".to_string(),
+            new_target: "target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert!(
+            unapplied.is_empty(),
+            "expected no unapplied fixes: {unapplied:?}"
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(
+            written.contains("[[target|My Label]]"),
+            "alias must be preserved, got: {written}"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_reports_unapplied_when_target_not_found() {
+        // A FixPlan whose old_target text is not actually present on disk
+        // (e.g. stale plan from a concurrently-edited file) must be reported
+        // as unapplied rather than silently counted as applied.
+        let tmp = vault_with_files(&[
+            ("a.md", "No matching link here.\n"),
+            ("target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "stale/target".to_string(),
+            new_target: "target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert!(plans.is_empty(), "no replacement should have been produced");
+        assert_eq!(unapplied.len(), 1);
+        assert_eq!(unapplied[0].old_target, "stale/target");
+    }
+
+    #[test]
+    fn apply_fixes_duplicate_plans_single_occurrence_reports_one_unapplied() {
+        // Two FixPlans with identical (line, old_target) — e.g. detection saw
+        // two occurrences but a concurrent edit removed one — must consume
+        // distinct on-disk occurrences. With only one occurrence on disk,
+        // exactly one plan is satisfied and the other is unapplied; keying
+        // satisfaction on (line, old_target) instead of plan identity would
+        // silently absorb the second plan.
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "---\ntitle: a\nrelated: [\"[[wrong/target]]\"]\n---\nBody.\n",
+            ),
+            ("sub/target.md", "Content\n"),
+        ]);
+
+        let plan = FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/target".to_string(),
+            new_target: "sub/target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        };
+        let fixes = vec![plan.clone(), plan];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements.len(), 1);
+        assert_eq!(
+            unapplied.len(),
+            1,
+            "second duplicate plan had no occurrence to consume and must be unapplied"
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(written.contains("[[sub/target]]"));
+    }
+
+    #[test]
+    fn apply_fixes_rewrites_frontmatter_wikilink_in_bom_file() {
+        // A UTF-8 BOM before the opening `---` must not disable the
+        // frontmatter rewrite path — the scanner (detection side) is
+        // BOM-aware, so the write path has to be too.
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "\u{feff}---\ntitle: a\nrelated: [\"[[wrong/target]]\"]\n---\nBody.\n",
+            ),
+            ("sub/target.md", "Content\n"),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/target".to_string(),
+            new_target: "sub/target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert!(
+            written.starts_with('\u{feff}'),
+            "BOM must be preserved through the rewrite"
+        );
+        assert!(written.contains("[[sub/target]]"));
+    }
+
+    #[test]
+    fn apply_fixes_duplicate_plans_two_occurrences_both_satisfied() {
+        // Two plans, two on-disk occurrences of the same broken target in the
+        // frontmatter block: each occurrence consumes one plan, both are
+        // rewritten, nothing is unapplied.
+        let tmp = vault_with_files(&[
+            (
+                "a.md",
+                "---\ntitle: a\nrelated: [\"[[wrong/target]]\", \"[[wrong/target]]\"]\n---\nBody.\n",
+            ),
+            ("sub/target.md", "Content\n"),
+        ]);
+
+        let plan = FixPlan {
+            source: "a.md".to_string(),
+            line: 1,
+            old_target: "wrong/target".to_string(),
+            new_target: "sub/target.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        };
+        let fixes = vec![plan.clone(), plan];
+
+        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].replacements.len(), 2);
+        assert!(
+            unapplied.is_empty(),
+            "both plans consumed by distinct occurrences: {unapplied:?}"
+        );
+        let written = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert_eq!(written.matches("[[sub/target]]").count(), 2);
     }
 
     // ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ tags:
   - obsidian-compat
 related:
   - "[[iterations/done/iteration-134-links-fix-short-form-wikilinks]]"
-  - "[[iterations/iteration-135-batch-mv]]"
+  - "[[iterations/done/iteration-135-batch-mv]]"
 ---
 
 ## Goal

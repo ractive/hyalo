@@ -219,11 +219,18 @@ pub(crate) fn set_rule(
         }
     } else if need_severity_override {
         // Table form is required to carry severity.
-        if doc.get("lint").is_none() {
-            doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
-        }
-        let lint_rules =
-            doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let lint_rules = match lint_rules_table_mut(&mut doc) {
+            Ok(item) => item,
+            Err(err) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format,
+                    &err.to_string(),
+                    None,
+                    Some("fix or remove the malformed entry in .hyalo.toml"),
+                    None,
+                )));
+            }
+        };
 
         // If the existing entry is a scalar bool, promote it to a table so
         // we can index into it without panicking. Handle both regular and
@@ -260,11 +267,18 @@ pub(crate) fn set_rule(
         rule_entry["severity"] = toml_edit::value(target_severity_str.clone());
     } else {
         // Only `enabled` diverges from default — scalar form is enough.
-        if doc.get("lint").is_none() {
-            doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
-        }
-        let lint_rules =
-            doc["lint"]["rules"].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let lint_rules = match lint_rules_table_mut(&mut doc) {
+            Ok(item) => item,
+            Err(err) => {
+                return Ok(CommandOutcome::UserError(format_error(
+                    format,
+                    &err.to_string(),
+                    None,
+                    Some("fix or remove the malformed entry in .hyalo.toml"),
+                    None,
+                )));
+            }
+        };
 
         if let Some(existing) = lint_rules.get_mut(rule_id)
             && (existing.is_table() || existing.is_inline_table())
@@ -358,6 +372,31 @@ pub(crate) fn set_rule(
         "wrote": wrote,
     });
     Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+}
+
+/// Get (creating if absent) the `[lint.rules]` table as a mutable `Item`.
+///
+/// Returns a user-facing error if `lint` or `lint.rules` exist but are not
+/// TOML tables (e.g. the user hand-edited `.hyalo.toml` into something like
+/// `lint = "oops"`). We prefer a clear error over a panic on user input —
+/// mirrors `ensure_schema_types_table` in `types.rs` for the identical
+/// malformed-config scenario.
+fn lint_rules_table_mut(doc: &mut toml_edit::DocumentMut) -> Result<&mut toml_edit::Item> {
+    if doc.get("lint").is_none() {
+        doc["lint"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let lint = doc["lint"].as_table_mut().ok_or_else(|| {
+        anyhow::anyhow!("malformed .hyalo.toml: `lint` is not a table — expected `[lint]` section")
+    })?;
+    if !lint.contains_key("rules") {
+        lint.insert("rules", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    if !lint["rules"].is_table() && !lint["rules"].is_inline_table() {
+        return Err(anyhow::anyhow!(
+            "malformed .hyalo.toml: `lint.rules` is not a table — expected `[lint.rules]` section"
+        ));
+    }
+    Ok(&mut lint["rules"])
 }
 
 /// Remove `[lint.rules]` and `[lint]` from `doc` when they have no surviving
@@ -683,6 +722,137 @@ mod tests {
         );
 
         let _ = (schema, &md_lint);
+    }
+
+    /// CRITICAL reproducer: `.hyalo.toml` with `lint` as a non-table scalar
+    /// must return a clean error from `set --severity`, not panic via
+    /// `IndexMut` on a non-table `Item`.
+    #[test]
+    fn set_severity_malformed_lint_scalar_returns_error() {
+        let dir = tempdir().unwrap();
+        let toml_path = dir.path().join(".hyalo.toml");
+        std::fs::write(&toml_path, "lint = \"oops\"\n").unwrap();
+
+        let engine = make_engine();
+        let md_lint = load_md_lint(dir.path());
+
+        let result = set_rule(
+            dir.path(),
+            "MD013",
+            None,
+            Some("error"),
+            false,
+            &engine,
+            &md_lint,
+            Format::Json,
+        );
+
+        let outcome = result.expect("malformed `lint` scalar must not panic or bubble up");
+        let CommandOutcome::UserError(msg) = outcome else {
+            panic!("expected UserError outcome, got {outcome:?}");
+        };
+        assert!(
+            msg.contains("malformed") && msg.contains("lint"),
+            "unexpected error: {msg}"
+        );
+
+        // The file must be left untouched — no partial write on error.
+        let contents_after = std::fs::read_to_string(&toml_path).unwrap();
+        assert_eq!(contents_after, "lint = \"oops\"\n");
+    }
+
+    /// CRITICAL reproducer: same malformed config for the `--enabled` path
+    /// (scalar-form branch), which used the same unguarded `doc["lint"]["rules"]`
+    /// indexing.
+    #[test]
+    fn set_enabled_malformed_lint_scalar_returns_error() {
+        let dir = tempdir().unwrap();
+        let toml_path = dir.path().join(".hyalo.toml");
+        std::fs::write(&toml_path, "lint = \"oops\"\n").unwrap();
+
+        let engine = make_engine();
+        let md_lint = load_md_lint(dir.path());
+
+        // MD013 defaults to enabled=false, so `--enabled true` diverges from
+        // the default and takes the scalar-form (`else`) branch.
+        let result = set_rule(
+            dir.path(),
+            "MD013",
+            Some(true),
+            None,
+            false,
+            &engine,
+            &md_lint,
+            Format::Json,
+        );
+
+        let outcome = result.expect("malformed `lint` scalar must not panic or bubble up");
+        let CommandOutcome::UserError(msg) = outcome else {
+            panic!("expected UserError outcome, got {outcome:?}");
+        };
+        assert!(
+            msg.contains("malformed") && msg.contains("lint"),
+            "unexpected error: {msg}"
+        );
+
+        let contents_after = std::fs::read_to_string(&toml_path).unwrap();
+        assert_eq!(contents_after, "lint = \"oops\"\n");
+    }
+
+    /// `lint.rules` present but not a table (e.g. hand-edited into a scalar)
+    /// must also error cleanly rather than panic.
+    #[test]
+    fn set_severity_malformed_lint_rules_scalar_returns_error() {
+        let dir = tempdir().unwrap();
+        let toml_path = dir.path().join(".hyalo.toml");
+        std::fs::write(&toml_path, "[lint]\nrules = \"oops\"\n").unwrap();
+
+        let engine = make_engine();
+        let md_lint = load_md_lint(dir.path());
+
+        let result = set_rule(
+            dir.path(),
+            "MD013",
+            None,
+            Some("error"),
+            false,
+            &engine,
+            &md_lint,
+            Format::Json,
+        );
+
+        let outcome = result.expect("malformed `lint.rules` scalar must not panic or bubble up");
+        let CommandOutcome::UserError(msg) = outcome else {
+            panic!("expected UserError outcome, got {outcome:?}");
+        };
+        assert!(
+            msg.contains("malformed") && msg.contains("lint.rules"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    /// `lint-rules remove` already guards its read path with `.and_then`
+    /// chains (no blind indexing), so a malformed `lint` scalar must fall
+    /// through to "no override found" rather than panicking or erroring.
+    #[test]
+    fn remove_rule_malformed_lint_scalar_does_not_panic() {
+        let dir = tempdir().unwrap();
+        let toml_path = dir.path().join(".hyalo.toml");
+        std::fs::write(&toml_path, "lint = \"oops\"\n").unwrap();
+
+        let engine = make_engine();
+        let md_lint = load_md_lint(dir.path());
+
+        let outcome = remove_rule(dir.path(), "MD013", false, &engine, &md_lint, Format::Json)
+            .expect("remove must not panic on malformed lint scalar");
+
+        match outcome {
+            CommandOutcome::Success { output, .. } => {
+                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                assert_eq!(v["removed"], false);
+            }
+            other => panic!("expected success, got {other:?}"),
+        }
     }
 
     #[test]
