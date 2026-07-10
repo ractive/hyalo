@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   publish:
-    uses: ractive/release-workflows/.github/workflows/publish-crates.yml@v0.1.2
+    uses: ractive/release-workflows/.github/workflows/publish-crates.yml@v0.1.3
     secrets: inherit
     with:
       publish-crates: hyalo-core,hyalo-mdlint,hyalo-cli
