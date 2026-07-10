@@ -1,0 +1,6 @@
+# cross-rs configuration for the release matrix's containerized builds.
+[build.env]
+# Forward the hermetic build-provenance vars (set by the release workflow)
+# into the container so build.rs bakes the correct sha/date into --version
+# instead of shelling out to the container's git against a cached target dir.
+passthrough = ["GIT_COMMIT", "GIT_COMMIT_DATE"]

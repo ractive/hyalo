@@ -99,6 +99,18 @@ jobs:
         with:
           tool: cross
 
+      - name: Set hermetic build provenance
+        shell: bash
+        # build.rs prefers GIT_COMMIT/GIT_COMMIT_DATE over shelling out to
+        # git, and declares them rerun-if-env-changed — which forces the
+        # build script to rerun even when a restored rust-cache carries a
+        # stale build-script output (v0.16.0 binaries shipped with a June
+        # sha baked in because the cached output's mtime beat the checkout).
+        # Cross.toml passes both through into cross containers.
+        run: |
+          echo "GIT_COMMIT=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT_DATE=$(git show -s --date=short --format=%cd HEAD)" >> "$GITHUB_ENV"
+
       - name: Build release
         run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --target ${{ matrix.target }}
 
