@@ -994,7 +994,10 @@ Repeatable (AND).\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
             OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
             (source, line, old_target, new_target, strategy, confidence), and \
-            the list of links that could not be matched.\n\
+            the list of links that could not be matched. With --apply it also \
+            reports applied_fixes (fixes actually written to disk) plus \
+            unapplied/unapplied_fixes for plans whose on-disk text no longer \
+            matched — only applied_fixes were durably written.\n\
             SIDE EFFECTS: None unless `links fix --apply` is passed.\n\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
             or 'hyalo find --broken-links' (list files with unresolved links).\n\n\
