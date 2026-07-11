@@ -48,3 +48,27 @@ libc = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
+
+[package.metadata.deb]
+maintainer = "ractive"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/hyalo", "usr/bin/", "755"],
+    ["completions/hyalo.bash", "usr/share/bash-completion/completions/hyalo", "644"],
+    ["completions/_hyalo", "usr/share/zsh/vendor-completions/_hyalo", "644"],
+    ["completions/hyalo.fish", "usr/share/fish/vendor_completions.d/hyalo.fish", "644"],
+    ["../../LICENSE", "usr/share/doc/hyalo/", "644"],
+    ["../../README.md", "usr/share/doc/hyalo/", "644"],
+]
+extended-description = "A CLI tool for exploring and managing Markdown knowledge bases with YAML frontmatter — search, lint, and bulk-edit frontmatter across Obsidian-compatible collections of notes."
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/hyalo", dest = "/usr/bin/hyalo", mode = "755" },
+    { source = "completions/hyalo.bash", dest = "/usr/share/bash-completion/completions/hyalo", mode = "644" },
+    { source = "completions/_hyalo", dest = "/usr/share/zsh/site-functions/_hyalo", mode = "644" },
+    { source = "completions/hyalo.fish", dest = "/usr/share/fish/vendor_completions.d/hyalo.fish", mode = "644" },
+    { source = "../../LICENSE", dest = "/usr/share/doc/hyalo/LICENSE", mode = "644", doc = true },
+    { source = "../../README.md", dest = "/usr/share/doc/hyalo/README.md", mode = "644", doc = true },
+]
