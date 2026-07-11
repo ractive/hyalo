@@ -214,12 +214,12 @@ A `SHA256SUMS` file with checksums for every asset is attached to each release.
 The system packages (apt/dnf and the standalone `.deb`/`.rpm`) install completions automatically. For the Homebrew, Scoop, cargo, or tarball routes, either copy the scripts from the archive's `completions/` directory or generate them on the fly:
 
 ```sh
-hyalo completion bash > ~/.local/share/bash-completion/completions/hyalo
-hyalo completion zsh  > ~/.local/share/zsh/site-functions/_hyalo
-hyalo completion fish > ~/.config/fish/completions/hyalo.fish
+hyalo completions bash > ~/.local/share/bash-completion/completions/hyalo
+hyalo completions zsh  > ~/.local/share/zsh/site-functions/_hyalo
+hyalo completions fish > ~/.config/fish/completions/hyalo.fish
 ```
 
-`hyalo completion --help` lists every supported shell (also elvish and powershell).
+`hyalo completions --help` lists every supported shell (also elvish and powershell). `hyalo completion` (singular) remains as a backward-compatible alias.
 
 ## Configuration
 
