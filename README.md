@@ -1,5 +1,9 @@
 # hyalo
 
+[![crates.io](https://img.shields.io/crates/v/hyalo-cli?logo=rust)](https://crates.io/crates/hyalo-cli)
+[![GitHub release](https://img.shields.io/github/v/release/ractive/hyalo?logo=github)](https://github.com/ractive/hyalo/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
+
 **A structured CLI for markdown knowledgebases — built for humans and AI agents.**
 
 If you maintain an [Obsidian](https://obsidian.md/) vault, a Zettelkasten, documentation site, or any folder of `.md` files with YAML frontmatter, you've probably hit the limits of `grep` and manual editing. Hyalo gives you a fast, structured way to search, filter, and bulk-edit your markdown files from the command line.
@@ -147,14 +151,33 @@ All artifacts are idempotent — re-running `hyalo init --claude` updates to the
 ### Homebrew (macOS & Linux)
 
 ```sh
-brew tap ractive/tap
 brew install ractive/tap/hyalo
 ```
+
+Covers macOS (Apple Silicon) and Linux (x86_64 and ARM64). The Linux binaries are statically linked against musl, so they have no glibc dependency.
+
+### apt (Debian & Ubuntu)
+
+```sh
+curl -sLf 'https://dl.cloudsmith.io/public/ractive/hyalo/cfg/setup/bash.deb.sh' | sudo bash
+sudo apt install hyalo
+```
+
+The setup script registers the [Cloudsmith](https://cloudsmith.io/~ractive/repos/hyalo)-hosted apt repository; `apt install` then pulls hyalo and picks up future updates through `apt upgrade`. Shell completions are installed system-wide automatically.
+
+### dnf / yum / zypper (Fedora, RHEL & openSUSE)
+
+```sh
+curl -sLf 'https://dl.cloudsmith.io/public/ractive/hyalo/cfg/setup/bash.rpm.sh' | sudo bash
+sudo dnf install hyalo    # or: yum install hyalo / zypper install hyalo
+```
+
+Registers the Cloudsmith-hosted rpm repository. Shell completions are installed system-wide automatically.
 
 ### Scoop (Windows)
 
 ```powershell
-scoop bucket add hyalo https://github.com/ractive/scoop-hyalo
+scoop bucket add ractive https://github.com/ractive/scoop-bucket
 scoop install hyalo
 ```
 
@@ -167,14 +190,36 @@ winget install ractive.hyalo
 ### Cargo (from crates.io)
 
 ```sh
-cargo install hyalo-cli
+cargo install hyalo-cli    # installs the `hyalo` binary
 ```
 
 ### Manual download
 
-Pre-built binaries for Linux (x86_64, ARM64, glibc and musl), macOS (Apple Silicon), and Windows (x86_64, ARM64) are available on the [GitHub Releases](https://github.com/ractive/hyalo/releases) page.
+Every [GitHub Release](https://github.com/ractive/hyalo/releases) publishes:
 
-> **Intel Mac users:** Homebrew bottles are only provided for Apple Silicon. Use `cargo install` above.
+- **Archives** named `hyalo-v<version>-<target>.{tar.gz,zip}` for Linux (x86_64/ARM64, glibc and musl), macOS (Apple Silicon), and Windows (x86_64/ARM64). Each archive contains the binary, `LICENSE`, `README.md`, and a `completions/` directory with bash/zsh/fish scripts.
+- **Standalone `.deb` and `.rpm` packages** for users who prefer to install a single downloaded file directly (they install completions system-wide, same as the apt/dnf repos above).
+- **CycloneDX SBOMs** (`*.cdx.json`) and GitHub build-provenance attestations for the native builds. Verify an artifact with:
+
+  ```sh
+  gh attestation verify hyalo-v0.17.0-aarch64-apple-darwin.tar.gz --owner ractive
+  ```
+
+A `SHA256SUMS` file with checksums for every asset is attached to each release.
+
+> **Intel Mac users:** Homebrew and the prebuilt macOS archive target Apple Silicon only. Use `cargo install hyalo-cli` above.
+
+### Shell completions
+
+The system packages (apt/dnf and the standalone `.deb`/`.rpm`) install completions automatically. For the Homebrew, Scoop, cargo, or tarball routes, either copy the scripts from the archive's `completions/` directory or generate them on the fly:
+
+```sh
+hyalo completion bash > ~/.local/share/bash-completion/completions/hyalo
+hyalo completion zsh  > ~/.local/share/zsh/site-functions/_hyalo
+hyalo completion fish > ~/.config/fish/completions/hyalo.fish
+```
+
+`hyalo completion --help` lists every supported shell (also elvish and powershell).
 
 ## Configuration
 
@@ -283,11 +328,18 @@ cargo build --release
 
 ## Releasing
 
-1. Bump the version in `Cargo.toml`
-2. Commit: `git commit -am "Bump version to X.Y.Z"`
-3. Create a GitHub release with tag `vX.Y.Z`
+1. Bump the workspace version in `Cargo.toml`
+2. Update `CHANGELOG.md`
+3. Cut the release: `gh release create vX.Y.Z --generate-notes`
 
-The [release workflow](.github/workflows/release.yml) handles cross-platform binaries, Homebrew, Scoop, and winget automatically.
+Publishing the release triggers [`release.yml`](.github/workflows/release.yml), a thin caller for the shared reusable pipeline in [ractive/release-workflows](https://github.com/ractive/release-workflows). From a single tag, it:
+
+- builds and tests seven targets (Linux x86_64/ARM64 in both glibc and musl, macOS Apple Silicon, Windows x86_64/ARM64);
+- packages versioned archives, plus `.deb`/`.rpm` packages, and publishes them to the hosted apt/yum repos at Cloudsmith;
+- publishes the crates to crates.io (with retry) and updates the Homebrew tap, Scoop bucket, and winget manifest;
+- emits CycloneDX SBOMs and GitHub build-provenance attestations for the native builds.
+
+Rehearse the whole thing without publishing anything via `gh workflow run release.yml` — a `workflow_dispatch` run builds and packages every target as a full dry run. If a downstream step needs to be re-run after a release, [`publish-crates.yml`](.github/workflows/publish-crates.yml) re-publishes to crates.io and [`cloudsmith-republish.yml`](.github/workflows/cloudsmith-republish.yml) backfills the Cloudsmith repos.
 
 ## Package repository hosting
 
