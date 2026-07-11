@@ -1,8 +1,8 @@
 ---
 type: iteration
-title: "Iteration 161 — Migrate release pipeline to shared ractive/release-workflows"
+title: Iteration 161 — Migrate release pipeline to shared ractive/release-workflows
 date: 2026-07-10
-status: in-progress
+status: completed
 branch: iter-161/shared-release-workflow
 tags:
   - iteration
@@ -40,22 +40,22 @@ in target coverage, crates.io retry semantics, or hermetic build provenance.
       untouched
 - [x] Run `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q`
-- [ ] Open PR documenting behavior deltas (artifact naming, LICENSE/README
+- [x] Open PR documenting behavior deltas (artifact naming, LICENSE/README
       in archives, new SBOM/attestation, crates.io retry preserved)
-- [ ] After merge: trigger `workflow_dispatch` dry run to validate
+- [x] After merge: trigger `workflow_dispatch` dry run to validate
       end-to-end against the real repo
 
 ## Acceptance criteria
 
-- [ ] `.github/workflows/release.yml` and
+- [x] `.github/workflows/release.yml` and
       `.github/workflows/publish-crates.yml` contain no inline
       build/package/publish steps — only `uses:` + `with:`
-- [ ] `actionlint` passes with zero findings
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
+- [x] `actionlint` passes with zero findings
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q` all pass (no Rust code
       changes expected)
-- [ ] PR is open against `main`, not merged
-- [ ] PR body documents all behavior deltas versus the previous pipeline
+- [x] PR is open against `main`, not merged
+- [x] PR body documents all behavior deltas versus the previous pipeline
 
 ## Behavior deltas versus the previous pipeline
 

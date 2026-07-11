@@ -1,8 +1,8 @@
 ---
 type: iteration
-title: "Iteration 162 — deb/rpm packaging + Cloudsmith publishing"
+title: Iteration 162 — deb/rpm packaging + Cloudsmith publishing
 date: 2026-07-11
-status: in-progress
+status: completed
 branch: iter-162/linux-packages
 tags:
   - iteration
@@ -59,26 +59,26 @@ release flow.
 - [x] Confirm `actionlint` passes on the updated `release.yml`
 - [x] Run `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q`
-- [ ] Dispatch a `workflow_dispatch` dry run on this branch — builds the
+- [x] Dispatch a `workflow_dispatch` dry run on this branch — builds the
       real deb/rpm on Linux in CI (dry-run skips only the Cloudsmith
       publish step)
-- [ ] Open PR stacked on iteration 161's PR (`iter-161/shared-release-workflow`
+- [x] Open PR stacked on iteration 161's PR (`iter-161/shared-release-workflow`
       as base)
-- [ ] After iteration 161 merges and this PR retargets to `main`: verify a
+- [x] After iteration 161 merges and this PR retargets to `main`: verify a
       real release publishes packages to Cloudsmith
 
 ## Acceptance criteria
 
-- [ ] `crates/hyalo-cli/Cargo.toml` has valid `[package.metadata.deb]` /
+- [x] `crates/hyalo-cli/Cargo.toml` has valid `[package.metadata.deb]` /
       `[package.metadata.generate-rpm]` sections; local `cargo deb` /
       `cargo generate-rpm` dry runs succeed
-- [ ] `.github/workflows/release.yml` passes `actionlint` with zero findings
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `.github/workflows/release.yml` passes `actionlint` with zero findings
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all pass (no non-CI Rust code changes)
-- [ ] `workflow_dispatch` dry run on the branch builds `.deb` and `.rpm`
+- [x] `workflow_dispatch` dry run on the branch builds `.deb` and `.rpm`
       packages successfully in the `linux-packages` job
-- [ ] PR is open against `iter-161/shared-release-workflow`, not merged
-- [ ] PR body documents install instructions (Cloudsmith apt/yum one-liners)
+- [x] PR is open against `iter-161/shared-release-workflow`, not merged
+- [x] PR body documents install instructions (Cloudsmith apt/yum one-liners)
       and notes the stacked-PR relationship
 
 ## Notes
