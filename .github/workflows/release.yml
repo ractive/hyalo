@@ -23,7 +23,7 @@ jobs:
       linux-package-crate: hyalo-cli
       # Publishes the .deb/.rpm to the hosted apt/yum repos at Cloudsmith
       # (non-blocking; needs the CLOUDSMITH_API_KEY repo secret):
-      cloudsmith-repo: ractive/ractive-pkgs
+      cloudsmith-repo: ractive/hyalo
       # Ship shell completions (hyalo's subcommand is `completion`, singular)
       # in archives and deb/rpm. Copies into crates/hyalo-cli/ because
       # cargo-deb/cargo-generate-rpm resolve asset paths relative to the

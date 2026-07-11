@@ -1,0 +1,16 @@
+name: Cloudsmith republish
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose .deb/.rpm to (re)publish, e.g. v0.17.0"
+        required: true
+permissions:
+  contents: read
+jobs:
+  republish:
+    uses: ractive/release-workflows/.github/workflows/cloudsmith-republish.yml@v0.2.1
+    secrets: inherit
+    with:
+      tag: ${{ inputs.tag }}
+      cloudsmith-repo: ractive/hyalo

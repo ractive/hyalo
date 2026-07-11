@@ -32,7 +32,7 @@ pages are explicitly out of scope for now.
 
 `hyalo` gets `.deb` and `.rpm` packages built on every release and published
 both as GitHub release assets and to the hosted Cloudsmith apt/yum repos at
-`ractive/ractive-pkgs`, with no regressions to the existing archive-based
+`ractive/hyalo`, with no regressions to the existing archive-based
 release flow.
 
 ## Tasks
@@ -47,7 +47,7 @@ release flow.
       `cargo deb`/`cargo generate-rpm` (deb lists all three completion
       files at hoppy-convention paths)
 - [x] Enable `enable-linux-packages: true`, `linux-package-crate: hyalo-cli`,
-      and `cloudsmith-repo: ractive/ractive-pkgs` in
+      and `cloudsmith-repo: ractive/hyalo` in
       `.github/workflows/release.yml`
 - [x] Validate `Cargo.toml` parses (`cargo metadata`, `cargo check -p
       hyalo-cli`)

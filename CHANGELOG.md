@@ -6,8 +6,8 @@
 
 - Linux packages: `.deb` and `.rpm` are built on every release, attached as
   release assets, and published to the hosted apt/yum repos at
-  [Cloudsmith](https://cloudsmith.io/~ractive/repos/ractive-pkgs)
-  (`ractive/ractive-pkgs`).
+  [Cloudsmith](https://cloudsmith.io/~ractive/repos/hyalo)
+  (`ractive/hyalo`).
 - Shell completions (`hyalo completion <shell>`) are now packaged: included
   in all release archives and installed by the `.deb`/`.rpm` at the
   standard bash/zsh/fish paths.
