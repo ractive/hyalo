@@ -172,6 +172,18 @@ Phase 2 was implemented first, same day (see [[decision-log]] DEC-048):
   `enable-linux-packages: true` + `[package.metadata.deb]` /
   `[package.metadata.generate-rpm]` sections.
 
+## Live (2026-07-11)
+
+Everything above shipped the same night: hyalo v0.17.0, hoppy v0.5.0, and
+ff-rdp v0.3.0 all released green on the shared pipeline. All three now
+publish deb/rpm to Cloudsmith (`ractive/ractive-pkgs`) and ship packaged
+shell completions; hoppy additionally gained musl static builds (the
+"links OpenSSL" premise was vestigial — see hoppy iter-80) and a winget
+bootstrap submission (microsoft/winget-pkgs#400670). Remaining manual
+steps live in hoppy's [[iteration-80-musl-targets-winget]] plan: Cloudsmith
+repo visibility → open-source, WINGET_TOKEN + caller identifier after
+moderation, AUR account.
+
 ## Key sources
 
 - GoReleaser Rust builder: <https://goreleaser.com/customization/builds/rust/>
