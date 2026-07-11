@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.17.0 — 2026-07-11
+
+### Added
+
+- Linux packages: `.deb` and `.rpm` are built on every release, attached as
+  release assets, and published to the hosted apt/yum repos at
+  [Cloudsmith](https://cloudsmith.io/~ractive/repos/ractive-pkgs)
+  (`ractive/ractive-pkgs`).
+- Shell completions (`hyalo completion <shell>`) are now packaged: included
+  in all release archives and installed by the `.deb`/`.rpm` at the
+  standard bash/zsh/fish paths.
+- CycloneDX SBOMs and GitHub build-provenance attestations for native
+  builds.
+
+### Changed
+
+- The release pipeline moved to the shared reusable workflow in
+  [ractive/release-workflows](https://github.com/ractive/release-workflows)
+  (`@v0.2.0`); `release.yml` is now a thin caller. Release archives are
+  named `hyalo-v<version>-<target>.*` (previously unversioned) and include
+  `LICENSE` and `README.md`.
+- Releases can be rehearsed end to end with a `workflow_dispatch` dry run
+  (builds and packages everything, publishes nothing).
+
+### Fixed
+
+- Two `clippy` findings from the Rust 1.97 toolchain (`question_mark`,
+  `unneeded_wildcard_pattern`).
+
 ## 0.16.1 — 2026-07-10
 
 ### Fixed
