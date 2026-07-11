@@ -124,15 +124,13 @@ fn effective_index_path_for(
         if let Some(path) = flags.effective_index_path(vault_dir) {
             let came_from_file = flags.index_file.is_some();
             (path, came_from_file)
-        } else if let Some(global) = global_index_file {
-            (global.to_path_buf(), true)
         } else {
-            return None;
+            let global = global_index_file?;
+            (global.to_path_buf(), true)
         }
-    } else if let Some(global) = global_index_file {
-        (global.to_path_buf(), true)
     } else {
-        return None;
+        let global = global_index_file?;
+        (global.to_path_buf(), true)
     };
 
     // Relative --index-file paths are resolved against CWD.
@@ -1109,7 +1107,6 @@ fn run_inner() -> Result<(), AppError> {
                         line,
                         section,
                         all,
-                        dry_run: _,
                         ..
                     } => (
                         HintSource::TaskToggle,
