@@ -151,10 +151,16 @@ All artifacts are idempotent — re-running `hyalo init --claude` updates to the
 ### Homebrew (macOS & Linux)
 
 ```sh
+brew trust --formula ractive/tap/hyalo   # Homebrew 6+: third-party taps need one-time trust
 brew install ractive/tap/hyalo
 ```
 
 Covers macOS (Apple Silicon) and Linux (x86_64 and ARM64). The Linux binaries are statically linked against musl, so they have no glibc dependency.
+
+Homebrew 6 introduced [tap trust](https://docs.brew.sh/Tap-Trust): formulae
+from third-party taps refuse to load until trusted. `brew trust --formula`
+scopes the trust to just this formula; `brew trust ractive/tap` trusts the
+whole tap instead.
 
 ### apt (Debian & Ubuntu)
 
