@@ -3,8 +3,8 @@
 # package managers) has already succeeded. Re-running the failed job would pin
 # to the release commit's workflow definition and manifests, so a fix pushed to
 # main can never reach it; this workflow runs the same publish steps against a
-# chosen ref instead. Publishing is idempotent here: every step treats
-# "already uploaded" as success, so a partial earlier publish is safe to resume.
+# chosen ref instead. Publishing is idempotent: every step treats "already
+# uploaded" as success, so a partial earlier publish is safe to resume.
 name: Publish crates
 
 on:
@@ -15,100 +15,13 @@ on:
         required: false
         default: "main"
 
+permissions:
+  contents: read
+
 jobs:
-  crates-io:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          ref: ${{ inputs.ref }}
-
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-
-      - name: Verify CARGO_TOKEN is set
-        env:
-          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        shell: bash
-        run: |
-          if [ -z "${CARGO_TOKEN}" ]; then
-            echo "ERROR: CARGO_TOKEN secret is not set"
-            exit 1
-          fi
-
-      - name: Publish hyalo-core to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        run: |
-          output=$(cargo publish --package hyalo-core --locked 2>&1) && exit 0
-          if echo "$output" | grep -qE 'already (uploaded|exists)'; then
-            echo "hyalo-core already published, skipping."
-          else
-            echo "$output" >&2
-            exit 1
-          fi
-
-      - name: Publish hyalo-mdlint to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        run: |
-          set -euo pipefail
-          max_attempts=10
-          delay=15
-          for attempt in $(seq 1 "$max_attempts"); do
-            echo "Publishing hyalo-mdlint (attempt $attempt/$max_attempts)..."
-            if output=$(cargo publish --package hyalo-mdlint --locked 2>&1); then
-              echo "$output"
-              echo "hyalo-mdlint published successfully."
-              exit 0
-            fi
-            echo "$output"
-            if echo "$output" | grep -qE 'already (uploaded|exists)'; then
-              echo "hyalo-mdlint already published, skipping."
-              exit 0
-            fi
-            if echo "$output" | grep -qiE 'failed to select a version|no matching package named|depends on'; then
-              if [ "$attempt" -eq "$max_attempts" ]; then
-                echo "ERROR: giving up after $max_attempts attempts" >&2
-                exit 1
-              fi
-              echo "Index not yet updated, waiting ${delay}s..."
-              sleep "$delay"
-              delay=$((delay * 2))
-            else
-              echo "ERROR: cargo publish failed with a non-index error" >&2
-              exit 1
-            fi
-          done
-
-      - name: Publish hyalo-cli to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        run: |
-          set -euo pipefail
-          max_attempts=10
-          delay=15
-          for attempt in $(seq 1 "$max_attempts"); do
-            echo "Publishing hyalo-cli (attempt $attempt/$max_attempts)..."
-            if output=$(cargo publish --package hyalo-cli --locked 2>&1); then
-              echo "$output"
-              echo "hyalo-cli published successfully."
-              exit 0
-            fi
-            echo "$output"
-            if echo "$output" | grep -qE 'already (uploaded|exists)'; then
-              echo "hyalo-cli already published, skipping."
-              exit 0
-            fi
-            if echo "$output" | grep -qiE 'failed to select a version|no matching package named|depends on'; then
-              if [ "$attempt" -eq "$max_attempts" ]; then
-                echo "ERROR: giving up after $max_attempts attempts" >&2
-                exit 1
-              fi
-              echo "Index not yet updated, waiting ${delay}s..."
-              sleep "$delay"
-              delay=$((delay * 2))
-            else
-              echo "ERROR: cargo publish failed with a non-index error" >&2
-              exit 1
-            fi
-          done
+  publish:
+    uses: ractive/release-workflows/.github/workflows/publish-crates.yml@v0.2.0
+    secrets: inherit
+    with:
+      publish-crates: hyalo-core,hyalo-mdlint,hyalo-cli
+      ref: ${{ inputs.ref }}
