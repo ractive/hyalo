@@ -42,7 +42,7 @@ const SUBCOMMANDS: &[&[&str]] = &[
 ];
 
 /// Commands allowed to skip the EXAMPLES requirement (no-op / meta commands).
-const EXAMPLES_ALLOWLIST: &[&str] = &["help", "completion"];
+const EXAMPLES_ALLOWLIST: &[&str] = &["help", "completions"];
 
 #[derive(Debug, Deserialize)]
 pub struct StalePatternFile {

@@ -1210,16 +1210,20 @@ Repeatable (AND).\n\
     Config,
     /// Generate shell completions for the given shell
     #[command(
+        name = "completions",
+        // Original singular name, kept for backward compatibility (hoppy and
+        // ff-rdp use the plural form; hyalo now matches).
+        visible_alias = "completion",
         display_order = 900,
         long_about = "Generate shell completion scripts.\n\n\
             Prints a completion script for the specified shell to stdout.\n\
             Source or install the output in your shell's completion directory.\n\n\
             EXAMPLES:\n\
-            \u{00a0} bash:        hyalo completion bash  > ~/.local/share/bash-completion/completions/hyalo\n\
-            \u{00a0} zsh:         hyalo completion zsh   > ~/.local/share/zsh/site-functions/_hyalo\n\
-            \u{00a0} fish:        hyalo completion fish  > ~/.config/fish/completions/hyalo.fish\n\
-            \u{00a0} elvish:      hyalo completion elvish > ~/.config/elvish/lib/completions/hyalo.elv\n\
-            \u{00a0} powershell:  hyalo completion powershell > _hyalo.ps1\n\n\
+            \u{00a0} bash:        hyalo completions bash  > ~/.local/share/bash-completion/completions/hyalo\n\
+            \u{00a0} zsh:         hyalo completions zsh   > ~/.local/share/zsh/site-functions/_hyalo\n\
+            \u{00a0} fish:        hyalo completions fish  > ~/.config/fish/completions/hyalo.fish\n\
+            \u{00a0} elvish:      hyalo completions elvish > ~/.config/elvish/lib/completions/hyalo.elv\n\
+            \u{00a0} powershell:  hyalo completions powershell > _hyalo.ps1\n\n\
             SIDE EFFECTS: None (prints to stdout)."
     )]
     Completion {

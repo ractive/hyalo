@@ -36,7 +36,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Use a view:                   hyalo find --view todo
   Use view with overrides:      hyalo find --view todo --limit 5
   Remove a view:                hyalo views remove todo
-  Generate shell completions:   hyalo completion bash";
+  Generate shell completions:   hyalo completions bash";
 
 /// Long help (shown by `--help`): command reference, cookbook, and output shapes.
 pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
@@ -101,8 +101,8 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Drop-index (delete snapshot index):
     hyalo drop-index [-p/--path PATH]
 
-  Completion (generate shell completions):
-    hyalo completion <SHELL>    # bash, zsh, fish, elvish, powershell
+  Completions (generate shell completions):
+    hyalo completions <SHELL>   # bash, zsh, fish, elvish, powershell
 
   Global flags (apply to all commands):
     -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)

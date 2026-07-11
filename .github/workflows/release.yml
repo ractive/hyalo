@@ -24,21 +24,20 @@ jobs:
       # Publishes the .deb/.rpm to the hosted apt/yum repos at Cloudsmith
       # (non-blocking; needs the CLOUDSMITH_API_KEY repo secret):
       cloudsmith-repo: ractive/hyalo
-      # Ship shell completions (hyalo's subcommand is `completion`, singular)
-      # in archives and deb/rpm. Copies into crates/hyalo-cli/ because
-      # cargo-deb/cargo-generate-rpm resolve asset paths relative to the
-      # crate directory.
+      # Ship shell completions in archives and deb/rpm. Copies into
+      # crates/hyalo-cli/ because cargo-deb/cargo-generate-rpm resolve
+      # asset paths relative to the crate directory.
       pre-package-command: |
         mkdir -p completions
         if [ "$CROSS" = "true" ] || [ "$TARGET" = "aarch64-pc-windows-msvc" ]; then
           # Target binary is not host-runnable: generate with a host build.
-          cargo run --release -p hyalo-cli --bin hyalo -- completion bash > completions/hyalo.bash
-          cargo run --release -p hyalo-cli --bin hyalo -- completion zsh  > completions/_hyalo
-          cargo run --release -p hyalo-cli --bin hyalo -- completion fish > completions/hyalo.fish
+          cargo run --release -p hyalo-cli --bin hyalo -- completions bash > completions/hyalo.bash
+          cargo run --release -p hyalo-cli --bin hyalo -- completions zsh  > completions/_hyalo
+          cargo run --release -p hyalo-cli --bin hyalo -- completions fish > completions/hyalo.fish
         else
-          "$BIN_PATH" completion bash > completions/hyalo.bash
-          "$BIN_PATH" completion zsh  > completions/_hyalo
-          "$BIN_PATH" completion fish > completions/hyalo.fish
+          "$BIN_PATH" completions bash > completions/hyalo.bash
+          "$BIN_PATH" completions zsh  > completions/_hyalo
+          "$BIN_PATH" completions fish > completions/hyalo.fish
         fi
         mkdir -p crates/hyalo-cli/completions
         cp completions/* crates/hyalo-cli/completions/
