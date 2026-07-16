@@ -108,24 +108,34 @@ So hyalo + a bundled `okf` skill = a **vendor-neutral, Claude-native OKF produce
 
 1. **Timezone-aware `timestamp` is rejected — a real incompatibility.** `is_datetime` (`crates/hyalo-core/src/frontmatter/types.rs:42`) hard-requires exactly 19 chars `YYYY-MM-DDThh:mm:ss`. OKF's real timestamps carry an offset (`2026-05-28T22:44:47+00:00`, 25 chars). hyalo's `datetime` constraint + `HYALO004` would flag **every** real OKF concept. Needs an RFC 3339 / offset-aware form (proposed `datetime-tz`, keeping naive `datetime` intact). Fixed in [[iteration-163-okf-frontmatter-foundations]].
 2. **No reserved-file exemption.** With `type` required globally, every `index.md`/`log.md` is flagged for missing `type` — but the spec *mandates* they have none. `lint.ignore` is a coarse path list; there's no glob-scoped "exempt `**/index.md`, `**/log.md` from required-type", no root-`index.md` `okf_version` allowance. Most important integration caveat. [[iteration-163-okf-frontmatter-foundations]].
-3. **`hyalo init --format=okf` doesn't exist.** `init` is hardcoded to Claude/pi skills (`crates/hyalo-cli/src/commands/init.rs`); no path to scaffold an OKF-shaped `.hyalo.toml`. [[iteration-164-okf-init-profile-and-skill]].
+3. **No OKF init profile.** `init` is hardcoded to Claude/pi skills (`crates/hyalo-cli/src/commands/init.rs`); no path to scaffold an OKF-shaped `.hyalo.toml`. NB: the flag must be `--profile okf`, not `--format=okf` — `--format` is the global output flag and collides. [[iteration-164-okf-init-profile-and-skill]].
 4. **No `index.md` / `log.md` generators.** These are *derived* data; maintaining them by hand is exactly the tedium hyalo should kill. `hyalo okf index` / `hyalo okf log` have no equivalent anywhere in the OKF ecosystem — highest-leverage, unique. [[iteration-165-okf-index-and-log-generators]].
 5. **No conformance profile.** Spec §9 = 3 rules; no `hyalo lint` ruleset encodes it, and broken-link checks must be *warn* not *error* to stay spec-compliant. [[iteration-166-okf-conformance-lint]].
 6. **No bundled OKF skill.** `init --claude` installs `hyalo`/`hyalo-tidy` skills; no OKF-authoring/producer skill. [[iteration-164-okf-init-profile-and-skill]].
-7. **No citation-aware linting.** hyalo has only generic markdown link rules (MD011/034/042/…) + internal broken-link repair (`hyalo links`); nothing understands the `# Citations` convention. Missing: *presence* (warn when a claim-bearing concept has no `# Citations`), *resolvability* (bundle-relative / `references/` citation links resolve), *non-regression* (don't shrink a doc's citation count — the reference-agent's own augmentation guard). External URL reachability stays out (determinism/offline). A convention (SHOULD), so warn-level advisory in the okf profile, not §9 conformance. [[iteration-166-okf-conformance-lint]].
+7. **No citation-aware linting.** hyalo has only generic markdown link rules (MD011/034/042/…) + internal broken-link repair (`hyalo links`); nothing understands the `# Citations` convention. Missing: *presence* (warn when a claim-bearing concept has no `# Citations`), *resolvability* (bundle-relative / `references/` citation links resolve), *non-regression* (don't shrink a doc's citation count — the reference-agent's own augmentation guard). External URL reachability stays out (determinism/offline). A convention (SHOULD), so warn-level advisory in the okf profile, not §9 conformance. Nuance: §8 says citations are *numbered*, but all official sample bundles use `-` bullets — accept both. [[iteration-166-okf-conformance-lint]].
+8. **Bundle-absolute link edge case.** SPEC §5 *recommends* leading-`/` bundle-root links ("stable when documents are moved"). `strip_site_prefix` (`crates/hyalo-core/src/link_graph.rs:569`) already falls back to vault-root resolution on prefix mismatch, so these mostly work today — but the auto-derived `site_prefix` (vault dirname) mis-strips when the bundle dir shares a name with a top-level subdir (bundle root named `tables/` breaks `/tables/x.md`). The OKF profile must pin `site_prefix`; `--site-prefix ""` currently means "disable resolution", which is also wrong for OKF. [[iteration-163-okf-frontmatter-foundations]].
 
 ## Proposed shape
 
 An **"okf" profile + a small `hyalo okf` subcommand group** — not a plugin architecture (overkill for a v0.1 draft):
 
-- **`datetime-tz` constraint type** — RFC 3339 with offset; naive `datetime` unchanged.
+- **`datetime-tz` constraint type** — RFC 3339 with offset (`+00:00` and `Z`, quoted and unquoted YAML); naive `datetime` unchanged.
 - **Reserved-file exemption** — schema-level `exempt = ["**/index.md", "**/log.md"]` honored by validation + lint, plus root-`index.md` `okf_version` allowance.
-- **`hyalo init --format=okf`** — writes an OKF `.hyalo.toml` (base schema: `required=["type"]`, recommended props declared with `timestamp:datetime-tz`, `resource` URL pattern; reserved-file exemptions; broken-links = warn) and, with `--claude`, an `okf` skill.
+- **Bundle-absolute link resolution** — spec-recommended `/x.md` form resolves from bundle root regardless of dirname (site_prefix pinning; see gap #8).
+- **`hyalo init --profile okf`** — writes an OKF `.hyalo.toml` (base schema: `required=["type"]`, recommended props declared with `timestamp:datetime-tz`, `resource` URL pattern; reserved-file exemptions; site_prefix pin; broken-links = warn) and, with `--claude`, an `okf` skill.
 - **`hyalo okf index`** — deterministic `index.md` (re)generation from `title`/`description`, grouped by `type`.
-- **`hyalo okf log`** — prepend a dated `log.md` entry.
+- **`hyalo okf log [TARGET]`** — prepend a dated entry to the `log.md` at any hierarchy level (§7 scope semantics).
 - **Frontmatter key-order normalization** to `type, resource, title, description, tags, timestamp`, plus tz-aware `timestamp` auto-stamp on write.
-- **`hyalo lint --profile okf`** — encodes SPEC §9; optional augmentation guards (don't drop `# Schema`/`# Citations`).
+- **`hyalo lint --profile okf`** — encodes SPEC §9; citation rules (advisory); optional augmentation guards (don't drop `# Schema`/`# Citations`).
 - **Bundled `okf` skill** — teaches an agent OKF conventions + which hyalo commands to use for the deterministic layer.
+
+### CLI design decisions (2026-07-16 second-pass review)
+
+1. **`--profile`, not `--format`.** `hyalo init --format=okf` is impossible: `--format` is the global output flag (`json|text`) and propagates into subcommands (verified: `error: invalid value 'okf'`). `--profile okf` on both `init` and `lint` makes "profile" one coherent concept.
+2. **Keep the `hyalo okf` group** (vs a bare `hyalo index`): "index" already means the snapshot index (`create-index`/`drop-index`); an unqualified `index` command would collide. `okf index`/`okf log` are self-documenting.
+3. **Generators default to dry-run + `--apply`**, matching the `links fix`/`links auto` house convention for bulk mutations.
+4. **Link forms:** SPEC §5 *recommends* bundle-absolute `/x.md` (stable under moves) — the "never leading `/`" rule seen in the reference agent's prompts is that agent's internal convention, **not** the spec. Official sample bundles use relative links in `index.md`; the blog's concept example uses absolute. hyalo must resolve both; generated indexes follow the samples (relative).
+5. **Citations:** SPEC §8 says numbered; every official sample bundle uses `-` bullets. Lint accepts both.
 
 ## Docs-sync obligation
 

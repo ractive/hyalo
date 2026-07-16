@@ -33,7 +33,7 @@ Positions hyalo as *the* OKF validator the ecosystem currently lacks. Encodes SP
 hyalo has no citation-aware linting today (only generic MD link rules + internal broken-link repair). Make `# Citations` first-class in the okf profile. Convention (SHOULD), so warn-only + opt-in — never a conformance error.
 
 - [ ] Rule `citations-present`: a concept doc making factual claims (heuristic: non-reserved, `resource`-less or `Reference`-typed, or configurable type set) SHOULD have a `# Citations` section — warn if absent
-- [ ] Rule `citations-well-formed`: entries under `# Citations` are a link/bullet list (URL, bundle-relative path, or `references/…`), not free prose — warn on malformed entries
+- [ ] Rule `citations-well-formed`: entries under `# Citations` are a list of links (URL, bundle-absolute/relative path, or `references/…`), not free prose — warn on malformed entries. Accept **both numbered lists (SPEC §8 says "numbered") and `-` bullets (what all official sample bundles actually use)**; style preference configurable, default lenient
 - [ ] Rule `citations-resolve`: bundle-relative / `references/` citation links must resolve to existing files (reuse the `hyalo links` resolver) — warn on unresolved (broken links stay warn per spec)
 - [ ] External `http(s)` citation URLs: parsed and surfaced, but **not** network-checked by default (determinism/offline); optional `--check-urls` left as a future flag, out of scope here
 - [ ] All citation rules live behind the okf profile and are individually toggleable via `hyalo lint-rules set`

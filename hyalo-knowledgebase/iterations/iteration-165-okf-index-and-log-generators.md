@@ -26,7 +26,7 @@ The highest-leverage, ecosystem-unique features: deterministic (re)generation of
 - [ ] For each dir: list child concepts + subdirs, group entries by frontmatter `type`, emit `* [title](relative-link) - description` (title falls back to filename; description optional)
 - [ ] Preserve/emit the root-`index.md` `okf_version` line; never clobber non-generated prose above/below a generated marker (define a stable managed region)
 - [ ] Flags: `--dry-run` (default), `--apply`, `--dir`/path scoping; exit non-zero on drift in dry-run for CI use
-- [ ] Use bundle-relative links; never leading `/` (per spec/agent rules); cross-platform paths
+- [ ] Emit **relative** links in generated `index.md` entries (matches §6 examples and all official sample bundles). Note: SPEC §5 actually *recommends* bundle-absolute `/x.md` for concept cross-links — both forms must resolve (iter-163); the generator just follows the samples' de-facto style. Cross-platform paths, forward slashes only
 
 ### 2. `hyalo okf log`
 
@@ -64,5 +64,5 @@ Per SPEC §7 a `log.md` MAY appear at **any level** of the hierarchy and records
 
 - [ ] `hyalo okf index --apply` deterministically regenerates spec-shaped `index.md` files and is idempotent
 - [ ] `hyalo okf log` maintains a spec-shaped `log.md`
-- [ ] Generated links are bundle-relative and resolve; runs on Windows/macOS/Linux
+- [ ] Generated index links are relative (sample-bundle style) and resolve; runs on Windows/macOS/Linux
 - [ ] Quality gates pass; docs + skill updated in the same PR
