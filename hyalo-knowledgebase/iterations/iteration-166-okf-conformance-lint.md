@@ -23,6 +23,7 @@ Positions hyalo as *the* OKF validator the ecosystem currently lacks. Encodes SP
 ### 1. Conformance profile
 
 - [ ] `--profile okf` enabling the §9 checks in `crates/hyalo-mdlint` as an **ephemeral overlay** (no config needed — CI / third-party bundles). In a vault initialized via `init --profile okf`, the same rules come from `.hyalo.toml` so **plain `hyalo lint` suffices** — decision: no `okf lint` subcommand (see [[okf-open-knowledge-format]] CLI-design §3a)
+- [ ] Overlay and `init` materialization MUST share the same fragment-merge code; overlay is **idempotent** — `lint --profile okf` on an already-initialized okf vault behaves identically to plain `hyalo lint` (test this; model in [[path-bound-schemas]] "How schemas, bind, and profiles fit together")
 - [ ] `hyalo okf --help` and `okf index`/`okf log` outputs emit a hint: `-> hyalo lint --profile okf  # validate bundle conformance`
 - [ ] `--profile` composes with the existing lint surface (`--fix`, `--rule`, `--strict`, `--files-from -`) — no forked code path
 - [ ] Rule: every non-reserved `.md` has a parseable YAML frontmatter block (error if absent/unparseable)

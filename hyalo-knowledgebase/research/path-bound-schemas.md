@@ -46,6 +46,27 @@ Ordered, first match wins; compiled to a `GlobSet` at schema-load time; unknown 
 
 **External prior art** (from [[profile-candidates-beyond-okf]]): Jekyll `defaults: scope: {path, type}`, Decap folder collections, Hugo `cascade._target.path`, ESLint `overrides.files` — first-match/last-match ordered glob binding is the industry-standard shape.
 
+## How schemas, bind, and profiles fit together
+
+Three layers (settled 2026-07-17 after discussion):
+
+1. **Schema** — the validation model, executes at runtime: `[schema.default]` + `[schema.types.X]` (required props, constraints, sections). What `lint`/`validate_on_write` run against.
+2. **Bind** — the router from file → type. Today the only route is `type:` frontmatter; `[schema.bind]` adds path-based routing. It belongs to the *schema* layer (it configures schema resolution) and is useful with zero profiles — e.g. bind your own `iterations/**` to `iteration`.
+
+   ```text
+   file → type: frontmatter? ──yes──► [schema.types.<that>]
+        └─no──► path matches [schema.bind]? ──yes──► [schema.types.<bound>]
+              └─no──► [schema.default]
+   ```
+
+3. **Profile** — a **named, pre-authored config fragment** (types + bind entries + lint rules + templates) shipped inside hyalo, with **two application modes**:
+   - **Materialize**: `init --profile X` writes the fragment into `.hyalo.toml` — persistent, hand-editable, composable (multiple profiles = multiple stamps).
+   - **Overlay**: `lint --profile X` merges the fragment **in-memory for one run** — nothing written (CI, third-party bundles).
+
+   Both modes MUST share the same merge code; consequence: the overlay is **idempotent** — `lint --profile okf` in an already-okf-initialized vault is a no-op merge, identical to plain `hyalo lint`. No mode state, no double-application.
+
+   NB: an earlier framing "profile = install-time only" was wrong (contradicted by `lint --profile`); the correct definition is "named config bundle, two application sites". Analogy: ESLint shareable preset (`extends` in config vs `--config` ad-hoc); bind ≈ `overrides.files`.
+
 ## Scheduling
 
 Follows this chain's pattern — capability ships with its first consumer:
