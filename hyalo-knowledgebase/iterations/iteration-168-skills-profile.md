@@ -28,7 +28,7 @@ Third profile (see [[profile-candidates-beyond-okf]]). The Agent Skills spec (<h
 
 ### 2. Profile fragment
 
-- [ ] `[schema.types.skill]` (dispatch: fixed filename `SKILL.md` rather than `type:` frontmatter — verify iter-164 machinery supports filename-based type dispatch; if not, this is the iteration's design work)
+- [ ] `[schema.types.skill]` — dispatched by path via iter-167's `[schema.bind]`: `"**/SKILL.md" = "skill"` (resolves the filename-dispatch question; see [[path-bound-schemas]])
 - [ ] `name`: required, pattern `^[a-z0-9]+(-[a-z0-9]+)*$`, 1–64 chars, ≠ reserved words (`anthropic`, `claude`), == parent dirname
 - [ ] `description`: required, 1–1024 chars, no XML tags (pattern)
 - [ ] Optional: `license`, `compatibility` (≤500), `metadata` (map — note: hyalo treats objects as text; validate presence only, don't type it), `allowed-tools`

@@ -12,17 +12,28 @@ depends-on: iteration-166-okf-conformance-lint
 
 # Iteration 167 — `madr` profile
 
-Second profile after okf (see [[profile-candidates-beyond-okf]]). MADR 4.0.0 (<https://adr.github.io/madr/>) is the cheapest profile — typed docs with a status lifecycle, exactly hyalo's sweet spot — and the first real test that iter-164's data-driven profile machinery holds: this profile MUST be additive data + at most small new rule kinds, no new per-profile code paths.
+Second profile after okf (see [[profile-candidates-beyond-okf]]). MADR 4.0.0 (<https://adr.github.io/madr/>) is typed docs with a status lifecycle — exactly hyalo's sweet spot — and the first real test that iter-164's data-driven profile machinery holds: this profile MUST be additive data + at most small new rule kinds, no new per-profile code paths.
+
+This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[path-bound-schemas]]), with madr as first consumer: ADRs usually live in a subdirectory (`docs/decisions/**`) of a larger vault, so the profile must apply to *those files only*. Iters 168/169 consume the same mechanism.
 
 ## Goal
 
-`hyalo init --profile madr` + `hyalo lint --profile madr` make a `docs/decisions/` ADR directory schema-valid, scaffoldable with auto-numbered filenames, and lintable — with a generated TOC/status dashboard (parity with `adr generate toc`).
+`hyalo init --profile madr` + `hyalo lint` make an ADR directory inside a larger vault schema-valid, scaffoldable with auto-numbered filenames, and lintable — with a generated TOC/status dashboard (parity with `adr generate toc`).
 
 ## Steps / Tasks
+
+### 0. `[schema.bind]` — path-bound schemas (generic mechanism)
+
+- [ ] `[schema.bind]` ordered path-glob → type map in `.hyalo.toml`; compiled to `GlobSet` at schema-load; first match wins; unknown target type → config warning (design + citations in [[path-bound-schemas]])
+- [ ] Binding assigns the **effective schema** during lint/`validate_on_write` when `type:` frontmatter is absent (extends the existing `infer_type_from_path` seam, `crates/hyalo-cli/src/commands/lint.rs:776`) — not just `--fix`-time inference
+- [ ] Precedence: explicit `type:` frontmatter wins; frontmatter↔binding mismatch → new warn-level lint rule
+- [ ] `lint --fix` type insertion consults bindings after `filename-template`
+- [ ] Cross-platform glob matching (reuse centralized `globset` infra), tests for ordering/first-match/ambiguity
 
 ### 1. Profile fragment (data-driven)
 
 - [ ] `[schema.types.adr]`: `status` enum `proposed|rejected|accepted|deprecated` + superseded pattern (`superseded by ADR-\d{4}`), `date`, `decision-makers`/`consulted`/`informed` string-lists — all optional-but-typed per MADR 4
+- [ ] Profile writes a bind entry for the ADR directory (`init --profile madr` derives/asks the path; default `docs/decisions/**`) so the schema applies to those files only, inside any larger vault
 - [ ] Required sections: `## Context and Problem Statement`, `## Considered Options`, `## Decision Outcome`
 - [ ] `filename-template` producing `NNNN-slug.md` — check whether `{n}` zero-pads; if not, add padding syntax (e.g. `{n:04}`) to `crates/hyalo-core` template expansion (generally useful, not madr-specific)
 - [ ] MADR 3.x variant: accept `deciders` (3.x) alongside `decision-makers` (4.x) — decide mechanism (alias in schema vs second profile `madr3`); document the choice

@@ -26,7 +26,7 @@ Fourth profile (see [[profile-candidates-beyond-okf]]). Keep a Changelog 1.1.0 (
 - [ ] Grammar for changelog: `# Changelog` → optional `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` (semver, strictly descending; dates monotonically non-increasing; optional `[YANKED]` marker) → `###` subsections limited to `Added|Changed|Deprecated|Removed|Fixed|Security`
 - [ ] Link-ref footer cross-check: every `[X.Y.Z]` heading has a matching link reference definition and vice versa
 - [ ] Lints: unknown `###` category, empty section, out-of-order versions, malformed dates
-- [ ] Single-file scope: profile targets `CHANGELOG.md` specifically (frontmatter-exempt), coexisting with a repo's other lint config — verify path-scoped profile application works
+- [ ] Single-file scope via iter-167's `[schema.bind]`: `"CHANGELOG.md" = "changelog"` — a frontmatter-less type bound purely by path (+ frontmatter exemption), coexisting with the vault's other profiles/config (see [[path-bound-schemas]])
 
 ### 2. Release generator
 

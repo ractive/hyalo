@@ -42,6 +42,7 @@ SPEC §5: links starting with `/` are bundle-root-relative and the **recommended
 - [ ] Honor `exempt` in schema validation (`validate_on_write`) AND in `hyalo lint` frontmatter/required-type checks — exempt files skip required-`type`/frontmatter-presence rules
 - [ ] Allow the bundle-root `index.md` to carry a lone `okf_version` key without tripping undeclared-property (`HYALO002`) — scoped so it applies only to the root index, not arbitrary files
 - [ ] Confirm glob matching is vault-relative and cross-platform (Windows separators)
+- [ ] Note: `exempt` is logically "bind to no schema" — iter-167's `[schema.bind]` may later subsume it as `= "none"` sugar ([[path-bound-schemas]]); keep `exempt` simple here, don't pre-build the general mechanism
 
 ### 4. Tests
 

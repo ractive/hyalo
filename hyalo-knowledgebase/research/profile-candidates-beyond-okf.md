@@ -79,6 +79,7 @@ Budget these into the profiles feature; several are shared across many profiles:
 9. **TOML `+++` frontmatter** — unlocks Zola + full Hugo
 10. **Non-`.md` extensions** — `.mdc` (Cursor), `.qmd` (Quarto)
 11. **Schema importers** — `types.json`, Decap `config.yml`, `frontmatter.json`, Jekyll `defaults:`
+12. **Path-bound schemas** — bind types/profiles to globs/files (`adrs/**` → madr, `CHANGELOG.md` → changelog); prerequisite for multiple profiles coexisting in one vault. Prior art: Jekyll `defaults: scope`, Decap collections, Hugo `cascade._target`, ESLint `overrides`. **Designed** ([[path-bound-schemas]]) — `[schema.bind]` ships in [[iteration-167-madr-profile]]
 
 ## Design implication for iter-164
 
