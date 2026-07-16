@@ -17,7 +17,7 @@ Survey of markdown standards/conventions that could become additional `hyalo ini
 2. **`skills`** — Agent Skills SKILL.md; formal spec, hard regex/length constraints, huge strategic adjacency (hyalo ships SKILL.md templates itself)
 3. **`madr`** — Markdown ADRs; typed docs with lifecycle + `NNNN-slug` auto-numbering (hyalo's `filename-template {n}` nearly covers it already)
 4. **`changelog`** — Keep a Changelog 1.1.0; pure heading grammar + a release-rotation generator sharing `okf log` machinery
-5. **Obsidian `types.json` import** — a bridge feature (importer, not really a profile): `.obsidian/types.json` ↔ hyalo schema round-trip
+5. **Obsidian `types.json` import** — a bridge feature, one-way and modest (see caveats below; prior finding in [[obsidian-properties]])
 6. SSG profiles (`hugo`, `docusaurus`, `jekyll`, `mkdocs-material`, `starlight`) — big markets, later wave or community-contributed
 
 ## Tier A — agent-ecosystem adjacency (do these next)
@@ -41,9 +41,12 @@ Survey of markdown standards/conventions that could become additional `hyalo ini
 - **Profile enforces/generates:** grammar, semver descending, date monotonicity, unknown/empty subsection lints, link-ref cross-check; "release" generator (rotate Unreleased → version) — structurally the planned `okf log` machinery.
 - **Why:** arguably the widest-adopted structured-markdown convention anywhere; no Rust-native linter of note exists. Requires a **heading-grammar lint mode** (frontmatter-less profile — same capability the OKF reserved-file checks need for `log.md`).
 
-### Obsidian (`types.json` importer + thin rules)
+### Obsidian (`types.json` importer + thin rules) — downgraded on review
 
-- Obsidian standardizes property *types* (Text/List/Number/Checkbox/Date/Datetime; reserved `tags`/`aliases`/`cssclasses`), not required keys/lifecycles — see [[obsidian-properties]]. The killer feature is **`.obsidian/types.json` ↔ hyalo schema import/export** (near 1:1 type mapping), plus small lints (reserved keys are lists, `tag`→`tags` normalization). Ship as an importer + built-in rules rather than a headline profile.
+- Obsidian standardizes property *types* (Text/List/Number/Checkbox/Date/Datetime; reserved `tags`/`aliases`/`cssclasses`), not required keys/lifecycles — see [[obsidian-properties]], whose "Global Type Assignment" finding is decisive: **`types.json` is a flat vault-global `property-name → type` map applied to any document** — no document types, no required fields, no enums/patterns, and the types are *UI rendering hints*, not validation constraints.
+- **Structural fit:** hyalo *does* have a vault-global constraints layer (`[schema.default.properties.*]` in `crates/hyalo-core/src/schema.rs` — a full `TypeSchema` merged under per-type overrides), so a **one-way import** `types.json` → `[schema.default.properties]` is mechanically clean (text→string, checkbox→boolean, multitext→string-list, …).
+- **Caveats:** the import is a semantic upgrade (hints become lint constraints — may flood real vaults with warnings; import should default to `severity=warn`), yields only loose types, and the **reverse direction is lossy** — hyalo legally types the same property differently per document type, which `types.json` cannot represent. An earlier draft of this note claimed a "near 1:1 round-trip"; that was wrong.
+- Verdict: a small, optional `hyalo import obsidian` convenience + thin lints (reserved keys are lists, `tag`→`tags`), well below `skills`/`madr`/`changelog` in priority.
 
 ## Tier B — SSG/CMS profiles (large markets, later wave)
 
