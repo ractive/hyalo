@@ -112,6 +112,7 @@ So hyalo + a bundled `okf` skill = a **vendor-neutral, Claude-native OKF produce
 4. **No `index.md` / `log.md` generators.** These are *derived* data; maintaining them by hand is exactly the tedium hyalo should kill. `hyalo okf index` / `hyalo okf log` have no equivalent anywhere in the OKF ecosystem — highest-leverage, unique. [[iteration-165-okf-index-and-log-generators]].
 5. **No conformance profile.** Spec §9 = 3 rules; no `hyalo lint` ruleset encodes it, and broken-link checks must be *warn* not *error* to stay spec-compliant. [[iteration-166-okf-conformance-lint]].
 6. **No bundled OKF skill.** `init --claude` installs `hyalo`/`hyalo-tidy` skills; no OKF-authoring/producer skill. [[iteration-164-okf-init-profile-and-skill]].
+7. **No citation-aware linting.** hyalo has only generic markdown link rules (MD011/034/042/…) + internal broken-link repair (`hyalo links`); nothing understands the `# Citations` convention. Missing: *presence* (warn when a claim-bearing concept has no `# Citations`), *resolvability* (bundle-relative / `references/` citation links resolve), *non-regression* (don't shrink a doc's citation count — the reference-agent's own augmentation guard). External URL reachability stays out (determinism/offline). A convention (SHOULD), so warn-level advisory in the okf profile, not §9 conformance. [[iteration-166-okf-conformance-lint]].
 
 ## Proposed shape
 

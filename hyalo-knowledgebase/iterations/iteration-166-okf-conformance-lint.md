@@ -28,18 +28,28 @@ Positions hyalo as *the* OKF validator the ecosystem currently lacks. Encodes SP
 - [ ] Rule: reserved files follow §6/§7 structure when present (`index.md` link-list shape; `log.md` date grouping) — warn
 - [ ] Ensure broken cross-links are **warn**, unknown `type`/extra keys are **allowed** (no error), per permissive model
 
-### 2. Optional augmentation guards (parity with reference_agent)
+### 2. Citation linting (advisory — OKF convention, warn-level)
+
+hyalo has no citation-aware linting today (only generic MD link rules + internal broken-link repair). Make `# Citations` first-class in the okf profile. Convention (SHOULD), so warn-only + opt-in — never a conformance error.
+
+- [ ] Rule `citations-present`: a concept doc making factual claims (heuristic: non-reserved, `resource`-less or `Reference`-typed, or configurable type set) SHOULD have a `# Citations` section — warn if absent
+- [ ] Rule `citations-well-formed`: entries under `# Citations` are a link/bullet list (URL, bundle-relative path, or `references/…`), not free prose — warn on malformed entries
+- [ ] Rule `citations-resolve`: bundle-relative / `references/` citation links must resolve to existing files (reuse the `hyalo links` resolver) — warn on unresolved (broken links stay warn per spec)
+- [ ] External `http(s)` citation URLs: parsed and surfaced, but **not** network-checked by default (determinism/offline); optional `--check-urls` left as a future flag, out of scope here
+- [ ] All citation rules live behind the okf profile and are individually toggleable via `hyalo lint-rules set`
+
+### 3. Optional augmentation guards (parity with reference_agent)
 
 - [ ] Warn when an edit would drop an existing `#` heading or shrink a `# Schema` field set / `# Citations` count (best-effort, diff-aware via `--files-from`)
 - [ ] Keep these advisory (warn), off by default outside the okf profile
 
-### 3. Tests
+### 4. Tests
 
 - [ ] e2e: all three committed sample bundles report conformant (0 errors) under `--profile okf`
 - [ ] e2e: a doc missing `type` → error; a broken link → warn (not error); an unknown `type` → clean
 - [ ] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 4. Docs sync (same PR)
+### 5. Docs sync (same PR)
 
 - [ ] `hyalo lint --help` documents `--profile okf`; `hyalo lint-rules list` shows the okf rules
 - [ ] README.md: "Validate an OKF bundle" section (`hyalo lint --profile okf`), note the warn-not-reject stance
