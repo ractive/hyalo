@@ -25,7 +25,7 @@ Makes OKF a first-class, discoverable target. Depends on [[iteration-163-okf-fro
 ### 1. `--profile` flag on `init`
 
 - [ ] Add `--profile <PROFILE>` (initially: `okf`) to `hyalo init` in `crates/hyalo-cli/src/commands/init.rs`; omitted = today's behavior
-- [ ] Refactor init scaffolding so profile-specific `.hyalo.toml` fragments are selectable (avoid a hard fork of the whole command)
+- [ ] **Data-driven design**: implement profiles as embedded declarative TOML fragments (schema + lint config + exemptions + template refs), not per-profile Rust code paths — `skills`/`madr`/`changelog` are queued behind okf and must be additive data (see [[profile-candidates-beyond-okf]])
 - [ ] Reject unknown profile values with a helpful error listing available profiles
 
 ### 2. OKF `.hyalo.toml` profile

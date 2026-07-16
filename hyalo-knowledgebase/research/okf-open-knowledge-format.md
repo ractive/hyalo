@@ -131,7 +131,7 @@ An **"okf" profile + a small `hyalo okf` subcommand group** — not a plugin arc
 
 ### CLI design decisions (2026-07-16 second-pass review)
 
-1. **`--profile`, not `--format`.** `hyalo init --format=okf` is impossible: `--format` is the global output flag (`json|text`) and propagates into subcommands (verified: `error: invalid value 'okf'`). `--profile okf` on both `init` and `lint` makes "profile" one coherent concept.
+1. **`--profile`, not `--format`.** `hyalo init --format=okf` is impossible: `--format` is the global output flag (`json|text`) and propagates into subcommands (verified: `error: invalid value 'okf'`). `--profile okf` on both `init` and `lint` makes "profile" one coherent concept. OKF is deliberately the *first* profile, not the only one — see [[profile-candidates-beyond-okf]] for the roadmap (`skills`, `madr`, `changelog`, …).
 2. **Keep the `hyalo okf` group** (vs a bare `hyalo index`): "index" already means the snapshot index (`create-index`/`drop-index`); an unqualified `index` command would collide. `okf index`/`okf log` are self-documenting.
 3. **Generators default to dry-run + `--apply`**, matching the `links fix`/`links auto` house convention for bulk mutations.
 4. **Link forms:** SPEC §5 *recommends* bundle-absolute `/x.md` (stable under moves) — the "never leading `/`" rule seen in the reference agent's prompts is that agent's internal convention, **not** the spec. Official sample bundles use relative links in `index.md`; the blog's concept example uses absolute. hyalo must resolve both; generated indexes follow the samples (relative).
