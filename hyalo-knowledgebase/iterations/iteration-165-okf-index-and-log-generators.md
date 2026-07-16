@@ -30,9 +30,16 @@ The highest-leverage, ecosystem-unique features: deterministic (re)generation of
 
 ### 2. `hyalo okf log`
 
-- [ ] `hyalo okf log --message "..."` prepends under today's `YYYY-MM-DD` heading (newest first), bold action word optional via `--action Update`
-- [ ] Create `log.md` if absent; append under existing date heading if present
-- [ ] `--dry-run`/`--apply`
+Per SPEC §7 a `log.md` MAY appear at **any level** of the hierarchy and records the history of **that scope** (directory-local, not bundle-wide) — so the target level must be selectable.
+
+- [ ] `hyalo okf log [TARGET] --message "..."` where `TARGET` selects which `log.md`:
+  - a directory → writes/creates `TARGET/log.md`
+  - a `log.md` file path → writes that file directly
+  - omitted → defaults to the bundle-root `log.md` (`<dir>/log.md`)
+- [ ] Validate `TARGET` is inside the vault/bundle; reject paths that escape it; cross-platform path handling
+- [ ] Prepends under today's `YYYY-MM-DD` heading (newest first), leading bold action word optional via `--action Update` (convention, not required per §7)
+- [ ] Create `log.md` if absent (no frontmatter — reserved file); append under existing date heading if present
+- [ ] `--dry-run` (default) / `--apply`
 
 ### 3. Frontmatter hygiene helpers (support the producer story)
 
