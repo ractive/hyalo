@@ -58,6 +58,10 @@ SPEC §5: links starting with `/` are bundle-root-relative and the **recommended
 - [ ] Update [[okf-open-knowledge-format]] gap #1/#2 status
 - [ ] Update bundled skill templates if they enumerate property types
 
+### 6. Retrospective (learnings-propagation — do this LAST, always)
+
+- [ ] Review the remaining profile iterations ([[iteration-164-okf-init-profile-and-skill]] through [[iteration-169-changelog-profile]]) against implementation learnings — update their scope/design/tasks before starting the next iteration
+
 ## Acceptance Criteria
 
 - [ ] A real OKF concept doc with `timestamp: '...+00:00'` validates clean when typed `datetime-tz`

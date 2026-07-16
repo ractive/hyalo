@@ -11,14 +11,16 @@ related: [research/okf-open-knowledge-format.md, research/obsidian-properties.md
 
 Survey of markdown standards/conventions that could become additional `hyalo init|lint --profile <name>` values after OKF ([[okf-open-knowledge-format]]). A profile = a canned `.hyalo.toml` (type schemas + lint config + exemptions) plus optionally scaffolding, generators, and a bundled skill. Two research sweeps: SSG/git-CMS ecosystems and KM/docs-methodology standards (2026-07-16, primary docs fetched, GitHub stars checked).
 
-## TL;DR — recommended profile roadmap
+## TL;DR — decided roadmap (2026-07-16)
 
-1. **`okf`** (planned, iters 163–166)
-2. **`skills`** — Agent Skills SKILL.md; formal spec, hard regex/length constraints, huge strategic adjacency (hyalo ships SKILL.md templates itself)
-3. **`madr`** — Markdown ADRs; typed docs with lifecycle + `NNNN-slug` auto-numbering (hyalo's `filename-template {n}` nearly covers it already)
-4. **`changelog`** — Keep a Changelog 1.1.0; pure heading grammar + a release-rotation generator sharing `okf log` machinery
-5. **Obsidian `types.json` import** — a bridge feature, one-way and modest (see caveats below; prior finding in [[obsidian-properties]])
-6. SSG profiles (`hugo`, `docusaurus`, `jekyll`, `mkdocs-material`, `starlight`) — big markets, later wave or community-contributed
+Sequence approved: **okf → madr → skills → changelog**, one iteration each, with a mandatory learnings-propagation retrospective at the end of every iteration (review + update the remaining iteration plans before starting the next).
+
+1. **`okf`** — [[iteration-163-okf-frontmatter-foundations]] … [[iteration-166-okf-conformance-lint]]
+2. **`madr`** — [[iteration-167-madr-profile]] (before skills: cheapest, and first proof the profile machinery is data-driven)
+3. **`skills`** — [[iteration-168-skills-profile]] (adds generic max-length / dirname-coupling / line-budget rule kinds)
+4. **`changelog`** — [[iteration-169-changelog-profile]] (generalizes the heading-grammar lint mode)
+5. **Obsidian `types.json` import** — a bridge feature, one-way and modest (see caveats below; prior finding in [[obsidian-properties]]) — not scheduled
+6. SSG profiles (`hugo`, `docusaurus`, `jekyll`, `mkdocs-material`, `starlight`) — big markets, later wave or community-contributed — not scheduled
 
 ## Tier A — agent-ecosystem adjacency (do these next)
 

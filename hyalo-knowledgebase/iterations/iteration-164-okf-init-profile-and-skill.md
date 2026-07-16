@@ -57,6 +57,10 @@ Makes OKF a first-class, discoverable target. Depends on [[iteration-163-okf-fro
 - [ ] Update [[okf-open-knowledge-format]] gap #3/#6 status
 - [ ] Keep the new skill in sync with README/help (house rule)
 
+### 6. Retrospective (learnings-propagation — do this LAST, always)
+
+- [ ] Review the remaining profile iterations ([[iteration-165-okf-index-and-log-generators]] through [[iteration-169-changelog-profile]]) against implementation learnings — especially whether the data-driven profile machinery is generic enough for madr/skills/changelog — update their scope/design/tasks before starting the next iteration
+
 ## Acceptance Criteria
 
 - [ ] `hyalo init --profile okf` produces a config under which a real OKF sample bundle lints clean

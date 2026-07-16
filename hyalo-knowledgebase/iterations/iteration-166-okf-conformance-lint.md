@@ -56,6 +56,10 @@ hyalo has no citation-aware linting today (only generic MD link rules + internal
 - [ ] Update the `okf` skill to include validation in the loop
 - [ ] Update [[okf-open-knowledge-format]] gap #5 status → done; mark research follow-through complete
 
+### 6. Retrospective (learnings-propagation — do this LAST, always)
+
+- [ ] Review the remaining profile iterations ([[iteration-167-madr-profile]] through [[iteration-169-changelog-profile]]) against implementation learnings — the reserved-file structure checks built here are the seed of iter-169's heading-grammar mode — update their scope/design/tasks before starting the next iteration
+
 ## Acceptance Criteria
 
 - [ ] `hyalo lint --profile okf` matches SPEC §9: errors only on missing frontmatter / missing `type`; warns on reserved-file structure and broken links; never errors on unknown types/keys

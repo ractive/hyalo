@@ -60,6 +60,10 @@ Per SPEC §7 a `log.md` MAY appear at **any level** of the hierarchy and records
 - [ ] Update the `okf` skill to prescribe `okf index`/`okf log` in the maintenance loop
 - [ ] Update [[okf-open-knowledge-format]] gap #4 status
 
+### 6. Retrospective (learnings-propagation — do this LAST, always)
+
+- [ ] Review the remaining profile iterations ([[iteration-166-okf-conformance-lint]] through [[iteration-169-changelog-profile]]) against implementation learnings — the generator machinery built here feeds `madr toc` (167) and `changelog release` (169) — update their scope/design/tasks before starting the next iteration
+
 ## Acceptance Criteria
 
 - [ ] `hyalo okf index --apply` deterministically regenerates spec-shaped `index.md` files and is idempotent
