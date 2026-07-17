@@ -507,7 +507,12 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
             if l.trim_start().starts_with("- ") {
                 // Found a new bullet: advance past it and all of its
                 // continuation lines (indented, non-blank lines that don't
-                // start a new bullet/heading).
+                // start a new bullet/heading). A nested `- ` item inside a
+                // bullet also matches here and is deliberately consumed as
+                // its own bullet-with-continuations block — no depth
+                // comparison is needed, because each `- ` line ratchets
+                // `insert_at` past itself the same way, so the anchor still
+                // ends after the last line of the whole list block.
                 insert_at = i + 1;
                 i += 1;
                 while i < section_end {
@@ -752,6 +757,58 @@ mod tests {
 [Unreleased]: https://x/compare/v1.0.0...HEAD
 [1.0.0]: https://x/tag/v1.0.0
 ";
+
+    /// A last bullet that *contains* a nested `- ` sub-list (each nested item
+    /// with its own continuation line). The scan has no indentation-depth
+    /// comparison — nested items are consumed as their own
+    /// bullet-with-continuations blocks — and this test locks in that the
+    /// anchor still ends after the whole list block, keeping the nested list
+    /// attached to its parent bullet.
+    const NESTED_LIST_LAST_BULLET: &str = "\
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- **Parent bullet with a nested list**: prose that
+  wraps to a continuation line before the sub-list:
+  - nested item one, whose text also
+    wraps to a deeper continuation line
+  - nested item two
+  and a closing parent continuation line after the sub-list.
+
+[Unreleased]: https://x/compare/v1.0.0...HEAD
+[1.0.0]: https://x/tag/v1.0.0
+";
+
+    #[test]
+    fn add_after_bullet_with_nested_list_lb5() {
+        let mut cl = Changelog::parse(NESTED_LIST_LAST_BULLET);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Fixed", "New entry.");
+        let out = cl.render();
+
+        let parent_pos = out.find("- **Parent bullet").expect("parent present");
+        let closing_pos = out
+            .find("  and a closing parent continuation line")
+            .expect("closing continuation present");
+        let new_entry_pos = out.find("- New entry.").expect("new entry present");
+        // The whole parent block — nested list included — stays contiguous:
+        // nothing is inserted between the parent's first line and its last
+        // continuation line.
+        assert!(
+            !out[parent_pos..closing_pos].contains("- New entry."),
+            "new entry must not split the parent bullet's block:\n{out}"
+        );
+        assert!(
+            closing_pos < new_entry_pos,
+            "new entry must follow the complete nested-list block:\n{out}"
+        );
+        let footer_pos = out.find("[Unreleased]:").expect("footer preserved");
+        assert!(new_entry_pos < footer_pos, "new entry stays inside section");
+        assert!(out.ends_with('\n') && !out.ends_with("\n\n"), "MD047 clean");
+    }
 
     #[test]
     fn add_after_wrapped_last_bullet_lb5() {
