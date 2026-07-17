@@ -226,7 +226,11 @@ impl SchemaConfig {
         for r in &required {
             properties
                 .entry(r.clone())
-                .or_insert(PropertyConstraint::String { pattern: None });
+                .or_insert(PropertyConstraint::String {
+                    pattern: None,
+                    min_length: None,
+                    max_length: None,
+                });
         }
 
         // Merge required_sections: default sections first, then type-specific ones.
@@ -378,10 +382,14 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
 /// Constraint on a single frontmatter property.
 #[derive(Debug, Clone)]
 pub enum PropertyConstraint {
-    /// Any string value; optional regex pattern validation.
+    /// Any string value; optional regex pattern and length-bound validation.
     String {
         /// Optional regex that the value must match.
         pattern: Option<String>,
+        /// Optional inclusive minimum length (in Unicode scalar values).
+        min_length: Option<usize>,
+        /// Optional inclusive maximum length (in Unicode scalar values).
+        max_length: Option<usize>,
     },
     /// ISO 8601 date (YYYY-MM-DD).
     Date,
@@ -427,6 +435,10 @@ pub struct RawPropertyConstraint {
     pub pattern: Option<String>,
     pub item_pattern: Option<String>,
     pub values: Option<Vec<String>>,
+    #[serde(rename = "min-length")]
+    pub min_length: Option<usize>,
+    #[serde(rename = "max-length")]
+    pub max_length: Option<usize>,
 }
 
 impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
@@ -451,6 +463,22 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
             ));
         }
 
+        // Length bounds (`min-length` / `max-length`) apply only to `string`
+        // properties. Reject them elsewhere so a typo (e.g. on a `date`) is a
+        // hard error rather than a silently ignored key.
+        if (raw.min_length.is_some() || raw.max_length.is_some()) && constraint_type != "string" {
+            return Err(format!(
+                "'min-length'/'max-length' are only valid on 'string' properties, not '{constraint_type}'"
+            ));
+        }
+        if let (Some(min), Some(max)) = (raw.min_length, raw.max_length)
+            && min > max
+        {
+            return Err(format!(
+                "'min-length' ({min}) must not exceed 'max-length' ({max})"
+            ));
+        }
+
         match constraint_type {
             "string" => {
                 if raw.item_pattern.is_some() {
@@ -460,6 +488,8 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                 }
                 Ok(PropertyConstraint::String {
                     pattern: raw.pattern,
+                    min_length: raw.min_length,
+                    max_length: raw.max_length,
                 })
             }
             "date" => {
@@ -889,7 +919,9 @@ pattern = "^iter-\\d+/"
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         match cfg.types["iteration"].properties.get("branch") {
-            Some(PropertyConstraint::String { pattern: Some(p) }) => {
+            Some(PropertyConstraint::String {
+                pattern: Some(p), ..
+            }) => {
                 assert_eq!(p, "^iter-\\d+/");
             }
             other => panic!("expected string with pattern, got {other:?}"),
@@ -989,11 +1021,11 @@ values = ["active", "archived", "draft"]
         // title and type should be auto-added as string
         assert!(matches!(
             merged.properties.get("title"),
-            Some(PropertyConstraint::String { pattern: None })
+            Some(PropertyConstraint::String { pattern: None, .. })
         ));
         assert!(matches!(
             merged.properties.get("type"),
-            Some(PropertyConstraint::String { pattern: None })
+            Some(PropertyConstraint::String { pattern: None, .. })
         ));
         // Explicit definitions should be preserved
         assert!(matches!(

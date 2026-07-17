@@ -231,6 +231,29 @@ hyalo madr toc --apply                                            # regenerate d
 
 Two advisory (warn-level) lint rules layer on top of the schema pass under `hyalo lint --profile madr`: **`MADR-SUPERSEDE-RESOLVE`** (a `status: superseded by ADR-0123` that points at a non-existent `0123-*.md` warns) and **`MADR-DUPLICATE-NUMBER`** (two ADRs sharing an `NNNN` prefix warn). Both are toggleable via `hyalo lint-rules set MADR-… --enabled false` and appear in `hyalo lint-rules list`.
 
+## Agent Skills profile — SKILL.md validator
+
+The [Agent Skills](https://agentskills.io/specification) spec packages an agent capability as a directory `<skill-name>/SKILL.md` whose frontmatter is unusually strict — which makes hyalo a CI-friendly Rust validator for a whole skill collection.
+
+```sh
+hyalo init --profile skills            # scaffold a skills-ready .hyalo.toml
+hyalo init --profile skills --claude   # also install the bundled `skills` skill
+```
+
+The `skills` profile is **pure data over the same machinery as `okf`/`madr`**, and is the first consumer of a new generic constraint — **string length bounds (`min-length` / `max-length`)** on any `string` property. The `skill` type is path-bound to `**/SKILL.md` (any depth) and requires exactly two fields, both hard-validated by the schema pass:
+
+- **`name`** — a lowercase slug (`^[a-z0-9]+(-[a-z0-9]+)*$`, no leading/trailing/consecutive hyphens), 1–64 characters (`min-length`/`max-length`).
+- **`description`** — 1–1024 characters, with no `<…>` tags (it is injected verbatim into a system prompt).
+
+Optional-but-typed fields: `license`, `compatibility` (≤500 chars), `allowed-tools` (a list), and the Claude Code extension `user_invocable` (boolean). The free-form `metadata` map is intentionally left untyped (hyalo treats nested objects as opaque). Companion directories (`scripts/`, `references/`, `assets/`) are a convention you create, not scaffolded.
+
+```sh
+hyalo new --type skill --file my-skill/SKILL.md   # scaffold a compliant SKILL.md
+hyalo lint --profile skills                        # validate a directory of skills
+```
+
+Three advisory rules layer on top of the schema pass under `hyalo lint --profile skills`: **`SKILL-RESERVED-NAME`** (**error** — `name` is a reserved word `anthropic`/`claude`, which the slug pattern cannot express without look-around), **`SKILL-NAME-DIRNAME`** (warn — `name` must equal its parent directory), and **`SKILL-LINE-BUDGET`** (warn — the body should stay under 500 lines). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set SKILL-… --enabled false`.
+
 ## Installation
 
 ### Homebrew (macOS & Linux)

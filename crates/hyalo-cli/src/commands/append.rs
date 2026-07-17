@@ -1020,7 +1020,11 @@ author: alice
         let mut type_props = HashMap::new();
         type_props.insert(
             "author".to_owned(),
-            PropertyConstraint::String { pattern: None },
+            PropertyConstraint::String {
+                pattern: None,
+                min_length: None,
+                max_length: None,
+            },
         );
         let schema = SchemaConfig {
             default: TypeSchema::default(),

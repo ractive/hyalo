@@ -31,6 +31,12 @@ const MADR_PROFILE_TOML: &str = include_str!("../../templates/profile-madr.toml"
 /// The bundled MADR skill body, embedded at compile time.
 const MADR_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-madr.md");
 
+/// The Agent Skills `.hyalo.toml` fragment, embedded at compile time.
+const SKILLS_PROFILE_TOML: &str = include_str!("../../templates/profile-skills.toml");
+
+/// The bundled Agent Skills skill body, embedded at compile time.
+const SKILLS_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-skills.md");
+
 /// A declarative init profile: a TOML fragment plus optional skill files.
 #[derive(Debug)]
 pub struct Profile {
@@ -60,6 +66,14 @@ pub const PROFILES: &[Profile] = &[
                       schema, status lifecycle, auto-numbered `NNNN-slug.md`",
         toml_fragment: MADR_PROFILE_TOML,
         skills: &[("madr", MADR_SKILL_CONTENT)],
+    },
+    Profile {
+        name: "skills",
+        description: "Agent Skills (SKILL.md): path-bound `skill` schema, `name` slug \
+                      (regex/length/reserved-words/dirname coupling), `description` bounds, \
+                      500-line body budget",
+        toml_fragment: SKILLS_PROFILE_TOML,
+        skills: &[("skills", SKILLS_SKILL_CONTENT)],
     },
 ];
 

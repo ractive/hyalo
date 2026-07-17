@@ -41,6 +41,7 @@ mod remove;
 mod set;
 mod short_flags;
 mod site_prefix;
+mod skills_profile;
 mod suggest;
 mod summary;
 mod tags;

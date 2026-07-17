@@ -87,12 +87,23 @@ pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig, format: Format) 
 fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
     use hyalo_core::schema::PropertyConstraint;
     match c {
-        PropertyConstraint::String { pattern } => {
+        PropertyConstraint::String {
+            pattern,
+            min_length,
+            max_length,
+        } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_owned(), Value::from("string"));
             if let Some(pat) = pattern {
-                serde_json::json!({"type": "string", "pattern": pat})
-            } else {
-                serde_json::json!({"type": "string"})
+                obj.insert("pattern".to_owned(), Value::from(pat.as_str()));
             }
+            if let Some(min) = min_length {
+                obj.insert("min-length".to_owned(), Value::from(*min));
+            }
+            if let Some(max) = max_length {
+                obj.insert("max-length".to_owned(), Value::from(*max));
+            }
+            Value::Object(obj)
         }
         PropertyConstraint::Date => serde_json::json!({"type": "date"}),
         PropertyConstraint::DateTime => serde_json::json!({"type": "datetime"}),

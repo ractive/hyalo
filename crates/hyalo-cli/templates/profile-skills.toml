@@ -1,0 +1,78 @@
+# --- skills profile (added by `hyalo init --profile skills`) ---
+# Agent Skills — SKILL.md conformance (https://agentskills.io/specification).
+# A skill is a directory `<name>/SKILL.md` whose frontmatter is machine-checkable:
+# `name` (a slug that must equal the directory) and `description` (≤1024 chars)
+# are the two required fields. This profile binds a `skill` schema to every
+# `SKILL.md` so a directory of skills lints clean in CI, and composes into any
+# existing vault without forcing unrelated files to be skills.
+
+# Validate skill frontmatter against the schema on write.
+validate_on_write = true
+
+# Mark this vault as skills-flavoured so plain `hyalo lint` runs the Agent Skills
+# advisory rules (name↔dirname coupling, 500-line body budget) without
+# `--profile skills` on every invocation. `hyalo lint --profile skills` is then
+# an idempotent overlay.
+[lint]
+profile = "skills"
+
+# Bind the `skill` schema to every `SKILL.md`, anywhere in the tree (the spec
+# locates a skill by its filename, not its directory depth). Files matching this
+# glob without an explicit `type:` are validated as `skill`; explicit
+# frontmatter always wins. First match wins, so more specific bindings from
+# other profiles can precede this one.
+[[schema.bind]]
+glob = "**/SKILL.md"
+type = "skill"
+
+# The `skill` type. `name` and `description` are the spec's two hard-required
+# fields; everything else is optional-but-typed.
+[schema.types.skill]
+required = ["name", "description"]
+
+# `name`: a lowercase slug, 1–64 chars, no leading/trailing/consecutive hyphens.
+# The pattern rejects `-x`, `x-`, `x--y`, uppercase, and underscores (Rust's
+# `regex` crate has no look-around, so this is a plain slug pattern). The 64-char
+# cap is enforced by `max-length`; `min-length` guards against an empty value.
+# The reserved words `anthropic` / `claude` are rejected by the advisory
+# `SKILL-RESERVED-NAME` rule (an *error*-severity finding), and the name↔directory
+# coupling by `SKILL-NAME-DIRNAME` — both need context the schema layer lacks.
+[schema.types.skill.properties.name]
+type = "string"
+pattern = "^[a-z0-9]+(-[a-z0-9]+)*$"
+min-length = 1
+max-length = 64
+
+# `description`: free text, 1–1024 chars, with no XML/HTML tags (the spec forbids
+# markup here because the description is injected verbatim into a system prompt).
+# The pattern forbids any literal `<`, which is the tag-open character — the
+# simplest lookahead-free way to reject `<tag>` spans.
+[schema.types.skill.properties.description]
+type = "string"
+pattern = "^[^<]*$"
+min-length = 1
+max-length = 1024
+
+# Optional metadata fields, typed when present so a typo surfaces.
+[schema.types.skill.properties.license]
+type = "string"
+
+# `compatibility`: an optional free-text note capped at 500 chars per the spec.
+[schema.types.skill.properties.compatibility]
+type = "string"
+max-length = 500
+
+# `allowed-tools`: an optional list of tool names the skill may use.
+[schema.types.skill.properties.allowed-tools]
+type = "string-list"
+
+# `user_invocable`: a Claude Code extension (whether the skill can be run as a
+# `/slash` command). Not part of the core Agent Skills spec, but typed here so a
+# skill collection that uses it lints clean rather than warning "undeclared".
+[schema.types.skill.properties.user_invocable]
+type = "boolean"
+
+# NOTE: `metadata` is a free-form map. hyalo treats nested objects as opaque
+# text, so it is intentionally *not* typed here — validate presence in review,
+# not shape. Companion directories (`scripts/`, `references/`, `assets/`) are a
+# convention, not a schema concern, so they are documented, not created.

@@ -822,8 +822,8 @@ Repeatable (AND).\n\
             With --claude, also installs the hyalo skill for Claude Code.\n\
             With --pi, also installs the hyalo skill for pi.\n\
             With --profile <name>, scaffolds a preset vault flavour by merging an\n\
-            embedded config fragment into .hyalo.toml (available: okf, madr). Multiple\n\
-            profiles compose in one vault; re-running upserts without clobbering.\n\
+            embedded config fragment into .hyalo.toml (available: okf, madr, skills).\n\
+            Multiple profiles compose in one vault; re-running upserts without clobbering.\n\
             With --profile <name> --claude, also installs the bundled skill for it.\n\n\
             Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
             EXAMPLES:\n\
@@ -833,7 +833,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo --dir kb init --pi\n\
             \u{00a0} hyalo init --profile okf\n\
             \u{00a0} hyalo init --profile okf --claude\n\
-            \u{00a0} hyalo init --profile madr"
+            \u{00a0} hyalo init --profile madr\n\
+            \u{00a0} hyalo init --profile skills"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
@@ -842,7 +843,7 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
-        /// Scaffold a preset vault flavour (okf, madr) by merging an
+        /// Scaffold a preset vault flavour (okf, madr, skills) by merging an
         /// embedded config fragment into .hyalo.toml
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
@@ -1076,6 +1077,11 @@ Repeatable (AND).\n\
             The overlay reuses the same fragment `hyalo init --profile okf` materializes, so on a\n\
             vault already initialized that way plain `hyalo lint` behaves identically. Unknown\n\
             `type` values and extra frontmatter keys are always accepted (permissive model).\n\
+            `--profile madr` binds an `adr` schema to `docs/decisions/**` and warns on dangling\n\
+            supersedes / duplicate ADR numbers. `--profile skills` binds a `skill` schema to\n\
+            `**/SKILL.md` (Agent Skills spec): it errors on `name` regex/length/reserved-word\n\
+            violations and out-of-bounds `description` length, and warns on a name↔directory\n\
+            mismatch and a >500-line body.\n\
             Composes with --fix, --rule, --strict, and --files-from.\n\n\
             AUTO-FIX: With --fix, hyalo applies frontmatter fixes (insert defaults, correct enum\n\
             typos, normalize dates, infer type) and body fixes from autofixable rules. Body fixes\n\
@@ -1092,7 +1098,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo lint --fix --dry-run\n\
             \u{00a0} hyalo lint --fix-rule HYALO001\n\
             \u{00a0} hyalo lint --fix\n\
-            \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\n\
+            \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\
+            \u{00a0} hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\n\
             INDEX NOTE: The snapshot index does not accelerate the body pass — body bytes are\n\
             not indexed. The frontmatter pass and file enumeration still benefit from --index.\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
@@ -1160,9 +1167,11 @@ Repeatable (AND).\n\
         /// `.hyalo.toml` change). `okf` enables the Open Knowledge Format §9
         /// rules plus advisory citation / augmentation checks; `madr` enables
         /// the MADR ADR schema (path-bound to `docs/decisions/**`) plus the
-        /// supersede / duplicate-number advisory rules. Reuses the same embedded
-        /// fragment as `hyalo init --profile <name>`, so on a vault already
-        /// initialized that way it is a no-op overlay (idempotent).
+        /// supersede / duplicate-number advisory rules; `skills` enables the
+        /// Agent Skills `skill` schema (path-bound to `**/SKILL.md`) plus the
+        /// reserved-name / name↔dirname / line-budget rules. Reuses the same
+        /// embedded fragment as `hyalo init --profile <name>`, so on a vault
+        /// already initialized that way it is a no-op overlay (idempotent).
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
         #[command(flatten)]

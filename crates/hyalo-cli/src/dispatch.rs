@@ -428,6 +428,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     // mutably below (the lint arm needs it while that mutable borrow is live).
     let okf_profile_active = ctx.lint_profile.as_deref() == Some("okf");
     let madr_profile_active = ctx.lint_profile.as_deref() == Some("madr");
+    let skills_profile_active = ctx.lint_profile.as_deref() == Some("skills");
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
@@ -1774,6 +1775,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 // overlay OR `[lint] profile` in config); captured above.
                 okf_profile: okf_profile_active,
                 madr_profile: madr_profile_active,
+                skills_profile: skills_profile_active,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
