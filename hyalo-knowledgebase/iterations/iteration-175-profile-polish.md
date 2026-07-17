@@ -8,7 +8,7 @@ tags:
   - iteration
   - profiles
   - fix-wave
-status: in-progress
+status: completed
 branch: iter-175/profile-polish
 ---
 
