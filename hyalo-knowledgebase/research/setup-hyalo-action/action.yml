@@ -1,0 +1,160 @@
+name: setup-hyalo
+description: Install the prebuilt hyalo CLI (markdown knowledgebase linter/query tool) on the runner and add it to PATH.
+author: ractive
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  version:
+    description: >-
+      hyalo release to install. Use "latest" (default) to track the newest
+      release, or an explicit tag like "v0.17.0" to pin.
+    required: false
+    default: latest
+  github-token:
+    description: >-
+      Token used for GitHub release-asset API calls (raises the anonymous rate
+      limit). Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The resolved hyalo version tag that was installed (e.g. v0.17.0).
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        INPUT_VERSION: ${{ inputs.version }}
+        REPO: ractive/hyalo
+      run: |
+        set -euo pipefail
+
+        # ---- validate the version input -------------------------------------
+        if [ "$INPUT_VERSION" != "latest" ] && ! printf '%s' "$INPUT_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::setup-hyalo: invalid 'version' input '$INPUT_VERSION' — expected 'latest' or a tag like 'v1.2.3'"
+          exit 1
+        fi
+
+        # ---- detect runner platform → release target ------------------------
+        os="$(uname -s)"
+        arch="$(uname -m)"
+        case "$arch" in
+          x86_64|amd64)   arch=x86_64 ;;
+          aarch64|arm64)  arch=aarch64 ;;
+          *) echo "::error::setup-hyalo: unsupported CPU architecture '$arch'"; exit 1 ;;
+        esac
+
+        ext=tar.gz
+        bin=hyalo
+        case "$os" in
+          Linux)
+            # Release ships gnu and musl linux builds; gnu is the safe default on hosted runners.
+            target="${arch}-unknown-linux-gnu" ;;
+          Darwin)
+            if [ "$arch" != "aarch64" ]; then
+              echo "::error::setup-hyalo: no prebuilt macOS binary for '$arch' — hyalo publishes aarch64-apple-darwin only. Use an arm64 macOS runner (macos-14 or newer) or 'cargo install hyalo-cli'."
+              exit 1
+            fi
+            target="aarch64-apple-darwin" ;;
+          MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            target="${arch}-pc-windows-msvc"
+            ext=zip
+            bin=hyalo.exe ;;
+          *) echo "::error::setup-hyalo: unsupported OS '$os'"; exit 1 ;;
+        esac
+        echo "setup-hyalo: runner detected as ${os}/${arch} -> target ${target}"
+
+        # ---- resolve the version tag ----------------------------------------
+        api="https://api.github.com/repos/${REPO}"
+        # Bash 3.2 (macOS runners) errors on "${arr[@]}" for an empty array under
+        # `set -u`, so guard every expansion with the "${arr[@]+...}" idiom.
+        auth=()
+        if [ -n "${GH_TOKEN:-}" ]; then
+          auth=(-H "Authorization: Bearer ${GH_TOKEN}")
+        fi
+
+        if [ "$INPUT_VERSION" = "latest" ]; then
+          # Fetch to a variable first: piping curl into `grep -m1` closes the pipe
+          # early, and under `pipefail` curl's write error (exit 23) would abort
+          # the step. Parse the buffered body instead.
+          release_json="$(curl -fsSL ${auth[@]+"${auth[@]}"} -H "Accept: application/vnd.github+json" "${api}/releases/latest")"
+          version="$(printf '%s' "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/')"
+          if [ -z "$version" ]; then
+            echo "::error::setup-hyalo: could not resolve the latest release tag from the GitHub API"
+            exit 1
+          fi
+          # The API-resolved tag feeds paths, the download URL, and GITHUB_OUTPUT
+          # (which callers may interpolate into scripts) — hold it to the same
+          # format as the explicit input, so a malformed/spoofed API response
+          # can't smuggle path traversal or shell metacharacters downstream.
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::setup-hyalo: latest release tag '$version' does not look like a version tag (vX.Y.Z)"
+            exit 1
+          fi
+        else
+          version="$INPUT_VERSION"
+        fi
+        echo "setup-hyalo: installing ${REPO} ${version}"
+
+        # ---- tool cache -----------------------------------------------------
+        cache_root="${RUNNER_TOOL_CACHE:-${HOME}/.cache}/hyalo/${version}/${target}"
+        if [ -x "${cache_root}/${bin}" ]; then
+          echo "setup-hyalo: cache hit at ${cache_root}"
+        else
+          asset="hyalo-${version}-${target}.${ext}"
+          url="https://github.com/${REPO}/releases/download/${version}/${asset}"
+          echo "setup-hyalo: downloading ${url}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL ${auth[@]+"${auth[@]}"} -o "${tmp}/${asset}" "$url" \
+            || { echo "::error::setup-hyalo: download failed for ${asset} (does release ${version} publish target ${target}?)"; exit 1; }
+
+          # ---- verify the archive against the release's SHA256SUMS ----------
+          curl -fsSL ${auth[@]+"${auth[@]}"} -o "${tmp}/SHA256SUMS" \
+            "https://github.com/${REPO}/releases/download/${version}/SHA256SUMS" \
+            || { echo "::error::setup-hyalo: release ${version} publishes no SHA256SUMS — refusing to install an unverified archive"; exit 1; }
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "${tmp}/${asset}" | awk '{print $1}')"
+          fi
+          expected="$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1; exit}' "${tmp}/SHA256SUMS")"
+          if [ -z "$expected" ]; then
+            echo "::error::setup-hyalo: SHA256SUMS for ${version} has no entry for ${asset}"
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::setup-hyalo: checksum mismatch for ${asset} (expected ${expected}, got ${actual})"
+            exit 1
+          fi
+          echo "setup-hyalo: sha256 verified (${actual})"
+
+          mkdir -p -m 0755 "$cache_root"
+          if [ "$ext" = "zip" ]; then
+            unzip -q -o "${tmp}/${asset}" -d "$cache_root"
+          else
+            tar -xzf "${tmp}/${asset}" -C "$cache_root"
+          fi
+          if [ ! -x "${cache_root}/${bin}" ]; then
+            chmod +x "${cache_root}/${bin}" 2>/dev/null || true
+          fi
+          if [ ! -e "${cache_root}/${bin}" ]; then
+            echo "::error::setup-hyalo: extracted archive did not contain '${bin}'"
+            exit 1
+          fi
+        fi
+
+        # ---- expose on PATH + outputs ---------------------------------------
+        echo "$cache_root" >> "$GITHUB_PATH"
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+    - name: Verify hyalo runs
+      shell: bash
+      run: hyalo --version

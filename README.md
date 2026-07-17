@@ -470,7 +470,15 @@ one-line `N errors, M warnings in K files` summary is printed at the end so the
 job log stays readable. The lint still exits non-zero on errors, failing the
 check. `--format github` is lint-only; other subcommands reject it.
 
-Drop this into a workflow to lint your whole vault on every PR:
+Drop this into a workflow to lint your whole vault on every PR. The
+[`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the
+prebuilt binary in seconds — no compilation — so the whole check is two steps:
+
+> **Note**: `ractive/setup-hyalo` is not published yet — the snippets below (and
+> in the agent section) show the intended usage once it ships. Until then,
+> install hyalo with one of the [other methods](#installation) (e.g.
+> `cargo install hyalo-cli --locked`, Homebrew, or a release binary) in place of
+> the `setup-hyalo` step.
 
 ```yaml
 # .github/workflows/lint-kb.yml
@@ -482,13 +490,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Install hyalo (Homebrew, cargo-binstall, or a release binary — see
-      # Installation). The setup-hyalo action is coming in a follow-up.
-      - run: cargo install hyalo-cli --locked
+      - uses: ractive/setup-hyalo@v1          # installs hyalo, adds it to PATH
       # Run from the repo root so annotation paths resolve against the workspace.
       # `.hyalo.toml` sets `dir = "..."`, so `hyalo lint` targets the vault.
       - run: hyalo lint --strict --format github
 ```
+
+Pin the binary with `with: { version: v0.17.0 }`; the default `latest` tracks the
+newest release. If you'd rather not depend on the action, install hyalo any other
+way (Homebrew, `cargo-binstall`, `cargo install hyalo-cli --locked`, or a release
+binary — see [Installation](#installation)) before the lint step.
 
 Paths are emitted **relative to the repository root**: vault-relative paths are
 prefixed with the vault dir's path relative to the current directory, so the job
@@ -514,6 +525,47 @@ non-zero when the on-disk artifacts are stale:
 ```
 
 [GitHub Actions workflow command]: https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+
+### `@claude` agent on GitHub (claude-code-action)
+
+Because [`setup-hyalo`](https://github.com/ractive/setup-hyalo) puts the binary on
+`PATH` before the agent runs, a [`claude-code-action`](https://github.com/anthropics/claude-code-action)
+workflow can hand `@claude` the full hyalo toolbox — so an `@claude` mention on a
+PR or issue can triage and *fix* lint findings (`hyalo lint --fix`, `hyalo set`,
+`hyalo mv`) rather than just report them. Commit the hyalo skill first with
+`hyalo init --claude` (add `--profile okf` for an OKF bundle) so the agent knows
+to prefer the CLI over raw file edits.
+
+```yaml
+# .github/workflows/claude.yml
+name: claude
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ractive/setup-hyalo@v1          # hyalo on PATH before the agent starts
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Let the agent run any hyalo subcommand (lint/find/set/mv/task/...).
+          allowed_tools: Bash(hyalo:*)
+```
+
+The committed skill routes the agent to commands like
+`hyalo lint --strict --format github` (see findings), `hyalo lint --fix`
+(auto-fix the fixable rules), and `hyalo set <file> --property status=done`
+(targeted frontmatter edits). Fix-mode and read-only lint use different JSON
+shapes (`remaining_groups` vs `rule_groups`); `--format github` renders both, so
+`hyalo lint --fix --format github` still annotates any violation left unfixable
+(e.g. a missing required property) after the auto-fix pass.
 
 ### Snapshot index
 
