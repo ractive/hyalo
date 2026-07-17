@@ -563,6 +563,58 @@ mod tests {
     }
 
     #[test]
+    fn resolve_changelog_file_defaults_to_vault_dir() {
+        let dir = Path::new("/repo/docs");
+        let config_dir = Path::new("/repo/docs");
+        let resolved = resolve_changelog_file(dir, config_dir, None).unwrap();
+        assert_eq!(resolved, dir.join("CHANGELOG.md"));
+    }
+
+    #[test]
+    fn resolve_changelog_file_resolves_relative_to_config_dir() {
+        let dir = Path::new("/repo/docs");
+        let config_dir = Path::new("/repo");
+        let resolved = resolve_changelog_file(dir, config_dir, Some("CHANGELOG.md")).unwrap();
+        assert_eq!(resolved, config_dir.join("CHANGELOG.md"));
+    }
+
+    #[test]
+    fn resolve_changelog_file_allows_bounded_parent_traversal() {
+        // `..` that stays net-non-negative relative to config_dir is fine (it
+        // never actually climbs above config_dir).
+        let dir = Path::new("/repo/docs");
+        let config_dir = Path::new("/repo");
+        let resolved =
+            resolve_changelog_file(dir, config_dir, Some("sub/../CHANGELOG.md")).unwrap();
+        assert_eq!(resolved, config_dir.join("sub/../CHANGELOG.md"));
+    }
+
+    #[test]
+    fn resolve_changelog_file_rejects_absolute_path() {
+        let dir = Path::new("/repo/docs");
+        let config_dir = Path::new("/repo");
+        let err = resolve_changelog_file(dir, config_dir, Some("/etc/passwd")).unwrap_err();
+        assert!(err.to_string().contains("must be relative"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_changelog_file_rejects_net_escape() {
+        let dir = Path::new("/repo/docs");
+        let config_dir = Path::new("/repo");
+        let err = resolve_changelog_file(dir, config_dir, Some("../CHANGELOG.md")).unwrap_err();
+        assert!(err.to_string().contains("escapes"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_changelog_file_rejects_deeper_net_escape() {
+        let dir = Path::new("/repo/docs");
+        let config_dir = Path::new("/repo");
+        let err =
+            resolve_changelog_file(dir, config_dir, Some("a/../../CHANGELOG.md")).unwrap_err();
+        assert!(err.to_string().contains("escapes"), "got: {err}");
+    }
+
+    #[test]
     fn release_rotates_unreleased() {
         let mut cl = Changelog::parse(BASE);
         let idx = cl.version_heading_index("Unreleased").unwrap();
