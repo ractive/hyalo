@@ -1763,7 +1763,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let github_output = ctx.user_format == crate::output::Format::Github;
 
             let max_per_rule_eff = if github_output {
-                0 // unlimited
+                // `usize::MAX`, not `0` — the fix-mode output path uses
+                // `.take(n)`/`.min(n)` to cap violations shown per rule, so `0`
+                // would truncate every rule group to zero shown violations and
+                // silently drop annotations. The non-fix path separately bypasses
+                // this cap via `opts.detailed`, but fix-mode does not, so the
+                // sentinel must mean "unlimited" in both paths.
+                usize::MAX
             } else {
                 max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule())
             };

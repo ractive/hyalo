@@ -2014,6 +2014,37 @@ Body.
     }
 }
 
+/// `--fix --dry-run --format github` uses the fix-mode payload shape
+/// (`remaining_groups`, not `rule_groups`) — the renderer must still emit
+/// annotations for violations that fix mode can't resolve (a missing required
+/// property isn't autofixable), not silently produce zero annotations.
+#[test]
+fn lint_github_fix_dry_run_emits_remaining_violations() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--fix",
+            "--dry-run",
+            "--format",
+            "github",
+            "missing_date.md",
+        ])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    assert!(
+        stdout.contains("::error file=missing_date.md,"),
+        "expected a remaining-violation annotation under --fix --dry-run; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("missing required property"),
+        "expected the SCHEMA message; got:\n{stdout}"
+    );
+    assert_eq!(output.status.code().unwrap(), 1, "errors -> exit 1");
+}
+
 /// `--format github` is rejected for non-lint subcommands with a clear error.
 #[test]
 fn github_format_rejected_for_non_lint() {

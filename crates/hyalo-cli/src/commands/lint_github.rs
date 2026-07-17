@@ -35,7 +35,9 @@ use std::fmt::Write as _;
 ///
 /// `payload` is the `results` value produced by the lint command — the
 /// serialized `ExtLintOutput` (or its `--fix` variant), i.e. an object with a
-/// `files` array whose entries carry `rule_groups[].violations[]`, plus the
+/// `files` array whose entries carry `rule_groups[].violations[]` (read-only
+/// lint) or `remaining_groups[].violations[]` (fix mode — `fixed_groups` are
+/// omitted from annotations since they're no longer problems), plus the
 /// top-level `errors` / `warnings` / `files_with_violations` counters.
 ///
 /// `path_prefix` is prepended (with a `/` separator, always forward-slash for
@@ -52,10 +54,30 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
                 .get("file")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("?");
-            let full_path = join_path(&prefix, file);
+            // `.hyalo.toml` view-lint findings (see `validate_views`) are reported
+            // as the literal filename `.hyalo.toml`, which always lives at the
+            // config root (repo root in the common case where CI runs from
+            // there) — never inside the vault dir. Every other entry is
+            // vault-relative and needs the prefix; this one must not get it, or
+            // the annotation points at a path that doesn't exist.
+            let full_path = if file == ".hyalo.toml" {
+                file.to_owned()
+            } else {
+                join_path(&prefix, file)
+            };
 
-            // New shape: violations grouped by rule under `rule_groups`.
-            if let Some(rule_groups) = file_entry.get("rule_groups").and_then(|rg| rg.as_array()) {
+            // New shape (read-only lint): violations grouped by rule under
+            // `rule_groups`. Fix-mode (`--fix`/`--fix --dry-run`) instead groups
+            // *unresolved* violations under `remaining_groups` — same per-group
+            // shape, different key — with `fixed_groups` for violations already
+            // resolved (nothing to annotate there since the PR diff no longer
+            // shows them as problems).
+            let groups_key = if file_entry.get("rule_groups").is_some() {
+                "rule_groups"
+            } else {
+                "remaining_groups"
+            };
+            if let Some(rule_groups) = file_entry.get(groups_key).and_then(|rg| rg.as_array()) {
                 for group in rule_groups {
                     let rule = group
                         .get("rule")
@@ -158,12 +180,21 @@ fn write_command(
 ///
 /// Per the workflow-command spec: `%` → `%25`, `\r` → `%0D`, `\n` → `%0A`.
 /// Order matters — `%` must be escaped first so the `%` in later replacements
-/// is not double-escaped.
+/// is not double-escaped. Message text ultimately originates from linted file
+/// content (body text, property values), so after the spec escapes are applied
+/// any *other* raw control bytes (e.g. ANSI escape sequences) are stripped via
+/// [`crate::output::sanitize_control_chars`] — the same defense other CLI
+/// output paths use — to prevent terminal/log injection in the Actions job log.
+/// This must run after the `\r`/`\n` replacement above, since
+/// `sanitize_control_chars` would otherwise silently drop a raw `\r` instead of
+/// letting it become `%0D`.
 #[must_use]
 pub fn escape_data(s: &str) -> String {
-    s.replace('%', "%25")
+    let escaped = s
+        .replace('%', "%25")
         .replace('\r', "%0D")
-        .replace('\n', "%0A")
+        .replace('\n', "%0A");
+    crate::output::sanitize_control_chars(&escaped)
 }
 
 /// Escape a workflow-command *property* value (e.g. `file=`, `title=`).
@@ -327,6 +358,10 @@ mod tests {
 
     #[test]
     fn render_handles_legacy_flat_violations() {
+        // `.hyalo.toml` view-lint findings are always reported at the config
+        // root (repo root in the common case), never inside the vault dir, so
+        // the vault-dir prefix must NOT apply here even though every other file
+        // entry gets prefixed with "kb".
         let payload = json!({
             "files": [
                 {
@@ -344,7 +379,84 @@ mod tests {
         let first = out.lines().next().unwrap();
         assert_eq!(
             first,
-            "::warning file=kb/.hyalo.toml::view 'x' has no narrowing filter"
+            "::warning file=.hyalo.toml::view 'x' has no narrowing filter"
         );
+    }
+
+    /// Fix-mode (`--fix`/`--fix --dry-run`) payloads group unresolved
+    /// violations under `remaining_groups`, not `rule_groups`. The renderer
+    /// must annotate those too — `fixed_groups` are intentionally skipped since
+    /// they're no longer problems.
+    #[test]
+    fn render_handles_fix_mode_remaining_groups() {
+        let payload = json!({
+            "files": [
+                {
+                    "file": "notes/a.md",
+                    "fixed_groups": [
+                        {"rule": "MD047", "count": 1, "violations": []}
+                    ],
+                    "remaining_groups": [
+                        {
+                            "rule": "MD013",
+                            "severity": "warn",
+                            "violations": [
+                                {"line": 5, "message": "Line length is 90 characters, expected no more than 80"}
+                            ]
+                        }
+                    ],
+                    "conflicts": []
+                }
+            ],
+            "errors": 0,
+            "warnings": 1,
+            "files_with_violations": 1
+        });
+        let out = render(&payload, "");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[0],
+            "::warning file=notes/a.md,line=5,title=MD013::Line length is 90 characters, expected no more than 80"
+        );
+        assert_eq!(lines[1], "0 errors, 1 warning in 1 file");
+    }
+
+    /// A fix-mode payload with zero remaining violations (everything fixed)
+    /// produces no annotations at all — matches `render_clean_payload_is_summary_only`.
+    #[test]
+    fn render_fix_mode_all_fixed_is_summary_only() {
+        let payload = json!({
+            "files": [
+                {
+                    "file": "notes/a.md",
+                    "fixed_groups": [
+                        {"rule": "MD047", "count": 1, "violations": []}
+                    ],
+                    "remaining_groups": [],
+                    "conflicts": []
+                }
+            ],
+            "errors": 0,
+            "warnings": 0,
+            "files_with_violations": 0
+        });
+        let out = render(&payload, "");
+        assert_eq!(out, "0 errors, 0 warnings in 0 files");
+    }
+
+    /// Raw control bytes (e.g. an ANSI escape sequence smuggled in via file
+    /// content) are stripped from messages after the workflow-command escapes
+    /// are applied, so they can't inject terminal/log control sequences into
+    /// the Actions job log. `\r`/`\n`/`%` still round-trip through the spec's
+    /// percent-escaping rather than being silently dropped.
+    #[test]
+    fn escape_data_strips_other_control_bytes_but_keeps_percent_escapes() {
+        // ESC (0x1B) starts a raw ANSI sequence — must be stripped.
+        let with_ansi = "\u{1b}[31mred\u{1b}[0m text";
+        assert_eq!(escape_data(with_ansi), "[31mred[0m text");
+        // \r and \n still become %0D / %0A, not stripped.
+        assert_eq!(escape_data("a\r\nb"), "a%0D%0Ab");
+        // A bell character (0x07) is stripped too.
+        assert_eq!(escape_data("beep\u{7}beep"), "beepbeep");
     }
 }

@@ -484,7 +484,7 @@ jobs:
       - uses: actions/checkout@v4
       # Install hyalo (Homebrew, cargo-binstall, or a release binary — see
       # Installation). The setup-hyalo action is coming in a follow-up.
-      - run: cargo install hyalo --locked
+      - run: cargo install hyalo-cli --locked
       # Run from the repo root so annotation paths resolve against the workspace.
       # `.hyalo.toml` sets `dir = "..."`, so `hyalo lint` targets the vault.
       - run: hyalo lint --strict --format github
