@@ -69,6 +69,25 @@ pub const VIOLATION_KIND_BIND_MISMATCH: &str = "schema/bind-mismatch";
 /// violation so its group is reported `autofixable: false` instead of `true`.
 pub const VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT: &str = "schema/missing-required-no-default";
 
+/// Stable rule id for a file whose frontmatter cannot be parsed (invalid YAML,
+/// duplicate keys, oversized scalar). Emitted as an error-severity lint
+/// violation so a corrupt file becomes a loud CI failure instead of silently
+/// vanishing from the scan (RB-3 / df-own-kb B3). Listed in the rule catalog
+/// (`lint-rules list`) so its severity is user-configurable via
+/// `[lint.rules.HYALO005]`, but it is never silently downgraded by a profile.
+pub const RULE_ID_FRONTMATTER_PARSE_ERROR: &str = "HYALO005";
+
+/// Deepest error message in an anyhow chain, condensed to its first line.
+///
+/// The YAML parser attaches a multi-line source snippet to its error; for a
+/// one-line lint message we keep only the leading line so the `HYALO005`
+/// violation stays terse. The full detail is still available in the file
+/// itself. Reused shape from `commands::okf::root_cause`.
+fn terse_root_cause(err: &anyhow::Error) -> String {
+    let root = err.root_cause().to_string();
+    root.lines().next().unwrap_or(&root).trim().to_owned()
+}
+
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize)]
 pub struct Violation {
@@ -1603,13 +1622,24 @@ pub fn lint_files_extended(
         .count();
     let files_checked_total = all_results.len();
     let files_truncated = all_results.len() > opts.max_files;
-    all_results.truncate(opts.max_files);
 
     let is_fix_mode = matches!(opts.fix, FixMode::Apply | FixMode::DryRun);
 
-    // Shared counters used by both output paths.
-    let mut total_errors = 0usize;
-    let mut total_warnings = 0usize;
+    // Authoritative error/warning totals, computed over EVERY result *before*
+    // the display list is capped to `max_files`. The per-file display loops
+    // below only build the (possibly truncated) `files[]` array — they must not
+    // be the source of the summary counters, or a `--limit`/`max_files` cap
+    // would under-report errors and let a corrupt vault exit 0 (ff-rdp B5).
+    let (authoritative_errors, authoritative_warnings) =
+        count_errors_warnings(&all_results, is_fix_mode);
+
+    // Cap the display list (0 == unlimited is normalized to `usize::MAX` by the
+    // caller, so truncation here is a no-op for `--limit 0`).
+    all_results.truncate(opts.max_files);
+
+    // Set of distinct rule ids seen across the (display-capped) result set,
+    // used for the `rules_fired` counter. Error/warning totals are taken from
+    // the authoritative pre-truncation pass above, not from these loops.
     let mut rules_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let val = if is_fix_mode {
@@ -1744,12 +1774,6 @@ pub fn lint_files_extended(
                         continue;
                     }
                     grand_total_remaining += remaining;
-                    for v in &remaining_owned {
-                        match v.severity.as_str() {
-                            "error" => total_errors += 1,
-                            _ => total_warnings += 1,
-                        }
-                    }
                     rules_seen.insert(rule_id.clone());
                     let shown = remaining.min(opts.max_per_rule);
                     let truncated = remaining > shown;
@@ -1787,12 +1811,6 @@ pub fn lint_files_extended(
                     continue;
                 }
                 grand_total_remaining += remaining_count;
-                for v in &remaining_violations {
-                    match v.severity.as_str() {
-                        "error" => total_errors += 1,
-                        _ => total_warnings += 1,
-                    }
-                }
                 rules_seen.insert(rule_id.clone());
 
                 let autofixable = md_lint_engine
@@ -1857,8 +1875,8 @@ pub fn lint_files_extended(
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,
             files_truncated,
-            errors: total_errors,
-            warnings: total_warnings,
+            errors: authoritative_errors,
+            warnings: authoritative_warnings,
             dry_run: matches!(opts.fix, FixMode::DryRun),
         };
         serde_json::to_value(&fix_output).context("failed to serialize fix lint output")?
@@ -1884,12 +1902,6 @@ pub fn lint_files_extended(
             for (rule_id, violations) in &r.violations_by_rule {
                 let count = violations.len();
                 total_violations += count;
-                for v in violations {
-                    match v.severity.as_str() {
-                        "error" => total_errors += 1,
-                        _ => total_warnings += 1,
-                    }
-                }
                 rules_seen.insert(rule_id.clone());
 
                 let autofixable = if rule_id == "SCHEMA" {
@@ -1949,18 +1961,22 @@ pub fn lint_files_extended(
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,
             files_truncated,
-            errors: total_errors,
-            warnings: total_warnings,
+            errors: authoritative_errors,
+            warnings: authoritative_warnings,
             dry_run: false,
             fixes: all_fix_actions,
         };
         serde_json::to_value(&output).context("failed to serialize extended lint output")?
     };
 
-    // Recompute counts from what we tracked above.
+    // Counts drive the exit code and `hyalo summary`. Use the authoritative
+    // pre-truncation totals so a `--limit`/`max_files` cap can never mask an
+    // error (which would let a corrupt vault exit 0). `total_errors` /
+    // `total_warnings` accumulated by the display loops only ever cover the
+    // capped `files[]` slice and would under-report.
     let counts = LintCounts {
-        errors: total_errors,
-        warnings: total_warnings,
+        errors: authoritative_errors,
+        warnings: authoritative_warnings,
         files_with_issues: total_files_with_violations,
     };
 
@@ -2042,6 +2058,48 @@ struct PerFileLintResult {
     /// `None` means fix-mode was off or no SCHEMA pass ran. Body rules use
     /// `InternalViolation.fixed` instead.
     post_fix_schema_remaining: Option<Vec<InternalViolation>>,
+}
+
+/// Count the error- and warning-severity violations across every result,
+/// independent of the `max_files` display cap.
+///
+/// In read-only mode this is simply every violation. In fix mode it counts the
+/// violations that *remain* after fixing — SCHEMA remainders come from
+/// `post_fix_schema_remaining`, body remainders from `!v.fixed` — so the
+/// reported `errors`/`warnings` (and the exit code they drive) reflect the true
+/// post-fix state of the whole vault, not just the first `max_files` shown.
+fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (usize, usize) {
+    let mut errors = 0usize;
+    let mut warnings = 0usize;
+    let mut tally = |severity: &str| {
+        if severity == "error" {
+            errors += 1;
+        } else {
+            warnings += 1;
+        }
+    };
+    for r in results {
+        for (rule_id, violations) in &r.violations_by_rule {
+            if is_fix_mode {
+                if rule_id == "SCHEMA" {
+                    // Post-fix SCHEMA remainder, or all originals if no fix pass ran.
+                    let remaining = r.post_fix_schema_remaining.as_ref().unwrap_or(violations);
+                    for v in remaining {
+                        tally(&v.severity);
+                    }
+                } else {
+                    for v in violations.iter().filter(|v| !v.fixed) {
+                        tally(&v.severity);
+                    }
+                }
+            } else {
+                for v in violations {
+                    tally(&v.severity);
+                }
+            }
+        }
+    }
+    (errors, warnings)
 }
 
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
@@ -2130,15 +2188,33 @@ fn lint_one_file_extended(
     let properties = match hyalo_core::frontmatter::read_frontmatter(full_path) {
         Ok(p) => p,
         Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
-            // Malformed frontmatter — report as a single violation.
+            // Malformed frontmatter — report as a single error-severity
+            // violation under the stable HYALO005 rule id so it shows up in
+            // lint output, `lint-rules list`, and CI. A file whose frontmatter
+            // cannot be parsed is otherwise invisible to every other rule, so
+            // this must never silently vanish (RB-3 / df-own-kb B3).
+            //
+            // Severity is user-configurable via `[lint.rules.HYALO005]
+            // severity = "warn"`, but the rule always emits (it is not
+            // disable-able) and no profile can downgrade it.
+            let severity = md_lint_config
+                .rules
+                .get(RULE_ID_FRONTMATTER_PARSE_ERROR)
+                .and_then(hyalo_mdlint::RuleOverride::severity)
+                .filter(|s| s.eq_ignore_ascii_case("warn"))
+                .map_or("error", |_| "warn");
             let mut violations_by_rule = indexmap::IndexMap::new();
             violations_by_rule.insert(
-                "FRONTMATTER".to_owned(),
+                RULE_ID_FRONTMATTER_PARSE_ERROR.to_owned(),
                 vec![InternalViolation {
                     line: 1,
                     column: 1,
-                    message: format!("{}: {e}", crate::hints::PARSE_ERROR_PREFIX),
-                    severity: "error".to_owned(),
+                    message: format!(
+                        "{}: {}",
+                        crate::hints::PARSE_ERROR_PREFIX,
+                        terse_root_cause(&e)
+                    ),
+                    severity: severity.to_owned(),
                     fix: None,
                     fixed: false,
                     autofixable: None,

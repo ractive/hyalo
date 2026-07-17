@@ -274,9 +274,10 @@ default in interactive terminals).
 `hyalo lint` runs two passes in one invocation:
 
 1. **Frontmatter** — validates against the `[schema]` block in `.hyalo.toml`. No-op when no schema is configured.
-2. **Markdown body** — stock mdbook-lint rules (MD001..MD059) plus two HYALO native rules:
+2. **Markdown body** — stock mdbook-lint rules (MD001..MD059) plus the HYALO native rules:
    - **HYALO001** — bare `[]` should be `- [ ]` (autofixable)
    - **HYALO002** — `status: completed` requires all task checkboxes ticked (fires only when `[schema.types.*].properties.status` is declared as an enum containing `"completed"`)
+   - **HYALO005** — frontmatter that cannot be parsed (invalid YAML, duplicate keys, oversized scalar). Error by default and the file still counts in `files_checked`, so a corrupt file fails CI instead of vanishing silently. Severity is configurable via `[lint.rules.HYALO005]` but no profile downgrades it.
 
 ```bash
 hyalo lint                               # whole vault, summary mode
@@ -296,7 +297,15 @@ fast on schema drift.
 `::error`/`::warning file=…,line=…,title=<RULE_ID>::<message>` GitHub Actions workflow
 commands so violations render as inline PR annotations, plus a one-line summary. Paths are
 repo-root-relative, so run it from the repository root. Composes with `--files-from -` for a
-diff-aware variant. Other subcommands reject `--format github`.
+diff-aware variant. Annotations are never truncated (the display caps are lifted for github).
+Under `--fix --dry-run --format github`, would-be-fixed violations become `::notice` with a
+`[fixable]` title prefix and the summary reads `N fixable, M remaining`. Other subcommands
+reject `--format github`.
+
+**Skip visibility & unlimited output:** with `--files-from`, dropped input paths surface as a
+`note:` line (`--format text`, stderr) or a `::notice::` (`--format github`), so a diff-scoped
+run always shows what it skipped without `jq`. `--limit 0` on lint means **unlimited** (lift
+the file cap) — the `errors`/exit code always reflect the whole vault, never just the shown slice.
 
 **Tune which rules run with `hyalo lint-rules`** (list / show / set / remove). Reach for it when a rule is too noisy on your KB style — disable it or change its severity rather than living with the warnings:
 

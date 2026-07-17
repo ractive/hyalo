@@ -21,8 +21,30 @@ and this project adheres to
 - **`[okf] ignore` config**: vault-relative globs (`_template/**`,
   `test/fixture-vault/**`) the OKF generators skip, independent of
   `[lint] ignore`.
+- **`HYALO005` / `frontmatter-parse-error` lint rule** (iter-174): a file whose
+  frontmatter cannot be parsed (invalid YAML, duplicate keys, oversized scalar)
+  is now reported as an error-severity lint violation under a stable rule id and
+  still counts toward `files_checked`, so it appears in text/json/github output
+  and fails CI. Listed in `hyalo lint-rules list`; severity configurable via
+  `[lint.rules.HYALO005]` but never silently downgraded by a profile.
+- **Skip-summary in text & github** (iter-174): when `--files-from` drops input
+  paths, `--format text` prints a `note: N input paths missing, M non-markdown
+  skipped` line (stderr) and `--format github` emits the same as a `::notice::`,
+  matching the counters JSON already exposes. An explicitly named `--file`
+  excluded by `[lint] ignore` prints a notice instead of a silent `0 files
+  checked`.
+- **Distinguishable `--fix --dry-run --format github`** (iter-174):
+  would-be-fixed violations render as `::notice` with a `[fixable]` title prefix
+  and the summary becomes `N fixable, M remaining`, so a dry-run preview is no
+  longer byte-identical to a plain lint run.
 
 ### Changed
+
+- **BREAKING (CI): unparseable frontmatter now fails lint** (iter-174). Files
+  that previously vanished silently from the scan (leaving a green
+  `0 files checked, no issues`) now surface as `HYALO005` errors and exit 1.
+  Vaults that unknowingly contained corrupt files will start failing CI — this
+  is intentional: a green lint must mean the vault is genuinely clean.
 
 - Generated `index.md`/`log.md`/`README.md` managed regions now emit a blank
   line after the begin marker and before the end marker, so a freshly generated
@@ -41,6 +63,15 @@ and this project adheres to
 - `SCHEMA` "missing required property" violations now report
   `autofixable: false` when no schema `default` exists for the property (so
   `--fix` cannot synthesize a value), instead of a misleading `true`.
+- **`lint --limit 0` now means unlimited** (iter-174): it previously emptied the
+  `files[]` list *and* zeroed the `errors` counter, so `hyalo lint --limit 0` on
+  a corrupt vault exited 0 with no findings. `--limit 0` now lifts the file cap
+  (matching `--count --limit 0`) and the `errors`/`warnings` counters and exit
+  code are computed over the whole vault, never the truncated display slice — so
+  a `--limit N` cap can no longer hide an error.
+- **`--format github` annotations are no longer truncated by the file cap**: the
+  regression is now covered by a test that lints 60 files past the default
+  50-file cap and asserts all 60 annotations are emitted.
 
 ## [0.18.0] - 2026-07-17
 

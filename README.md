@@ -450,7 +450,7 @@ bypassing the directory walk entirely. This is ideal for linting only changed fi
 # Lint only the markdown files touched on this branch
 git diff --name-only origin/main -- '**/*.md' | hyalo lint --files-from -
 
-# Non-.md paths (build artifacts, source files) are silently skipped —
+# Non-.md paths (build artifacts, source files) are skipped —
 # no need to pre-filter git diff output. Repo-relative paths that start with
 # the vault directory prefix (e.g. `hyalo-knowledgebase/notes/foo.md` when
 # the vault is configured as `dir = "hyalo-knowledgebase"`) are stripped
@@ -460,6 +460,21 @@ git diff --name-only origin/main -- '**/*.md' | hyalo lint --files-from -
 git diff --name-only origin/main | hyalo lint --files-from - --format json \
   | jq '{missing: .results.files_missing, non_md: .results.files_skipped_non_md}'
 ```
+
+Dropped input paths are no longer JSON-only: `--format text` prints a
+`note: N input paths missing, M non-markdown skipped` line on stderr and
+`--format github` emits the same as a `::notice::` in the job log, so a
+diff-scoped run always shows what it left out without piping through `jq`.
+An explicitly named `--file` that is excluded by `[lint] ignore` likewise
+prints a notice instead of silently reporting `0 files checked`.
+
+**Parse errors fail the check.** A file whose frontmatter cannot be parsed
+(invalid YAML, duplicate keys, an oversized scalar) is reported as an
+error-severity **`HYALO005` / `frontmatter-parse-error`** violation and counts
+toward `files_checked` — it can no longer silently vanish from the scan and
+leave a green lint. The rule is listed in `hyalo lint-rules list` and its
+severity is configurable via `[lint.rules.HYALO005]`, but no profile downgrades
+it. A green `hyalo lint` in CI therefore means the vault is genuinely clean.
 
 `--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, `append`,
 `task toggle`, `task set`, `task read`, `read`, and `backlinks`.
@@ -477,6 +492,14 @@ glue required. Errors become `::error`, warnings become `::warning`, and a
 one-line `N errors, M warnings in K files` summary is printed at the end so the
 job log stays readable. The lint still exits non-zero on errors, failing the
 check. `--format github` is lint-only; other subcommands reject it.
+Annotations are **never truncated** under `--format github` — the per-rule and
+per-file display caps are lifted so every finding lands on the PR, even past the
+default 50-file cap.
+
+Under `--fix --dry-run --format github`, violations that `--fix` *would* resolve
+are rendered as `::notice` annotations with a `[fixable]` title prefix and the
+summary switches to `N fixable, M remaining`, so a dry-run preview reads
+distinctly from a plain lint run.
 
 Drop this into a workflow to lint your whole vault on every PR. The
 [`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the

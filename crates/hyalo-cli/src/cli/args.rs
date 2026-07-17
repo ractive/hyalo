@@ -1052,12 +1052,17 @@ Repeatable (AND).\n\
             them (checking those is a separate constraint not done here). To require tags on\n\
             a document type, list `tags` in that type's `required` array; no separate\n\
             `min_items` knob needed.\n\n\
-            BODY PASS: ~14 default-on stock rules from mdbook-lint plus two HYALO native\n\
+            BODY PASS: ~14 default-on stock rules from mdbook-lint plus the HYALO native\n\
             cross-cutting rules:\n\
             \u{00a0} - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\
             \u{00a0} - HYALO002: `status: completed` requires all task checkboxes ticked\n\
             \u{00a0}            (only fires when the schema declares `status` as an enum\n\
             \u{00a0}            containing `completed`)\n\
+            \u{00a0} - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
+            \u{00a0}            oversized scalar) — error by default; the file still counts in\n\
+            \u{00a0}            `files_checked` so a corrupt file can never leave a green lint.\n\
+            \u{00a0}            Severity is configurable via `[lint.rules.HYALO005]` but no\n\
+            \u{00a0}            profile downgrades it.\n\
             Severity is hyalo-controlled. Manage rule enable/severity with `hyalo lint-rules`.\n\
             Override defaults via `[lint]` and `[lint.rules]` in `.hyalo.toml`.\n\n\
             INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
@@ -1066,11 +1071,24 @@ Repeatable (AND).\n\
             output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
             `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
             for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
-            `files_with_violations`, and `files_truncated`.\n\n\
+            `files_with_violations`, and `files_truncated`. The `errors`/`warnings` counters\n\
+            and the exit code always reflect the WHOLE vault, never just the displayed slice —\n\
+            a file cap can never mask an error.\n\
+            LIMIT: --limit/-n N caps the displayed files[]; `--limit 0` means UNLIMITED (lift\n\
+            the cap entirely, matching `--count --limit 0`) — it never empties the list.\n\n\
+            SKIP VISIBILITY: with `--files-from`, dropped input paths (missing / non-markdown)\n\
+            are reported as a `note:` line (--format text, on stderr) or a `::notice::` (--format\n\
+            github), matching the `files_missing`/`files_skipped_*` counters in the JSON envelope.\n\
+            An explicitly named `--file` excluded by `[lint] ignore` also prints a notice rather\n\
+            than silently reporting `0 files checked`.\n\n\
             GITHUB ANNOTATIONS: --format github (lint-only) emits one GitHub Actions workflow\n\
             command per violation — `::error file=<path>,line=<line>,title=<RULE_ID>::<message>`\n\
             (warnings use `::warning`) — so findings render as inline annotations on the PR diff,\n\
-            followed by a one-line `N errors, M warnings in K files` summary. Message data is\n\
+            followed by a one-line `N errors, M warnings in K files` summary. Annotations are\n\
+            never truncated (the display caps are lifted for github so every finding lands on\n\
+            the PR). Under `--fix --dry-run`, would-be-fixed violations are emitted as `::notice`\n\
+            with a `[fixable]` title prefix and the summary becomes `N fixable, M remaining`, so\n\
+            a dry-run preview reads distinctly from a plain lint run. Message data is\n\
             escaped per the workflow-command spec. Paths are emitted RELATIVE TO THE REPO ROOT:\n\
             vault-relative paths are prefixed with the vault dir's path relative to the current\n\
             directory, so CI must run `hyalo lint` from the repository root for annotations to\n\

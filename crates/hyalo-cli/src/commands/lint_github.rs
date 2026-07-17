@@ -48,6 +48,13 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
     let mut out = String::new();
     let prefix = normalize_prefix(path_prefix);
 
+    // Fix-mode payloads carry `total_fixed` / `total_remaining` (see
+    // `ExtLintFixOutput`). In that mode, would-be-fixed violations are rendered
+    // as `::notice` annotations with a `[fixable]` title prefix so the PR check
+    // is visibly different from a plain lint run (df-own-kb U6): a reviewer can
+    // tell at a glance which findings `--fix` would resolve versus which remain.
+    let is_fix_mode = payload.get("total_fixed").is_some();
+
     if let Some(files) = payload.get("files").and_then(|f| f.as_array()) {
         for file_entry in files {
             let file = file_entry
@@ -118,11 +125,76 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
                     write_command(&mut out, severity, &full_path, None, "", message);
                 }
             }
+
+            // Fix-mode: annotate would-be-fixed violations as `::notice` with a
+            // `[fixable]` title prefix so they read distinctly from the errors
+            // and warnings that remain (df-own-kb U6).
+            if is_fix_mode
+                && let Some(fixed_groups) =
+                    file_entry.get("fixed_groups").and_then(|fg| fg.as_array())
+            {
+                for group in fixed_groups {
+                    let rule = group
+                        .get("rule")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let title = if rule.is_empty() {
+                        "[fixable]".to_owned()
+                    } else {
+                        format!("[fixable] {rule}")
+                    };
+                    let violations = group.get("violations").and_then(|v| v.as_array());
+                    match violations {
+                        Some(vs) if !vs.is_empty() => {
+                            for v in vs {
+                                let line = v
+                                    .get("line")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .filter(|&l| l > 0);
+                                let message = v
+                                    .get("message")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("");
+                                write_notice(&mut out, &full_path, line, &title, message);
+                            }
+                        }
+                        // Groups with no per-violation detail (e.g. SCHEMA
+                        // fixes counted via re-validation) still get one
+                        // file-level notice so the fix is visible.
+                        _ => {
+                            let count = group
+                                .get("count")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let message = format!("{count} violation(s) would be fixed");
+                            write_notice(&mut out, &full_path, None, &title, &message);
+                        }
+                    }
+                }
+            }
         }
     }
 
-    // Trailing summary line, using the same field-name fallbacks the text
-    // renderer uses so both read-only and `--fix` payloads are covered.
+    // Trailing summary line. Fix-mode gets a distinct `N fixable, M remaining`
+    // shape so `--fix --dry-run` output is never byte-identical to a plain lint
+    // run (df-own-kb U6); read-only keeps the `N errors, M warnings` shape.
+    if is_fix_mode {
+        let fixable = payload
+            .get("total_fixed")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let remaining = payload
+            .get("total_remaining")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let _ = write!(
+            out,
+            "{fixable} {}, {remaining} remaining",
+            plural(fixable, "fixable", "fixable"),
+        );
+        return out;
+    }
+
     let errors = payload
         .get("errors")
         .and_then(serde_json::Value::as_u64)
@@ -145,6 +217,21 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
     );
 
     out
+}
+
+/// Write one `::notice` workflow command line to `out`, used for fix-mode
+/// would-be-fixed annotations. Mirrors [`write_command`] but always uses the
+/// `notice` command (there is no error/warning distinction for a fixable).
+fn write_notice(out: &mut String, file: &str, line: Option<u64>, title: &str, message: &str) {
+    use std::fmt::Write as _;
+    let _ = write!(out, "::notice file={}", escape_property(file));
+    if let Some(l) = line {
+        let _ = write!(out, ",line={l}");
+    }
+    if !title.is_empty() {
+        let _ = write!(out, ",title={}", escape_property(title));
+    }
+    let _ = writeln!(out, "::{}", escape_data(message));
 }
 
 /// Pick the singular or plural word based on `n`.
