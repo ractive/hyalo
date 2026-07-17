@@ -33,7 +33,7 @@ No scope changes to the steps below; this note just anchors the retrospective's 
 
 ## Steps / Tasks
 
-### 1. `hyalo okf index`
+### 1. `hyalo okf index` [5/5]
 
 - [x] New `hyalo okf` subcommand group; `index` regenerates `index.md` per directory
 - [x] For each dir: list child concepts + subdirs, group entries by frontmatter `type`, emit `* [title](relative-link) - description` (title falls back to filename; description optional)
@@ -41,7 +41,7 @@ No scope changes to the steps below; this note just anchors the retrospective's 
 - [x] Flags: `--dry-run` (default), `--apply`, `--dir`/path scoping; exit non-zero on drift in dry-run for CI use
 - [x] Emit **relative** links in generated `index.md` entries (matches §6 examples and all official sample bundles). Note: SPEC §5 actually *recommends* bundle-absolute `/x.md` for concept cross-links — both forms must resolve (iter-163); the generator just follows the samples' de-facto style. Cross-platform paths, forward slashes only
 
-### 2. `hyalo okf log`
+### 2. `hyalo okf log` [5/5]
 
 Per SPEC §7 a `log.md` MAY appear at **any level** of the hierarchy and records the history of **that scope** (directory-local, not bundle-wide) — so the target level must be selectable.
 
@@ -54,26 +54,26 @@ Per SPEC §7 a `log.md` MAY appear at **any level** of the hierarchy and records
 - [x] Create `log.md` if absent (no frontmatter — reserved file); append under existing date heading if present
 - [x] `--dry-run` (default) / `--apply`
 
-### 3. Frontmatter hygiene helpers (support the producer story)
+### 3. Frontmatter hygiene helpers (support the producer story) [2/2]
 
 - [x] Key-order normalization to `type, resource, title, description, tags, timestamp` (opt-in flag or part of `okf` lint --fix)
 - [x] tz-aware `timestamp` auto-stamp helper on write (reuse `datetime-tz` from iter-163)
 
-### 4. Tests
+### 4. Tests [4/4]
 
 - [x] e2e: `okf index --apply` on a copied sample bundle reproduces the committed `index.md` files (modulo optional LLM directory summaries, which hyalo omits)
 - [x] e2e: `okf log` creates/updates `log.md` with correct date grouping and ordering
 - [x] Idempotency: running `okf index --apply` twice is a no-op
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 5. Docs sync (same PR)
+### 5. Docs sync (same PR) [4/4]
 
 - [x] `hyalo okf --help`, `hyalo okf index --help`, `hyalo okf log --help`
 - [x] README.md: generators section + CI usage (`okf index --dry-run`)
 - [x] Update the `okf` skill to prescribe `okf index`/`okf log` in the maintenance loop
 - [x] Update [[okf-open-knowledge-format]] gap #4 status
 
-### 6. Retrospective (learnings-propagation — do this LAST, always)
+### 6. Retrospective (learnings-propagation — do this LAST, always) [1/1]
 
 - [x] Review the remaining profile iterations ([[iteration-166-okf-conformance-lint]] through [[iteration-169-changelog-profile]]) against implementation learnings — the generator machinery built here feeds `madr toc` (167) and `changelog release` (169) — update their scope/design/tasks before starting the next iteration
 
