@@ -135,6 +135,24 @@ the same effective flag and case-folding the predicates; under
 case-insensitivity `INDEX.md` now takes the reserved-file path
 (`OKF-INDEX-STRUCTURE` applies, concept-doc rules don't).
 
+### LB-5: `changelog add` splits multi-line bullets (MEDIUM-HIGH, found post-LB-fix while dogfooding the release notes)
+
+Adding the PR #205 entries to hyalo's own root CHANGELOG.md: when the last
+bullet of the target `### Category` wraps across lines (hanging indent — as
+KaC files routinely do), `changelog add --apply` inserts the new entry after
+that bullet's *first* line, orphaning its continuation lines below the new
+entries and corrupting the existing entry. The RB-4 fix bounded the section
+at the footer link refs but the insertion anchor still doesn't skip
+continuation lines. Fixed in the follow-up PR from this session.
+
+Two adjacent LOW notes from the same exercise:
+
+- `hyalo lint CHANGELOG.md` cannot reach the `[changelog] path` file when it
+  lies outside the vault (`file not found`) — `changelog add` can write a
+  file that lint can't check by path.
+- `changelog add` emits the message as one long line; files wrapped at 80
+  columns end up style-inconsistent (MD013-relevant where enabled).
+
 ### LB-2: skip-summary pluralization (LOW)
 
 `note: 1 input paths missing` → "1 input path missing".

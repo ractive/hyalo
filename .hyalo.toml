@@ -164,3 +164,7 @@ MD013 = true
 # vault, so HYALO002 is advisory (warn) here rather than a CI-failing error.
 [lint.rules.HYALO002]
 severity = "warn"
+
+# Root Keep-a-Changelog file (vault is hyalo-knowledgebase/, the changelog is not in it).
+[changelog]
+path = "CHANGELOG.md"

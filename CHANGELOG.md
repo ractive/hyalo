@@ -72,6 +72,13 @@ and this project adheres to
 - **`--format github` annotations are no longer truncated by the file cap**: the
   regression is now covered by a test that lints 60 files past the default
   50-file cap and asserts all 60 annotations are emitted.
+- `[schema] exempt` globs and the OKF reserved-file checks (`index.md`/`log.md`)
+  now honor the resolved `[links] case_insensitive` mode, so an adopted
+  `INDEX.md` on macOS/Windows is exempted and classified as reserved instead of
+  failing `lint` as a typeless concept doc.
+- Skip-summary pluralization (`1 input path missing`) and YAML parse errors no
+  longer leak library-internal advice (`set DuplicateKeyPolicy in Options if
+  acceptable`) in `HYALO005` messages and generator skip warnings.
 
 ## [0.18.0] - 2026-07-17
 
