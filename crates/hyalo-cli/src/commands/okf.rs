@@ -196,7 +196,10 @@ pub fn run_index(
             }
             Err(err) => {
                 skipped_malformed += 1;
-                eprintln!("warning: skipping {rel}: {}", root_cause(&err));
+                eprintln!(
+                    "warning: skipping {rel}: {}",
+                    crate::commands::terse_root_cause(&err)
+                );
             }
         }
     }
@@ -647,13 +650,6 @@ fn build_ignore_globset(patterns: &[String]) -> Option<globset::GlobSet> {
         return None;
     }
     builder.build().ok()
-}
-
-/// The deepest error message in an `anyhow` chain, for a terse one-line stderr
-/// warning (the `root_cause` is the concrete parse/IO failure, not the wrapping
-/// "failed to parse frontmatter of X" context we add ourselves).
-fn root_cause(err: &anyhow::Error) -> String {
-    err.root_cause().to_string()
 }
 
 // ---------------------------------------------------------------------------

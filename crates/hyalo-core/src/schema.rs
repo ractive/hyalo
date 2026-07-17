@@ -122,13 +122,18 @@ impl SchemaBind {
 
 /// Compiled set of vault-relative exempt globs.
 ///
-/// Wraps the raw patterns plus a lazily-built [`globset::GlobSet`]. An empty
-/// set matches nothing. Cheap to clone (the underlying `GlobSet` is `Arc`-free
-/// but small, and patterns are shared by clone).
+/// Wraps the raw patterns plus lazily-built [`globset::GlobSet`]s: one
+/// case-sensitive, one case-insensitive. An empty set matches nothing. Cheap
+/// to clone (the underlying `GlobSet`s are `Arc`-free but small, and patterns
+/// are shared by clone).
 #[derive(Debug, Clone, Default)]
 pub struct ExemptGlobs {
     patterns: Vec<String>,
     set: Option<globset::GlobSet>,
+    /// Same patterns compiled with `.case_insensitive(true)`, used by
+    /// [`is_exempt_ci`](Self::is_exempt_ci) on filesystems that fold case
+    /// (e.g. `INDEX.md` matching `**/index.md` on macOS/Windows).
+    set_ci: Option<globset::GlobSet>,
 }
 
 impl ExemptGlobs {
@@ -141,6 +146,7 @@ impl ExemptGlobs {
             return Self::default();
         }
         let mut builder = globset::GlobSetBuilder::new();
+        let mut builder_ci = globset::GlobSetBuilder::new();
         let mut valid = Vec::with_capacity(patterns.len());
         for pat in patterns {
             // Skip invalid globs but keep the rest usable; config-load already
@@ -150,19 +156,32 @@ impl ExemptGlobs {
                 .build()
             {
                 builder.add(g);
-                valid.push(pat);
+                valid.push(pat.clone());
+            }
+            if let Ok(g) = globset::GlobBuilder::new(&pat)
+                .literal_separator(true)
+                .case_insensitive(true)
+                .build()
+            {
+                builder_ci.add(g);
             }
         }
         let set = builder.build().ok();
+        let set_ci = builder_ci.build().ok();
         Self {
             patterns: valid,
             set,
+            set_ci,
         }
     }
 
     /// Returns `true` when `rel_path` (a vault-relative path) matches any
     /// exempt glob. The path is normalized to forward slashes so Windows
     /// backslash-separated paths match the same globs as Unix paths.
+    ///
+    /// Matching is always case-sensitive here; use
+    /// [`is_exempt_ci`](Self::is_exempt_ci) when the vault's filesystem folds
+    /// case (e.g. under the resolved `[links] case_insensitive` mode).
     #[must_use]
     pub fn is_exempt(&self, rel_path: &str) -> bool {
         let Some(set) = &self.set else {
@@ -170,6 +189,30 @@ impl ExemptGlobs {
         };
         let normalized = rel_path.replace('\\', "/");
         set.is_match(normalized.as_str())
+    }
+
+    /// Returns `true` when `rel_path` matches any exempt glob, honoring
+    /// filesystem case-folding when `case_insensitive` is `true`.
+    ///
+    /// On a case-insensitive filesystem (macOS/Windows default), a file named
+    /// `INDEX.md` and a pattern `**/index.md` refer to the same path on disk,
+    /// so exempt matching should fold case too — otherwise `hyalo lint` and
+    /// `hyalo okf index` disagree about which file is the reserved index file
+    /// (`hyalo okf index` already treats `INDEX.md` as `index.md` via
+    /// [`crate::case_index::mode_enabled`]). On a case-sensitive filesystem,
+    /// pass `case_insensitive = false` — `INDEX.md` and `index.md` are
+    /// genuinely different files there and only the latter should match.
+    #[must_use]
+    pub fn is_exempt_ci(&self, rel_path: &str, case_insensitive: bool) -> bool {
+        if case_insensitive {
+            let Some(set) = &self.set_ci else {
+                return false;
+            };
+            let normalized = rel_path.replace('\\', "/");
+            set.is_match(normalized.as_str())
+        } else {
+            self.is_exempt(rel_path)
+        }
     }
 
     /// Returns `true` when no exempt patterns are configured.
@@ -745,6 +788,47 @@ impl SchemaConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------------
+    // ExemptGlobs case-(in)sensitivity
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn exempt_globs_case_sensitive_by_default() {
+        let globs = ExemptGlobs::new(vec!["**/index.md".to_owned()]);
+        assert!(globs.is_exempt("index.md"));
+        assert!(globs.is_exempt("sub/index.md"));
+        assert!(!globs.is_exempt("INDEX.md"));
+    }
+
+    #[test]
+    fn is_exempt_ci_false_matches_only_exact_case() {
+        let globs = ExemptGlobs::new(vec!["**/index.md".to_owned()]);
+        assert!(globs.is_exempt_ci("index.md", false));
+        assert!(!globs.is_exempt_ci("INDEX.md", false));
+    }
+
+    #[test]
+    fn is_exempt_ci_true_folds_case() {
+        let globs = ExemptGlobs::new(vec!["**/index.md".to_owned()]);
+        assert!(globs.is_exempt_ci("INDEX.md", true), "uppercase must match");
+        assert!(
+            globs.is_exempt_ci("Index.Md", true),
+            "mixed case must match"
+        );
+        assert!(
+            globs.is_exempt_ci("index.md", true),
+            "lowercase must still match"
+        );
+        assert!(!globs.is_exempt_ci("other.md", true));
+    }
+
+    #[test]
+    fn is_exempt_ci_normalizes_windows_separators() {
+        let globs = ExemptGlobs::new(vec!["**/index.md".to_owned()]);
+        assert!(globs.is_exempt_ci(r"sub\INDEX.md", true));
+        assert!(!globs.is_exempt_ci(r"sub\INDEX.md", false));
+    }
 
     #[test]
     fn empty_schema_is_empty() {

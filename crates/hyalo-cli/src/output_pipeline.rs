@@ -94,7 +94,12 @@ impl OutputPipeline<'_> {
         let c = self.files_from_counters.as_ref()?;
         let mut parts: Vec<String> = Vec::new();
         if c.files_missing > 0 {
-            parts.push(format!("{} input paths missing", c.files_missing));
+            let noun = if c.files_missing == 1 {
+                "path"
+            } else {
+                "paths"
+            };
+            parts.push(format!("{} input {noun} missing", c.files_missing));
         }
         if c.files_skipped_non_md > 0 {
             parts.push(format!("{} non-markdown skipped", c.files_skipped_non_md));
@@ -299,5 +304,83 @@ impl OutputPipeline<'_> {
                 2
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pipeline_with_counters(counters: FilesFromCounters) -> OutputPipeline<'static> {
+        OutputPipeline {
+            user_format: Format::Text,
+            jq_filter: None,
+            hint_ctx: None,
+            count: false,
+            files_from_counters: Some(counters),
+            github_path_prefix: String::new(),
+        }
+    }
+
+    #[test]
+    fn skip_summary_singular_missing_path() {
+        let pipeline = pipeline_with_counters(FilesFromCounters {
+            files_missing: 1,
+            files_skipped_non_md: 0,
+            files_skipped_outside_vault: 0,
+        });
+        assert_eq!(
+            pipeline.skip_summary().as_deref(),
+            Some("1 input path missing")
+        );
+    }
+
+    #[test]
+    fn skip_summary_plural_missing_paths() {
+        let pipeline = pipeline_with_counters(FilesFromCounters {
+            files_missing: 2,
+            files_skipped_non_md: 0,
+            files_skipped_outside_vault: 0,
+        });
+        assert_eq!(
+            pipeline.skip_summary().as_deref(),
+            Some("2 input paths missing")
+        );
+    }
+
+    #[test]
+    fn skip_summary_combines_all_counters() {
+        let pipeline = pipeline_with_counters(FilesFromCounters {
+            files_missing: 1,
+            files_skipped_non_md: 3,
+            files_skipped_outside_vault: 1,
+        });
+        assert_eq!(
+            pipeline.skip_summary().as_deref(),
+            Some("1 input path missing, 3 non-markdown skipped, 1 outside vault skipped")
+        );
+    }
+
+    #[test]
+    fn skip_summary_none_when_no_counters() {
+        let pipeline = OutputPipeline {
+            user_format: Format::Text,
+            jq_filter: None,
+            hint_ctx: None,
+            count: false,
+            files_from_counters: None,
+            github_path_prefix: String::new(),
+        };
+        assert_eq!(pipeline.skip_summary(), None);
+    }
+
+    #[test]
+    fn skip_summary_none_when_all_zero() {
+        let pipeline = pipeline_with_counters(FilesFromCounters {
+            files_missing: 0,
+            files_skipped_non_md: 0,
+            files_skipped_outside_vault: 0,
+        });
+        assert_eq!(pipeline.skip_summary(), None);
     }
 }
