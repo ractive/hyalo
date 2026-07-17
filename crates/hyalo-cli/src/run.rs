@@ -114,6 +114,7 @@ fn effective_index_path_for(
         | Commands::Types { .. }
         | Commands::Okf { .. }
         | Commands::Madr { .. }
+        | Commands::Changelog { .. }
         | Commands::LintRules { .. } => None,
         Commands::Views { action } => match action {
             Some(crate::cli::args::ViewsAction::Run { index_flags, .. }) => Some(index_flags),
@@ -1246,6 +1247,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Views { .. }
             | Commands::Okf { .. }
             | Commands::Madr { .. }
+            | Commands::Changelog { .. }
             | Commands::LintRules { .. } => None,
         }
     } else {

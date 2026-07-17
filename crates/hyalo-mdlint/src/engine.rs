@@ -275,6 +275,78 @@ impl HyaloLintEngine {
                 source: "hyalo-mdlint (skills profile)".to_owned(),
             });
         }
+
+        // Keep a Changelog 1.1.0 conformance-profile rules. Same gating model as
+        // the OKF / MADR / skills rules above: listed here so `lint-rules list` /
+        // `--rule-prefix CHANGELOG` see them and `[lint.rules.CHANGELOG-*]`
+        // overrides round-trip, but they only execute under
+        // `hyalo lint --profile changelog` (or `[lint] profile = "changelog"`).
+        // The changelog grammar is stricter than the other profiles: a malformed
+        // changelog is a real defect, so the grammar/ordering rules default to
+        // *error*; the two soft rules (empty section, footer link-ref
+        // cross-check) are advisory (warn). Per-rule severity is the source of
+        // truth — see each entry's `default_severity` below.
+        let changelog_entries = [
+            (
+                "CHANGELOG-TITLE",
+                "changelog-title",
+                "A changelog must start with a `# Changelog` H1",
+                DiagSeverity::Error,
+            ),
+            (
+                "CHANGELOG-VERSION-HEADING",
+                "changelog-version-heading",
+                "H2 version headings must be `[Unreleased]` or `[X.Y.Z] - YYYY-MM-DD`",
+                DiagSeverity::Error,
+            ),
+            (
+                "CHANGELOG-CATEGORY",
+                "changelog-category",
+                "H3 headings must be one of Added/Changed/Deprecated/Removed/Fixed/Security",
+                DiagSeverity::Error,
+            ),
+            (
+                "CHANGELOG-VERSION-ORDER",
+                "changelog-version-order",
+                "Versions must be strictly descending (newest first)",
+                DiagSeverity::Error,
+            ),
+            (
+                "CHANGELOG-DATE-ORDER",
+                "changelog-date-order",
+                "Release dates must be non-increasing (newest first)",
+                DiagSeverity::Error,
+            ),
+            (
+                "CHANGELOG-UNRELEASED-POSITION",
+                "changelog-unreleased-position",
+                "`## [Unreleased]` must be the first version section",
+                DiagSeverity::Error,
+            ),
+            (
+                "CHANGELOG-EMPTY-SECTION",
+                "changelog-empty-section",
+                "A released or category section should not be empty",
+                DiagSeverity::Warn,
+            ),
+            (
+                "CHANGELOG-LINK-REF",
+                "changelog-link-ref",
+                "Every version heading needs a matching footer link reference and vice versa",
+                DiagSeverity::Warn,
+            ),
+        ];
+        for (id, name, description, default_severity) in changelog_entries {
+            catalog.push(RuleCatalogEntry {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                description: description.to_owned(),
+                default_severity,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint (changelog profile)".to_owned(),
+            });
+        }
         catalog
     }
 

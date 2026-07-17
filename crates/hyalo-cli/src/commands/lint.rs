@@ -1473,6 +1473,11 @@ pub struct ExtLintOptions<'a> {
     /// (mostly warn-level; `SKILL-RESERVED-NAME` defaults to error) in
     /// addition to the schema pass. Set by `hyalo lint --profile skills`.
     pub skills_profile: bool,
+    /// When `true`, run the Keep a Changelog conformance profile's rules
+    /// (mostly error-level grammar/ordering; empty-section and link-ref
+    /// cross-check default to warn) in addition to the schema pass. Set by
+    /// `hyalo lint --profile changelog`.
+    pub changelog_profile: bool,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1506,6 +1511,7 @@ pub fn lint_files_extended(
     let okf_profile = opts.okf_profile;
     let madr_profile = opts.madr_profile;
     let skills_profile = opts.skills_profile;
+    let changelog_profile = opts.changelog_profile;
     let vault_dir = opts.vault_dir;
 
     // Process files in parallel. Each worker lints one file.
@@ -1525,6 +1531,7 @@ pub fn lint_files_extended(
             okf_profile,
             madr_profile,
             skills_profile,
+            changelog_profile,
             vault_dir,
         )
     };
@@ -2014,6 +2021,7 @@ fn lint_one_file_extended(
     okf_profile: bool,
     madr_profile: bool,
     skills_profile: bool,
+    changelog_profile: bool,
     vault_dir: &Path,
 ) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
@@ -2650,6 +2658,57 @@ fn lint_one_file_extended(
         }
     }
 
+    // Keep a Changelog conformance profile — the grammar rules layered on top
+    // of the schema pass. Only runs under `hyalo lint --profile changelog` (or a
+    // vault whose `.hyalo.toml` sets `[lint] profile = "changelog"`). Rules
+    // dispatch only on the file whose effective type is `changelog` (the literal
+    // `CHANGELOG.md` binding). Severity is *mixed*: the grammar/ordering rules
+    // default to error, the empty-section and link-ref cross-check to warn — the
+    // per-finding `default_severity` is the source of truth, honoured below.
+    // Same override/filter discipline as the OKF/MADR/skills blocks above.
+    if changelog_profile {
+        let explicit_type = properties.get("type").and_then(|v| v.as_str());
+        let effective_type = explicit_type.or_else(|| schema.bound_type_for(rel_path));
+        if matches!(effective_type, Some(t) if t.eq_ignore_ascii_case("changelog")) {
+            let is_enabled = |rule_id: &str| -> bool {
+                let cfg_enabled = md_lint_config
+                    .rules
+                    .get(rule_id)
+                    .and_then(hyalo_mdlint::RuleOverride::enabled)
+                    .unwrap_or(true);
+                if !cfg_enabled {
+                    return false;
+                }
+                rule_filter.is_empty() || rule_filter.iter().any(|r| r == rule_id)
+            };
+            let findings = crate::commands::changelog_lint::run_changelog_rules(
+                &content,
+                body_content,
+                find_body_line_offset(&content, body_start),
+                &is_enabled,
+            );
+            for f in findings {
+                let severity = md_lint_config
+                    .rules
+                    .get(f.rule_id)
+                    .and_then(hyalo_mdlint::RuleOverride::severity)
+                    .unwrap_or(f.default_severity)
+                    .to_owned();
+                violations_by_rule
+                    .entry(f.rule_id.to_owned())
+                    .or_default()
+                    .push(InternalViolation {
+                        line: f.line,
+                        column: 1,
+                        message: f.message,
+                        severity,
+                        fix: None,
+                        fixed: false,
+                    });
+            }
+        }
+    }
+
     let total_violations = violations_by_rule.values().map(Vec::len).sum();
 
     let _ = max_per_rule; // applied during output construction
@@ -3184,6 +3243,7 @@ mod tests {
             okf_profile: false,
             madr_profile: false,
             skills_profile: false,
+            changelog_profile: false,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }

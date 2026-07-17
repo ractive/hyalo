@@ -1082,6 +1082,10 @@ Repeatable (AND).\n\
             `**/SKILL.md` (Agent Skills spec): it errors on `name` regex/length/reserved-word\n\
             violations and out-of-bounds `description` length, and warns on a name↔directory\n\
             mismatch and a >500-line body.\n\
+            `--profile changelog` binds a frontmatter-less `changelog` type to `CHANGELOG.md`\n\
+            (Keep a Changelog 1.1.0): it errors on a missing `# Changelog` title, malformed\n\
+            version/category headings, and out-of-order versions/dates, and warns on empty\n\
+            sections and mismatched footer link references.\n\
             Composes with --fix, --rule, --strict, and --files-from.\n\n\
             AUTO-FIX: With --fix, hyalo applies frontmatter fixes (insert defaults, correct enum\n\
             typos, normalize dates, infer type) and body fixes from autofixable rules. Body fixes\n\
@@ -1099,7 +1103,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo lint --fix-rule HYALO001\n\
             \u{00a0} hyalo lint --fix\n\
             \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\
-            \u{00a0} hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\n\
+            \u{00a0} hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\
+            \u{00a0} hyalo lint --profile changelog   # validate CHANGELOG.md (Keep a Changelog)\n\n\
             INDEX NOTE: The snapshot index does not accelerate the body pass — body bytes are\n\
             not indexed. The frontmatter pass and file enumeration still benefit from --index.\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
@@ -1295,6 +1300,34 @@ Repeatable (AND).\n\
         #[command(subcommand)]
         action: MadrAction,
     },
+    /// Keep a Changelog (CHANGELOG.md) release generators
+    #[command(
+        display_order = 812,
+        long_about = "Keep a Changelog 1.1.0 (CHANGELOG.md) maintenance commands.\n\n\
+            Deterministic, LLM-free maintenance of a `CHANGELOG.md` that follows the\n\
+            https://keepachangelog.com/en/1.1.0/ grammar. Two subcommands:\n\n\
+            - `changelog add --category <CAT> --message \"...\"` appends an entry under the\n\
+              `### <CAT>` subsection of `## [Unreleased]` (creating the subsection if\n\
+              needed). Categories: Added, Changed, Deprecated, Removed, Fixed, Security.\n\
+            - `changelog release <X.Y.Z> [--date YYYY-MM-DD]` rotates the accumulated\n\
+              `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section, recreates\n\
+              an empty `[Unreleased]` above it, and appends a placeholder footer link\n\
+              reference (`[X.Y.Z]: TBD`). It refuses to release a version that already\n\
+              exists (idempotency guard).\n\n\
+            Both default to --dry-run and exit non-zero on drift (a CI signal); pass\n\
+            --apply to write.\n\n\
+            VALIDATE: after releasing, replace the `TBD` link target with the real\n\
+            compare/tag URL and run `hyalo lint --profile changelog`.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo changelog add --category Added --message \"New export format\" --apply\n\
+            \u{00a0} hyalo changelog release 1.2.0 --dry-run\n\
+            \u{00a0} hyalo changelog release 1.2.0 --apply\n\
+            \u{00a0} hyalo changelog release 1.2.0 --date 2026-07-17 --apply"
+    )]
+    Changelog {
+        #[command(subcommand)]
+        action: ChangelogAction,
+    },
     /// Print the effective configuration (resolved .hyalo.toml path, dir, and core settings)
     #[command(
         name = "config",
@@ -1430,6 +1463,70 @@ pub(crate) enum MadrAction {
         /// ADR directory (vault-relative); defaults to `docs/decisions`
         #[arg(value_name = "DIR")]
         adr_dir: Option<String>,
+        /// Write changes to disk. Without this flag the command is a dry run.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Preview changes without writing (default behaviour; explicit for clarity)
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ChangelogAction {
+    /// Rotate `## [Unreleased]` into a dated `## [X.Y.Z]` release section
+    #[command(
+        long_about = "Cut a release: rotate the accumulated `## [Unreleased]` content into a\n\
+            dated `## [X.Y.Z] - <date>` version section.\n\n\
+            The existing `## [Unreleased]` heading is relabelled to the new version (its\n\
+            body — the categorised entries — moves with it), a fresh empty `## [Unreleased]`\n\
+            is inserted above it, and a placeholder footer link reference `[X.Y.Z]: TBD` is\n\
+            appended (replace `TBD` with the real compare/tag URL). The date defaults to\n\
+            today; override with --date YYYY-MM-DD.\n\n\
+            Refuses to release a version that already appears in the file (idempotency\n\
+            guard). Defaults to --dry-run and exits non-zero when the file would change;\n\
+            pass --apply to write.\n\n\
+            SIDE EFFECTS: writes CHANGELOG.md only with --apply.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo changelog release 1.2.0 --dry-run\n\
+            \u{00a0} hyalo changelog release 1.2.0 --apply\n\
+            \u{00a0} hyalo changelog release 1.2.0 --date 2026-07-17 --apply"
+    )]
+    Release {
+        /// The new version (MAJOR.MINOR.PATCH)
+        #[arg(value_name = "VERSION")]
+        version: String,
+        /// Release date (YYYY-MM-DD); defaults to today
+        #[arg(long, value_name = "DATE")]
+        date: Option<String>,
+        /// Write changes to disk. Without this flag the command is a dry run.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Preview changes without writing (default behaviour; explicit for clarity)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Append an entry under a category in `## [Unreleased]`
+    #[command(
+        long_about = "Append a changelog entry under a category of the `## [Unreleased]` section.\n\n\
+            Inserts `- <message>` under the `### <category>` subsection of `## [Unreleased]`,\n\
+            creating the `[Unreleased]` section and/or the category subsection if they are\n\
+            missing (a fresh `# Changelog` skeleton is created when the file is absent).\n\
+            Category must be one of the six Keep a Changelog kinds: Added, Changed,\n\
+            Deprecated, Removed, Fixed, Security (case-insensitive).\n\n\
+            Defaults to --dry-run and exits non-zero on drift; pass --apply to write.\n\n\
+            SIDE EFFECTS: writes/creates CHANGELOG.md only with --apply.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo changelog add --category Added --message \"New export format\" --apply\n\
+            \u{00a0} hyalo changelog add --category Fixed --message \"Crash on empty input\" --apply"
+    )]
+    Add {
+        /// Change category (Added/Changed/Deprecated/Removed/Fixed/Security)
+        #[arg(long, value_name = "CATEGORY")]
+        category: String,
+        /// The entry text (required)
+        #[arg(long, value_name = "TEXT", required = true)]
+        message: String,
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,

@@ -1,11 +1,14 @@
 #![allow(clippy::missing_errors_doc)]
 pub mod append;
 pub mod backlinks;
+pub mod changelog;
+pub mod changelog_lint;
 pub(crate) mod config;
 pub mod create_index;
 pub mod drop_index;
 pub mod files_from;
 pub mod find;
+pub mod heading_grammar;
 pub mod init;
 pub(crate) mod inputs;
 pub mod links;

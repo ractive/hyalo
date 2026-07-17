@@ -37,6 +37,12 @@ const SKILLS_PROFILE_TOML: &str = include_str!("../../templates/profile-skills.t
 /// The bundled Agent Skills skill body, embedded at compile time.
 const SKILLS_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-skills.md");
 
+/// The Keep a Changelog `.hyalo.toml` fragment, embedded at compile time.
+const CHANGELOG_PROFILE_TOML: &str = include_str!("../../templates/profile-changelog.toml");
+
+/// The bundled changelog skill body, embedded at compile time.
+const CHANGELOG_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-changelog.md");
+
 /// A declarative init profile: a TOML fragment plus optional skill files.
 #[derive(Debug)]
 pub struct Profile {
@@ -74,6 +80,14 @@ pub const PROFILES: &[Profile] = &[
                       500-line body budget",
         toml_fragment: SKILLS_PROFILE_TOML,
         skills: &[("skills", SKILLS_SKILL_CONTENT)],
+    },
+    Profile {
+        name: "changelog",
+        description: "Keep a Changelog 1.1.0 (CHANGELOG.md): path-bound frontmatter-less \
+                      `changelog` type, strict heading grammar (version/date ordering, \
+                      categories, footer link refs), `changelog release` rotation",
+        toml_fragment: CHANGELOG_PROFILE_TOML,
+        skills: &[("changelog", CHANGELOG_SKILL_CONTENT)],
     },
 ];
 
@@ -261,6 +275,68 @@ required = [\"type\", \"status\"]
         assert_eq!(madr.skills.len(), 1);
         assert_eq!(madr.skills[0].0, "madr");
         assert!(!madr.skills[0].1.is_empty());
+    }
+
+    #[test]
+    fn lookup_finds_changelog() {
+        assert_eq!(lookup("changelog").unwrap().name, "changelog");
+    }
+
+    #[test]
+    fn changelog_fragment_is_valid_toml() {
+        let _: toml::Table =
+            toml::from_str(CHANGELOG_PROFILE_TOML).expect("changelog fragment must parse");
+    }
+
+    #[test]
+    fn changelog_fragment_binds_literal_path() {
+        // The fragment must produce a valid SchemaConfig with a `changelog` type,
+        // a literal-path bind, and CHANGELOG.md exempt from frontmatter rules.
+        let merged = merge_into_config("", CHANGELOG_PROFILE_TOML).unwrap();
+        let val: toml::Value = toml::from_str(&merged).unwrap();
+        let raw: hyalo_core::schema::RawSchemaConfig = val
+            .get("schema")
+            .and_then(|v| v.clone().try_into().ok())
+            .expect("schema section present");
+        let cfg = hyalo_core::schema::SchemaConfig::try_from(raw).expect("valid schema");
+        assert!(
+            cfg.types.contains_key("changelog"),
+            "changelog type declared"
+        );
+        assert_eq!(
+            cfg.bound_type_for("CHANGELOG.md"),
+            Some("changelog"),
+            "literal bind resolves CHANGELOG.md to the changelog type"
+        );
+        assert!(
+            cfg.exempt.is_exempt("CHANGELOG.md"),
+            "CHANGELOG.md is exempt"
+        );
+        assert!(
+            cfg.unknown_bind_targets().is_empty(),
+            "bind target must reference a declared type"
+        );
+    }
+
+    #[test]
+    fn changelog_declares_a_skill() {
+        let cl = lookup("changelog").unwrap();
+        assert_eq!(cl.skills.len(), 1);
+        assert_eq!(cl.skills[0].0, "changelog");
+        assert!(!cl.skills[0].1.is_empty());
+    }
+
+    #[test]
+    fn changelog_composes_with_others() {
+        // All profiles applied to one vault must coexist.
+        let a = merge_into_config("", OKF_PROFILE_TOML).unwrap();
+        let b = merge_into_config(&a, MADR_PROFILE_TOML).unwrap();
+        let c = merge_into_config(&b, CHANGELOG_PROFILE_TOML).unwrap();
+        let parsed: toml::Table = toml::from_str(&c).unwrap();
+        let types = parsed["schema"]["types"].as_table().unwrap();
+        assert!(types.contains_key("changelog"));
+        assert!(types.contains_key("adr"));
+        assert!(types.contains_key("BigQuery Table"));
     }
 
     #[test]

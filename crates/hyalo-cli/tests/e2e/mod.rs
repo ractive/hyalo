@@ -4,6 +4,7 @@ mod append;
 mod backlinks;
 mod bm25;
 mod broken_pipe;
+mod changelog_profile;
 mod completion;
 mod config;
 mod config_dir;
