@@ -103,3 +103,20 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
   every PR check. Flip it after the action repo is published.
 - Smoke-matrix green + a real annotated PR are verifiable only once the repo is
   public.
+
+## Update (2026-07-17, post-merge)
+
+**Published.** <https://github.com/ractive/setup-hyalo> is live (tags `v1.0.0`,
+`v1.0.1`, floating `v1`), pushed from the staged tree (minus `PUBLISH.md`,
+which stays internal). First smoke run failed on all 6 jobs — the fixture lint
+used `--format github`, which is on hyalo main but **not in v0.17.0**, the
+latest release the action installs; `v1.0.1` runs plain `lint --strict` with a
+TODO to restore the github format after the next release. Second run: **smoke
+matrix green on all three OSes**, both `latest` and pinned.
+
+**Still open — blocked on the next hyalo release (> v0.17.0):** flipping the
+`lint-kb` job to the action and the two remaining ACs (annotated PR via the
+action, `--format github` two-step check). The release must ship the iter-170
+annotations format first. Sequence after release: re-enable `--format github`
+in the smoke fixture → `workflow_dispatch` smoke with the new tag → flip
+`lint-kb` → tick the last boxes and set this iteration `completed`.
