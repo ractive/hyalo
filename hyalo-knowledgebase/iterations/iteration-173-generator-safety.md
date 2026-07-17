@@ -47,7 +47,7 @@ adding it after the fact.
 
 ## Tasks
 
-### 1. Non-destructive adoption (RB-2, data loss)
+### 1. Non-destructive adoption (RB-2, data loss) [4/4]
 
 - [x] `okf index --apply` on an existing `index.md` WITHOUT okf markers:
   preserve the entire existing body and append the managed region (markers +
@@ -61,7 +61,7 @@ adding it after the fact.
   on adopt, and the adopt/preserve semantics apply (this was one careless
   apply away from destroying mapl-memory's 36 KB curated INDEX.md)
 
-### 2. Malformed-file policy (generator half of RB-3)
+### 2. Malformed-file policy (generator half of RB-3) [3/3]
 
 - [x] `okf index` / `okf log` / `madr toc` skip files with unparseable
   frontmatter with a per-file stderr warning and continue (today: hard abort
@@ -71,7 +71,7 @@ adding it after the fact.
 - [x] Exit codes: 0/1 keep their drift semantics; 2 only for real I/O or
   config errors
 
-### 3. Lint-clean generated output
+### 3. Lint-clean generated output [2/2]
 
 - [x] Emit a blank line after `<!-- okf:index:begin -->` (and symmetrically
   before `end` if needed) so generated files pass MD022 — kills the
@@ -80,7 +80,7 @@ adding it after the fact.
   freshly generated file has zero NEW violations under the vault's default
   lint config (long-title MD013 excepted — document that)
 
-### 4. Generator scoping & case-insensitive matching
+### 4. Generator scoping & case-insensitive matching [2/2]
 
 - [x] New `[okf] ignore = ["glob", ...]` honored by `okf index`/`okf log`
   generation (independent of `[lint] ignore`): stop generating into
@@ -90,7 +90,7 @@ adding it after the fact.
   policy as `[links] case_insensitive`): `INDEX.md`/`LOG.md` are recognized
   as the reserved files they physically are (mapl BUG-2)
 
-### 5. Text output & misc
+### 5. Text output & misc [2/2]
 
 - [x] Fix `--format text` rendering for `okf index` / `okf log` / `madr toc`
   results: proper per-file lines instead of the mis-nested
@@ -98,7 +98,7 @@ adding it after the fact.
 - [x] `SCHEMA missing required property` violations report
   `autofixable: false` when `--fix` cannot synthesize a value (mapl BUG-3)
 
-### 6. Tests
+### 6. Tests [6/6]
 
 - [x] e2e: adopt round-trip — marker-less file with prose → apply → all
   original lines present + managed region + second apply idempotent +
@@ -112,7 +112,7 @@ adding it after the fact.
   CI legs; skipped with a note on case-sensitive Linux)
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 7. Docs sync (same PR)
+### 7. Docs sync (same PR) [1/2]
 
 - [x] `okf index --help` documents adopt/`--replace`/ignore; README OKF
   section updated; okf skill template's maintenance loop reflects adopt
