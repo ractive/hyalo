@@ -47,7 +47,7 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
 
 ### 2. Versioning & release protocol
 
-- [ ] Tag `v1` (floating) + `v1.0.0` on the action repo; document the retag protocol in the action README
+- [x] Tag `v1` (floating) + `v1.0.0` on the action repo; document the retag protocol in the action README
 - [x] Decide + document whether the hyalo release pipeline should smoke-test `setup-hyalo` with each new release (follow the ractive/release-workflows change protocol from the KB); no automation required this iteration — a documented manual step is enough
 
 ### 3. Consumer recipes (docs, in the hyalo repo)
@@ -60,14 +60,14 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
 
 ### 4. Verification
 
-- [ ] Smoke matrix in the action repo green on all three OSes
+- [x] Smoke matrix in the action repo green on all three OSes
 - [ ] A real PR in the hyalo repo shows inline lint annotations produced via the action
 - [x] Knowledgebase: record the separate-repo + floating-tag decision in the decision log
 
 ## Acceptance criteria
 
 - [ ] `uses: ractive/setup-hyalo@v1` followed by `hyalo lint --strict --format github` is a working two-step PR check on ubuntu, macos, and windows runners
-- [ ] Pinned `version:` input installs exactly that release; `latest` tracks the newest
+- [x] Pinned `version:` input installs exactly that release; `latest` tracks the newest
 - [ ] hyalo's own CI uses the action for its KB lint job
 - [x] README documents both the PR-check and the claude-code-action recipes
 
