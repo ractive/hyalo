@@ -76,7 +76,7 @@ Third profile (see [[profile-candidates-beyond-okf]]). The Agent Skills spec (<h
 
 ## Acceptance Criteria
 
-- [x] `hyalo lint --profile skills` catches every hard spec violation (name regex/length/dirname/reserved words, description bounds) and warns on the line budget
-- [x] This repo's own skills + bundled templates lint clean (after fixing real findings)
-- [x] New rule kinds (max-length, dirname-coupling, line budget) are generic, reusable by future profiles
-- [x] Quality gates pass; docs synced; retrospective applied to iter 169
+- [x] `hyalo lint --profile skills` catches every hard spec violation (name regex/length/dirname/reserved words, description bounds) and warns on the line budget — see `name_pattern_rejects_consecutive_hyphens`, `name_over_64_chars_errors`, `description_over_1024_chars_errors`, `description_with_xml_tag_errors`, `reserved_name_errors`, `dirname_mismatch_warns`, `line_budget_warns_above_500` in `crates/hyalo-cli/tests/e2e/skills_profile.rs`
+- [x] This repo's own skills lint clean, verified by a dogfooding regression test (`this_repos_own_skills_lint_clean_under_skills_profile`, `crates/hyalo-cli/tests/e2e/skills_profile.rs`) that copies the live `.claude/skills/**/SKILL.md` files into a temp vault and asserts zero errors under `--profile skills`. Bundled templates under `crates/hyalo-cli/templates/` are named `skill-*.md` (scaffolding source, not live `SKILL.md` files), so the `**/SKILL.md` glob does not apply to them — nothing to lint there.
+- [x] New rule kinds are generic, reusable by future profiles: `min-length`/`max-length` are plain `PropertyConstraint` fields on any `string` property (`crates/hyalo-core/src/schema.rs`, not skills-specific), and `SKILL-RESERVED-NAME`/`SKILL-NAME-DIRNAME`/`SKILL-LINE-BUDGET` are ordinary `RuleCatalogEntry` registrations in `hyalo-mdlint/src/engine.rs` (toggleable via `lint-rules set`, listed by `lint-rules list`) — see `skill_rules_are_generic_catalog_entries_not_hardcoded` and `skill_rule_can_be_disabled`
+- [x] Quality gates pass (`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` all green as of this PR); docs synced (`README.md` "Agent Skills profile" section, `--profile` help); retrospective applied to iter 169 (see [[iteration-169-changelog-profile]])

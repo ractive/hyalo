@@ -274,3 +274,44 @@ fn skill_rule_can_be_disabled() {
         "disabled rule must not fire: {json}"
     );
 }
+
+/// Dogfooding regression: this repo's own `.claude/skills/` directory must
+/// lint clean under the `skills` profile — zero `SKILL-*`/schema errors.
+/// Copies the real skill dirs into a temp vault (rather than pointing `--dir`
+/// at the live `.claude/skills`) so the test is hermetic and doesn't depend on
+/// the current working directory of `cargo test`.
+#[test]
+fn this_repos_own_skills_lint_clean_under_skills_profile() {
+    let tmp = init_skills();
+    let repo_skills = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.claude/skills")
+        .canonicalize()
+        .expect(".claude/skills must exist at the repo root");
+    let mut copied_any = false;
+    for entry in std::fs::read_dir(&repo_skills).unwrap() {
+        let entry = entry.unwrap();
+        if !entry.file_type().unwrap().is_dir() {
+            continue;
+        }
+        let src = entry.path().join("SKILL.md");
+        if !src.is_file() {
+            continue;
+        }
+        let dest_dir = tmp.path().join(entry.file_name());
+        std::fs::create_dir_all(&dest_dir).unwrap();
+        std::fs::copy(&src, dest_dir.join("SKILL.md")).unwrap();
+        copied_any = true;
+    }
+    assert!(
+        copied_any,
+        "expected at least one SKILL.md under {repo_skills:?}"
+    );
+
+    let (json, output) = run(tmp.path(), &["lint", "--profile", "skills"]);
+    assert!(output.status.success(), "lint failed: {json}");
+    let errors = json["results"]["errors"].as_i64().unwrap_or(-1);
+    assert_eq!(
+        errors, 0,
+        "this repo's own skills must lint clean under --profile skills: {json}"
+    );
+}
