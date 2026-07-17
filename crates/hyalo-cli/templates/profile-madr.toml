@@ -12,7 +12,7 @@ validate_on_write = true
 # rules (supersede cross-check, duplicate ADR number) without `--profile madr`
 # on every invocation. `hyalo lint --profile madr` is then an idempotent overlay.
 [lint]
-profile = "madr"
+profiles = ["madr"]
 
 # The generated TOC (`README.md`) is a derived artifact, not an ADR — exempt it
 # (and any bundle `index.md`) from the `adr` schema so it is neither validated

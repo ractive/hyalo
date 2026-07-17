@@ -74,7 +74,10 @@ fn rule_fired(results: &Value, rule_id: &str) -> bool {
 fn init_writes_skills_config() {
     let tmp = init_skills();
     let cfg = std::fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
-    assert!(cfg.contains("profile = \"skills\""), "records lint profile");
+    assert!(
+        cfg.contains("profiles = [\"skills\"]"),
+        "records lint profile"
+    );
     assert!(cfg.contains("[[schema.bind]]"), "writes a bind entry");
     assert!(cfg.contains("**/SKILL.md"), "binds every SKILL.md");
     assert!(

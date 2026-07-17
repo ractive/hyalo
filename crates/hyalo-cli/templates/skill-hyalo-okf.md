@@ -178,7 +178,7 @@ The OKF profile's `.hyalo.toml` sets: `[schema.default] required = ["type"]`, th
 recommended props (`title`, `description`, `resource` with a URL pattern, `tags`,
 `timestamp: datetime-tz`), `exempt = ["**/index.md", "**/log.md"]`, `site_prefix = ""`
 for bundle-root links, `validate_on_write = true` so authoring stays conformant, and
-`[lint] profile = "okf"` so a plain `hyalo lint` runs the §9 conformance + citation rules
+`[lint] profiles = ["okf"]` so a plain `hyalo lint` runs the §9 conformance + citation rules
 (no `--profile okf` needed on this vault).
 
 ## Example concept

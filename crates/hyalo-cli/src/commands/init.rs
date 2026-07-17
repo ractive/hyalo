@@ -103,23 +103,17 @@ fn run_init_in(
     } else {
         let toml_content = if toml_existed {
             // Read and parse the existing file; update only the `dir` key so
-            // that other user config (format, hints, site_prefix …) is preserved.
-            // If the file is malformed, fall back to overwriting with just `dir`.
+            // that other user config (format, hints, site_prefix …) — and any
+            // hand-written comments / key order — are preserved. Editing via
+            // `toml_edit::DocumentMut` keeps decor intact, which matters for
+            // idempotency when a profile merge (also comment-preserving) runs
+            // next. If the file is malformed, fall back to overwriting with
+            // just `dir`.
             let existing_raw = fs::read_to_string(&toml_path)
                 .with_context(|| format!("failed to read {}", toml_path.display()))?;
-            if let Ok(mut table) = toml::from_str::<toml::Table>(&existing_raw) {
-                table.insert("dir".to_owned(), TomlValue::String(dir_value.clone()));
-                // Serialise back; toml::to_string always produces valid TOML.
-                if let Ok(s) = toml::to_string(&table) {
-                    s
-                } else {
-                    writeln!(
-                        summary,
-                        "warning  .hyalo.toml was malformed; existing content replaced"
-                    )
-                    .unwrap();
-                    minimal_toml_dir(&dir_value)
-                }
+            if let Ok(mut doc) = existing_raw.parse::<toml_edit::DocumentMut>() {
+                doc["dir"] = toml_edit::value(dir_value.clone());
+                doc.to_string()
             } else {
                 // Malformed existing file — overwrite with just dir and note it.
                 writeln!(
@@ -148,11 +142,18 @@ fn run_init_in(
     if let Some(profile) = profile {
         let existing_raw = fs::read_to_string(&toml_path)
             .with_context(|| format!("failed to read {}", toml_path.display()))?;
-        let merged =
-            crate::commands::profiles::merge_into_config(&existing_raw, profile.toml_fragment)
-                .with_context(|| format!("failed to apply profile '{}'", profile.name))?;
+        let (merged, conflicts) = crate::commands::profiles::merge_into_config_with_conflicts(
+            &existing_raw,
+            profile.toml_fragment,
+        )
+        .with_context(|| format!("failed to apply profile '{}'", profile.name))?;
         fs::write(&toml_path, &merged)
             .with_context(|| format!("failed to write {}", toml_path.display()))?;
+        // Surface any scalar value the profile overwrote so nothing changes
+        // silently. Arrays never shrink (they union), so only scalars conflict.
+        for conflict in &conflicts {
+            crate::warn::warn(conflict.line(profile.name));
+        }
         writeln!(
             summary,
             "updated  .hyalo.toml  (merged '{}' profile)",

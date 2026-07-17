@@ -946,7 +946,16 @@ fn validate_properties(
         .as_deref()
         .map(|t| format!(" (type: {t})"))
         .unwrap_or_default();
+    // Bind = typing: when a file's type is assigned by a `[schema.bind]` path
+    // binding (no explicit `type:` frontmatter), the binding itself satisfies a
+    // `required = ["type"]` gate — a spec-valid frontmatter-less bound file
+    // (SKILL.md, ADR, CHANGELOG.md) must lint clean. Skip only the `type`
+    // requirement in that case; every other required property is still checked.
+    let type_satisfied_by_bind = doc_type.is_none() && bound_type.is_some();
     for req in &effective_schema.required {
+        if type_satisfied_by_bind && req == "type" {
+            continue;
+        }
         match properties.get(req.as_str()) {
             None => {
                 violations.push(Violation {
@@ -2136,11 +2145,14 @@ fn lint_one_file_extended(
             .iter()
             .any(|v| v.kind == Some(VIOLATION_KIND_MISSING_TYPE));
         // Exempt / reserved files are bound to no schema, so `--strict` must
-        // not inject a missing-`type` error for them either.
+        // not inject a missing-`type` error for them either. A path-bound file
+        // (bind = typing) is fully typed by its binding, so it is likewise
+        // exempt from the missing-`type` injection.
         if strict
             && !already_has_missing_type
             && !properties.contains_key("type")
             && !schema.exempt.is_exempt(rel_path)
+            && schema.bound_type_for(rel_path).is_none()
         {
             fm_violations.push(Violation {
                 severity: Severity::Warn,
@@ -3148,6 +3160,109 @@ mod tests {
                 .violations
                 .iter()
                 .any(|v| v.severity == Severity::Warn && v.message.contains("no 'type' property"))
+        );
+    }
+
+    /// Build a `SchemaConfig` from a TOML `[schema]` fragment (as it would
+    /// appear in `.hyalo.toml`), for tests that exercise bind = typing.
+    fn schema_from_toml(fragment: &str) -> SchemaConfig {
+        let val: toml::Value = toml::from_str(fragment).expect("valid schema fragment");
+        let raw: hyalo_core::schema::RawSchemaConfig = val
+            .get("schema")
+            .and_then(|v| v.clone().try_into().ok())
+            .expect("schema section present");
+        SchemaConfig::try_from(raw).expect("valid schema")
+    }
+
+    #[test]
+    fn bind_typed_frontmatterless_file_satisfies_required_type() {
+        // iter-172 bind = typing: a file whose type comes from a `[schema.bind]`
+        // path binding must satisfy `[schema.default] required = ["type"]`
+        // WITHOUT explicit `type:` frontmatter — a spec-valid frontmatter-less
+        // SKILL.md / ADR must lint clean under composed profiles.
+        let schema = schema_from_toml(
+            "\
+[schema.default]
+required = [\"type\"]
+
+[schema.types.skill]
+required = [\"name\", \"description\"]
+
+[[schema.bind]]
+glob = \"**/SKILL.md\"
+type = \"skill\"
+",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        // A skill with the two required fields but NO explicit `type:`.
+        std::fs::write(
+            &path,
+            "---\nname: my-skill\ndescription: does a thing\n---\nBody\n",
+        )
+        .unwrap();
+
+        let result = lint_file(&path, "foo/SKILL.md", &schema).unwrap();
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.message.contains("missing required property \"type\"")),
+            "bound file must not require explicit type: {:?}",
+            result.violations
+        );
+        assert!(
+            !result
+                .violations
+                .iter()
+                .any(|v| v.message.contains("no 'type' property")),
+            "bound file must not warn about missing type: {:?}",
+            result.violations
+        );
+        // The skill's OWN required props are still enforced (both present here),
+        // so the file is clean.
+        assert!(
+            result
+                .violations
+                .iter()
+                .all(|v| v.severity != Severity::Error),
+            "frontmatter-less bound skill lints clean: {:?}",
+            result.violations
+        );
+    }
+
+    #[test]
+    fn bind_typed_file_still_enforces_type_specific_required() {
+        // Bind = typing drops only the `type` requirement; a bound file missing
+        // its type's OWN required property still errors.
+        let schema = schema_from_toml(
+            "\
+[schema.default]
+required = [\"type\"]
+
+[schema.types.skill]
+required = [\"name\", \"description\"]
+
+[[schema.bind]]
+glob = \"**/SKILL.md\"
+type = \"skill\"
+",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SKILL.md");
+        // Missing `description` (a skill-required field).
+        std::fs::write(&path, "---\nname: my-skill\n---\nBody\n").unwrap();
+
+        let result = lint_file(&path, "foo/SKILL.md", &schema).unwrap();
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.severity == Severity::Error
+                    && v.message
+                        .contains("missing required property \"description\"")),
+            "type-specific required still enforced: {:?}",
+            result.violations
         );
     }
 

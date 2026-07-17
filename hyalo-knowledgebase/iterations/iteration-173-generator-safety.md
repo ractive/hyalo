@@ -31,6 +31,18 @@ blocker **RB-2** and the generator half of **RB-3** from
 - **Case handling reuses the `[links] case_insensitive` auto approach**
   (FS-detected), rather than a new knob.
 
+## Note from iter-172
+
+No scope overlap with iter-172's merge-engine/bind-typing work (this
+iteration doesn't touch `profiles.rs`, `.hyalo.toml` merge, or
+`[schema.bind]`). One process lesson carries forward: the `ac-fidelity-check`
+gate requires each ticked Acceptance Criteria bullet to be a single line
+containing a backtick-quoted symbol (test fn name or code identifier) that
+appears in the diff — multi-line prose bullets with no quoted symbol fail the
+gate even when a real test backs the claim. When closing out this iteration,
+write ACs as one-liners naming the backing test/symbol up front rather than
+adding it after the fact.
+
 ## Tasks
 
 ### 1. Non-destructive adoption (RB-2, data loss)

@@ -14,7 +14,7 @@ validate_on_write = true
 # `--profile skills` on every invocation. `hyalo lint --profile skills` is then
 # an idempotent overlay.
 [lint]
-profile = "skills"
+profiles = ["skills"]
 
 # Bind the `skill` schema to every `SKILL.md`, anywhere in the tree (the spec
 # locates a skill by its filename, not its directory depth). Files matching this
