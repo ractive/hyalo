@@ -752,3 +752,39 @@ The repo dogfoods this via a `lint-kb` CI job. Frozen historical trees
 `promotion-plan.md`) are added to `[lint] ignore`, and `HYALO002` is downgraded to **warn**
 in this vault because completed iterations legitimately keep a trailing unchecked
 housekeeping task — so the gate protects the live knowledgebase without churning history.
+
+## DEC-051: `setup-hyalo` lives in a separate repo with a floating `@v1` tag (2026-07-17)
+
+**Decision:** Ship the install-hyalo GitHub Action as its own repository
+`ractive/setup-hyalo` (composite bash action), **not** as a folder inside the
+hyalo repo, and give it an independent version line: a full `vMAJOR.MINOR.PATCH`
+tag plus a moving `vMAJOR` tag that consumers reference as `ractive/setup-hyalo@v1`.
+
+**Why:** This is the `dtolnay/rust-toolchain` pattern. A separate repo decouples
+action versioning from binary versioning (the hyalo binary can release without
+retagging the action, and vice versa), keeps the action's marketplace/`@v1`
+surface clean, and lets the action be pinned by SHA independently of the
+`version:` input that pins the binary. The action stays pure bash + `curl` (no
+Node/Python — consistent with the no-polyglot rule); it resolves the runner
+platform to a release target, downloads + caches the prebuilt archive, and adds
+the binary to `PATH`. hyalo ships **no** `x86_64-apple-darwin` build, so the
+action fails fast with a clear message on Intel macOS runners (use `macos-14`+ or
+`cargo install`).
+
+**Retag protocol:** cut `vX.Y.Z`, then `git tag -f v1 && git push -f origin v1`;
+only move the floating major for backwards-compatible changes, bump to `v2` on a
+breaking change. When hyalo cuts a release, run the action's `smoke` workflow
+(`workflow_dispatch`, `version:` = new tag) to confirm the new archives install
+on all three OSes — automating this into the hyalo release pipeline is deferred
+(follow the `ractive/release-workflows` change protocol).
+
+**Blocked (2026-07-17):** the automated iteration run could not `gh repo create`
+the public `ractive/setup-hyalo` repo — creating a new public repository requires
+human authorization in the web UI and was denied by the environment's safety
+classifier. The full, platform-verified action tree (`action.yml`, matrix `smoke`
+workflow, fixture vault, MIT `LICENSE`, README) is built and its install logic was
+validated end-to-end on macOS bash 3.2 (latest + pinned + warm-cache + input
+validation). It awaits a human to create the repo and push the tree, after which
+hyalo's own `lint-kb` CI job switches from build-from-source to
+`uses: ractive/setup-hyalo@v1` (deliberately **not** switched now — pointing live
+CI at a not-yet-published action would break every PR check).

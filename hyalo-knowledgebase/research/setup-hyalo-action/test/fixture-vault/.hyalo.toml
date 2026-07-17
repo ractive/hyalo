@@ -1,0 +1,6 @@
+# Tiny fixture vault used by the smoke workflow to prove `hyalo lint` runs
+# end-to-end after the action installs the binary.
+dir = "."
+
+[schema.types.note]
+required = ["title", "type"]

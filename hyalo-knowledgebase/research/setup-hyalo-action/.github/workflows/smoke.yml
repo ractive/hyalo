@@ -1,0 +1,41 @@
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 is arm64 (aarch64-apple-darwin) — the only macOS target hyalo ships.
+        os: [ubuntu-latest, macos-14, windows-latest]
+        version: [latest, v0.17.0]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install hyalo via setup-hyalo
+        id: hyalo
+        uses: ./
+        with:
+          version: ${{ matrix.version }}
+
+      - name: hyalo --version
+        shell: bash
+        run: hyalo --version
+
+      - name: Report resolved version
+        shell: bash
+        run: echo "resolved=${{ steps.hyalo.outputs.version }}"
+
+      - name: Lint the fixture vault
+        shell: bash
+        working-directory: test/fixture-vault
+        run: hyalo lint --strict --format github
