@@ -1047,7 +1047,11 @@ fn validate_constraint(
     regex_cache: &mut HashMap<String, Result<Regex, String>>,
 ) -> Vec<Violation> {
     match constraint {
-        PropertyConstraint::String { pattern } => {
+        PropertyConstraint::String {
+            pattern,
+            min_length,
+            max_length,
+        } => {
             let Some(s) = value_as_str(value) else {
                 return vec![Violation {
                     severity: Severity::Error,
@@ -1055,6 +1059,28 @@ fn validate_constraint(
                     message: format!("property \"{name}\" expected string, got {value}"),
                 }];
             };
+            // Length bounds are measured in Unicode scalar values (chars), so a
+            // 1024-char cap counts characters, not bytes — matching how humans
+            // and the Agent Skills spec reason about a description's length.
+            let len = s.chars().count();
+            if let Some(min) = min_length
+                && len < *min
+            {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" is {len} characters; minimum is {min}"),
+                }];
+            }
+            if let Some(max) = max_length
+                && len > *max
+            {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" is {len} characters; maximum is {max}"),
+                }];
+            }
             if let Some(pat) = pattern {
                 // Compile (or look up) the regex once per pattern per call.
                 let entry = regex_cache
@@ -1435,6 +1461,10 @@ pub struct ExtLintOptions<'a> {
     /// When `true`, run the MADR conformance profile's advisory (warn-level)
     /// rules in addition to the schema pass. Set by `hyalo lint --profile madr`.
     pub madr_profile: bool,
+    /// When `true`, run the Agent Skills conformance profile's advisory
+    /// (warn-level) rules in addition to the schema pass. Set by
+    /// `hyalo lint --profile skills`.
+    pub skills_profile: bool,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1467,6 +1497,7 @@ pub fn lint_files_extended(
     let strict = opts.strict;
     let okf_profile = opts.okf_profile;
     let madr_profile = opts.madr_profile;
+    let skills_profile = opts.skills_profile;
     let vault_dir = opts.vault_dir;
 
     // Process files in parallel. Each worker lints one file.
@@ -1485,6 +1516,7 @@ pub fn lint_files_extended(
             strict,
             okf_profile,
             madr_profile,
+            skills_profile,
             vault_dir,
         )
     };
@@ -1973,6 +2005,7 @@ fn lint_one_file_extended(
     strict: bool,
     okf_profile: bool,
     madr_profile: bool,
+    skills_profile: bool,
     vault_dir: &Path,
 ) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
@@ -2556,6 +2589,57 @@ fn lint_one_file_extended(
         }
     }
 
+    // Agent Skills conformance profile — advisory (warn-level) rules layered on
+    // top of the schema pass. Only runs under `hyalo lint --profile skills` (or
+    // a vault whose `.hyalo.toml` sets `[lint] profile = "skills"`). Same
+    // override/filter discipline as the OKF/MADR blocks above.
+    if skills_profile {
+        let is_enabled = |rule_id: &str| -> bool {
+            let cfg_enabled = md_lint_config
+                .rules
+                .get(rule_id)
+                .and_then(hyalo_mdlint::RuleOverride::enabled)
+                .unwrap_or(true);
+            if !cfg_enabled {
+                return false;
+            }
+            rule_filter.is_empty() || rule_filter.iter().any(|r| r == rule_id)
+        };
+        // Effective type: explicit `type:` frontmatter else the path binding.
+        let explicit_type = properties.get("type").and_then(|v| v.as_str());
+        let effective_type = explicit_type.or_else(|| schema.bound_type_for(rel_path));
+        let name = properties.get("name").and_then(|v| v.as_str());
+        // Line budget counts the markdown body only (frontmatter excluded). A
+        // trailing newline does not add a phantom final line.
+        let body_line_count = body_content.lines().count();
+        let findings = crate::commands::skills_lint::run_skill_rules(
+            rel_path,
+            effective_type,
+            name,
+            body_line_count,
+            &is_enabled,
+        );
+        for f in findings {
+            let severity = md_lint_config
+                .rules
+                .get(f.rule_id)
+                .and_then(hyalo_mdlint::RuleOverride::severity)
+                .unwrap_or(f.default_severity)
+                .to_owned();
+            violations_by_rule
+                .entry(f.rule_id.to_owned())
+                .or_default()
+                .push(InternalViolation {
+                    line: f.line,
+                    column: 1,
+                    message: f.message,
+                    severity,
+                    fix: None,
+                    fixed: false,
+                });
+        }
+    }
+
     let total_violations = violations_by_rule.values().map(Vec::len).sum();
 
     let _ = max_per_rule; // applied during output construction
@@ -2934,6 +3018,8 @@ mod tests {
             &Value::String("iter-42/my-feature".into()),
             &PropertyConstraint::String {
                 pattern: Some(r"^iter-\d+/".into()),
+                min_length: None,
+                max_length: None,
             },
         );
         assert!(v.is_none());
@@ -2946,6 +3032,8 @@ mod tests {
             &Value::String("feature/my-branch".into()),
             &PropertyConstraint::String {
                 pattern: Some(r"^iter-\d+/".into()),
+                min_length: None,
+                max_length: None,
             },
         );
         assert!(matches!(
@@ -3085,6 +3173,7 @@ mod tests {
             strict,
             okf_profile: false,
             madr_profile: false,
+            skills_profile: false,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }
@@ -3139,7 +3228,11 @@ mod tests {
             ts.required.push("title".to_owned());
             ts.properties.insert(
                 "title".to_owned(),
-                PropertyConstraint::String { pattern: None },
+                PropertyConstraint::String {
+                    pattern: None,
+                    min_length: None,
+                    max_length: None,
+                },
             );
             schema.types.insert("note".to_owned(), ts);
             schema
@@ -3240,7 +3333,11 @@ mod tests {
             ts.required.push("title".to_owned());
             ts.properties.insert(
                 "title".to_owned(),
-                PropertyConstraint::String { pattern: None },
+                PropertyConstraint::String {
+                    pattern: None,
+                    min_length: None,
+                    max_length: None,
+                },
             );
             schema.types.insert("note".to_owned(), ts);
             schema

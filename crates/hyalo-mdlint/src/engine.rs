@@ -234,6 +234,45 @@ impl HyaloLintEngine {
                 source: "hyalo-mdlint (madr profile)".to_owned(),
             });
         }
+
+        // Agent Skills conformance-profile rules. Same gating model as the OKF
+        // and MADR rules above: listed here so `lint-rules list` /
+        // `--rule-prefix SKILL` see them and `[lint.rules.SKILL-*]` overrides
+        // round-trip, but they only execute under `hyalo lint --profile skills`
+        // (or `[lint] profile = "skills"`). Both are advisory (warn): a
+        // name/dirname mismatch or an over-budget body is a smell, not a hard
+        // error — the hard `name`/`description` constraints are the schema's job.
+        let skill_entries = [
+            (
+                "SKILL-RESERVED-NAME",
+                "skill-reserved-name",
+                "A skill's `name` must not be a reserved word (`anthropic` / `claude`)",
+                DiagSeverity::Error,
+            ),
+            (
+                "SKILL-NAME-DIRNAME",
+                "skill-name-dirname",
+                "A skill's `name` should equal its parent directory (`<name>/SKILL.md`)",
+                DiagSeverity::Warn,
+            ),
+            (
+                "SKILL-LINE-BUDGET",
+                "skill-line-budget",
+                "A SKILL.md body should stay under 500 lines (move detail into `references/`)",
+                DiagSeverity::Warn,
+            ),
+        ];
+        for (id, name, description, default_severity) in skill_entries {
+            catalog.push(RuleCatalogEntry {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                description: description.to_owned(),
+                default_severity,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint (skills profile)".to_owned(),
+            });
+        }
         catalog
     }
 

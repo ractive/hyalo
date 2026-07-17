@@ -25,6 +25,7 @@ pub mod read;
 pub mod remove;
 pub mod section_scanner;
 pub mod set;
+pub mod skills_lint;
 pub mod summary;
 pub mod tags;
 pub mod tasks;
