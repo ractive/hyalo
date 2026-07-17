@@ -1,4 +1,4 @@
-use super::common::hyalo_no_hints;
+use super::common::{hyalo_no_hints, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -1136,4 +1136,181 @@ fn init_dir_does_not_create_existing_directory() {
         content.contains("existing-docs"),
         ".hyalo.toml should reference 'existing-docs'; got: {content}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// --profile okf
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_profile_okf_writes_expected_toml() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "okf", "--dir", "."])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(content.contains("site_prefix = \"\""), "got: {content}");
+    assert!(
+        content.contains("validate_on_write = true"),
+        "got: {content}"
+    );
+    assert!(
+        content.contains("exempt = [\"**/index.md\", \"**/log.md\"]"),
+        "got: {content}"
+    );
+    assert!(content.contains("required = [\"type\"]"), "got: {content}");
+    assert!(content.contains("datetime-tz"), "got: {content}");
+    assert!(content.contains("BigQuery Table"), "got: {content}");
+    // Must not emit the deprecated kebab-case section key.
+    assert!(
+        !stderr.contains("deprecated: 'required-sections'"),
+        "profile must use canonical required_sections; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn init_profile_okf_bundle_lints_clean_under_strict() {
+    let tmp = TempDir::new().unwrap();
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "okf", "--dir", "."])
+        .output()
+        .unwrap();
+
+    // A minimal OKF bundle: reserved index.md/log.md (no type), one concept.
+    // index.md is the bundle-root exception (may carry a lone `okf_version` key) and
+    // is a pure Markdown link list per the OKF spec; log.md is fully frontmatter-free.
+    write_md(
+        tmp.path(),
+        "index.md",
+        "---\nokf_version: \"0.1\"\n---\n* [Bitcoin](/concepts/bitcoin.md) - a concept\n",
+    );
+    write_md(tmp.path(), "log.md", "Changelog body.\n");
+    write_md(
+        tmp.path(),
+        "concepts/bitcoin.md",
+        "---\ntype: concept\ntitle: Bitcoin\ntimestamp: '2026-05-28T22:44:47+00:00'\n---\n\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "OKF bundle should lint clean under --strict; stdout: {stdout}, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        json["results"]["files_with_violations"]
+            .as_u64()
+            .unwrap_or(99),
+        0,
+        "expected zero violations; stdout: {stdout}"
+    );
+}
+
+#[test]
+fn init_profile_okf_claude_installs_skill() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "okf", "--claude", "--dir", "."])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains(".claude/skills/okf/SKILL.md"),
+        "stdout: {stdout}"
+    );
+
+    let skill = tmp
+        .path()
+        .join(".claude")
+        .join("skills")
+        .join("okf")
+        .join("SKILL.md");
+    assert!(skill.exists(), "okf SKILL.md installed");
+    let body = fs::read_to_string(&skill).unwrap();
+    assert!(body.contains("Open Knowledge Format"));
+    assert!(body.contains("hyalo find --property type="));
+}
+
+#[test]
+fn init_profile_okf_composes_and_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "okf", "--dir", "."])
+        .output()
+        .unwrap();
+    let first = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "okf", "--dir", "."])
+        .output()
+        .unwrap();
+    let second = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+
+    assert_eq!(first, second, "re-running the profile must be idempotent");
+}
+
+#[test]
+fn init_unknown_profile_errors_cleanly() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "nope", "--dir", "."])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "unknown profile should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown profile 'nope'") && stderr.contains("okf"),
+        "stderr should name the bad profile and list available; got: {stderr}"
+    );
+    // No config was written.
+    assert!(!tmp.path().join(".hyalo.toml").exists());
+}
+
+#[test]
+fn init_default_output_unchanged_by_profile_flag() {
+    // Default `init` (no --profile) must behave exactly as before.
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--dir", "docs"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(
+        !stdout.contains("profile"),
+        "default init must not mention profiles; got: {stdout}"
+    );
+    let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(!content.contains("site_prefix"), "no OKF keys leaked");
+    assert!(!content.contains("schema"), "no OKF schema leaked");
 }

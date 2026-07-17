@@ -1,11 +1,17 @@
 ---
-title: "Iteration 164 — hyalo init --profile okf + bundled OKF skill"
+title: Iteration 164 — hyalo init --profile okf + bundled OKF skill
 type: iteration
 date: 2026-07-16
-status: planned
+status: completed
 branch: iter-164/okf-init-profile-and-skill
-tags: [iteration, okf, init, scaffolding, skill]
-related: [research/okf-open-knowledge-format.md]
+tags:
+  - iteration
+  - okf
+  - init
+  - scaffolding
+  - skill
+related:
+  - research/okf-open-knowledge-format.md
 priority: 2
 depends-on: iteration-163-okf-frontmatter-foundations
 ---
@@ -24,49 +30,60 @@ Makes OKF a first-class, discoverable target. Depends on [[iteration-163-okf-fro
 
 ## Steps / Tasks
 
-### 1. `--profile` flag on `init`
+### 1. `--profile` flag on `init` [4/4]
 
-- [ ] Add `--profile <PROFILE>` (initially: `okf`) to `hyalo init` in `crates/hyalo-cli/src/commands/init.rs`; omitted = today's behavior
-- [ ] **Data-driven design**: implement profiles as embedded declarative TOML fragments (schema + lint config + exemptions + template refs), not per-profile Rust code paths — `skills`/`madr`/`changelog` are queued behind okf and must be additive data (see [[profile-candidates-beyond-okf]])
-- [ ] **Composable profiles**: multiple `init --profile <p>` runs must coexist in one vault (madr in `adrs/**` + changelog on `CHANGELOG.md`, [[path-bound-schemas]]) — each run *upserts* its own fragment without clobbering others; fragment shape must accommodate future `[schema.bind]` entries (lands in iter-167)
-- [ ] Reject unknown profile values with a helpful error listing available profiles
+- [x] Add `--profile <PROFILE>` (initially: `okf`) to `hyalo init` in `crates/hyalo-cli/src/commands/init.rs`; omitted = today's behavior
+- [x] **Data-driven design**: implement profiles as embedded declarative TOML fragments (schema + lint config + exemptions + template refs), not per-profile Rust code paths — `skills`/`madr`/`changelog` are queued behind okf and must be additive data (see [[profile-candidates-beyond-okf]])
+- [x] **Composable profiles**: multiple `init --profile <p>` runs must coexist in one vault (madr in `adrs/**` + changelog on `CHANGELOG.md`, [[path-bound-schemas]]) — each run *upserts* its own fragment without clobbering others; fragment shape must accommodate future `[schema.bind]` entries (lands in iter-167)
+- [x] Reject unknown profile values with a helpful error listing available profiles
 
-### 2. OKF `.hyalo.toml` profile
+### 2. OKF `.hyalo.toml` profile [7/7]
 
-- [ ] `[schema.default] required = ["type"]`
-- [ ] Declare recommended props: `title:string`, `description:string`, `resource:string` (URL pattern), `tags:list`, `timestamp:datetime-tz`
-- [ ] `[schema] exempt = ["**/index.md", "**/log.md"]`
-- [ ] Set `site_prefix = ""` so bundle-absolute links (`/tables/x.md`, the spec-**recommended** §5 form) resolve from the bundle root — iter-163 confirmed `""` (→ `None`) strips only the leading `/`, avoiding the auto-derived-prefix collision (bundle dir named like a top-level subdir); no new explicit form was needed
-- [ ] Broken-link lint rule severity = `warn` (spec forbids rejecting on broken links)
-- [ ] Optionally seed common OKF `[schema.types.*]` (e.g. `"BigQuery Table"`, `"BigQuery Dataset"`, `Reference`) with recommended `required-sections` like `# Schema`, `# Citations` — verify TOML quoted keys with spaces work end-to-end
-- [ ] `validate_on_write = true` so authoring stays conformant
+- [x] `[schema.default] required = ["type"]`
+- [x] Declare recommended props: `title:string`, `description:string`, `resource:string` (URL pattern), `tags:list`, `timestamp:datetime-tz`
+- [x] `[schema] exempt = ["**/index.md", "**/log.md"]`
+- [x] Set `site_prefix = ""` so bundle-absolute links (`/tables/x.md`, the spec-**recommended** §5 form) resolve from the bundle root — iter-163 confirmed `""` (→ `None`) strips only the leading `/`, avoiding the auto-derived-prefix collision (bundle dir named like a top-level subdir); no new explicit form was needed
+- [x] Broken-link lint rule severity = `warn` (spec forbids rejecting on broken links) — **satisfied by construction, no config added**: `hyalo lint` never errors on broken cross-file links (that's the advisory `find --broken-links`); no severity override exists or was needed. See retrospective.
+- [x] Optionally seed common OKF `[schema.types.*]` (e.g. `"BigQuery Table"`, `"BigQuery Dataset"`, `Reference`) with recommended `required-sections` like `# Schema`, `# Citations` — verify TOML quoted keys with spaces work end-to-end
+- [x] `validate_on_write = true` so authoring stays conformant
 
-### 3. Bundled `okf` skill
+### 3. Bundled `okf` skill [3/3]
 
-- [ ] Add `templates/skill-hyalo-okf.md` (+ pi variant if parity is expected) embedded in the binary
-- [ ] Skill teaches: OKF concept model, reserved-file rules, link forms (bundle-absolute recommended for concept cross-links), the deterministic-vs-LLM split, and the exact hyalo commands (`find --property type=`, `okf index`, `okf log`, `lint --profile okf`, `new --type`)
-- [ ] `hyalo init --profile okf --claude` installs the skill + `.claude` hints referencing OKF workflow
+- [x] Add `templates/skill-hyalo-okf.md` (+ pi variant if parity is expected) embedded in the binary
+- [x] Skill teaches: OKF concept model, reserved-file rules, link forms (bundle-absolute recommended for concept cross-links), the deterministic-vs-LLM split, and the exact hyalo commands — **scope corrected in-flight**: only shipped commands are referenced (`find --property type=`, `new --type`, `lint --strict`, `set`/`append`, `mv`, `find --broken-links`); `okf index`/`okf log`/`lint --profile okf` don't exist yet (iters 165–166) and are deliberately omitted rather than taught as vaporware. See retrospective.
+- [x] `hyalo init --profile okf --claude` installs the skill at `.claude/skills/okf/SKILL.md` — note: the base `.claude/CLAUDE.md` managed-section hint stays generic (not OKF-specific); the skill file itself is the OKF workflow reference
 
-### 4. Tests
+### 4. Tests [3/3]
 
-- [ ] e2e: `init --profile okf` in a temp dir writes expected `.hyalo.toml`; a scaffolded concept validates; `init --profile okf --claude` installs the skill
-- [ ] e2e: default `init` output byte-identical to pre-change (no regression); unknown `--profile` value errors cleanly
-- [ ] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
+- [x] e2e: `init --profile okf` in a temp dir writes expected `.hyalo.toml`; a scaffolded concept validates; `init --profile okf --claude` installs the skill
+- [x] e2e: default `init` output byte-identical to pre-change (no regression); unknown `--profile` value errors cleanly
+- [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 5. Docs sync (same PR)
+### 5. Docs sync (same PR) [4/4]
 
-- [ ] `hyalo init --help` documents `--profile`
-- [ ] README.md: an "OKF (Open Knowledge Format)" section with the quickstart (`hyalo init --profile okf --claude`)
-- [ ] Update [[okf-open-knowledge-format]] gap #3/#6 status
-- [ ] Keep the new skill in sync with README/help (house rule)
+- [x] `hyalo init --help` documents `--profile`
+- [x] README.md: an "OKF (Open Knowledge Format)" section with the quickstart (`hyalo init --profile okf --claude`)
+- [x] Update [[okf-open-knowledge-format]] gap #3/#6 status
+- [x] Keep the new skill in sync with README/help (house rule)
 
-### 6. Retrospective (learnings-propagation — do this LAST, always)
+### 6. Retrospective (learnings-propagation — do this LAST, always) [1/1]
 
-- [ ] Review the remaining profile iterations ([[iteration-165-okf-index-and-log-generators]] through [[iteration-169-changelog-profile]]) against implementation learnings — especially whether the data-driven profile machinery is generic enough for madr/skills/changelog — update their scope/design/tasks before starting the next iteration
+- [x] Review the remaining profile iterations ([[iteration-165-okf-index-and-log-generators]] through [[iteration-169-changelog-profile]]) against implementation learnings — especially whether the data-driven profile machinery is generic enough for madr/skills/changelog — update their scope/design/tasks before starting the next iteration
 
 ## Acceptance Criteria
 
-- [ ] `hyalo init --profile okf` produces a config under which a real OKF sample bundle lints clean
-- [ ] The `okf` skill is installed by `--claude` and references only real, current hyalo commands
-- [ ] Default `init` behavior unchanged; global `--format json|text` still works on `init`
-- [ ] Quality gates pass; docs + skill updated in the same PR
+- [x] `hyalo init --profile okf` produces a config under which a real OKF sample bundle lints clean
+- [x] The `okf` skill is installed by `--claude` and references only real, current hyalo commands
+- [x] Default `init` behavior unchanged; global `--format json|text` still works on `init`
+- [x] Quality gates pass; docs + skill updated in the same PR — verified locally 2026-07-17: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` (822+53+25 passed) all green; README.md, `init --help`, and `templates/skill-hyalo-okf.md` all touched in this PR's diff
+
+## Retrospective (2026-07-17)
+
+The data-driven profile machinery landed as designed and **is generic enough for the queued profiles**:
+
+- `Profile` (`crates/hyalo-cli/src/commands/profiles.rs`) is `{ name, description, toml_fragment, skills }` — adding `madr`/`skills`/`changelog` is one more `PROFILES` entry plus an embedded `templates/profile-<name>.toml` (+ optional skill), **no new Rust branches**. Item 30 ("additive data") satisfied.
+- `merge_into_config` is a recursive **deep-merge/upsert**: scalars and arrays owned by a profile overwrite; tables merge; untouched keys (another profile's `[schema.types.*]`) survive. This is exactly the composability item 31 needs for madr-in-`adrs/**` + changelog-on-`CHANGELOG.md`. **Caveat for iter-167 ([[path-bound-schemas]]):** path-bound profiles will want `[schema.bind]` entries, which the current deep-merge handles structurally (they are just more table keys), but overlapping `bind` arrays from two profiles would *overwrite* rather than *union* — iter-167 should decide bind-array merge semantics (likely append-with-dedupe) rather than rely on last-writer-wins.
+- **Broken-link "severity = warn" (item 40) was a non-issue:** `hyalo lint` never errors on broken cross-file links (that is a `find --broken-links` advisory feature, and MD011/MD042 only cover reversed/empty inline links). So the spec's "don't reject on broken links" is satisfied by construction — no lint-rule severity override was needed or added. iters 165–166 should not assume a configurable broken-link lint severity exists.
+- The skill deliberately references **only shipped commands**; `okf index`/`okf log`/`lint --profile okf` are name-dropped in the skill's setup prose only as they land (iters 165–166). When those ship, update `templates/skill-hyalo-okf.md` in the same PR (house rule).
+
+No scope changes required for iters 165–169; the one actionable follow-up is the `[schema.bind]` array-merge decision noted above, recorded for iter-167.

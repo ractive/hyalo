@@ -14,6 +14,13 @@ depends-on: iteration-164-okf-init-profile-and-skill
 
 The highest-leverage, ecosystem-unique features: deterministic (re)generation of the *derived* files OKF authors otherwise hand-maintain. Mirrors `reference_agent`'s `bundle/index.py::regenerate_indexes` — but with no LLM and no cloud. See [[okf-open-knowledge-format]].
 
+**iter-164 retrospective (2026-07-17):** the profile machinery landed as a reusable pattern (`crates/hyalo-cli/src/commands/profiles.rs`, `Profile { name, description, toml_fragment, skills }`), but that's not directly reusable here — iter-165 adds a new `hyalo okf` subcommand *group*, not another profile. Three things do carry forward:
+1. **Broken-link severity is a non-issue by construction** — `hyalo lint` never errors on broken cross-file links (only `find --broken-links` surfaces them, advisory-only). Don't add a severity knob for generated-link validation; if `okf index` needs to warn on unresolvable link targets, that's new behavior in the `okf` subcommand itself, not a lint-rule config.
+2. **The bundled skill file is at `crates/hyalo-cli/templates/skill-hyalo-okf.md`, embedded via `include_str!` in `profiles.rs`** and installed to `.claude/skills/okf/SKILL.md` by `init --profile okf --claude`. Item 5's "update the okf skill" task means editing that template file (same house rule as iter-164: keep skill/README/help in sync in the same PR) — it deliberately does not yet mention `okf index`/`okf log`, so this iteration is exactly where those get added.
+3. **`site_prefix = ""` (bundle-root link resolution) and relative links both already resolve correctly** (iter-163/164 confirmed) — item 1's relative-link generation choice doesn't need new resolution logic, just correct relative-path computation cross-platform.
+
+No scope changes to the steps below; this note just anchors the retrospective's pointers to concrete file paths.
+
 ## Goal
 
 `hyalo okf index` regenerates every `index.md` from frontmatter; `hyalo okf log` prepends a dated entry to `log.md`. Both deterministic, streaming, cross-platform.

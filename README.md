@@ -146,6 +146,28 @@ This installs two [skills](https://docs.anthropic.com/en/docs/claude-code/skills
 
 All artifacts are idempotent — re-running `hyalo init --claude` updates to the latest versions. `hyalo deinit` removes everything cleanly.
 
+## OKF (Open Knowledge Format)
+
+[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is a vendor-neutral format for **knowledge bundles**: a directory of Markdown "concept" files with YAML frontmatter, distributed as a git repo or tarball. Every concept has exactly one required field — `type` — plus recommended `title`, `description`, `resource`, `tags`, and an RFC 3339 `timestamp`. Reserved `index.md`/`log.md` files are frontmatter-free, except the bundle-root `index.md`, which may carry a single `okf_version` key and nothing else.
+
+hyalo makes OKF a first-class target:
+
+```sh
+hyalo init --profile okf            # scaffold an OKF-ready .hyalo.toml
+hyalo init --profile okf --claude   # also install the bundled `okf` skill
+```
+
+The `okf` profile merges a declarative config fragment into `.hyalo.toml`:
+
+- `[schema.default] required = ["type"]` — the one OKF-mandated field.
+- Recommended props declared with types: `title`/`description` (string), `resource` (URL-pattern string), `tags` (list), `timestamp` (`datetime-tz`, offset-aware).
+- `[schema] exempt = ["**/index.md", "**/log.md"]` — reserved files skip the required-`type` check.
+- `site_prefix = ""` — bundle-absolute links (`/tables/x.md`, the spec-recommended form) resolve from the bundle root.
+- `validate_on_write = true` — authoring stays conformant.
+- Seed `[schema.types.*]` for common OKF concept types with recommended `# Schema`/`# Citations` sections.
+
+Profiles are **composable** and **idempotent**: multiple `--profile` runs coexist in one vault (the fragment is deep-merged, upserting only its own keys), and re-running never clobbers other config. With `--claude`, the bundled `okf` skill teaches Claude the OKF concept model, reserved-file rules, link forms, and the exact hyalo commands — hyalo owns the deterministic frontmatter/link mechanics while the LLM does the semantic work.
+
 ## Installation
 
 ### Homebrew (macOS & Linux)
