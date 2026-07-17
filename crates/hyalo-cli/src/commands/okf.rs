@@ -136,6 +136,17 @@ pub fn run_index(
     // Always ensure the bundle root has an index, even in an empty vault.
     by_dir.entry(String::new()).or_default();
 
+    // Ensure every directory that appears as a *child* subdirectory also has a
+    // by_dir entry, even when it holds no concept files directly (only nested
+    // subdirectories). Without this, a directory like `a/` containing only
+    // `a/b/concept.md` never gets an `index.md` planned, even though its
+    // parent's index links to `a/index.md`.
+    for children in child_dirs.values() {
+        for child in children {
+            by_dir.entry(child.clone()).or_default();
+        }
+    }
+
     // Build a plan per directory in scope.
     let mut plans: Vec<IndexPlan> = Vec::new();
     for (parent, entries) in &by_dir {
@@ -349,9 +360,15 @@ fn render_entry_line(e: &ConceptEntry) -> String {
 fn splice_managed_region(old_content: &str, generated: &str, is_root: bool) -> String {
     let managed = format!("{INDEX_BEGIN}\n{generated}\n{INDEX_END}");
 
-    if let (Some(begin), Some(end)) = (old_content.find(INDEX_BEGIN), old_content.find(INDEX_END))
-        && begin < end
-    {
+    // Search for INDEX_END starting *after* INDEX_BEGIN so a stray mention of
+    // the end-marker text in prose above the managed region (or in a code
+    // block) can't be picked up as the closing marker and corrupt the splice.
+    let markers = old_content.find(INDEX_BEGIN).and_then(|begin| {
+        old_content[begin + INDEX_BEGIN.len()..]
+            .find(INDEX_END)
+            .map(|rel_end| (begin, begin + INDEX_BEGIN.len() + rel_end))
+    });
+    if let Some((begin, end)) = markers {
         let before = &old_content[..begin];
         let after = &old_content[end + INDEX_END.len()..];
         let mut result = String::with_capacity(before.len() + managed.len() + after.len());
@@ -491,9 +508,13 @@ fn prepend_log_entry(content: &str, date: &str, entry_line: &str) -> String {
         let insert_at = line_end_after(content, pos);
         let mut result = String::with_capacity(content.len() + entry_line.len() + 2);
         result.push_str(&content[..insert_at]);
-        // Skip a single blank line following the heading, then insert.
+        // Skip a single blank line following the heading, then insert. The
+        // blank line is itself an empty line terminated by `\n` or `\r\n`.
         let rest = &content[insert_at..];
-        let rest_trimmed = rest.strip_prefix('\n').unwrap_or(rest);
+        let rest_trimmed = rest
+            .strip_prefix('\n')
+            .or_else(|| rest.strip_prefix("\r\n"))
+            .unwrap_or(rest);
         result.push('\n');
         result.push_str(entry_line);
         result.push('\n');
@@ -528,17 +549,25 @@ fn prepend_log_entry(content: &str, date: &str, entry_line: &str) -> String {
 }
 
 /// Find the byte offset of a heading line exactly matching `heading` (start of
-/// line). Returns `None` when absent.
+/// line). Returns `None` when absent. Tolerates CRLF line endings (the
+/// trailing `\r` is trimmed before comparison) so existing headings are still
+/// found in a `log.md` that was checked out or hand-edited with CRLF.
 fn find_heading(content: &str, heading: &str) -> Option<usize> {
     let mut offset = 0usize;
     for line in content.split_inclusive('\n') {
-        let trimmed = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = strip_line_ending(line);
         if trimmed == heading {
             return Some(offset);
         }
         offset += line.len();
     }
     None
+}
+
+/// Strip a trailing `\n` or `\r\n` line ending from `line`.
+fn strip_line_ending(line: &str) -> &str {
+    line.strip_suffix('\n')
+        .map_or(line, |s| s.strip_suffix('\r').unwrap_or(s))
 }
 
 /// Byte offset just past the end of the line that starts at `line_start`.
@@ -803,6 +832,23 @@ mod tests {
     }
 
     #[test]
+    fn splice_ignores_end_marker_mentioned_in_prose_before_begin() {
+        // A stray mention of the end-marker text above the real managed
+        // region must not be mistaken for the closing marker.
+        let old = format!(
+            "# Index\n\nSee marker `{INDEX_END}` in the docs.\n\n{INDEX_BEGIN}\nOLD LIST\n{INDEX_END}\n\nFooter note.\n"
+        );
+        let out = splice_managed_region(&old, "* [X](x.md)", false);
+        assert!(
+            out.contains("See marker"),
+            "prose before begin marker must survive: {out}"
+        );
+        assert!(out.contains("Footer note."), "footer must survive: {out}");
+        assert!(out.contains("* [X](x.md)"));
+        assert!(!out.contains("OLD LIST"));
+    }
+
+    #[test]
     fn splice_fresh_root_keeps_okf_version() {
         let old = "---\nokf_version: \"0.1\"\n---\n\n# Old\n";
         let out = splice_managed_region(old, "* [X](x.md)", true);
@@ -835,6 +881,23 @@ mod tests {
         assert!(second < first, "newest first within a day: {out}");
         // Only one heading for the day.
         assert_eq!(out.matches("## 2026-07-17").count(), 1);
+    }
+
+    #[test]
+    fn log_prepends_under_existing_date_crlf() {
+        // A log.md checked out or hand-edited with CRLF line endings must
+        // still be recognized as having today's heading already, instead of
+        // creating a duplicate `## <date>` section.
+        let old = "# Log\r\n\r\n## 2026-07-17\r\n\r\n- First entry\r\n";
+        let out = prepend_log_entry(old, "2026-07-17", "- Second entry");
+        assert_eq!(
+            out.matches("## 2026-07-17").count(),
+            1,
+            "must not duplicate the date heading on CRLF input: {out}"
+        );
+        let first = out.find("First entry").unwrap();
+        let second = out.find("Second entry").unwrap();
+        assert!(second < first, "newest first within a day: {out}");
     }
 
     #[test]

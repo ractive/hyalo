@@ -149,6 +149,39 @@ fn okf_index_scope_limits_subtree() {
     assert!(!tmp.path().join("references/index.md").exists());
 }
 
+#[test]
+fn okf_index_generates_index_for_intermediate_dir_with_no_direct_concepts() {
+    // `a/` holds no concept files directly — only a nested `a/b/concept.md` —
+    // but the root index links to `a/index.md`, so `a/` must get one too.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a/b/concept.md",
+        "---\ntype: Thing\ntitle: Deep Concept\n---\nBody\n",
+    );
+    write_md(
+        tmp.path(),
+        "index.md",
+        "---\nokf_version: \"0.1\"\n---\n\n# Index\n",
+    );
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--dir", ".", "okf", "index", "--apply"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let root = fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    assert!(root.contains("* [a](a/index.md)"), "{root}");
+    assert!(
+        tmp.path().join("a/index.md").exists(),
+        "intermediate directory a/ must get an index.md so the root link resolves"
+    );
+    let a_index = fs::read_to_string(tmp.path().join("a/index.md")).unwrap();
+    assert!(a_index.contains("* [b](b/index.md)"), "{a_index}");
+    assert!(tmp.path().join("a/b/index.md").exists());
+}
+
 // ---------------------------------------------------------------------------
 // okf log
 // ---------------------------------------------------------------------------

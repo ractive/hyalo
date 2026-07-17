@@ -81,5 +81,5 @@ Per SPEC §7 a `log.md` MAY appear at **any level** of the hierarchy and records
 
 - [x] `hyalo okf index --apply` deterministically regenerates spec-shaped `index.md` files and is idempotent
 - [x] `hyalo okf log` maintains a spec-shaped `log.md`
-- [x] Generated index links are relative (sample-bundle style) and resolve; runs on Windows/macOS/Linux
-- [x] Quality gates pass; docs + skill updated in the same PR
+- [x] Generated index links are relative (sample-bundle style) and resolve — verified by `okf_index_apply_generates_grouped_index` (link text/target pairs against files on disk) and `okf_index_apply_is_idempotent`; forward-slash-only path construction (no OS-specific separators) makes it cross-platform by construction — no dedicated Windows/macOS/Linux CI matrix run
+- [x] Quality gates pass (`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` all green per PR test plan); docs + skill updated in the same PR (README.md, `templates/skill-hyalo-okf.md`, `okf-open-knowledge-format.md`)
