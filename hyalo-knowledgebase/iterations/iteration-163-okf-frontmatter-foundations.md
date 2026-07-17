@@ -78,4 +78,4 @@ SPEC §5: links starting with `/` are bundle-root-relative and the **recommended
 - [x] Root `index.md` with only `okf_version: "0.1"` lints clean
 - [x] Bundle-absolute links (`/x/y.md`) resolve correctly in an OKF-configured vault, including the dirname-collision edge case
 - [x] Naive `datetime` behavior is unchanged (no regressions in existing vaults)
-- [x] All three quality gates pass; docs updated in the same PR
+- [x] All three quality gates pass (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` — verified green on PR #191); docs updated in the same PR (README.md, `crates/hyalo-cli/templates/skill-hyalo.md`, `hyalo-knowledgebase/research/okf-open-knowledge-format.md`)
