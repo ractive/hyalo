@@ -176,15 +176,23 @@ OKF bundles keep two *derived* reserved files that are otherwise hand-maintained
 hyalo okf index --dry-run          # CI: exits non-zero if any index.md is stale
 hyalo okf index --apply            # regenerate every directory's index.md
 hyalo okf index tables --apply     # scope to a subtree
+hyalo okf index --apply --replace  # overwrite a marker-less index.md (destructive)
 
 hyalo okf log --message "Added blocks table" --apply
 hyalo okf log tables --action Update --message "Refreshed schema" --apply
 ```
 
 - **`okf index`** walks each directory, groups its child concepts by frontmatter `type` (untyped concepts fall under `Other`), and emits `* [title](relative-link) - description` lines (title falls back to the filename stem; description optional). Immediate subdirectories are listed under a `Subdirectories` group. The generated list lives inside a stable managed region delimited by `<!-- okf:index:begin -->` / `<!-- okf:index:end -->` markers, so any hand-written prose outside the markers is preserved verbatim across runs. The bundle-root `index.md`'s lone `okf_version` frontmatter key is kept. Links are relative and forward-slashed (cross-platform). Running `--apply` twice is a no-op (idempotent); `--dry-run` (the default) exits non-zero on drift, so it doubles as a **CI freshness check**.
+  - **Non-destructive adopt:** an existing `index.md` that has *no* markers is **adopted** — its entire hand-written body is preserved and the managed region is appended after it (dry-run reports `adopt (preserving N existing lines)`). Only `--replace` overwrites such a file with a fresh managed index. On case-insensitive filesystems an existing `INDEX.md` is recognized as the reserved file and adopted by its on-disk casing.
+  - **Scoping & malformed files:** files matching an `[okf] ignore` glob in `.hyalo.toml` (e.g. `_template/**`, `test/fixture-vault/**`) are neither indexed nor generated into. A concept whose frontmatter cannot be parsed is skipped with a stderr warning and the run continues (a scoped run never fails on a bad file outside its scope).
 - **`okf log`** prepends a dated entry under today's `YYYY-MM-DD` heading (newest first) to a scope-selectable `log.md`. The `TARGET` argument picks the log: a directory (`TARGET/log.md`), a `log.md` path (written directly), or omitted (the bundle-root `log.md`, per SPEC §7 directory-local scope). `--action Update` prefixes a bold action word. The file is created (frontmatter-free) when absent, and `TARGET` is validated to stay inside the bundle.
 
-Both generators default to `--dry-run` and mutate only with `--apply`, matching hyalo's `links fix` / `links auto` convention.
+Both generators default to `--dry-run` and mutate only with `--apply`, matching hyalo's `links fix` / `links auto` convention. Configure the generator scope with an `[okf]` section:
+
+```toml
+[okf]
+ignore = ["_template/**", "test/fixture-vault/**"]  # skip these trees
+```
 
 ### Validate an OKF bundle (`lint --profile okf`)
 
@@ -227,7 +235,7 @@ hyalo lint                                                        # validate (pr
 hyalo madr toc --apply                                            # regenerate docs/decisions/README.md
 ```
 
-**`hyalo madr toc`** regenerates an ADR table of contents / status dashboard (number, title, status, date) into `docs/decisions/README.md`, inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->` managed region (prose outside is preserved). Like `okf index`, it defaults to `--dry-run` and exits non-zero on drift, so it doubles as a CI check.
+**`hyalo madr toc`** regenerates an ADR table of contents / status dashboard (number, title, status, date) into `docs/decisions/README.md`, inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->` managed region (prose outside is preserved). A marker-less `README.md` is adopted non-destructively (its body is kept and the region appended; `--replace` overwrites). Like `okf index`, it defaults to `--dry-run` and exits non-zero on drift, so it doubles as a CI check.
 
 Two advisory (warn-level) lint rules layer on top of the schema pass under `hyalo lint --profile madr`: **`MADR-SUPERSEDE-RESOLVE`** (a `status: superseded by ADR-0123` that points at a non-existent `0123-*.md` warns) and **`MADR-DUPLICATE-NUMBER`** (two ADRs sharing an `NNNN` prefix warn). Both are toggleable via `hyalo lint-rules set MADR-… --enabled false` and appear in `hyalo lint-rules list`.
 
