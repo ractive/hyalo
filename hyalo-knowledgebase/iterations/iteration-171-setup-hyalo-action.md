@@ -48,7 +48,7 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
 ### 2. Versioning & release protocol
 
 - [ ] Tag `v1` (floating) + `v1.0.0` on the action repo; document the retag protocol in the action README
-- [ ] Decide + document whether the hyalo release pipeline should smoke-test `setup-hyalo` with each new release (follow the ractive/release-workflows change protocol from the KB); no automation required this iteration — a documented manual step is enough
+- [x] Decide + document whether the hyalo release pipeline should smoke-test `setup-hyalo` with each new release (follow the ractive/release-workflows change protocol from the KB); no automation required this iteration — a documented manual step is enough
 
 ### 3. Consumer recipes (docs, in the hyalo repo)
 
