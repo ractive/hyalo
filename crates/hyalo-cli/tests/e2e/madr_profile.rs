@@ -232,6 +232,96 @@ fn toc_generates_and_is_idempotent() {
 }
 
 #[test]
+fn official_madr4_short_template_lints_clean() {
+    // The MADR 4.0.0 "short" template, verbatim from
+    // <https://github.com/adr/madr/blob/4.0.0/template/adr-template-short.md>
+    // (MIT licensed), with the `{status}`/`{date}`/`{title}` placeholders and
+    // the optional `{decision-makers}`/`{consulted}`/`{informed}` lines filled
+    // in — the "fill in the blanks" contract MADR itself specifies. This is
+    // the actual spec-repo fixture, not a hand-rolled equivalent of it, per the
+    // "Official MADR 4 template lints clean" acceptance criterion.
+    let tmp = init_madr();
+    let official = "---\n\
+        status: \"accepted\"\n\
+        date: 2026-07-17\n\
+        decision-makers: [alice, bob]\n\
+        ---\n\
+        \n\
+        # Use PostgreSQL for the primary datastore\n\
+        \n\
+        ## Context and Problem Statement\n\
+        \n\
+        We need a primary datastore for the service. Which relational database \
+        should we standardize on?\n\
+        \n\
+        ## Considered Options\n\
+        \n\
+        * PostgreSQL\n\
+        * MySQL\n\
+        * SQLite\n\
+        \n\
+        ## Decision Outcome\n\
+        \n\
+        Chosen option: \"PostgreSQL\", because it best balances feature set, \
+        licensing, and operational maturity.\n";
+    write_md(tmp.path(), "docs/decisions/0001-use-postgres.md", official);
+    let (json, output) = run(tmp.path(), &["lint"]);
+    let r = &json["results"];
+    assert_eq!(
+        r["errors"].as_u64(),
+        Some(0),
+        "official MADR 4 short template must lint clean: {json}"
+    );
+    assert!(
+        output.status.success(),
+        "lint on the official template should succeed: {json}"
+    );
+}
+
+#[test]
+fn madr_rules_are_generic_catalog_entries_not_hardcoded() {
+    // "Pure data over iter-164 machinery" means the MADR-* rules are ordinary
+    // `RuleCatalogEntry`s: they must be visible/toggleable through the generic
+    // `lint-rules` surface exactly like any other rule (e.g. the OKF-* ones),
+    // with no madr-only subcommand needed to inspect or disable them.
+    let tmp = init_madr();
+    let (json, output) = run(tmp.path(), &["lint-rules", "list"]);
+    assert!(output.status.success(), "lint-rules list failed: {json}");
+    let rules = json["results"].as_array().cloned().unwrap_or_default();
+    for id in ["MADR-SUPERSEDE-RESOLVE", "MADR-DUPLICATE-NUMBER"] {
+        assert!(
+            rules.iter().any(|r| r["id"].as_str() == Some(id)),
+            "{id} must appear in the generic rule catalog: {json}"
+        );
+    }
+
+    // Toggling one off through the generic surface actually suppresses it —
+    // proving there is no madr-specific code path bypassing the shared
+    // enable/disable machinery.
+    let (_json, out) = run(
+        tmp.path(),
+        &[
+            "lint-rules",
+            "set",
+            "MADR-SUPERSEDE-RESOLVE",
+            "--enabled",
+            "false",
+        ],
+    );
+    assert!(out.status.success(), "lint-rules set failed");
+    write_md(
+        tmp.path(),
+        "docs/decisions/0001-old.md",
+        &md_adr("Old decision", "superseded by ADR-0099", None),
+    );
+    let (json, _out) = run(tmp.path(), &["lint"]);
+    assert!(
+        !rule_fired(&json["results"], "MADR-SUPERSEDE-RESOLVE"),
+        "disabling MADR-SUPERSEDE-RESOLVE via the generic surface must suppress it: {json}"
+    );
+}
+
+#[test]
 fn toc_crlf_managed_region_stable() {
     // A README with CRLF line endings and a hand-written prose region must
     // regenerate its managed region without corrupting the surrounding prose.
