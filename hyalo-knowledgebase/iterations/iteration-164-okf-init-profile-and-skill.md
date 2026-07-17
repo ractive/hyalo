@@ -16,6 +16,8 @@ Makes OKF a first-class, discoverable target. Depends on [[iteration-163-okf-fro
 
 **Flag naming (2026-07-16 review):** the originally proposed `init --format=okf` is **impossible** — `--format` is hyalo's global output flag (`json|text`) and propagates into every subcommand (verified: `hyalo init --format=okf` → `error: invalid value 'okf'`). Use **`--profile okf`** instead, unifying with `lint --profile okf` (iter-166): one "profile" concept across init and lint.
 
+**iter-163 retrospective (2026-07-17):** all the foundation primitives this iteration depends on landed exactly as anticipated — `PropertyConstraint::DateTimeTz` (`crates/hyalo-core/src/schema.rs`), `SchemaConfig.exempt: ExemptGlobs` with `[schema] exempt = [...]` parsing (also in `schema.rs`, not `hyalo-cli/src/config.rs` — the raw-TOML-to-`SchemaConfig` conversion lives in `hyalo-core`; `hyalo-cli/src/commands/config.rs` only surfaces it for `hyalo config` output), and `site_prefix = ""` confirmed correct for bundle-root link resolution (no new explicit form needed — item 37 already reflects this). No API surprises to account for; item 2's `.hyalo.toml` fragment can be written directly against the shipped schema. One reusable asset: `crates/hyalo-cli/tests/e2e/lint.rs::okf_schema_toml()` is a working `dir = "."` + `site_prefix = ""` + `[schema] exempt` + `datetime-tz` fixture — iter-164's e2e tests (item 4) can crib its shape for the `init --profile okf`-generated config instead of re-deriving the TOML from scratch.
+
 ## Goal
 
 `hyalo init --profile okf` scaffolds an OKF-ready vault config, and `--claude` installs an `okf` skill that turns Claude into a vendor-neutral OKF producer/maintainer using hyalo for the deterministic layer.
