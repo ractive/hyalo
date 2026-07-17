@@ -489,8 +489,14 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
 
     let entry = format!("- {message}");
     if let Some(cat_idx) = cat_idx {
-        // Insert after the last bullet under this category (before the next
-        // heading or a trailing blank line).
+        // Insert after the *complete* last bullet block under this category
+        // (before the next heading or a trailing blank line). A bullet block
+        // is its `- ` line plus every immediately-following hanging-indent
+        // continuation line (non-blank, starts with whitespace) — Keep a
+        // Changelog entries routinely wrap prose at ~80 columns, so a bullet's
+        // last line is often a continuation, not the `- ` line itself. Blank
+        // lines never continue a bullet and are never themselves treated as
+        // the insertion point.
         let mut insert_at = cat_idx + 1;
         let mut i = cat_idx + 1;
         while i < section_end {
@@ -499,7 +505,23 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
                 break;
             }
             if l.trim_start().starts_with("- ") {
+                // Found a new bullet: advance past it and all of its
+                // continuation lines (indented, non-blank lines that don't
+                // start a new bullet/heading).
                 insert_at = i + 1;
+                i += 1;
+                while i < section_end {
+                    let cont = &cl.lines[i];
+                    let is_continuation = !cont.trim().is_empty()
+                        && cont.starts_with(char::is_whitespace)
+                        && !cont.trim_start().starts_with("- ");
+                    if !is_continuation {
+                        break;
+                    }
+                    insert_at = i + 1;
+                    i += 1;
+                }
+                continue;
             }
             i += 1;
         }
@@ -708,6 +730,131 @@ mod tests {
             entry_pos < footer_pos,
             "appended entry stays inside the section:\n{out}"
         );
+    }
+
+    /// LB-5: a category whose last bullet is wrapped across several
+    /// hanging-indent continuation lines, with a footer link-ref block at EOF
+    /// (the RB-4 layout). `add` must insert the new entry after the *complete*
+    /// wrapped bullet — not after its first line — leaving the continuation
+    /// lines intact and directly following the `- ` line, and must not
+    /// disturb the footer.
+    const WRAPPED_LAST_BULLET: &str = "\
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- **`--format github` annotations are no longer truncated by the file cap**: the
+  regression is now covered by a test that lints 60 files past the default
+  50-file cap and asserts all 60 annotations are emitted.
+
+[Unreleased]: https://x/compare/v1.0.0...HEAD
+[1.0.0]: https://x/tag/v1.0.0
+";
+
+    #[test]
+    fn add_after_wrapped_last_bullet_lb5() {
+        let mut cl = Changelog::parse(WRAPPED_LAST_BULLET);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Fixed", "New entry.");
+        let out = cl.render();
+
+        // The old wrapped bullet is fully intact: its `- ` line is
+        // immediately followed by both continuation lines, uninterrupted.
+        let old_bullet_pos = out
+            .find("- **`--format github` annotations")
+            .expect("old bullet present");
+        let cont1_pos = out
+            .find("  regression is now covered")
+            .expect("first continuation present");
+        let cont2_pos = out
+            .find("  50-file cap and asserts")
+            .expect("second continuation present");
+        let new_entry_pos = out.find("- New entry.").expect("new entry present");
+        assert!(
+            old_bullet_pos < cont1_pos && cont1_pos < cont2_pos,
+            "old bullet's continuation lines stay in order directly after it:\n{out}"
+        );
+        // Nothing (in particular not the new entry) is stranded between the
+        // bullet's first line and its continuation lines.
+        let between = &out[old_bullet_pos..cont2_pos];
+        assert!(
+            !between.contains("- New entry."),
+            "new entry must not split the wrapped bullet:\n{out}"
+        );
+        // The new entry lands after the complete old bullet block.
+        assert!(
+            cont2_pos < new_entry_pos,
+            "new entry must follow the old bullet's last continuation line:\n{out}"
+        );
+
+        // Footer link refs untouched and still at EOF.
+        let footer_pos = out.find("[Unreleased]:").expect("footer preserved");
+        assert!(new_entry_pos < footer_pos, "new entry stays inside section");
+        assert_eq!(out.matches("[Unreleased]:").count(), 1);
+        assert_eq!(out.matches("[1.0.0]:").count(), 1);
+        assert!(
+            out.trim_end().ends_with("[1.0.0]: https://x/tag/v1.0.0"),
+            "footer remains the last content:\n{out}"
+        );
+
+        // MD047: exactly one trailing newline, no doubled blank lines.
+        assert!(out.ends_with('\n') && !out.ends_with("\n\n"), "MD047 clean");
+    }
+
+    /// LB-5: multiple wrapped bullets in the same category — including a
+    /// blank line between two bullets, the same blank-line separation the
+    /// non-wrapped tests already rely on (see `BASE`/`UNRELEASED_LAST`, which
+    /// separate bullets/subsections with blank lines) — with the *last*
+    /// bullet itself wrapped. The insertion point must land after the last
+    /// bullet's final continuation line, and the blank line between the
+    /// first two bullets must not be mistaken for the insertion point.
+    const MULTI_WRAPPED_BULLETS: &str = "\
+# Changelog
+
+## [Unreleased]
+
+### Fixed
+
+- First bug, single line.
+
+- **Second bug, wrapped**: the fix
+  spans two continuation lines
+  before the next entry.
+
+[Unreleased]: https://x/compare/v1.0.0...HEAD
+[1.0.0]: https://x/tag/v1.0.0
+";
+
+    #[test]
+    fn add_after_multiple_wrapped_bullets_lb5() {
+        let mut cl = Changelog::parse(MULTI_WRAPPED_BULLETS);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Fixed", "Third bug.");
+        let out = cl.render();
+
+        let first_pos = out.find("- First bug, single line.").unwrap();
+        let second_pos = out.find("- **Second bug, wrapped**").unwrap();
+        let last_cont_pos = out.find("  before the next entry.").unwrap();
+        let new_pos = out.find("- Third bug.").unwrap();
+        let footer_pos = out.find("[Unreleased]:").unwrap();
+
+        assert!(first_pos < second_pos, "bullets stay in original order");
+        assert!(
+            second_pos < last_cont_pos && last_cont_pos < new_pos,
+            "new entry lands after the complete last wrapped bullet:\n{out}"
+        );
+        assert!(new_pos < footer_pos, "new entry stays inside the section");
+
+        // The blank line between the two original bullets is preserved
+        // exactly once, and no new blank line was introduced elsewhere.
+        assert!(
+            out.contains("- First bug, single line.\n\n- **Second bug, wrapped**"),
+            "blank line between first and second bullet preserved:\n{out}"
+        );
+
+        assert!(out.ends_with('\n') && !out.ends_with("\n\n"), "MD047 clean");
     }
 
     #[test]
