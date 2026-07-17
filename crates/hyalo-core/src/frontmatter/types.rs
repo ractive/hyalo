@@ -14,12 +14,20 @@ pub fn infer_type(value: &Value) -> &'static str {
     }
 }
 
-/// Infer the type of a string value (date, datetime, or text).
+/// Infer the type of a string value (date, datetime, datetime-tz, or text).
+///
+/// Inference precedence for datetimes: a bare `YYYY-MM-DDThh:mm:ss` value
+/// (no offset) infers as the naive `datetime` type, while a value carrying an
+/// explicit `Z`/`±hh:mm` offset infers as `datetime-tz`. The two grammars are
+/// disjoint, so the classification is unambiguous — a naive value is never
+/// silently treated as tz-aware, nor vice-versa.
 fn infer_string_type(s: &str) -> &'static str {
     if is_date(s) {
         "date"
     } else if is_datetime(s) {
         "datetime"
+    } else if is_datetime_tz(s) {
+        "datetime-tz"
     } else {
         "text"
     }
@@ -57,6 +65,13 @@ fn is_datetime(s: &str) -> bool {
         && b[17..19].iter().all(u8::is_ascii_digit)
 }
 
+/// Check if a string is a timezone-aware datetime (`YYYY-MM-DDThh:mm:ss` plus
+/// a `Z` or `±hh:mm` offset). Delegates to the shared calendar-aware validator
+/// so inference and lint agree on what counts as tz-aware.
+fn is_datetime_tz(s: &str) -> bool {
+    crate::util::is_iso8601_datetime_tz(s)
+}
+
 /// Parse a string value into an appropriate YAML Value, optionally forced to a specific type.
 pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
     match forced_type {
@@ -88,6 +103,13 @@ pub fn parse_value(raw: &str, forced_type: Option<&str>) -> Result<Value> {
             anyhow::ensure!(
                 is_datetime(raw),
                 "value is not a valid datetime (YYYY-MM-DDThh:mm:ss)"
+            );
+            Ok(Value::String(raw.to_owned()))
+        }
+        Some("datetime-tz") => {
+            anyhow::ensure!(
+                is_datetime_tz(raw),
+                "value is not a valid tz-aware datetime (YYYY-MM-DDThh:mm:ss with Z or ±hh:mm offset)"
             );
             Ok(Value::String(raw.to_owned()))
         }
@@ -256,5 +278,53 @@ mod wikilink_tests {
     #[test]
     fn is_wikilink_value_colon_false() {
         assert!(!is_wikilink_value("[[key: value]]"));
+    }
+}
+
+#[cfg(test)]
+mod datetime_tz_tests {
+    use super::*;
+
+    #[test]
+    fn tz_value_infers_as_datetime_tz() {
+        // Quoted sample-bundle spelling (offset) and unquoted blog spelling (Z)
+        // both classify as datetime-tz after the YAML parser hands us a string.
+        assert_eq!(
+            infer_string_type("2026-05-28T22:44:47+00:00"),
+            "datetime-tz"
+        );
+        assert_eq!(infer_string_type("2026-05-28T14:30:00Z"), "datetime-tz");
+    }
+
+    #[test]
+    fn naive_value_still_infers_as_datetime() {
+        assert_eq!(infer_string_type("2026-05-28T14:30:00"), "datetime");
+    }
+
+    #[test]
+    fn plain_date_still_infers_as_date() {
+        assert_eq!(infer_string_type("2026-05-28"), "date");
+    }
+
+    #[test]
+    fn parse_datetime_tz_accepts_offset_and_z() {
+        // Both YAML spellings the OKF material uses.
+        assert!(parse_value("2026-05-28T22:44:47+00:00", Some("datetime-tz")).is_ok());
+        assert!(parse_value("2026-05-28T14:30:00Z", Some("datetime-tz")).is_ok());
+        assert!(parse_value("2026-05-28T22:44:47-05:30", Some("datetime-tz")).is_ok());
+    }
+
+    #[test]
+    fn parse_datetime_tz_rejects_naive_and_garbage() {
+        assert!(parse_value("2026-05-28T14:30:00", Some("datetime-tz")).is_err());
+        assert!(parse_value("2026-05-28", Some("datetime-tz")).is_err());
+        assert!(parse_value("not-a-datetime", Some("datetime-tz")).is_err());
+    }
+
+    #[test]
+    fn parse_naive_datetime_rejects_tz_value() {
+        // A tz value forced to the naive `datetime` type must not be accepted.
+        assert!(parse_value("2026-05-28T14:30:00Z", Some("datetime")).is_err());
+        assert!(parse_value("2026-05-28T22:44:47+00:00", Some("datetime")).is_err());
     }
 }

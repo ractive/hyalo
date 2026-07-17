@@ -34,7 +34,7 @@ Makes OKF a first-class, discoverable target. Depends on [[iteration-163-okf-fro
 - [ ] `[schema.default] required = ["type"]`
 - [ ] Declare recommended props: `title:string`, `description:string`, `resource:string` (URL pattern), `tags:list`, `timestamp:datetime-tz`
 - [ ] `[schema] exempt = ["**/index.md", "**/log.md"]`
-- [ ] Pin `site_prefix` so bundle-absolute links (`/tables/x.md`, the spec-**recommended** §5 form) always resolve from the bundle root — guards against the auto-derived-prefix collision (bundle dir named like a top-level subdir); exact semantics decided in iter-163
+- [ ] Set `site_prefix = ""` so bundle-absolute links (`/tables/x.md`, the spec-**recommended** §5 form) resolve from the bundle root — iter-163 confirmed `""` (→ `None`) strips only the leading `/`, avoiding the auto-derived-prefix collision (bundle dir named like a top-level subdir); no new explicit form was needed
 - [ ] Broken-link lint rule severity = `warn` (spec forbids rejecting on broken links)
 - [ ] Optionally seed common OKF `[schema.types.*]` (e.g. `"BigQuery Table"`, `"BigQuery Dataset"`, `Reference`) with recommended `required-sections` like `# Schema`, `# Citations` — verify TOML quoted keys with spaces work end-to-end
 - [ ] `validate_on_write = true` so authoring stays conformant

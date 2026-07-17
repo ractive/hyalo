@@ -956,6 +956,7 @@ tags:
         type_props.insert("tags".to_owned(), PropertyConstraint::List);
         let schema = SchemaConfig {
             default: TypeSchema::default(),
+            exempt: hyalo_core::schema::ExemptGlobs::default(),
             types: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -1019,6 +1020,7 @@ author: alice
         );
         let schema = SchemaConfig {
             default: TypeSchema::default(),
+            exempt: hyalo_core::schema::ExemptGlobs::default(),
             types: {
                 let mut m = HashMap::new();
                 m.insert(

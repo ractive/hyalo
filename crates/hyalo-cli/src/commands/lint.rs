@@ -521,7 +521,7 @@ fn lint_file_with_fix(
         None => schema.default_schema().clone(),
     };
 
-    if !effective_schema.required_sections.is_empty() {
+    if !effective_schema.required_sections.is_empty() && !schema.exempt.is_exempt(rel_path) {
         let section_violations =
             validate_required_sections(full_path, rel_path, &effective_schema.required_sections)?;
         violations.extend(section_violations);
@@ -770,6 +770,16 @@ fn apply_fixes(
     actions
 }
 
+/// Returns `true` when `rel_path` is the bundle-root `index.md` (the vault-root
+/// index of an OKF bundle). Matches only the top-level `index.md`, not
+/// `index.md` files in subdirectories. Paths are normalized to forward slashes
+/// so the check is cross-platform.
+fn is_bundle_root_index(rel_path: &str) -> bool {
+    let normalized = rel_path.replace('\\', "/");
+    let trimmed = normalized.strip_prefix("./").unwrap_or(&normalized);
+    trimmed == "index.md"
+}
+
 /// Try to infer a `type` value for a file at `rel_path` by matching it against
 /// every `[schema.types.*].filename-template`. Returns `None` if zero or more
 /// than one type matches (ambiguous).
@@ -842,11 +852,18 @@ fn normalize_date(s: &str) -> Option<String> {
 /// Separated so it can be used both by the disk-reading path (`lint_file`) and
 /// the index-based path (`lint_counts_from_properties`).
 fn validate_properties(
-    _rel_path: &str,
+    rel_path: &str,
     properties: &IndexMap<String, Value>,
     schema: &SchemaConfig,
 ) -> Vec<Violation> {
     let mut violations: Vec<Violation> = Vec::new();
+
+    // Reserved / exempt files (e.g. OKF `index.md`, `log.md`) are bound to no
+    // schema: they skip the missing-`type` warning, required-property checks,
+    // undeclared-property warnings, and per-property constraint validation.
+    if schema.exempt.is_exempt(rel_path) {
+        return violations;
+    }
 
     // Determine the document type.
     let type_value = properties.get("type");
@@ -955,7 +972,14 @@ fn validate_properties(
         }
         // Never warn about "type" (type discriminator) or properties listed in `required`
         // — they're implicitly accepted even if not in the `properties` map.
-        let implicitly_accepted = name == "type" || effective_schema.required.contains(name);
+        //
+        // Additionally, the OKF bundle-root `index.md` may carry a lone
+        // `okf_version` key (spec §2). This allowance is scoped to the root
+        // index only (`rel_path == "index.md"`), so an `okf_version` key in an
+        // arbitrary file is still flagged as undeclared.
+        let implicitly_accepted = name == "type"
+            || effective_schema.required.contains(name)
+            || (name == "okf_version" && is_bundle_root_index(rel_path));
 
         if let Some(constraint) = effective_schema.properties.get(name.as_str()) {
             violations.extend(validate_constraint(
@@ -1059,6 +1083,27 @@ fn validate_constraint(
                     kind: None,
                     message: format!(
                         "property \"{name}\" expected datetime (YYYY-MM-DDThh:mm:ss), got \"{s}\""
+                    ),
+                }];
+            }
+            vec![]
+        }
+        PropertyConstraint::DateTimeTz => {
+            let Some(s) = value_as_str(value) else {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!(
+                        "property \"{name}\" expected tz-aware datetime (YYYY-MM-DDThh:mm:ss with Z or ±hh:mm offset), got {value}"
+                    ),
+                }];
+            };
+            if !hyalo_core::util::is_iso8601_datetime_tz(s) {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!(
+                        "property \"{name}\" expected tz-aware datetime (YYYY-MM-DDThh:mm:ss with Z or ±hh:mm offset), got \"{s}\""
                     ),
                 }];
             }
@@ -1993,7 +2038,13 @@ fn lint_one_file_extended(
         let already_has_missing_type = fm_violations
             .iter()
             .any(|v| v.kind == Some(VIOLATION_KIND_MISSING_TYPE));
-        if strict && !already_has_missing_type && !properties.contains_key("type") {
+        // Exempt / reserved files are bound to no schema, so `--strict` must
+        // not inject a missing-`type` error for them either.
+        if strict
+            && !already_has_missing_type
+            && !properties.contains_key("type")
+            && !schema.exempt.is_exempt(rel_path)
+        {
             fm_violations.push(Violation {
                 severity: Severity::Warn,
                 kind: Some(VIOLATION_KIND_MISSING_TYPE),
@@ -2061,14 +2112,18 @@ fn lint_one_file_extended(
         Some(t) => schema.merged_schema_for_type(t),
         None => schema.default_schema().clone(),
     };
-    let datetime_pairs: Vec<(&str, &str)> = effective_schema_for_dt
+    let datetime_pairs: Vec<(&str, &str, bool)> = effective_schema_for_dt
         .properties
         .iter()
-        .filter(|(_, c)| matches!(c, PropertyConstraint::DateTime))
-        .filter_map(|(name, _)| {
+        .filter_map(|(name, c)| {
+            let is_tz = match c {
+                PropertyConstraint::DateTime => false,
+                PropertyConstraint::DateTimeTz => true,
+                _ => return None,
+            };
             let v = properties.get(name.as_str())?;
             let s = v.as_str()?;
-            Some((name.as_str(), s))
+            Some((name.as_str(), s, is_tz))
         })
         .collect();
     for diag in engine.lint_frontmatter_hyalo004(
@@ -2540,7 +2595,11 @@ mod tests {
         };
         let mut types = HashMap::new();
         types.insert(type_name.to_owned(), type_schema);
-        SchemaConfig { default, types }
+        SchemaConfig {
+            default,
+            types,
+            ..Default::default()
+        }
     }
 
     // --- is_iso8601_date ---
@@ -3219,6 +3278,7 @@ mod tests {
         SchemaConfig {
             default: TypeSchema::default(),
             types,
+            ..Default::default()
         }
     }
 

@@ -1692,3 +1692,169 @@ fn lint_oversized_file_is_skipped_with_warning() {
         "the skipped file must be reported as not-clean, not silently dropped"
     );
 }
+
+// ---------------------------------------------------------------------------
+// OKF foundations (iter-163): tz timestamps, reserved-file exemption,
+// bundle-root okf_version, bundle-absolute links
+// ---------------------------------------------------------------------------
+
+/// A `.hyalo.toml` configured like an OKF bundle: a `datetime-tz` timestamp,
+/// `[schema] exempt` reserved files, `site_prefix = ""` for bundle-root links.
+fn okf_schema_toml() -> &'static str {
+    r#"dir = "."
+site_prefix = ""
+
+[schema]
+exempt = ["**/index.md", "**/log.md"]
+
+[schema.types.concept]
+required = ["title"]
+
+[schema.types.concept.properties.timestamp]
+type = "datetime-tz"
+"#
+}
+
+/// A whole OKF-style bundle lints clean: tz-aware timestamps (both YAML
+/// spellings), reserved `index.md`/`log.md` skip required-`type`, the root
+/// `index.md` carries a lone `okf_version`, and bundle-absolute links resolve.
+#[test]
+fn lint_okf_bundle_zero_false_positives() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), okf_schema_toml());
+
+    // Root index.md: only an okf_version key, no `type`. Links to a concept via
+    // a bundle-absolute path. Both must lint clean.
+    write_md(
+        tmp.path(),
+        "index.md",
+        "---\nokf_version: \"0.1\"\n---\nSee [bitcoin](/concepts/bitcoin.md)\n",
+    );
+    // Reserved log.md: no `type`, must be exempt.
+    write_md(tmp.path(), "log.md", "---\n---\nChangelog body.\n");
+    // Concept with quoted offset timestamp (sample-bundle spelling).
+    write_md(
+        tmp.path(),
+        "concepts/bitcoin.md",
+        "---\ntype: concept\ntitle: Bitcoin\ntimestamp: '2026-05-28T22:44:47+00:00'\n---\nBody.\n",
+    );
+    // Concept with unquoted Z timestamp (blog-example spelling).
+    write_md(
+        tmp.path(),
+        "concepts/ledger.md",
+        "---\ntype: concept\ntitle: Ledger\ntimestamp: 2026-05-28T14:30:00Z\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "OKF bundle should lint clean under --strict; stdout: {stdout}, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        json["results"]["files_with_violations"]
+            .as_u64()
+            .unwrap_or(99),
+        0,
+        "expected zero violations; stdout: {stdout}"
+    );
+}
+
+/// A tz-aware value in a `datetime-tz` property that is actually naive (no
+/// offset) still fires HYALO004.
+#[test]
+fn lint_okf_datetime_tz_rejects_naive() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), okf_schema_toml());
+    write_md(
+        tmp.path(),
+        "concepts/bad.md",
+        "---\ntype: concept\ntitle: Bad\ntimestamp: 2026-05-28T14:30:00\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO004", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let files = json["results"]["files"].as_array().expect("files array");
+    let found = files.iter().any(|f| {
+        f["rule_groups"]
+            .as_array()
+            .is_some_and(|rgs| rgs.iter().any(|rg| rg["rule"] == "HYALO004"))
+    });
+    assert!(
+        found,
+        "naive value in datetime-tz property should fire HYALO004; stdout: {stdout}"
+    );
+}
+
+/// A non-reserved file with an `okf_version` key (but no `type`) is still
+/// flagged — the root-index allowance is scoped to `index.md`, not arbitrary
+/// files.
+#[test]
+fn lint_okf_version_key_scoped_to_root_index() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), okf_schema_toml());
+    // A non-index, non-exempt file carrying okf_version → undeclared property.
+    write_md(
+        tmp.path(),
+        "concepts/rogue.md",
+        "---\ntype: concept\ntitle: Rogue\nokf_version: \"0.1\"\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "okf_version in a non-root file should be flagged; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("okf_version"),
+        "expected undeclared-property message naming okf_version; stdout: {stdout}"
+    );
+}
+
+/// Bundle-absolute links resolve from bundle root with `site_prefix = ""`,
+/// even when a bundle subdir name would collide with an auto-derived prefix.
+#[test]
+fn lint_okf_bundle_absolute_links_not_broken() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), okf_schema_toml());
+    // The bundle has a `concepts/` subdir; a bundle-absolute link to it must
+    // resolve (not be reported broken).
+    write_md(
+        tmp.path(),
+        "index.md",
+        "---\nokf_version: \"0.1\"\n---\n[c](/concepts/x.md)\n",
+    );
+    write_md(
+        tmp.path(),
+        "concepts/x.md",
+        "---\ntype: concept\ntitle: X\n---\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--broken-links", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("/concepts/x.md") && !stdout.contains("\"x.md\""),
+        "bundle-absolute link should resolve, not appear broken; stdout: {stdout}"
+    );
+}

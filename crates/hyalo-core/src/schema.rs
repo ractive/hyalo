@@ -40,6 +40,79 @@ pub struct SchemaConfig {
     pub default: TypeSchema,
     /// Per-type schemas, keyed by the value of the `type` frontmatter property.
     pub types: HashMap<String, TypeSchema>,
+    /// Vault-relative glob patterns for files that are exempt from schema
+    /// validation and from the `hyalo lint` required-`type` / frontmatter
+    /// presence rules. Configured via `[schema] exempt = ["**/index.md", ...]`.
+    ///
+    /// Matching is vault-relative and cross-platform (paths are normalized to
+    /// forward slashes before matching), so `**/index.md` matches
+    /// `index.md`, `sub/index.md`, etc. on every OS.
+    pub exempt: ExemptGlobs,
+}
+
+/// Compiled set of vault-relative exempt globs.
+///
+/// Wraps the raw patterns plus a lazily-built [`globset::GlobSet`]. An empty
+/// set matches nothing. Cheap to clone (the underlying `GlobSet` is `Arc`-free
+/// but small, and patterns are shared by clone).
+#[derive(Debug, Clone, Default)]
+pub struct ExemptGlobs {
+    patterns: Vec<String>,
+    set: Option<globset::GlobSet>,
+}
+
+impl ExemptGlobs {
+    /// Build from raw glob patterns. Invalid globs are skipped (they are
+    /// reported at config-load time by the caller if desired); an empty input
+    /// yields a set that matches nothing.
+    #[must_use]
+    pub fn new(patterns: Vec<String>) -> Self {
+        if patterns.is_empty() {
+            return Self::default();
+        }
+        let mut builder = globset::GlobSetBuilder::new();
+        let mut valid = Vec::with_capacity(patterns.len());
+        for pat in patterns {
+            // Skip invalid globs but keep the rest usable; config-load already
+            // reports them as an error via `TryFrom`.
+            if let Ok(g) = globset::GlobBuilder::new(&pat)
+                .literal_separator(true)
+                .build()
+            {
+                builder.add(g);
+                valid.push(pat);
+            }
+        }
+        let set = builder.build().ok();
+        Self {
+            patterns: valid,
+            set,
+        }
+    }
+
+    /// Returns `true` when `rel_path` (a vault-relative path) matches any
+    /// exempt glob. The path is normalized to forward slashes so Windows
+    /// backslash-separated paths match the same globs as Unix paths.
+    #[must_use]
+    pub fn is_exempt(&self, rel_path: &str) -> bool {
+        let Some(set) = &self.set else {
+            return false;
+        };
+        let normalized = rel_path.replace('\\', "/");
+        set.is_match(normalized.as_str())
+    }
+
+    /// Returns `true` when no exempt patterns are configured.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+
+    /// The configured raw glob patterns (for display / `hyalo config`).
+    #[must_use]
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
 }
 
 impl SchemaConfig {
@@ -216,6 +289,10 @@ pub enum PropertyConstraint {
     Date,
     /// ISO 8601 naive local datetime (YYYY-MM-DDThh:mm:ss).
     DateTime,
+    /// RFC 3339 timezone-aware datetime (YYYY-MM-DDThh:mm:ss with a `Z` or
+    /// `±hh:mm` offset). Distinct from `DateTime`: a naive value is not
+    /// accepted here, and a tz-aware value is not accepted by `DateTime`.
+    DateTimeTz,
     /// Integer or floating-point number.
     Number,
     /// Boolean (`true` / `false`).
@@ -313,6 +390,19 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                 }
                 Ok(PropertyConstraint::DateTime)
             }
+            "datetime-tz" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                Ok(PropertyConstraint::DateTimeTz)
+            }
             "number" => {
                 if raw.pattern.is_some() {
                     return Err(format!(
@@ -379,7 +469,7 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
             }
             other => Err(format!(
                 "unknown property constraint type '{other}': expected one of \
-                 string, date, datetime, number, boolean, list, enum, string-list"
+                 string, date, datetime, datetime-tz, number, boolean, list, enum, string-list"
             )),
         }
     }
@@ -437,6 +527,10 @@ pub struct RawSchemaConfig {
     pub default: Option<RawTypeSchema>,
     #[serde(default)]
     pub types: HashMap<String, RawTypeSchema>,
+    /// Vault-relative glob patterns for files exempt from validation and the
+    /// `hyalo lint` required-`type` / frontmatter-presence rules.
+    #[serde(default)]
+    pub exempt: Vec<String>,
 }
 
 impl TryFrom<RawSchemaConfig> for SchemaConfig {
@@ -453,7 +547,20 @@ impl TryFrom<RawSchemaConfig> for SchemaConfig {
                 .map_err(|e| format!("[schema.types.{name}]: {e}"))?;
             types.insert(name, ts);
         }
-        Ok(Self { default, types })
+        // Validate exempt globs eagerly so a malformed pattern surfaces as a
+        // config error rather than being silently dropped.
+        for pat in &raw.exempt {
+            globset::GlobBuilder::new(pat)
+                .literal_separator(true)
+                .build()
+                .map_err(|e| format!("[schema] exempt: invalid glob {pat:?}: {e}"))?;
+        }
+        let exempt = ExemptGlobs::new(raw.exempt);
+        Ok(Self {
+            default,
+            types,
+            exempt,
+        })
     }
 }
 
@@ -495,6 +602,7 @@ required = ["title"]
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
         assert_eq!(cfg.default.required, vec!["title".to_owned()]);
@@ -524,6 +632,7 @@ type = "date"
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -558,6 +667,7 @@ required = ["date", "status"]
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -586,6 +696,7 @@ values = ["planned", "completed"]
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -611,6 +722,7 @@ required = ["title"]
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -632,6 +744,7 @@ pattern = "^iter-\\d+/"
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -691,6 +804,7 @@ required = ["title", "date"]
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -723,6 +837,7 @@ values = ["active", "archived", "draft"]
             .unwrap_or_else(|| RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -761,6 +876,7 @@ values = ["active", "archived", "draft"]
             .unwrap_or(RawSchemaConfig {
                 default: None,
                 types: HashMap::new(),
+                exempt: Vec::new(),
             });
         SchemaConfig::try_from(raw_schema)
     }
@@ -805,6 +921,31 @@ type = "datetime"
             cfg.types["note"].properties.get("when"),
             Some(PropertyConstraint::DateTime)
         ));
+    }
+
+    #[test]
+    fn parse_datetime_tz_constraint() {
+        let toml = r#"
+[schema.types.concept.properties.timestamp]
+type = "datetime-tz"
+"#;
+        let cfg = parse_cfg(toml).expect("should parse");
+        assert!(matches!(
+            cfg.types["concept"].properties.get("timestamp"),
+            Some(PropertyConstraint::DateTimeTz)
+        ));
+    }
+
+    #[test]
+    fn reject_pattern_on_datetime_tz() {
+        let toml = r#"
+[schema.types.concept.properties.timestamp]
+type = "datetime-tz"
+pattern = "foo"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("'pattern'"));
+        assert!(err.contains("datetime-tz"));
     }
 
     #[test]

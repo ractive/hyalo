@@ -96,6 +96,7 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
         }
         PropertyConstraint::Date => serde_json::json!({"type": "date"}),
         PropertyConstraint::DateTime => serde_json::json!({"type": "datetime"}),
+        PropertyConstraint::DateTimeTz => serde_json::json!({"type": "datetime-tz"}),
         PropertyConstraint::Number => serde_json::json!({"type": "number"}),
         PropertyConstraint::Boolean => serde_json::json!({"type": "boolean"}),
         PropertyConstraint::List => serde_json::json!({"type": "list"}),
@@ -160,12 +161,13 @@ fn parse_property_type_str(s: &str) -> Result<&'static str, String> {
         "string" => Ok("string"),
         "date" => Ok("date"),
         "datetime" => Ok("datetime"),
+        "datetime-tz" => Ok("datetime-tz"),
         "number" => Ok("number"),
         "boolean" => Ok("boolean"),
         "list" => Ok("list"),
         "enum" => Ok("enum"),
         other => Err(format!(
-            "invalid property type '{other}': must be one of string, date, datetime, number, boolean, list, enum"
+            "invalid property type '{other}': must be one of string, date, datetime, datetime-tz, number, boolean, list, enum"
         )),
     }
 }
@@ -892,6 +894,7 @@ fn load_schema_from_doc(doc: &toml_edit::DocumentMut) -> Result<SchemaConfig> {
         .unwrap_or(hyalo_core::schema::RawSchemaConfig {
             default: None,
             types: HashMap::new(),
+            exempt: Vec::new(),
         });
     Ok(SchemaConfig::from_raw_lossy(raw_schema))
 }
@@ -916,6 +919,7 @@ mod tests {
         SchemaConfig {
             default: TypeSchema::default(),
             types,
+            ..Default::default()
         }
     }
 
@@ -935,6 +939,7 @@ mod tests {
         SchemaConfig {
             default: TypeSchema::default(),
             types,
+            ..Default::default()
         }
     }
 

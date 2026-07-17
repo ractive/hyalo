@@ -314,6 +314,11 @@ pub fn set(
     //     `type` property (post-mutation), so `--property type=X` selects X's schema.
     if validate && let Some(schema) = schema {
         for (full_path, rel_path) in &files {
+            // Reserved / exempt files (e.g. OKF `index.md`, `log.md`) are not
+            // subject to schema validation.
+            if schema.exempt.is_exempt(rel_path) {
+                continue;
+            }
             let props = match frontmatter::read_frontmatter(full_path) {
                 Ok(p) => p,
                 // Parse errors are reported as warnings during the write loop; skip here.
@@ -1189,6 +1194,7 @@ type: post
         );
         let schema = SchemaConfig {
             default: TypeSchema::default(),
+            exempt: hyalo_core::schema::ExemptGlobs::default(),
             types: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -1251,6 +1257,7 @@ type: post
         );
         let schema = SchemaConfig {
             default: TypeSchema::default(),
+            exempt: hyalo_core::schema::ExemptGlobs::default(),
             types: {
                 let mut m = HashMap::new();
                 m.insert(
