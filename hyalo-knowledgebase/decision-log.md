@@ -788,3 +788,35 @@ validation). It awaits a human to create the repo and push the tree, after which
 hyalo's own `lint-kb` CI job switches from build-from-source to
 `uses: ractive/setup-hyalo@v1` (deliberately **not** switched now — pointing live
 CI at a not-yet-published action would break every PR check).
+
+## DEC-052: Fix-wave design decisions for profile composition & generators (2026-07-17)
+
+**Context:** the 7-agent pre-v0.18.0 dogfood
+([[dogfood-results/dogfood-v0180-okf-profiles-pre-release]]) found five
+release blockers. Four design decisions were taken with the user to shape the
+fix wave (iterations 172–175):
+
+1. **Smart merge, not layered fragments.** Profile composition is fixed
+   inside the materialized `.hyalo.toml`: array keys union, `[lint]`
+   gains a `profiles` list, scalar overwrites print `conflict:` lines, and
+   comments/order are preserved (`toml_edit`). The cleaner layered-fragments
+   model (config names active profiles, fragments composed at load) is
+   deliberately deferred as a possible future major-version redesign — it
+   solves refresh/uninstall exactly but changes the config model.
+2. **`okf index --apply` auto-adopts marker-less files, preserving all
+   content.** The managed region is appended to the existing body; dry-run
+   announces adoption; destructive overwrite requires an explicit
+   `--replace`.
+3. **Dot-directory reach is a general walker include-list**
+   (`[scan] include` globs, `.git` hard-excluded), shipped by the skills
+   profile as `.claude/skills/**` — not a hard-coded special case.
+4. **Full 4-iteration cut before release** (blockers + mediums), with the
+   feature-gap items (config-editing commands, `set` for string-lists,
+   `okf log` style matching, body-section append) deferred to a separate
+   design pass.
+
+Supporting calls baked into the plans: `[[schema.bind]]` satisfies the
+`type` requirement (bind = typing); root changelogs are addressed via
+`[changelog] path` resolved from the config dir; the OKF profile ships
+vendor-neutral (no BigQuery example types); case handling for reserved files
+reuses the `[links] case_insensitive` auto-detection approach.
