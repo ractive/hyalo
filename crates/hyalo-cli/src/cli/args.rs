@@ -1043,7 +1043,10 @@ Repeatable (AND).\n\
             EXEMPT FILES: `[schema] exempt = [\"**/index.md\", \"**/log.md\"]` lists vault-relative\n\
             globs for reserved files that are bound to no schema — they skip the missing-`type`\n\
             warning, required-property checks, and undeclared-property warnings (useful for OKF\n\
-            bundle reserved files). Matching is cross-platform (forward-slash normalized).\n\n\
+            bundle reserved files). Matching is cross-platform (forward-slash normalized) and\n\
+            honors the resolved `[links] case_insensitive` mode: on a case-insensitive filesystem\n\
+            (macOS/Windows default, or `case_insensitive = \"true\"`), `INDEX.md` is exempted by\n\
+            `**/index.md` the same way `hyalo okf index` treats it as the reserved index file.\n\n\
             REQUIRED EMPTINESS: a required property whose value is YAML null (`tags: ~`) or\n\
             an empty array (`tags: []`) is treated as semantically equivalent to absent and\n\
             reported as an error (e.g. `required property \"tags\" must not be empty`). The\n\

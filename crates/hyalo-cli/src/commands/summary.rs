@@ -332,7 +332,14 @@ pub fn summary(
         // extract_tags, so passing properties alone is sufficient for the
         // lint pass — there is no `tags` data unreachable through properties.
         let lint_entries = entries.iter().map(|e| (e.rel_path.as_str(), &e.properties));
-        let counts = lint_counts_from_properties(lint_entries, schema);
+        // Mirror the vault's resolved `[links] case_insensitive` mode so
+        // `[schema] exempt` globs (e.g. `**/index.md`) fold case the same way
+        // `hyalo okf index` does on case-insensitive filesystems. `case_index`
+        // already resolved the mode via `mode_enabled` when it was built, so
+        // reading it back here costs nothing extra.
+        let case_insensitive =
+            case_index.is_some_and(CaseInsensitiveIndex::case_insensitive_paths_enabled);
+        let counts = lint_counts_from_properties(lint_entries, schema, case_insensitive);
         Some(LintSummary {
             errors: counts.errors,
             warnings: counts.warnings,

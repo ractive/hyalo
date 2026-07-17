@@ -1210,6 +1210,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 dry_run,
                 do_validate,
                 if do_validate { Some(ctx.schema) } else { None },
+                ctx.case_insensitive_mode,
             )
         }
         Commands::Remove {
@@ -1870,6 +1871,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 madr_profile: madr_profile_active,
                 skills_profile: skills_profile_active,
                 changelog_profile: changelog_profile_active,
+                // Resolved once per `hyalo lint` invocation (not re-probed
+                // per file) so `[schema] exempt` globs fold case the same way
+                // `hyalo okf index` treats `INDEX.md` on case-insensitive
+                // filesystems (macOS/Windows default).
+                case_insensitive: mode_enabled(ctx.case_insensitive_mode, dir),
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
@@ -2270,6 +2276,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     filename_template.as_deref(),
                     dry_run,
                     effective_format,
+                    ctx.case_insensitive_mode,
                 ),
             }
         }

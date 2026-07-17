@@ -30,6 +30,7 @@ use hyalo_core::schema::{
 use hyalo_core::util::is_iso8601_date;
 
 use crate::commands::section_scanner::SectionScanner;
+use crate::commands::terse_root_cause;
 
 use crate::output::{CommandOutcome, Format, format_success};
 
@@ -76,17 +77,6 @@ pub const VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT: &str = "schema/missing-req
 /// (`lint-rules list`) so its severity is user-configurable via
 /// `[lint.rules.HYALO005]`, but it is never silently downgraded by a profile.
 pub const RULE_ID_FRONTMATTER_PARSE_ERROR: &str = "HYALO005";
-
-/// Deepest error message in an anyhow chain, condensed to its first line.
-///
-/// The YAML parser attaches a multi-line source snippet to its error; for a
-/// one-line lint message we keep only the leading line so the `HYALO005`
-/// violation stays terse. The full detail is still available in the file
-/// itself. Reused shape from `commands::okf::root_cause`.
-fn terse_root_cause(err: &anyhow::Error) -> String {
-    let root = err.root_cause().to_string();
-    root.lines().next().unwrap_or(&root).trim().to_owned()
-}
 
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize)]
@@ -187,8 +177,17 @@ pub struct LintCounts {
 pub fn lint_files(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
+    case_insensitive: bool,
 ) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_with_options(files, schema, FixMode::Off, None, &mut None, None)
+    lint_files_with_options(
+        files,
+        schema,
+        FixMode::Off,
+        None,
+        &mut None,
+        None,
+        case_insensitive,
+    )
 }
 
 /// Prepend an additional `FileLintResult` (e.g. `.hyalo.toml` view violations)
@@ -372,6 +371,7 @@ pub fn lint_files_with_options(
     limit: Option<usize>,
     snapshot_index: &mut Option<hyalo_core::index::SnapshotIndex>,
     index_path: Option<&Path>,
+    case_insensitive: bool,
 ) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
     let mut counts = LintCounts::default();
@@ -379,7 +379,8 @@ pub fn lint_files_with_options(
     let mut index_dirty = false;
 
     for (full_path, rel_path) in files {
-        let (file_result, file_fixes) = lint_file_with_fix(full_path, rel_path, schema, fix)?;
+        let (file_result, file_fixes) =
+            lint_file_with_fix(full_path, rel_path, schema, fix, case_insensitive)?;
         for v in &file_result.violations {
             match v.severity {
                 Severity::Error => counts.errors += 1,
@@ -443,10 +444,11 @@ pub fn lint_files_with_options(
 pub fn lint_counts_only(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
+    case_insensitive: bool,
 ) -> Result<LintCounts> {
     let mut counts = LintCounts::default();
     for (full_path, rel_path) in files {
-        let file_result = lint_file(full_path, rel_path, schema)?;
+        let file_result = lint_file(full_path, rel_path, schema, case_insensitive)?;
         for v in &file_result.violations {
             match v.severity {
                 Severity::Error => counts.errors += 1,
@@ -467,10 +469,11 @@ pub fn lint_counts_only(
 pub(crate) fn lint_counts_from_properties<'a>(
     entries: impl Iterator<Item = (&'a str, &'a IndexMap<String, Value>)>,
     schema: &SchemaConfig,
+    case_insensitive: bool,
 ) -> LintCounts {
     let mut counts = LintCounts::default();
     for (rel_path, properties) in entries {
-        let violations = validate_properties(rel_path, properties, schema);
+        let violations = validate_properties(rel_path, properties, schema, case_insensitive);
         for v in &violations {
             match v.severity {
                 Severity::Error => counts.errors += 1,
@@ -488,8 +491,14 @@ pub(crate) fn lint_counts_from_properties<'a>(
 // Per-file validation
 // ---------------------------------------------------------------------------
 
-fn lint_file(full_path: &Path, rel_path: &str, schema: &SchemaConfig) -> Result<FileLintResult> {
-    let (result, _) = lint_file_with_fix(full_path, rel_path, schema, FixMode::Off)?;
+fn lint_file(
+    full_path: &Path,
+    rel_path: &str,
+    schema: &SchemaConfig,
+    case_insensitive: bool,
+) -> Result<FileLintResult> {
+    let (result, _) =
+        lint_file_with_fix(full_path, rel_path, schema, FixMode::Off, case_insensitive)?;
     Ok(result)
 }
 
@@ -499,6 +508,7 @@ fn lint_file_with_fix(
     rel_path: &str,
     schema: &SchemaConfig,
     fix: FixMode,
+    case_insensitive: bool,
 ) -> Result<(FileLintResult, FileFixResult)> {
     let properties = match read_frontmatter(full_path) {
         Ok(props) => props,
@@ -535,7 +545,7 @@ fn lint_file_with_fix(
         (properties, Vec::new())
     };
 
-    let mut violations = validate_properties(rel_path, &final_props, schema);
+    let mut violations = validate_properties(rel_path, &final_props, schema, case_insensitive);
 
     // Validate required_sections against the body outline. The effective type is
     // the explicit `type:` else the `[schema.bind]` path binding, so a bound ADR
@@ -552,7 +562,9 @@ fn lint_file_with_fix(
         None => schema.default_schema().clone(),
     };
 
-    if !effective_schema.required_sections.is_empty() && !schema.exempt.is_exempt(rel_path) {
+    if !effective_schema.required_sections.is_empty()
+        && !schema.exempt.is_exempt_ci(rel_path, case_insensitive)
+    {
         let section_violations =
             validate_required_sections(full_path, rel_path, &effective_schema.required_sections)?;
         violations.extend(section_violations);
@@ -888,13 +900,17 @@ fn validate_properties(
     rel_path: &str,
     properties: &IndexMap<String, Value>,
     schema: &SchemaConfig,
+    case_insensitive: bool,
 ) -> Vec<Violation> {
     let mut violations: Vec<Violation> = Vec::new();
 
     // Reserved / exempt files (e.g. OKF `index.md`, `log.md`) are bound to no
     // schema: they skip the missing-`type` warning, required-property checks,
     // undeclared-property warnings, and per-property constraint validation.
-    if schema.exempt.is_exempt(rel_path) {
+    // `case_insensitive` mirrors the vault's resolved `[links]
+    // case_insensitive` mode so `INDEX.md` is exempted the same way `hyalo
+    // okf index` treats it on case-folding filesystems (macOS/Windows).
+    if schema.exempt.is_exempt_ci(rel_path, case_insensitive) {
         return violations;
     }
 
@@ -1519,6 +1535,11 @@ pub struct ExtLintOptions<'a> {
     /// cross-check default to warn) in addition to the schema pass. Set by
     /// `hyalo lint --profile changelog`.
     pub changelog_profile: bool,
+    /// Resolved `[links] case_insensitive` mode for `vault_dir` (see
+    /// [`hyalo_core::case_index::mode_enabled`]). Used so `[schema] exempt`
+    /// globs (e.g. `**/index.md`) fold case the same way `hyalo okf index`
+    /// does on case-insensitive filesystems.
+    pub case_insensitive: bool,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1554,6 +1575,7 @@ pub fn lint_files_extended(
     let skills_profile = opts.skills_profile;
     let changelog_profile = opts.changelog_profile;
     let vault_dir = opts.vault_dir;
+    let case_insensitive = opts.case_insensitive;
 
     // Process files in parallel. Each worker lints one file.
     let lint_file = |(full_path, rel_path): &(std::path::PathBuf, String)| {
@@ -1574,6 +1596,7 @@ pub fn lint_files_extended(
             skills_profile,
             changelog_profile,
             vault_dir,
+            case_insensitive,
         )
     };
     #[cfg(not(miri))]
@@ -2121,6 +2144,7 @@ fn lint_one_file_extended(
     skills_profile: bool,
     changelog_profile: bool,
     vault_dir: &Path,
+    case_insensitive: bool,
 ) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
     // trimmed line changing what counts as a duplicate blank line), so a
@@ -2244,7 +2268,8 @@ fn lint_one_file_extended(
             .iter()
             .any(|r| r.starts_with("FRONTMATTER") || r == "SCHEMA");
     if should_include_frontmatter {
-        let mut fm_violations = validate_properties(rel_path, &properties, schema);
+        let mut fm_violations =
+            validate_properties(rel_path, &properties, schema, case_insensitive);
 
         // Under --strict, the missing-type warning is promoted to an error.
         // `validate_properties` only emits it when the schema is non-empty, but
@@ -2260,7 +2285,7 @@ fn lint_one_file_extended(
         if strict
             && !already_has_missing_type
             && !properties.contains_key("type")
-            && !schema.exempt.is_exempt(rel_path)
+            && !schema.exempt.is_exempt_ci(rel_path, case_insensitive)
             && schema.bound_type_for(rel_path).is_none()
         {
             fm_violations.push(Violation {
@@ -2416,7 +2441,7 @@ fn lint_one_file_extended(
                 // `fix_actions.len()`, which is not 1:1 with resolved
                 // diagnostics (one fix action can clear multiple violations,
                 // or insert defaults that don't clear any).
-                let post = validate_properties(rel_path, &mutable, schema);
+                let post = validate_properties(rel_path, &mutable, schema, case_insensitive);
                 let remaining: Vec<InternalViolation> = post
                     .into_iter()
                     .map(|v| {
@@ -2666,6 +2691,7 @@ fn lint_one_file_extended(
             okf_doc_type,
             &is_enabled,
             vault_dir,
+            case_insensitive,
         );
         for f in findings {
             // Apply per-rule severity override; OKF rules default to warn.
@@ -3259,7 +3285,7 @@ mod tests {
         std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
 
         let schema = make_schema(&["title", "date"], "note", &[], HashMap::new());
-        let result = lint_file(&path, "note.md", &schema).unwrap();
+        let result = lint_file(&path, "note.md", &schema, false).unwrap();
         // date is in default required, but only "title" is present.
         // No type -> warn about no type. date missing -> error.
         assert!(
@@ -3277,7 +3303,7 @@ mod tests {
         // be synthesized by --fix, so its violation is tagged not-autofixable.
         let schema = make_schema(&["title", "date"], "note", &[], HashMap::new());
         let props: IndexMap<String, Value> = IndexMap::new(); // nothing present
-        let violations = validate_properties("note.md", &props, &schema);
+        let violations = validate_properties("note.md", &props, &schema, false);
         let date_v = violations
             .iter()
             .find(|v| v.message.contains("missing required property \"date\""))
@@ -3305,7 +3331,7 @@ mod tests {
             ..Default::default()
         };
         let props: IndexMap<String, Value> = IndexMap::new();
-        let violations = validate_properties("note.md", &props, &schema);
+        let violations = validate_properties("note.md", &props, &schema, false);
         let status_v = violations
             .iter()
             .find(|v| v.message.contains("missing required property \"status\""))
@@ -3324,7 +3350,7 @@ mod tests {
         std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
 
         let schema = make_schema(&["title"], "note", &[], HashMap::new());
-        let result = lint_file(&path, "note.md", &schema).unwrap();
+        let result = lint_file(&path, "note.md", &schema, false).unwrap();
         assert!(
             result
                 .violations
@@ -3372,7 +3398,7 @@ type = \"skill\"
         )
         .unwrap();
 
-        let result = lint_file(&path, "foo/SKILL.md", &schema).unwrap();
+        let result = lint_file(&path, "foo/SKILL.md", &schema, false).unwrap();
         assert!(
             !result
                 .violations
@@ -3423,7 +3449,7 @@ type = \"skill\"
         // Missing `description` (a skill-required field).
         std::fs::write(&path, "---\nname: my-skill\n---\nBody\n").unwrap();
 
-        let result = lint_file(&path, "foo/SKILL.md", &schema).unwrap();
+        let result = lint_file(&path, "foo/SKILL.md", &schema, false).unwrap();
         assert!(
             result
                 .violations
@@ -3447,7 +3473,7 @@ type = \"skill\"
         .unwrap();
 
         let schema = make_schema(&["title"], "note", &[], HashMap::new());
-        let result = lint_file(&path, "note.md", &schema).unwrap();
+        let result = lint_file(&path, "note.md", &schema, false).unwrap();
         assert!(result.violations.is_empty());
     }
 
@@ -3459,7 +3485,7 @@ type = \"skill\"
 
         let schema = SchemaConfig::default();
         let files = vec![(path, "note.md".to_owned())];
-        let (_, counts) = lint_files(&files, &schema).unwrap();
+        let (_, counts) = lint_files(&files, &schema, false).unwrap();
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
     }
@@ -3477,7 +3503,7 @@ type = \"skill\"
         .unwrap();
 
         let schema = SchemaConfig::default();
-        let result = lint_file(&path, "note.md", &schema).unwrap();
+        let result = lint_file(&path, "note.md", &schema, false).unwrap();
         let comma_warn = result
             .violations
             .iter()
@@ -3529,6 +3555,7 @@ type = \"skill\"
             madr_profile: false,
             skills_profile: false,
             changelog_profile: false,
+            case_insensitive: false,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }
@@ -3733,9 +3760,16 @@ type = \"skill\"
 
         let schema = SchemaConfig::default();
         let files = vec![(path.clone(), "note.md".to_owned())];
-        let (_, counts) =
-            lint_files_with_options(&files, &schema, FixMode::Apply, None, &mut None, None)
-                .unwrap();
+        let (_, counts) = lint_files_with_options(
+            &files,
+            &schema,
+            FixMode::Apply,
+            None,
+            &mut None,
+            None,
+            false,
+        )
+        .unwrap();
 
         // After fix, the comma-joined tag warning should be gone.
         assert_eq!(counts.warnings, 0, "comma-tag warning should be fixed");
@@ -3906,7 +3940,7 @@ type = \"skill\"
         .unwrap();
 
         let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
-        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let result = lint_file(&path, "doc.md", &schema, false).unwrap();
         let section_viols: Vec<_> = result
             .violations
             .iter()
@@ -3929,7 +3963,7 @@ type = \"skill\"
         .unwrap();
 
         let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
-        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let result = lint_file(&path, "doc.md", &schema, false).unwrap();
         let section_viols: Vec<_> = result
             .violations
             .iter()
@@ -3960,7 +3994,7 @@ type = \"skill\"
 
         // Required: Goal then Tasks (but in body: Tasks then Goal).
         let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
-        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let result = lint_file(&path, "doc.md", &schema, false).unwrap();
         let section_viols: Vec<_> = result
             .violations
             .iter()
@@ -3984,7 +4018,7 @@ type = \"skill\"
         .unwrap();
 
         let schema = make_schema_with_sections(vec!["# Goal".to_owned(), "## Tasks".to_owned()]);
-        let result = lint_file(&path, "doc.md", &schema).unwrap();
+        let result = lint_file(&path, "doc.md", &schema, false).unwrap();
         let section_viols: Vec<_> = result
             .violations
             .iter()

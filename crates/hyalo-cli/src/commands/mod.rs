@@ -66,6 +66,49 @@ pub fn resolve_file_user(
     discovery::resolve_file(dir, path_arg)
 }
 
+/// Known noisy suffixes that upstream YAML parser errors (`serde-saphyr`)
+/// append to otherwise-useful messages — internal-API advice ("set
+/// `DuplicateKeyPolicy` in `Options`...") that means nothing to a user
+/// looking at a `HYALO005` lint violation or an OKF generator skip
+/// warning. Stripped by [`terse_root_cause`] before the message reaches the
+/// user; the line/column info and the actual cause (e.g. "duplicate mapping
+/// key: type") are left intact.
+const NOISY_ERROR_SUFFIXES: &[&str] = &[", set DuplicateKeyPolicy in Options if acceptable"];
+
+/// Deepest error message in an `anyhow` chain, condensed to its first line and
+/// stripped of known-noisy upstream advisory suffixes (see
+/// [`NOISY_ERROR_SUFFIXES`]).
+///
+/// The YAML parser attaches a multi-line source snippet to its error; for a
+/// one-line lint message or generator skip warning we keep only the leading
+/// line so the message stays terse. The full detail is still available in the
+/// file itself.
+///
+/// Shared by the `HYALO005` (`RULE_ID_FRONTMATTER_PARSE_ERROR`) lint
+/// violation message and the OKF generator skip warnings — both surface
+/// a YAML parse error's root cause to the user.
+#[must_use]
+pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
+    let root = err.root_cause().to_string();
+    let first_line = root.lines().next().unwrap_or(&root).trim();
+    // Strip to a fixed point so one suffix's removal can expose another
+    // (matters once NOISY_ERROR_SUFFIXES grows past a single entry).
+    let mut msg = first_line;
+    loop {
+        let mut stripped_any = false;
+        for suffix in NOISY_ERROR_SUFFIXES {
+            if let Some(stripped) = msg.strip_suffix(suffix) {
+                msg = stripped;
+                stripped_any = true;
+            }
+        }
+        if !stripped_any {
+            break;
+        }
+    }
+    msg.trim_end().to_owned()
+}
+
 /// The `hyalo lint --profile <profile>` hint to attach to a generator command's
 /// output — or `None` when it would be redundant.
 ///
@@ -498,5 +541,51 @@ mod tests {
     #[test]
     fn iso8601_known_date() {
         assert_eq!(format_iso8601(1_705_314_600), "2024-01-15T10:30:00Z");
+    }
+
+    // --- terse_root_cause ---
+
+    /// A real duplicate-mapping-key YAML error, produced through the same
+    /// frontmatter-parsing entry point `HYALO005` and the OKF/MADR skip
+    /// warnings use, must not leak the upstream `serde-saphyr` internal-API
+    /// advice ("set DuplicateKeyPolicy in Options if acceptable") — but must
+    /// keep the actual cause and its line/column location.
+    #[test]
+    fn terse_root_cause_strips_duplicate_key_policy_advice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("corrupt.md");
+        std::fs::write(&path, "---\ntitle: A\ntitle: B\n---\n# Body\n").unwrap();
+        let err = hyalo_core::frontmatter::read_frontmatter(&path).unwrap_err();
+
+        let msg = terse_root_cause(&err);
+
+        assert!(
+            !msg.contains("DuplicateKeyPolicy"),
+            "must not leak the Rust type name: {msg:?}"
+        );
+        assert!(
+            !msg.contains("set DuplicateKeyPolicy in Options if acceptable"),
+            "must not leak the internal-API advice suffix: {msg:?}"
+        );
+        assert!(
+            msg.contains("duplicate mapping key"),
+            "must keep the actual cause: {msg:?}"
+        );
+        assert!(
+            msg.contains("line 2 column 1"),
+            "must keep line/column info: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn terse_root_cause_condenses_to_first_line() {
+        let err = anyhow::anyhow!("first line\nsecond line\nthird line");
+        assert_eq!(terse_root_cause(&err), "first line");
+    }
+
+    #[test]
+    fn terse_root_cause_leaves_unrelated_messages_untouched() {
+        let err = anyhow::anyhow!("plain error with no noisy suffix");
+        assert_eq!(terse_root_cause(&err), "plain error with no noisy suffix");
     }
 }

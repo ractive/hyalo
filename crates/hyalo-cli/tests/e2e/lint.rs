@@ -2331,6 +2331,44 @@ fn lint_skip_summary_text_and_github() {
     );
 }
 
+/// A single missing input path is reported as singular ("1 input path
+/// missing"), not "1 input paths missing" (redogfood fix-wave v0.18.0).
+#[test]
+fn lint_skip_summary_singular_missing_path() {
+    let tmp = setup_vault_with_corrupt_file();
+    write_md(tmp.path(), "ok.md", "---\ntitle: Fine\n---\n# Body\n");
+
+    // Exactly 1 real .md + 1 missing path.
+    let list = write_list_file(&["ok.md", "gone.md"]);
+    let list_path = list.path().to_str().unwrap();
+
+    let text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "--files-from", list_path])
+        .output()
+        .unwrap();
+    let text_err = std::str::from_utf8(&text.stderr).unwrap();
+    assert!(
+        text_err.contains("note: 1 input path missing"),
+        "singular count must say 'path', not 'paths'; got stderr:\n{text_err}"
+    );
+    assert!(
+        !text_err.contains("1 input paths missing"),
+        "must not use the plural form for count=1; got stderr:\n{text_err}"
+    );
+
+    let gh = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "--files-from", list_path])
+        .output()
+        .unwrap();
+    let gh_out = std::str::from_utf8(&gh.stdout).unwrap();
+    assert!(
+        gh_out.contains("::notice::1 input path missing"),
+        "github format must also use the singular form; got:\n{gh_out}"
+    );
+}
+
 /// An explicitly named `--file` that is excluded by `[lint] ignore` prints a
 /// notice instead of silently reporting `0 files checked`.
 #[test]
@@ -2403,5 +2441,214 @@ fn lint_github_fix_dry_run_distinguishable() {
     assert_ne!(
         stdout, plain_out,
         "fix --dry-run github output must differ from plain lint output"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exempt globs honor `[links] case_insensitive` (redogfood fix-wave v0.18.0)
+// ---------------------------------------------------------------------------
+//
+// `hyalo okf index` already treats `INDEX.md` as the reserved index file on a
+// case-insensitive filesystem (auto-detected or forced via `[links]
+// case_insensitive`); `hyalo lint`'s `[schema] exempt` globs must agree, or a
+// literally-named `INDEX.md` spuriously fails the required-`type` check that
+// `**/index.md` was supposed to exempt it from.
+//
+// Both tests below force the mode explicitly via config rather than relying
+// on host detection, so they pass identically on Linux, macOS, and Windows.
+
+fn exempt_index_schema_toml() -> &'static str {
+    r#"dir = "."
+
+[schema]
+exempt = ["**/index.md"]
+
+[schema.default]
+required = ["type"]
+"#
+}
+
+/// `[links] case_insensitive = "true"` forces exempt-glob matching to fold
+/// case: a literal `INDEX.md` is treated the same as `index.md` and is
+/// exempt from the `required = ["type"]` default schema.
+#[test]
+fn lint_exempt_glob_case_insensitive_true_exempts_uppercase_index() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        &format!(
+            "{}\n[links]\ncase_insensitive = \"true\"\n",
+            exempt_index_schema_toml()
+        ),
+    );
+    // No `type` property — would fail `required = ["type"]` unless exempt.
+    write_md(tmp.path(), "INDEX.md", "---\n---\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "INDEX.md must be exempt under case_insensitive = true; stdout: {stdout}, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        json["results"]["files_with_violations"]
+            .as_u64()
+            .unwrap_or(99),
+        0,
+        "expected zero violations for exempt INDEX.md; stdout: {stdout}"
+    );
+}
+
+/// `[links] case_insensitive = "false"` keeps exempt-glob matching strict:
+/// `INDEX.md` does NOT match `**/index.md` and the missing-`type` violation
+/// still fires. This is the inverse of the test above and guards against a
+/// fix that makes exempt matching unconditionally case-insensitive.
+#[test]
+fn lint_exempt_glob_case_insensitive_false_does_not_exempt_uppercase_index() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        &format!(
+            "{}\n[links]\ncase_insensitive = \"false\"\n",
+            exempt_index_schema_toml()
+        ),
+    );
+    write_md(tmp.path(), "INDEX.md", "---\n---\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "INDEX.md must NOT be exempt under case_insensitive = false; stdout: {stdout}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        json["results"]["files_with_violations"]
+            .as_u64()
+            .unwrap_or(0),
+        1,
+        "expected the missing-type violation on INDEX.md; stdout: {stdout}"
+    );
+
+    // The genuinely-exempt lowercase `index.md` still lints clean regardless
+    // of case_insensitive mode.
+    write_md(tmp.path(), "index.md", "---\n---\nBody.\n");
+    let output2 = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "index.md"])
+        .output()
+        .unwrap();
+    assert!(
+        output2.status.success(),
+        "lowercase index.md must remain exempt; stdout: {}",
+        String::from_utf8_lossy(&output2.stdout)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// OKF profile: reserved-file predicates (is_index_file/is_log_file) honor
+// `[links] case_insensitive` too (same fix-wave, okf_lint.rs half of the bug).
+//
+// The SCHEMA exempt-glob pass (tested above) is one of two independent
+// reserved-file checks; `--profile okf`'s own `is_index_file`/`is_log_file`
+// used to be hard-coded case-sensitive, so an adopted `INDEX.md` was exempt
+// from SCHEMA but still fell through to the concept-doc rules (spurious
+// `OKF-CITATIONS-PRESENT`) instead of being treated as the reserved index.
+// ---------------------------------------------------------------------------
+
+/// `[links] case_insensitive = "true"` + `--profile okf`: an `INDEX.md` with
+/// no `# Citations` section must NOT get `OKF-CITATIONS-PRESENT` (it is now
+/// recognized as the reserved index, not a concept doc) — it may still warn
+/// `OKF-INDEX-STRUCTURE` because its body is prose, not a link list.
+#[test]
+fn lint_okf_profile_case_insensitive_true_index_skips_citations_present() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"true\"\n",
+    );
+    // Prose body, no link list and no `# Citations` — would trip both
+    // OKF-INDEX-STRUCTURE (not a link list) and, if misclassified as a
+    // concept doc, OKF-CITATIONS-PRESENT.
+    write_md(
+        tmp.path(),
+        "INDEX.md",
+        "---\ntype: BigQuery Table\n---\nThis is prose, not a link list.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--profile", "okf"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let rule_ids: Vec<&str> = json["results"]["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["rule_groups"].as_array())
+        .flatten()
+        .filter_map(|g| g["rule"].as_str())
+        .collect();
+
+    assert!(
+        !rule_ids.contains(&"OKF-CITATIONS-PRESENT"),
+        "case-folded INDEX.md must not be treated as a concept doc: stdout={stdout}"
+    );
+    assert!(
+        rule_ids.contains(&"OKF-INDEX-STRUCTURE"),
+        "case-folded INDEX.md should still get OKF-INDEX-STRUCTURE for its prose body: stdout={stdout}"
+    );
+}
+
+/// `[links] case_insensitive = "false"` + `--profile okf`: behavior is
+/// unchanged from before this whole fix wave — `INDEX.md` is treated as an
+/// ordinary concept doc and DOES get `OKF-CITATIONS-PRESENT` when it lacks a
+/// `# Citations` section.
+#[test]
+fn lint_okf_profile_case_insensitive_false_index_keeps_citations_present() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"false\"\n",
+    );
+    write_md(
+        tmp.path(),
+        "INDEX.md",
+        "---\ntype: BigQuery Table\n---\nThis is prose, not a link list.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--profile", "okf"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let rule_ids: Vec<&str> = json["results"]["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["rule_groups"].as_array())
+        .flatten()
+        .filter_map(|g| g["rule"].as_str())
+        .collect();
+
+    assert!(
+        rule_ids.contains(&"OKF-CITATIONS-PRESENT"),
+        "with case_insensitive=false, INDEX.md must remain an ordinary concept doc: stdout={stdout}"
     );
 }

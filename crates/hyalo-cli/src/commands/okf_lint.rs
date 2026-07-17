@@ -57,15 +57,34 @@ const INDEX_BEGIN: &str = "<!-- okf:index:begin -->";
 const INDEX_END: &str = "<!-- okf:index:end -->";
 
 /// Is `rel_path` a reserved `index.md` (root or any subdirectory)?
-fn is_index_file(rel_path: &str) -> bool {
-    let norm = rel_path.replace('\\', "/");
-    norm == "index.md" || norm.ends_with("/index.md")
+///
+/// When `case_insensitive` is set (mirrors the vault's resolved `[links]
+/// case_insensitive` mode, same as `ExemptGlobs::is_exempt_ci`), the match
+/// folds case so an adopted `INDEX.md` is recognized as reserved exactly
+/// like `hyalo okf index` and the SCHEMA exempt-glob pass already do.
+fn is_index_file(rel_path: &str, case_insensitive: bool) -> bool {
+    has_reserved_name(rel_path, "index.md", case_insensitive)
 }
 
-/// Is `rel_path` a reserved `log.md`?
-fn is_log_file(rel_path: &str) -> bool {
-    let norm = rel_path.replace('\\', "/");
-    norm == "log.md" || norm.ends_with("/log.md")
+/// Is `rel_path` a reserved `log.md`? See [`is_index_file`] for the
+/// `case_insensitive` contract.
+fn is_log_file(rel_path: &str, case_insensitive: bool) -> bool {
+    has_reserved_name(rel_path, "log.md", case_insensitive)
+}
+
+/// Basename comparison behind the reserved-file predicates, allocation-free
+/// (runs once per file per lint invocation). Case folding is ASCII-only
+/// (`eq_ignore_ascii_case`) while the SCHEMA exempt-glob pass folds via
+/// globset's Unicode-aware `(?i)`; the reserved names are pure ASCII, so the
+/// two can only diverge on pathological non-ASCII lookalikes (e.g. U+212A
+/// KELVIN SIGN case-folding to `k`) — accepted, not worth matching exactly.
+fn has_reserved_name(rel_path: &str, name: &str, case_insensitive: bool) -> bool {
+    let base = rel_path.rsplit(['/', '\\']).next().unwrap_or(rel_path);
+    if case_insensitive {
+        base.eq_ignore_ascii_case(name)
+    } else {
+        base == name
+    }
 }
 
 /// Strip a trailing `\r` (CRLF tolerance) and any trailing `\n` already removed
@@ -98,6 +117,10 @@ fn ends_with_md(s: &str) -> bool {
 /// * `doc_type` — the frontmatter `type`, if any.
 /// * `is_enabled` — predicate deciding whether a given rule id runs (honors
 ///   `[lint.rules]` overrides and `--rule`/`--rule-prefix` filters).
+/// * `case_insensitive` — resolved `[links] case_insensitive` mode for the
+///   vault, mirroring `ExemptGlobs::is_exempt_ci` so a case-folded `INDEX.md`
+///   / `LOG.md` is recognized as the reserved file the same way the SCHEMA
+///   exempt-glob pass and `hyalo okf index` already do.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_okf_rules(
     rel_path: &str,
@@ -108,17 +131,18 @@ pub(crate) fn run_okf_rules(
     doc_type: Option<&str>,
     is_enabled: &dyn Fn(&str) -> bool,
     vault_dir: &Path,
+    case_insensitive: bool,
 ) -> Vec<OkfFinding> {
     let mut out = Vec::new();
 
-    if is_index_file(rel_path) {
+    if is_index_file(rel_path, case_insensitive) {
         if is_enabled("OKF-INDEX-STRUCTURE") {
             check_index_structure(content, body, body_line_offset, &mut out);
         }
         // Reserved files are not concept docs — no citation/augmentation checks.
         return out;
     }
-    if is_log_file(rel_path) {
+    if is_log_file(rel_path, case_insensitive) {
         if is_enabled("OKF-LOG-STRUCTURE") {
             check_log_structure(body, body_line_offset, &mut out);
         }
@@ -592,6 +616,42 @@ mod tests {
         true
     }
 
+    // -------------------------------------------------------------------
+    // is_index_file / is_log_file: case-sensitivity contract
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn is_index_file_case_sensitive_by_default() {
+        assert!(!is_index_file("INDEX.md", false));
+        assert!(is_index_file("index.md", false));
+        assert!(is_index_file("sub/index.md", false));
+        assert!(!is_index_file("sub/INDEX.md", false));
+    }
+
+    #[test]
+    fn is_index_file_case_insensitive_when_enabled() {
+        assert!(is_index_file("INDEX.md", true));
+        assert!(is_index_file("index.md", true));
+        assert!(is_index_file("sub/INDEX.md", true));
+        assert!(is_index_file("sub\\INDEX.md", true), "Windows separator");
+    }
+
+    #[test]
+    fn is_log_file_case_sensitive_by_default() {
+        assert!(!is_log_file("LOG.md", false));
+        assert!(is_log_file("log.md", false));
+        assert!(is_log_file("sub/log.md", false));
+        assert!(!is_log_file("sub/LOG.md", false));
+    }
+
+    #[test]
+    fn is_log_file_case_insensitive_when_enabled() {
+        assert!(is_log_file("LOG.md", true));
+        assert!(is_log_file("log.md", true));
+        assert!(is_log_file("sub/LOG.md", true));
+        assert!(is_log_file("sub\\LOG.md", true), "Windows separator");
+    }
+
     #[test]
     fn every_emitted_rule_id_is_registered() {
         // Any rule id the runtime can emit must appear in OKF_RULE_IDS so the
@@ -606,6 +666,7 @@ mod tests {
             Some("BigQuery Table"),
             &always_enabled,
             Path::new("/vault"),
+            false,
         );
         for f in &out {
             assert!(
@@ -760,6 +821,7 @@ mod tests {
             Some("BigQuery Table"),
             &always_enabled,
             Path::new("/vault"),
+            false,
         );
         assert!(
             out.iter()

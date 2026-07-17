@@ -432,6 +432,8 @@ A required property whose value is YAML null (`tags: ~`) or an empty array (`tag
 
 **Exempt (reserved) files:** `[schema] exempt = ["**/index.md", "**/log.md"]` lists vault-relative globs for files that are bound to no schema. They skip the missing-`type` warning, required-property checks, and undeclared-property warnings — useful for reserved files such as an [Open Knowledge Format](https://openknowledge.foundation/) bundle's `index.md`/`log.md`. Glob matching is vault-relative and cross-platform (paths are normalized to forward slashes). For bundle-root absolute links (`/x/y.md` resolved from the vault root), set `site_prefix = ""` so only the leading `/` is stripped — this also avoids mis-stripping when a subdirectory shares its name with the vault directory.
 
+Exempt-glob matching honors the vault's resolved `[links] case_insensitive` mode (see below): on a case-insensitive filesystem (the macOS/Windows default, or `case_insensitive = "true"`), a literally-named `INDEX.md` is exempted by `**/index.md` the same way `hyalo okf index` already treats `INDEX.md` as the reserved index file. On a case-sensitive filesystem (or `case_insensitive = "false"`), `INDEX.md` and `index.md` are distinct files and only the latter matches.
+
 See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to validate your vault against them.
 
 ### CWD-aware behaviour
