@@ -344,6 +344,121 @@ fn add_rejects_unknown_category() {
 }
 
 #[test]
+fn add_places_new_category_before_footer_link_refs_rb4() {
+    // RB-4: on a conformant KaC file whose `[Unreleased]` is the LAST section
+    // (only the footer link-ref block follows), a new `### Category` must land
+    // inside the section — not after the link-ref definitions — and the result
+    // must lint clean.
+    let tmp = init_changelog();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Existing feature.\n\n\
+         [Unreleased]: https://x/compare/v1.0.0...HEAD\n[1.0.0]: https://x/tag/v1.0.0\n",
+    );
+    let (json, out) = run(
+        tmp.path(),
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "A bug.",
+            "--apply",
+        ],
+    );
+    assert!(out.status.success(), "add succeeds: {json}");
+    let content = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+    let fixed = content.find("### Fixed").expect("Fixed subsection");
+    let footer = content.find("[Unreleased]:").expect("footer");
+    assert!(
+        fixed < footer,
+        "new category before footer link refs:\n{content}"
+    );
+    // Exactly one trailing newline (MD047).
+    assert!(
+        content.ends_with('\n') && !content.ends_with("\n\n"),
+        "MD047 clean"
+    );
+    // And it lints clean under the changelog profile.
+    let (lint_json, lint_out) = run(tmp.path(), &["lint", "--profile", "changelog"]);
+    assert!(
+        lint_out.status.success(),
+        "conformant after add: {lint_json}"
+    );
+}
+
+#[test]
+fn root_changelog_reachable_from_docs_subdir_vault() {
+    // Task 4 / AC: a repo-root CHANGELOG.md with the vault dir set to a docs
+    // subdir must be addressable by `changelog add` and `lint --profile
+    // changelog` without `--dir .` gymnastics.
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+    std::fs::write(
+        tmp.path().join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n[Unreleased]: https://x/compare/v1.0.0...HEAD\n",
+    )
+    .unwrap();
+    // init from the repo root with the vault dir = docs; the changelog profile
+    // auto-writes `[changelog] path = "CHANGELOG.md"`.
+    let init = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["init", "--profile", "changelog", "--dir", "docs"])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "init failed");
+    let cfg = std::fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        cfg.contains("path = \"CHANGELOG.md\""),
+        "init wrote the changelog path: {cfg}"
+    );
+
+    // `changelog add` (no --dir) targets the root file.
+    let add = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "Root bug.",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let root = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+    assert!(
+        root.contains("- Root bug."),
+        "entry added to root file:\n{root}"
+    );
+    assert!(
+        !tmp.path().join("docs/CHANGELOG.md").exists(),
+        "must not create a vault-local changelog"
+    );
+
+    // `lint --profile changelog` (no --dir) reaches the root file.
+    let lint = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--profile", "changelog", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&lint.stdout);
+    let json: Value = serde_json::from_str(&stdout).unwrap();
+    let checked = json["results"]["files_checked"]
+        .as_u64()
+        .or_else(|| json["total"].as_u64())
+        .unwrap_or(0);
+    assert!(checked >= 1, "root CHANGELOG.md was linted: {stdout}");
+}
+
+#[test]
 fn release_rejects_bad_version() {
     let tmp = init_changelog();
     write_changelog(

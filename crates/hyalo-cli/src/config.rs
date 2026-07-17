@@ -33,6 +33,31 @@ struct LinksConfig {
     case_insensitive: Option<String>,
 }
 
+/// Changelog configuration from `[changelog]` in `.hyalo.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChangelogConfig {
+    /// Path to the `CHANGELOG.md`, resolved relative to the config file's
+    /// directory (`config_dir`). Defaults to `CHANGELOG.md` in the vault dir.
+    /// May point outside the vault dir (e.g. `../CHANGELOG.md` for a repo-root
+    /// changelog when the vault is a docs subdir), but never above the repo
+    /// root — validated at resolution time. Used by `changelog add`,
+    /// `changelog release`, and `lint --profile changelog`.
+    path: Option<String>,
+}
+
+/// Vault-walker configuration from `[scan]` in `.hyalo.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScanConfig {
+    /// Vault-relative globs whose (otherwise-skipped) hidden dot-paths the
+    /// walker descends into. E.g. `[".claude/skills/**"]` makes the canonical
+    /// Claude Code skill location reachable. `.git/**` is never re-included.
+    /// Honored by every command that discovers vault files.
+    #[serde(default)]
+    include: Vec<String>,
+}
+
 /// OKF generator configuration from `[okf]` in `.hyalo.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,6 +153,10 @@ struct ConfigFile {
     links: Option<LinksConfig>,
     /// OKF generator configuration (`[okf]` section).
     okf: Option<OkfConfig>,
+    /// Vault-walker configuration (`[scan]` section).
+    scan: Option<ScanConfig>,
+    /// Changelog configuration (`[changelog]` section).
+    changelog: Option<ChangelogConfig>,
     /// When `true`, schema validation runs automatically on every `set`/`append`.
     /// Accepted as a top-level key for backwards compatibility; the documented
     /// location is `[schema] validate_on_write`.
@@ -170,6 +199,14 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) lint_ignore: Vec<String>,
     /// Vault-relative globs the OKF generators skip. From `[okf] ignore`.
     pub(crate) okf_ignore: Vec<String>,
+    /// Vault-relative globs the walker descends into despite being hidden
+    /// dot-paths. From `[scan] include`. Installed process-wide at startup so
+    /// every command's file discovery honors it.
+    pub(crate) scan_include: Vec<String>,
+    /// Raw `[changelog] path` value (config-dir-relative), if set. `None` means
+    /// the default `CHANGELOG.md` in the vault dir. Resolution/validation into
+    /// an absolute path happens in `run.rs` (needs `config_dir`).
+    pub(crate) changelog_path: Option<String>,
     /// Markdown linting config (max caps, per-rule overrides).
     pub(crate) md_lint: hyalo_mdlint::LintConfig,
     /// Parsed schema configuration from `[schema.*]` sections.
@@ -228,6 +265,8 @@ impl ResolvedDefaults {
             validate_on_write: false,
             lint_ignore: Vec::new(),
             okf_ignore: Vec::new(),
+            scan_include: Vec::new(),
+            changelog_path: None,
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
             default_limit: None,
@@ -415,6 +454,8 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .map(|l| l.ignore.clone())
             .unwrap_or_default(),
         okf_ignore: cfg.okf.map(|o| o.ignore).unwrap_or_default(),
+        scan_include: cfg.scan.map(|s| s.include).unwrap_or_default(),
+        changelog_path: cfg.changelog.and_then(|c| c.path),
         md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
         default_limit: cfg.default_limit,
@@ -604,6 +645,31 @@ pub(crate) fn overlay_profile(
         lint_strict,
         lint_profiles,
     })
+}
+
+/// The `[scan] include` globs contributed by merging the named profile's
+/// fragment into the `.hyalo.toml` found in `config_dir`.
+///
+/// Used to install the walker's dot-dir include list for an ephemeral
+/// `--profile <name>` run (which never writes `.hyalo.toml`) so a profile that
+/// ships `[scan] include` — e.g. `skills` reaching `.claude/skills/` — works
+/// without first running `hyalo init --profile`. On any failure (unknown
+/// profile, unreadable/invalid base config) returns an empty list rather than
+/// erroring: dispatch surfaces the real profile error separately.
+pub(crate) fn overlay_scan_include(config_dir: &Path, profile_name: &str) -> Vec<String> {
+    let Ok(profile) = crate::commands::profiles::lookup(profile_name) else {
+        return Vec::new();
+    };
+    let existing_raw = std::fs::read_to_string(config_dir.join(".hyalo.toml")).unwrap_or_default();
+    let Ok(merged_raw) =
+        crate::commands::profiles::merge_into_config(&existing_raw, profile.toml_fragment)
+    else {
+        return Vec::new();
+    };
+    let Ok(cfg) = toml::from_str::<ConfigFile>(&merged_raw) else {
+        return Vec::new();
+    };
+    cfg.scan.map(|s| s.include).unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -868,3 +868,39 @@ fn types_set_upsert_does_not_duplicate_type() {
     let set_json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(set_json["results"]["action"], "updated");
 }
+
+#[test]
+fn types_set_default_is_rejected() {
+    // `default` names the fallback `[schema.default]` table, not a concrete
+    // type. `types set default` must be a user error pointing at that table and
+    // must not create a phantom `[schema.types.default]` (user-service BUG-A3).
+    let tmp = TempDir::new().unwrap();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "set", "default", "--required", "title"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "types set default must fail: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("[schema.default]"),
+        "error points at the real table: {combined}"
+    );
+    // No phantom type table was written.
+    let cfg = tmp.path().join(".hyalo.toml");
+    if cfg.exists() {
+        let contents = std::fs::read_to_string(&cfg).unwrap();
+        assert!(
+            !contents.contains("[schema.types.default]"),
+            "must not create a phantom default type: {contents}"
+        );
+    }
+}

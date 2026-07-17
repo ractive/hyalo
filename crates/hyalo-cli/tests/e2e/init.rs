@@ -1167,7 +1167,16 @@ fn init_profile_okf_writes_expected_toml() {
     );
     assert!(content.contains("required = [\"type\"]"), "got: {content}");
     assert!(content.contains("datetime-tz"), "got: {content}");
-    assert!(content.contains("BigQuery Table"), "got: {content}");
+    // The OKF profile is vendor-neutral (iter-175): it must NOT inject example
+    // concept types like the old `BigQuery Table` / `Reference`.
+    assert!(
+        !content.contains("BigQuery"),
+        "neutral OKF profile ships no vendor example types: {content}"
+    );
+    assert!(
+        !content.contains("[schema.types.Reference]"),
+        "neutral OKF profile ships no Reference type: {content}"
+    );
     // Must not emit the deprecated kebab-case section key.
     assert!(
         !stderr.contains("deprecated: 'required-sections'"),

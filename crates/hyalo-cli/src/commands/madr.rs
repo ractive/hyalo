@@ -51,6 +51,8 @@ pub fn run_toc(
     adr_dir: Option<&str>,
     apply: bool,
     replace: bool,
+    schema: &hyalo_core::schema::SchemaConfig,
+    active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     let adr_rel_normalized = adr_dir.unwrap_or(DEFAULT_ADR_DIR).replace('\\', "/");
@@ -70,7 +72,7 @@ pub fn run_toc(
         ));
     }
 
-    let entries = collect_adrs(&adr_full, adr_rel)?;
+    let entries = collect_adrs(&adr_full, adr_rel, schema)?;
     let body = render_toc_body(&entries);
 
     let toc_rel = format!("{adr_rel}/README.md");
@@ -111,7 +113,7 @@ pub fn run_toc(
         "changed": changed,
         "file": plan.rel_path,
         "action": action,
-        "hint": "hyalo lint --profile madr  # validate ADR conformance",
+        "hint": crate::commands::profile_lint_hint("madr", active_profiles, "validate ADR conformance"),
     });
     if action == "adopt" {
         payload["preserved_lines"] = serde_json::Value::from(plan.old_content.lines().count());
@@ -125,10 +127,28 @@ pub fn run_toc(
     ))
 }
 
-/// Read every `.md` file (except the generated `README.md`) directly under
-/// `adr_full` into an [`AdrEntry`], sorted by number then filename.
-fn collect_adrs(adr_full: &Path, adr_rel: &str) -> Result<Vec<AdrEntry>> {
+/// Read every ADR-typed `.md` file (except the generated `README.md`) directly
+/// under `adr_full` into an [`AdrEntry`], sorted by number then filename.
+///
+/// A file counts as an ADR only when its *effective* type is `adr` — either an
+/// explicit `type: adr` in frontmatter, or a `[[schema.bind]]` that maps its
+/// path to `adr`. This keeps unrelated concept/prose files that happen to live
+/// under the decisions directory out of the dashboard (user-service repro: 13
+/// concept files polluted the TOC).
+fn collect_adrs(
+    adr_full: &Path,
+    adr_rel: &str,
+    schema: &hyalo_core::schema::SchemaConfig,
+) -> Result<Vec<AdrEntry>> {
     let mut entries: Vec<AdrEntry> = Vec::new();
+    // Only filter by effective type when the schema actually knows the `adr`
+    // type (via a `[schema.types.adr]` declaration or a bind that maps to it —
+    // i.e. the madr profile is active). On a plain vault with no ADR schema, the
+    // command has no way to distinguish ADRs from other files, so it keeps the
+    // historical "every .md in the directory" behavior rather than emptying the
+    // dashboard.
+    let filter_by_type =
+        schema.types.contains_key("adr") || schema.bind.entries().iter().any(|(_, t)| t == "adr");
     let read = std::fs::read_dir(adr_full)
         .with_context(|| format!("failed to read ADR directory {adr_rel}"))?;
     for dirent in read.flatten() {
@@ -146,6 +166,9 @@ fn collect_adrs(adr_full: &Path, adr_rel: &str) -> Result<Vec<AdrEntry>> {
             continue;
         }
         let full = dirent.path();
+        if filter_by_type && !is_adr_typed(&full, &format!("{adr_rel}/{name}"), schema)? {
+            continue;
+        }
         entries.push(read_adr_entry(&full, name)?);
     }
     entries.sort_by(|a, b| match (a.number, b.number) {
@@ -155,6 +178,20 @@ fn collect_adrs(adr_full: &Path, adr_rel: &str) -> Result<Vec<AdrEntry>> {
         (None, None) => a.link.cmp(&b.link),
     });
     Ok(entries)
+}
+
+/// Whether the file at `full` (vault-relative `rel`) has effective type `adr`.
+///
+/// Precedence: an explicit `type:` in frontmatter wins; otherwise the schema's
+/// path bindings decide. A file with an explicit *non-`adr`* type, or one bound
+/// to a different type, is excluded from the TOC.
+fn is_adr_typed(full: &Path, rel: &str, schema: &hyalo_core::schema::SchemaConfig) -> Result<bool> {
+    let props = hyalo_core::frontmatter::read_frontmatter(full)
+        .with_context(|| format!("failed to parse frontmatter of {rel}"))?;
+    if let Some(explicit) = props.get("type").and_then(|v| v.as_str()) {
+        return Ok(explicit.trim() == "adr");
+    }
+    Ok(schema.bound_type_for(rel) == Some("adr"))
 }
 
 /// Read one ADR file's frontmatter/heading into an [`AdrEntry`].
@@ -364,7 +401,16 @@ mod tests {
         .unwrap();
 
         // First apply creates the README.
-        let (_out, exit) = run_toc(tmp.path(), None, true, false, Format::Json).unwrap();
+        let (_out, exit) = run_toc(
+            tmp.path(),
+            None,
+            true,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert_eq!(exit, None, "apply never sets a drift exit code");
         let readme = adr.join("README.md");
         assert!(readme.is_file());
@@ -373,12 +419,30 @@ mod tests {
         assert!(content.contains("<!-- madr:toc:begin -->"));
 
         // Dry-run now reports no drift (exit None).
-        let (_out2, exit2) = run_toc(tmp.path(), None, false, false, Format::Json).unwrap();
+        let (_out2, exit2) = run_toc(
+            tmp.path(),
+            None,
+            false,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert_eq!(exit2, None, "no drift after apply");
 
         // Re-apply is a no-op (idempotent).
         let before = std::fs::read_to_string(&readme).unwrap();
-        run_toc(tmp.path(), None, true, false, Format::Json).unwrap();
+        run_toc(
+            tmp.path(),
+            None,
+            true,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         let after = std::fs::read_to_string(&readme).unwrap();
         assert_eq!(before, after);
     }
@@ -390,14 +454,32 @@ mod tests {
         std::fs::create_dir_all(&adr).unwrap();
         std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
         // No README yet → dry-run must signal drift (exit 1).
-        let (_out, exit) = run_toc(tmp.path(), None, false, false, Format::Json).unwrap();
+        let (_out, exit) = run_toc(
+            tmp.path(),
+            None,
+            false,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert_eq!(exit, Some(1));
     }
 
     #[test]
     fn missing_adr_dir_is_user_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let (out, exit) = run_toc(tmp.path(), None, false, false, Format::Json).unwrap();
+        let (out, exit) = run_toc(
+            tmp.path(),
+            None,
+            false,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert!(matches!(out, CommandOutcome::UserError(_)));
         assert_eq!(exit, None);
     }
@@ -413,10 +495,87 @@ mod tests {
         std::fs::create_dir_all(&adr).unwrap();
         std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
 
-        let (out, exit) =
-            run_toc(tmp.path(), Some("docs\\adr"), true, false, Format::Json).unwrap();
+        let (out, exit) = run_toc(
+            tmp.path(),
+            Some("docs\\adr"),
+            true,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
         assert_eq!(exit, None, "apply never sets a drift exit code: {out:?}");
         // The README must land at docs/adr/README.md, not a mixed-separator path.
         assert!(adr.join("README.md").is_file());
+    }
+
+    /// Build a `SchemaConfig` with an `adr` type bound to the decisions subtree,
+    /// mirroring what the madr profile activates.
+    fn adr_schema() -> hyalo_core::schema::SchemaConfig {
+        let merged = crate::commands::profiles::merge_into_config(
+            "",
+            include_str!("../../templates/profile-madr.toml"),
+        )
+        .unwrap();
+        let val: toml::Value = toml::from_str(&merged).unwrap();
+        let raw: hyalo_core::schema::RawSchemaConfig =
+            val.get("schema").unwrap().clone().try_into().unwrap();
+        hyalo_core::schema::SchemaConfig::try_from(raw).unwrap()
+    }
+
+    #[test]
+    fn toc_excludes_non_adr_typed_files_when_schema_present() {
+        // user-service repro: concept/prose files under the decisions dir must
+        // not pollute the TOC when the madr schema is active.
+        let tmp = tempfile::tempdir().unwrap();
+        let adr = tmp.path().join("docs/decisions");
+        std::fs::create_dir_all(&adr).unwrap();
+        // A real ADR (bound to `adr` by path, no explicit type).
+        std::fs::write(
+            adr.join("0001-use-postgres.md"),
+            "---\nstatus: accepted\n---\n# Use Postgres\n",
+        )
+        .unwrap();
+        // A concept file that happens to live here but declares another type.
+        std::fs::write(
+            adr.join("glossary.md"),
+            "---\ntype: concept\n---\n# Glossary\n",
+        )
+        .unwrap();
+
+        let schema = adr_schema();
+        run_toc(tmp.path(), None, true, false, &schema, &[], Format::Json).unwrap();
+        let readme = std::fs::read_to_string(adr.join("README.md")).unwrap();
+        assert!(readme.contains("Use Postgres"), "ADR included:\n{readme}");
+        assert!(
+            !readme.contains("Glossary"),
+            "non-adr concept excluded:\n{readme}"
+        );
+    }
+
+    #[test]
+    fn toc_includes_all_when_no_adr_schema() {
+        // Without the madr schema, `madr toc` can't tell ADRs from other files,
+        // so it keeps the historical "every .md" behavior (no empty dashboard).
+        let tmp = tempfile::tempdir().unwrap();
+        let adr = tmp.path().join("docs/decisions");
+        std::fs::create_dir_all(&adr).unwrap();
+        std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
+        std::fs::write(adr.join("0002-y.md"), "---\nstatus: proposed\n---\n# Y\n").unwrap();
+
+        run_toc(
+            tmp.path(),
+            None,
+            true,
+            false,
+            &hyalo_core::schema::SchemaConfig::default(),
+            &[],
+            Format::Json,
+        )
+        .unwrap();
+        let readme = std::fs::read_to_string(adr.join("README.md")).unwrap();
+        assert!(readme.contains("# X") || readme.contains("0001-x"));
+        assert!(readme.contains("# Y") || readme.contains("0002-y"));
     }
 }

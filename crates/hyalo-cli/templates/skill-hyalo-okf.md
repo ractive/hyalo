@@ -191,6 +191,33 @@ for bundle-root links, `validate_on_write = true` so authoring stays conformant,
 `[lint] profiles = ["okf"]` so a plain `hyalo lint` runs the §9 conformance + citation rules
 (no `--profile okf` needed on this vault).
 
+## Adding domain types
+
+The OKF profile is **vendor-neutral** and ships **no example concept types** — a
+real bundle's `type` values are domain-specific (a data catalog, a research
+library, and an API reference all differ). Declare the types your bundle uses
+before scaffolding with `hyalo new --type <name>`; the `[schema.default]` block
+above already applies to every concept, so a type only adds what is specific to
+it (extra required fields, `required_sections`). Two ways:
+
+```bash
+# 1) From the CLI (quoted names with spaces are fine end-to-end):
+hyalo types set "Data Table" --required type,title
+# then edit .hyalo.toml to add required_sections for it, e.g.:
+#   [schema.types."Data Table"]
+#   required = ["type", "title"]
+#   required_sections = ["# Schema", "# Citations"]
+
+# 2) By hand in .hyalo.toml (same result), then verify:
+hyalo types list
+hyalo types show "Data Table"
+```
+
+Reserved `default` cannot be used as a type name — it names the fallback
+`[schema.default]` table, which you edit directly. Once a type is declared,
+`hyalo new --type "Data Table" --file tables/blocks.md` scaffolds it. The
+examples below use a `"BigQuery Table"` domain type; substitute your own.
+
 ## Example concept
 
 ```markdown

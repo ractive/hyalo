@@ -27,6 +27,51 @@ Run `hyalo --help` for usage. Use `--format text` for compact LLM-friendly outpu
 const SECTION_START: &str = "<!-- hyalo:start -->";
 const SECTION_END: &str = "<!-- hyalo:end -->";
 
+/// The `.claude/CLAUDE.md` pointer line for an active profile, or `None` for a
+/// profile with no specific reminder. Each line nudges the agent toward the
+/// profile's drift-check / conformance workflow.
+fn profile_pointer_line(profile: &str) -> Option<&'static str> {
+    match profile {
+        "okf" => Some(
+            "OKF vault: run `hyalo okf index --dry-run` to check index drift and \
+             `hyalo lint` for §9 conformance.",
+        ),
+        "madr" => Some(
+            "MADR vault: run `hyalo madr toc --dry-run` to check the ADR table drift and \
+             `hyalo lint` for ADR conformance.",
+        ),
+        "skills" => Some(
+            "Skills vault: run `hyalo lint` to validate SKILL.md files (name/description \
+             rules, `.claude/skills/` is reachable via `[scan] include`).",
+        ),
+        "changelog" => Some(
+            "Changelog vault: use `hyalo changelog add`/`release` to edit CHANGELOG.md and \
+             `hyalo lint` to check Keep-a-Changelog grammar.",
+        ),
+        _ => None,
+    }
+}
+
+/// Read the active `[lint] profiles` list from a written `.hyalo.toml` (empty
+/// on any read/parse failure), in declaration order.
+fn active_profiles_from_config(toml_path: &Path) -> Vec<String> {
+    let Ok(raw) = fs::read_to_string(toml_path) else {
+        return Vec::new();
+    };
+    let Ok(val) = toml::from_str::<toml::Value>(&raw) else {
+        return Vec::new();
+    };
+    val.get("lint")
+        .and_then(|l| l.get("profiles"))
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Common documentation directory names to scan for when no `--dir` is given.
 const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "content", "pages"];
 
@@ -160,6 +205,46 @@ fn run_init_in(
             profile.name
         )
         .unwrap();
+
+        // Changelog profile: when the vault dir is a subdirectory and the repo
+        // root holds the `CHANGELOG.md` (the common layout that hit
+        // user-event-service), point `[changelog] path` at it so
+        // `changelog add`/`release` and `lint --profile changelog` reach the
+        // root file without `--dir .` gymnastics. Only write the key when it is
+        // not already set (idempotent, never clobbers a user override) and the
+        // root file actually exists but the vault-local one does not.
+        if profile.name == "changelog" && dir_value != "." {
+            let root_changelog = cwd.join("CHANGELOG.md");
+            let vault_changelog = cwd.join(&dir_value).join("CHANGELOG.md");
+            if root_changelog.is_file() && !vault_changelog.is_file() {
+                let existing_raw = fs::read_to_string(&toml_path)
+                    .with_context(|| format!("failed to read {}", toml_path.display()))?;
+                if let Ok(mut doc) = existing_raw.parse::<toml_edit::DocumentMut>() {
+                    let already_set = doc.get("changelog").and_then(|c| c.get("path")).is_some();
+                    if !already_set {
+                        // `[changelog] path` is resolved relative to the config
+                        // file's directory (where `.hyalo.toml` lives — the repo
+                        // root here), NOT the vault `dir`. The root `CHANGELOG.md`
+                        // sits right beside `.hyalo.toml`, so the config-dir-
+                        // relative path is simply `CHANGELOG.md` (which differs
+                        // from the default `dir/CHANGELOG.md` and thus points at
+                        // the root file).
+                        let changelog_tbl = doc["changelog"].or_insert(toml_edit::table());
+                        if let Some(tbl) = changelog_tbl.as_table_mut() {
+                            tbl.set_implicit(false);
+                            tbl["path"] = toml_edit::value("CHANGELOG.md");
+                        }
+                        fs::write(&toml_path, doc.to_string())
+                            .with_context(|| format!("failed to write {}", toml_path.display()))?;
+                        writeln!(
+                            summary,
+                            "updated  .hyalo.toml  ([changelog] path = \"CHANGELOG.md\")"
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
     }
 
     if !claude && !pi {
@@ -233,9 +318,22 @@ fn run_init_in(
             writeln!(summary, "created  .claude/rules/knowledgebase.md").unwrap();
         }
 
-        // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md
+        // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md.
+        // Append one profile-specific pointer line per *active* profile (read
+        // from the merged `[lint] profiles` in `.hyalo.toml`), so a vault with
+        // several profiles carries a drift-check reminder for each — and the
+        // lines survive across `init --profile` runs because they are rebuilt
+        // from the config each time, not just from the current `--profile`.
         let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
-        let managed_section = format!("{SECTION_START}\n{CLAUDE_MD_HINT}\n{SECTION_END}");
+        let managed_section = {
+            let active = active_profiles_from_config(&toml_path);
+            let mut body = String::from(CLAUDE_MD_HINT);
+            for pointer in active.iter().filter_map(|p| profile_pointer_line(p)) {
+                body.push('\n');
+                body.push_str(pointer);
+            }
+            format!("{SECTION_START}\n{body}\n{SECTION_END}")
+        };
         if claude_md_path.exists() {
             let existing = fs::read_to_string(&claude_md_path)
                 .with_context(|| format!("failed to read {}", claude_md_path.display()))?;

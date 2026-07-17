@@ -1,40 +1,205 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
-use globset::{GlobBuilder, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::mpsc;
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::link_graph::strip_site_prefix;
 use crate::util::levenshtein;
 
+/// Process-global set of `[scan] include` globs.
+///
+/// The vault walker skips hidden (dot-prefixed) paths by default. When a vault
+/// opts a hidden subtree back in via `[scan] include = ["glob", …]`, the CLI
+/// installs the compiled glob set here once at startup (see
+/// [`set_scan_include`]). [`discover_files`] then descends into any otherwise
+/// hidden directory whose vault-relative path is a prefix of, or matches, one
+/// of these globs — so the include list is honored by *every* command that
+/// discovers vault files without threading the config through each call site.
+///
+/// `.git/**` is always hard-excluded regardless of the include list.
+static SCAN_INCLUDE: OnceLock<Option<ScanInclude>> = OnceLock::new();
+
+/// Compiled `[scan] include` configuration.
+#[derive(Clone)]
+struct ScanInclude {
+    /// Full glob set, matched against files to decide inclusion.
+    set: GlobSet,
+    /// Literal directory prefixes of each glob (the path portion before the
+    /// first glob metacharacter). Used to decide whether to *descend* into a
+    /// hidden directory: the walker enters a dir when it lies on the path to,
+    /// or beneath, one of these prefixes.
+    dir_prefixes: Vec<String>,
+}
+
+impl ScanInclude {
+    /// Cheap clone for moving into the parallel-walk `filter_entry` closure
+    /// (`GlobSet` is `Send + Sync` and cheap to clone — it shares compiled
+    /// automata internally).
+    fn clone_shared(&self) -> Self {
+        self.clone()
+    }
+
+    /// Whether the walker should descend into the hidden vault-relative
+    /// directory `rel` (forward-slash, no trailing slash) because a glob reaches
+    /// into or beneath it.
+    fn allows_dir(&self, rel: &str) -> bool {
+        // `.git` is never re-included, even if a glob would match it.
+        if rel == ".git" || rel.starts_with(".git/") {
+            return false;
+        }
+        self.dir_prefixes.iter().any(|p| {
+            p == rel
+                || p.starts_with(&format!("{rel}/")) // rel is an ancestor of the prefix
+                || rel.starts_with(&format!("{p}/")) // rel is inside the prefix
+        })
+    }
+
+    /// Whether the file at vault-relative path `rel` is explicitly re-included.
+    fn allows_file(&self, rel: &str) -> bool {
+        if rel.starts_with(".git/") {
+            return false;
+        }
+        self.set.is_match(rel)
+    }
+}
+
+/// Literal directory prefix of a forward-slash glob: everything up to (but not
+/// including) the segment that first contains a glob metacharacter. E.g.
+/// `.claude/skills/**` → `.claude/skills`, `.config/*.md` → `.config`,
+/// `.obsidian/**/x.md` → `.obsidian`. A glob with metacharacters in its first
+/// segment yields `""`.
+fn glob_dir_prefix(glob: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for seg in glob.split('/') {
+        if seg.contains(['*', '?', '[', '{']) {
+            break;
+        }
+        kept.push(seg);
+    }
+    // Drop a trailing filename-looking segment only if the whole glob was
+    // literal (no metachars at all): then the "directory" is its parent.
+    if kept.len() == glob.split('/').count() {
+        kept.pop();
+    }
+    kept.join("/")
+}
+
+/// Install the `[scan] include` glob set for this process.
+///
+/// Idempotent-once: only the first call takes effect (the walker reads it
+/// through a `OnceLock`). The CLI calls this exactly once, right after config
+/// resolution, before any command runs. `patterns` are vault-relative,
+/// forward-slash globs (e.g. `.claude/skills/**`). Invalid globs are skipped
+/// with the returned error list so a single bad pattern doesn't disable the
+/// rest.
+///
+/// # Errors
+/// Never returns `Err`; instead returns the list of `(pattern, message)` pairs
+/// for any globs that failed to compile, so the caller can surface a warning.
+pub fn set_scan_include(patterns: &[String]) -> Vec<(String, String)> {
+    let mut errors = Vec::new();
+    let compiled = if patterns.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        let mut dir_prefixes = Vec::new();
+        for pat in patterns {
+            match GlobBuilder::new(pat).literal_separator(true).build() {
+                Ok(g) => {
+                    builder.add(g);
+                    let prefix = glob_dir_prefix(pat);
+                    if !prefix.is_empty() {
+                        dir_prefixes.push(prefix);
+                    }
+                }
+                Err(e) => errors.push((pat.clone(), e.to_string())),
+            }
+        }
+        builder
+            .build()
+            .ok()
+            .map(|set| ScanInclude { set, dir_prefixes })
+    };
+    let _ = SCAN_INCLUDE.set(compiled);
+    errors
+}
+
+/// True when any component of `rel` is a hidden (dot-prefixed) segment.
+fn has_hidden_component(rel: &str) -> bool {
+    rel.split('/')
+        .any(|c| c.starts_with('.') && c != "." && c != "..")
+}
+
 /// Collect all `.md` files under the given directory, respecting `.gitignore` and skipping hidden dirs.
+///
+/// Hidden (dot-prefixed) paths are skipped unless a `[scan] include` glob
+/// (installed via [`set_scan_include`]) re-includes them; `.git/**` is always
+/// excluded.
 pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let include = match SCAN_INCLUDE.get() {
+        Some(Some(inc)) => Some(inc),
+        _ => None,
+    };
+    discover_files_with_include(dir, include)
+}
+
+/// Test-friendly variant of [`discover_files`] with an explicit include
+/// override, bypassing the process-global `OnceLock` (which can only be set
+/// once per process). Production code uses [`discover_files`].
+fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Result<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel::<String>();
-    WalkBuilder::new(dir)
-        .hidden(true) // skip hidden files/dirs
-        .git_ignore(true)
-        .build_parallel()
-        .run(|| {
-            let tx = tx.clone();
-            let err_tx = err_tx.clone();
-            Box::new(move |entry| {
-                let entry = match entry {
-                    Ok(e) => e,
-                    Err(e) => {
-                        let _ = err_tx.send(format!("{e}"));
-                        return ignore::WalkState::Continue;
-                    }
-                };
-                let path = entry.path();
-                if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
-                    let _ = tx.send(path.to_path_buf());
-                }
-                ignore::WalkState::Continue
-            })
+    let walk_root = dir.to_path_buf();
+    let mut builder = WalkBuilder::new(dir);
+    builder.git_ignore(true);
+    if let Some(inc) = include {
+        // Take over hidden-skipping so `[scan] include` can re-admit specific
+        // dot-subtrees. `filter_entry` prunes hidden dirs/files not covered by
+        // the include list while still descending into included ones.
+        builder.hidden(false);
+        let root = walk_root.clone();
+        let inc = inc.clone_shared();
+        builder.filter_entry(move |entry| {
+            let rel = relative_path(&root, entry.path());
+            if rel.is_empty() {
+                return true;
+            }
+            if !has_hidden_component(&rel) {
+                return true;
+            }
+            let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
+            // Hidden path: admit only if the include list reaches it.
+            if is_dir {
+                inc.allows_dir(&rel)
+            } else {
+                inc.allows_file(&rel)
+            }
         });
+    } else {
+        builder.hidden(true); // skip hidden files/dirs
+    }
+    builder.build_parallel().run(|| {
+        let tx = tx.clone();
+        let err_tx = err_tx.clone();
+        Box::new(move |entry| {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    let _ = err_tx.send(format!("{e}"));
+                    return ignore::WalkState::Continue;
+                }
+            };
+            let path = entry.path();
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+                let _ = tx.send(path.to_path_buf());
+            }
+            ignore::WalkState::Continue
+        })
+    });
     drop(tx); // close sender so rx iterator terminates
     drop(err_tx); // close error sender so err_rx iterator terminates
 
@@ -704,6 +869,73 @@ mod tests {
         let files = discover_files(tmp.path()).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].ends_with("visible.md"));
+    }
+
+    /// Build a `ScanInclude` directly for testing the include-override path
+    /// without touching the process-global `OnceLock`.
+    fn test_include(patterns: &[&str]) -> ScanInclude {
+        let mut builder = GlobSetBuilder::new();
+        let mut dir_prefixes = Vec::new();
+        for p in patterns {
+            builder.add(GlobBuilder::new(p).literal_separator(true).build().unwrap());
+            let prefix = glob_dir_prefix(p);
+            if !prefix.is_empty() {
+                dir_prefixes.push(prefix);
+            }
+        }
+        ScanInclude {
+            set: builder.build().unwrap(),
+            dir_prefixes,
+        }
+    }
+
+    #[test]
+    fn glob_dir_prefix_cases() {
+        assert_eq!(glob_dir_prefix(".claude/skills/**"), ".claude/skills");
+        assert_eq!(glob_dir_prefix(".config/*.md"), ".config");
+        assert_eq!(glob_dir_prefix(".obsidian/**/x.md"), ".obsidian");
+        assert_eq!(glob_dir_prefix("**/*.md"), "");
+        // A fully-literal glob's "directory" is the parent of the file.
+        assert_eq!(glob_dir_prefix(".claude/skills/a.md"), ".claude/skills");
+    }
+
+    #[test]
+    fn scan_include_reaches_dot_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("visible.md"), "# Visible").unwrap();
+        fs::create_dir_all(tmp.path().join(".claude/skills/foo")).unwrap();
+        fs::write(tmp.path().join(".claude/skills/foo/SKILL.md"), "# Skill").unwrap();
+        // A different hidden dir must stay excluded.
+        fs::create_dir_all(tmp.path().join(".secret")).unwrap();
+        fs::write(tmp.path().join(".secret/leak.md"), "# Leak").unwrap();
+
+        let inc = test_include(&[".claude/skills/**"]);
+        let files = discover_files_with_include(tmp.path(), Some(&inc)).unwrap();
+        let rels: Vec<String> = files.iter().map(|f| relative_path(tmp.path(), f)).collect();
+        assert!(rels.contains(&"visible.md".to_owned()));
+        assert!(
+            rels.contains(&".claude/skills/foo/SKILL.md".to_owned()),
+            "included dot-subtree reachable: {rels:?}"
+        );
+        assert!(
+            !rels.iter().any(|r| r.contains(".secret")),
+            "unrelated hidden dir stays excluded: {rels:?}"
+        );
+    }
+
+    #[test]
+    fn scan_include_never_reaches_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join(".git/config.md"), "# never").unwrap();
+        // Even a permissive glob must not pull `.git` files in.
+        let inc = test_include(&[".git/**", "**/*.md"]);
+        let files = discover_files_with_include(tmp.path(), Some(&inc)).unwrap();
+        let rels: Vec<String> = files.iter().map(|f| relative_path(tmp.path(), f)).collect();
+        assert!(
+            !rels.iter().any(|r| r.starts_with(".git/")),
+            ".git is hard-excluded: {rels:?}"
+        );
     }
 
     #[test]

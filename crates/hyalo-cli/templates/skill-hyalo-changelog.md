@@ -62,7 +62,10 @@ hyalo changelog release 1.2.0 --date 2026-07-17 --apply            # override th
 ```
 
 - **`changelog add`** appends `- <message>` under the `### <category>` subsection of
-  `## [Unreleased]`, creating the subsection if missing.
+  `## [Unreleased]`, creating the subsection if missing. The entry always lands
+  **inside** the section, before the footer link-reference block, and the file keeps
+  exactly one trailing newline — the output stays Keep-a-Changelog-conformant even when
+  `[Unreleased]` is the last section.
 - **`changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a
   dated `## [X.Y.Z] - <date>` section (date defaults to today), re-creates an empty
   `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference
@@ -72,3 +75,19 @@ hyalo changelog release 1.2.0 --date 2026-07-17 --apply            # override th
 
 After a release, replace the `TBD` link target with the real compare/tag URL and run
 `hyalo lint --profile changelog` to confirm the result is clean.
+
+## Root `CHANGELOG.md` with a docs-subdir vault
+
+When the vault dir is a subdirectory (`dir = "docs"`) but `CHANGELOG.md` lives at the
+repo root, set `[changelog] path` — resolved relative to the config file's directory —
+so the changelog commands and lint reach the root file:
+
+```toml
+dir = "docs"
+[changelog]
+path = "CHANGELOG.md"   # the repo-root file, beside .hyalo.toml
+```
+
+`hyalo init --profile changelog --dir docs` writes this key automatically when a root
+`CHANGELOG.md` already exists. With it, `hyalo changelog add`/`release` and
+`hyalo lint --profile changelog` all operate on the root file — no `--dir .` needed.

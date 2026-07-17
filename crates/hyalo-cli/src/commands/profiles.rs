@@ -138,6 +138,7 @@ const UNION_ARRAY_KEYS: &[&str] = &[
     "lint.ignore",
     "schema.default.required",
     "lint.profiles",
+    "scan.include",
 ];
 
 /// Deep-merge the profile's TOML fragment into an existing (or empty) config
@@ -380,10 +381,8 @@ required = [\"type\", \"status\"]
         let parsed: toml::Table = toml::from_str(&merged).unwrap();
         let types = parsed["schema"]["types"].as_table().unwrap();
         assert!(types.contains_key("madr"), "foreign type preserved");
-        assert!(
-            types.contains_key("BigQuery Table"),
-            "OKF type added alongside"
-        );
+        // The neutral OKF profile ships no example concept types, so the merge
+        // must not have clobbered the foreign `madr` type — it simply survives.
     }
 
     #[test]
@@ -502,7 +501,6 @@ required = [\"type\", \"status\"]
         let types = parsed["schema"]["types"].as_table().unwrap();
         assert!(types.contains_key("changelog"));
         assert!(types.contains_key("adr"));
-        assert!(types.contains_key("BigQuery Table"));
     }
 
     // ---------------------------------------------------------------------------
@@ -717,9 +715,8 @@ exempt = [\"user/only.md\"]
         let parsed: toml::Table = toml::from_str(&both).unwrap();
         let types = parsed["schema"]["types"].as_table().unwrap();
         assert!(types.contains_key("adr"), "madr adr type present");
-        assert!(
-            types.contains_key("BigQuery Table"),
-            "okf types preserved alongside madr"
-        );
+        // OKF adds no example types, so `adr` is the only declared type after
+        // composing okf+madr — the okf merge must not have dropped it.
+        assert_eq!(types.len(), 1, "only madr's adr type declared: {types:?}");
     }
 }

@@ -23,8 +23,11 @@ pub(crate) struct ConfigReport {
     pub raw_contents: Option<String>,
     /// Current working directory.
     pub cwd: PathBuf,
-    /// Resolved vault directory (from `.hyalo.toml` or default `"."`).
+    /// Resolved vault directory: the effective directory the CLI would use —
+    /// a `--dir` override wins over the config's own `dir`.
     pub dir: PathBuf,
+    /// `true` when a `--dir` override replaced the config's `dir` value.
+    pub dir_overridden: bool,
     /// Resolved output format (from config or `None`).
     pub format: Option<String>,
     /// Whether hints are enabled.
@@ -36,8 +39,19 @@ pub(crate) struct ConfigReport {
 }
 
 /// Build and return the config report for `cwd`.
-pub(crate) fn collect_config_report(cwd: &Path) -> anyhow::Result<ConfigReport> {
-    let toml_path = cwd.join(".hyalo.toml");
+///
+/// When `dir_override` is `Some` (the user passed a global `--dir`), the report
+/// loads the config from that directory and reports it as the effective `dir`,
+/// so `hyalo config --dir X` mirrors what the rest of the CLI would use rather
+/// than echoing the CWD config's shadowed `dir` value (ff-rdp B6).
+pub(crate) fn collect_config_report(
+    cwd: &Path,
+    dir_override: Option<&Path>,
+) -> anyhow::Result<ConfigReport> {
+    // The directory whose `.hyalo.toml` we read: the `--dir` override if given,
+    // else the CWD.
+    let config_search_dir = dir_override.unwrap_or(cwd);
+    let toml_path = config_search_dir.join(".hyalo.toml");
     let (config_path, raw_contents) = if toml_path.is_file() {
         let contents = std::fs::read_to_string(&toml_path)
             .with_context(|| format!("reading {}", toml_path.display()))?;
@@ -47,13 +61,21 @@ pub(crate) fn collect_config_report(cwd: &Path) -> anyhow::Result<ConfigReport> 
     };
 
     // Load the full resolved config (handles partial files, malformed TOML, etc.)
-    let resolved = crate::config::load_config_from(cwd);
+    let resolved = crate::config::load_config_from(config_search_dir);
+
+    // A `--dir` override is the effective vault dir regardless of the config's
+    // own `dir` key.
+    let (dir, dir_overridden) = match dir_override {
+        Some(d) => (d.to_path_buf(), true),
+        None => (resolved.dir, false),
+    };
 
     Ok(ConfigReport {
         config_path,
         raw_contents,
         cwd: cwd.to_path_buf(),
-        dir: resolved.dir,
+        dir,
+        dir_overridden,
         format: resolved.format,
         hints: resolved.hints,
         site_prefix: resolved.site_prefix,
@@ -76,6 +98,7 @@ fn run_config_json(report: &ConfigReport) -> CommandOutcome {
         "raw_contents": report.raw_contents,
         "cwd": report.cwd.display().to_string(),
         "dir": report.dir.display().to_string(),
+        "dir_overridden": report.dir_overridden,
         "format": report.format,
         "hints": report.hints,
         "site_prefix": report.site_prefix,
@@ -99,8 +122,16 @@ fn run_config_text(report: &ConfigReport) -> CommandOutcome {
         report.exempt.join(", ")
     };
 
+    // Annotate the dir line when a `--dir` override is in effect, so the report
+    // makes the shadow explicit rather than silently reporting the override.
+    let dir_suffix = if report.dir_overridden {
+        "  (--dir override)"
+    } else {
+        ""
+    };
+
     let mut out = format!(
-        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n",
+        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,

@@ -97,7 +97,13 @@ fn new_skill_scaffolds_and_is_a_skill() {
     );
     assert!(output.status.success(), "new skill failed: {json}");
     let content = std::fs::read_to_string(tmp.path().join("my-skill/SKILL.md")).unwrap();
-    assert!(content.contains("type: skill"));
+    // `**/SKILL.md` binds this path to `skill`, so the scaffold omits the
+    // non-spec explicit `type:` key (SKILL.md carries no `type:` per the Agent
+    // Skills spec) — iter-175.
+    assert!(
+        !content.contains("type:"),
+        "bound SKILL.md omits explicit type: {content}"
+    );
     assert!(content.contains("name:"));
     assert!(content.contains("description:"));
 }
@@ -317,4 +323,67 @@ fn this_repos_own_skills_lint_clean_under_skills_profile() {
         errors, 0,
         "this repo's own skills must lint clean under --profile skills: {json}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// UX-A: [scan] include reaches .claude/skills/
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scan_include_reaches_claude_skills_dir() {
+    // The skills profile ships `[scan] include = [".claude/skills/**"]`, so a
+    // SKILL.md under the canonical (hidden) Claude Code location is discoverable
+    // and lintable without relocating it (ff-rdp U1 scenario).
+    let tmp = init_skills();
+    let skill = tmp.path().join(".claude/skills/my-skill");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: my-skill\ndescription: A discoverable dot-dir skill.\n---\n\n# My Skill\n\nBody.\n",
+    )
+    .unwrap();
+
+    // The config carries the include glob.
+    let cfg = std::fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        cfg.contains(".claude/skills/**"),
+        "skills profile ships the scan include: {cfg}"
+    );
+
+    // `find` sees the hidden-dir skill.
+    let (json, output) = run(
+        tmp.path(),
+        &["find", "--glob", ".claude/skills/**/SKILL.md"],
+    );
+    assert!(output.status.success(), "find failed: {json}");
+    assert_eq!(
+        json["total"].as_u64(),
+        Some(1),
+        "the .claude/skills SKILL.md is discovered: {json}"
+    );
+
+    // And it lints clean (no relocation needed).
+    let (lint_json, lint_out) = run(
+        tmp.path(),
+        &["lint", "--file", ".claude/skills/my-skill/SKILL.md"],
+    );
+    assert!(
+        lint_out.status.success(),
+        "lint reached the file: {lint_json}"
+    );
+}
+
+#[test]
+fn scan_include_never_reaches_git() {
+    // Even with the include list active, `.git/**` stays hard-excluded.
+    let tmp = init_skills();
+    std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
+    std::fs::write(tmp.path().join(".git/config.md"), "# never linted\n").unwrap();
+    let (json, output) = run(tmp.path(), &["find", "--glob", "**/*.md"]);
+    assert!(output.status.success(), "find failed: {json}");
+    let files = json["results"].as_array().cloned().unwrap_or_default();
+    let any_git = files
+        .iter()
+        .any(|f| f["file"].as_str().is_some_and(|p| p.starts_with(".git/")));
+    assert!(!any_git, ".git is never walked: {json}");
 }

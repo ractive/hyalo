@@ -78,7 +78,19 @@ fn new_adr_scaffolds_required_sections() {
     assert!(output.status.success(), "new adr failed: {json}");
     let content =
         std::fs::read_to_string(tmp.path().join("docs/decisions/0001-use-postgres.md")).unwrap();
-    assert!(content.contains("type: adr"));
+    // The file is path-bound to `adr`, so the scaffold omits the redundant
+    // explicit `type:` key (iter-175) — the bind already types it.
+    assert!(
+        !content.contains("type:"),
+        "bound file omits explicit type: {content}"
+    );
+    // Schema defaults are applied to the scaffold: `status = proposed` and a
+    // `$today`-expanded date.
+    assert!(
+        content.contains("status: proposed"),
+        "status default applied: {content}"
+    );
+    assert!(content.contains("date:"), "date default applied: {content}");
     assert!(content.contains("## Context and Problem Statement"));
     assert!(content.contains("## Considered Options"));
     assert!(content.contains("## Decision Outcome"));

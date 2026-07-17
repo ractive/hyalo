@@ -23,3 +23,5 @@ jobs:
         run: cargo run -p xtask -- check-feature-fanout
       - name: Check help drift
         run: cargo run -p xtask -- check-help-drift
+      - name: Check bundled skills pass the skills profile
+        run: cargo run -p xtask -- check-bundled-skills

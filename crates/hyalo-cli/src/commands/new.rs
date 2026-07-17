@@ -94,7 +94,12 @@ pub(crate) fn create_new(
     // Step 4 & 6: synthesise and atomically create the file
     // ------------------------------------------------------------------
     let merged = schema.merged_schema_for_type(type_name);
-    let content = synthesise_content(type_name, &merged, dir);
+    // Normalize the vault-relative path (forward slashes) for bind lookup so a
+    // `[[schema.bind]]` covering this path lets us omit the redundant explicit
+    // `type:` key (the bind already types the file).
+    let rel_for_bind = file_arg.replace('\\', "/");
+    let bound_here = schema.bound_type_for(&rel_for_bind) == Some(type_name);
+    let content = synthesise_content(type_name, &merged, bound_here);
 
     // Pre-flight budget check: reject before touching the filesystem.
     // Extract the YAML content between the --- delimiters.
@@ -176,18 +181,36 @@ pub(crate) fn create_new(
 fn synthesise_content(
     type_name: &str,
     merged: &hyalo_core::schema::TypeSchema,
-    _dir: &Path,
+    omit_type: bool,
 ) -> String {
     // Build an ordered map of frontmatter properties.
-    // `type` always comes first.
+    // `type` comes first — unless a `[[schema.bind]]` already types this file,
+    // in which case the explicit key is redundant (and non-spec for formats like
+    // SKILL.md that carry no `type:`), so we omit it.
     let mut props: IndexMap<String, PropValue> = IndexMap::new();
-    props.insert("type".to_owned(), PropValue::Str(type_name.to_owned()));
+    if !omit_type {
+        props.insert("type".to_owned(), PropValue::Str(type_name.to_owned()));
+    }
 
+    // Emit, in order: required properties (each seeded from its default or a
+    // type-appropriate placeholder), then any *non-required* property that has a
+    // schema `default` (e.g. MADR's `status = "proposed"` / `date = "$today"`),
+    // so the scaffold reflects the schema's declared defaults rather than
+    // leaving those columns blank in downstream views like `madr toc`.
+    let mut emit_order: Vec<String> = Vec::new();
     for prop_name in &merged.required {
         if prop_name == "type" {
-            continue; // already emitted
+            continue;
         }
+        emit_order.push(prop_name.clone());
+    }
+    for prop_name in merged.defaults.keys() {
+        if prop_name != "type" && !emit_order.iter().any(|p| p == prop_name) {
+            emit_order.push(prop_name.clone());
+        }
+    }
 
+    for prop_name in &emit_order {
         // Check if the schema has a default value.
         let default_val = merged.defaults.get(prop_name).map(|d| expand_default(d));
 
