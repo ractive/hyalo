@@ -23,7 +23,7 @@ fixed mediums, and a quick own-KB regression + perf pass. Scratch vaults
 gate per the iteration-170 ignore policy).
 
 **Verdict: release v0.18.0.** All five blockers and both UX gaps are fixed
-and behave well under the original repros. Three leftovers found (1 MEDIUM,
+and behave well under the original repros. Four leftovers found (2 MEDIUM,
 2 LOW), all fixed in the follow-up PR from this session — none blocks the
 release on its own.
 
@@ -123,6 +123,17 @@ OKF vaults. Root cause: `ExemptGlobs::is_exempt`
 iter-173's case handling covered only the generator's reserved-file
 targeting. Fix: exempt matching honors the same effective
 `[links] case_insensitive` setting (auto-detected) the generator uses.
+
+### LB-4: OKF reserved-file predicates also case-sensitive (MEDIUM)
+
+Same bug class as LB-1, second site: `okf_lint.rs`'s own
+`is_index_file`/`is_log_file` predicates compare case-sensitively, so an
+adopted `INDEX.md` — exempted from SCHEMA after the LB-1 fix — was still
+classified as a concept doc and warned `OKF-CITATIONS-PRESENT` under
+`--profile okf`; lowercase `index.md` got zero findings. Fixed by threading
+the same effective flag and case-folding the predicates; under
+case-insensitivity `INDEX.md` now takes the reserved-file path
+(`OKF-INDEX-STRUCTURE` applies, concept-doc rules don't).
 
 ### LB-2: skip-summary pluralization (LOW)
 
