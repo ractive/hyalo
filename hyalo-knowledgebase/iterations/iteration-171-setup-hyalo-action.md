@@ -53,8 +53,9 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
 ### 3. Consumer recipes (docs, in the hyalo repo)
 
 - [ ] README "CI / PR checks" section (from iter-170) upgraded to use `ractive/setup-hyalo@v1` instead of manual download; full snippet: checkout → setup-hyalo → `hyalo lint --strict --format github`
-- [ ] Diff-aware variant documented: `git diff --name-only origin/main...HEAD -- '*.md' | hyalo lint --files-from - --strict --format github`
+- [ ] Diff-aware variant documented — reuse the exact snippet iter-170 already shipped in the README rather than a fresh one: `git diff --name-only origin/main -- '**/*.md' | hyalo lint --strict --files-from - --format github` (note: **not** `origin/main...HEAD -- '*.md'` — align on the landed syntax so the repo doesn't carry two slightly different diff-aware examples)
 - [ ] Agent recipe documented: `claude-code-action` workflow with a preceding `setup-hyalo` step, `allowed_tools: Bash(hyalo:*)`, and the repo carrying the skill from `hyalo init --claude` — so `@claude` mentions can triage/fix lint findings with `hyalo set` / `lint --fix`
+- [ ] If the agent recipe demonstrates `hyalo lint --fix` (mutating or `--dry-run`) combined with `--format github`, sanity-check against a file with an unfixable violation (e.g. a missing required property) — iter-170's PR review found the fix-mode output path uses a different JSON shape (`remaining_groups`) than read-only lint (`rule_groups`), which the github-format renderer initially missed entirely; that's fixed on main now, but any *new* lint output consumer should assume both shapes exist and test both, not just the read-only path
 - [ ] Convert hyalo's own `lint-kb` CI job (iter-170) to use the published action — end-to-end dogfood of the release artifact path
 
 ### 4. Verification
