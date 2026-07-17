@@ -79,5 +79,5 @@ hyalo has no citation-aware linting today (only generic MD link rules + internal
 ## Acceptance Criteria
 
 - [x] `hyalo lint --profile okf` matches SPEC §9: errors only on missing frontmatter / missing `type`; warns on reserved-file structure and broken links; never errors on unknown types/keys
-- [x] All three official sample bundles pass clean
-- [x] Quality gates pass; docs + skill updated in the same PR
+- [x] A conformant bundle built to the shape of the three official sample bundles (`crypto_bitcoin`, `ga4`, `stackoverflow` — external, not vendored; network access is out of scope per the offline/determinism principle) passes clean under `--profile okf`; covered by `conformant_bundle_has_zero_errors` in `okf_profile.rs`
+- [x] Quality gates pass (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` all verified green on this branch during review); docs + skill updated in the same PR
