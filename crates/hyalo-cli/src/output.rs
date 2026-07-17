@@ -31,6 +31,10 @@ type JaqFilterCache = HashMap<String, jaq_core::compile::Filter<Native<D>>>;
 pub enum Format {
     Json,
     Text,
+    /// GitHub Actions workflow-command output. Lint-only: emits one
+    /// `::error`/`::warning file=…,line=…,title=…::message` line per violation
+    /// so findings render as inline PR annotations. Non-lint commands reject it.
+    Github,
 }
 
 impl std::fmt::Display for Format {
@@ -38,6 +42,7 @@ impl std::fmt::Display for Format {
         match self {
             Format::Json => f.write_str("json"),
             Format::Text => f.write_str("text"),
+            Format::Github => f.write_str("github"),
         }
     }
 }
@@ -131,7 +136,9 @@ pub(crate) fn sanitize_control_chars(s: &str) -> String {
 #[must_use]
 pub fn format_success(format: Format, value: &serde_json::Value) -> String {
     match format {
-        Format::Json => serde_json::to_string_pretty(value)
+        // `Github` is rendered by the output pipeline (lint-only); if it ever
+        // reaches a generic formatter, fall back to JSON rather than panicking.
+        Format::Json | Format::Github => serde_json::to_string_pretty(value)
             .expect("serializing serde_json::Value is infallible"),
         Format::Text => {
             let mut cache = JaqFilterCache::new();
@@ -203,7 +210,7 @@ pub fn format_envelope(
     hints: &[crate::hints::Hint],
 ) -> String {
     match format {
-        Format::Json => {
+        Format::Json | Format::Github => {
             let envelope = build_envelope_value(value, total, hints);
             serde_json::to_string_pretty(&envelope)
                 .expect("serializing serde_json::Value is infallible")
@@ -247,7 +254,7 @@ pub fn format_prebuilt_envelope(
     results_value: &serde_json::Value,
 ) -> String {
     match format {
-        Format::Json => serde_json::to_string_pretty(envelope)
+        Format::Json | Format::Github => serde_json::to_string_pretty(envelope)
             .expect("serializing serde_json::Value is infallible"),
         Format::Text => {
             let mut cache = JaqFilterCache::new();
@@ -326,7 +333,7 @@ pub fn format_error(
     cause: Option<&str>,
 ) -> String {
     match format {
-        Format::Json => {
+        Format::Json | Format::Github => {
             let mut obj = json!({"error": error});
             if let Some(p) = path {
                 obj["path"] = json!(p);
@@ -372,7 +379,7 @@ pub fn format_budget_error(
 ) -> String {
     let safe_file = sanitize_control_chars(&e.file);
     match format {
-        Format::Json => {
+        Format::Json | Format::Github => {
             let obj = serde_json::json!({
                 "error": "frontmatter would exceed size budget",
                 "limit_bytes": e.limit_bytes,

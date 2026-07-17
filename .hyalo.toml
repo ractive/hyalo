@@ -143,6 +143,24 @@ fields = ["tasks"]
 properties = ["status=in-progress"]
 
 [lint]
+# Frozen historical records: completed iterations, done backlog items, and
+# dogfood/review logs are snapshots of past state. They legitimately carry old
+# formatting and aspirational/unchecked housekeeping tasks, so they are excluded
+# from the CI lint gate (which protects the *live* knowledgebase). See
+# iteration-170.
+ignore = [
+  "iterations/done/**",
+  "backlog/done/**",
+  "dogfood-results/**",
+  "reviews/**",
+  "research/**",
+  "promotion-plan.md",
+]
 
 [lint.rules]
 MD013 = true
+# Completed iterations often keep a trailing "mark completed / move to done"
+# housekeeping checkbox unticked. That is a normal, not an error, state for this
+# vault, so HYALO002 is advisory (warn) here rather than a CI-failing error.
+[lint.rules.HYALO002]
+severity = "warn"

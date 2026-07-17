@@ -41,3 +41,21 @@ jobs:
       - run: cargo test --workspace
       - name: Verify CLI runs
         run: cargo run -p hyalo-cli -- --help
+
+  # Dogfood: lint the project's own knowledgebase and surface any schema/body
+  # violations as inline PR annotations. `.hyalo.toml` at the repo root sets
+  # `dir = "hyalo-knowledgebase"`, so `hyalo lint` targets the vault, and
+  # `--format github` emits `::error`/`::warning` workflow commands. Paths are
+  # repo-root-relative because the job runs from the checkout root. The lint
+  # exits non-zero on errors, failing the check. Annotations are
+  # platform-independent, so this runs on ubuntu only.
+  lint-kb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Build hyalo
+        run: cargo build --release -p hyalo-cli
+      - name: Lint knowledgebase
+        run: ./target/release/hyalo lint --strict --format github

@@ -1064,6 +1064,15 @@ Repeatable (AND).\n\
             `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
             for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
             `files_with_violations`, and `files_truncated`.\n\n\
+            GITHUB ANNOTATIONS: --format github (lint-only) emits one GitHub Actions workflow\n\
+            command per violation — `::error file=<path>,line=<line>,title=<RULE_ID>::<message>`\n\
+            (warnings use `::warning`) — so findings render as inline annotations on the PR diff,\n\
+            followed by a one-line `N errors, M warnings in K files` summary. Message data is\n\
+            escaped per the workflow-command spec. Paths are emitted RELATIVE TO THE REPO ROOT:\n\
+            vault-relative paths are prefixed with the vault dir's path relative to the current\n\
+            directory, so CI must run `hyalo lint` from the repository root for annotations to\n\
+            resolve. Composes with --strict, --rule/--rule-prefix, --max-per-rule, and\n\
+            `[lint] ignore`; exit codes are unchanged. Other subcommands reject `--format github`.\n\n\
             FILTER FLAGS:\n\
             \u{00a0} --rule <ID>             restrict to a single rule\n\
             \u{00a0} --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
@@ -1104,7 +1113,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo lint --fix\n\
             \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\
             \u{00a0} hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\
-            \u{00a0} hyalo lint --profile changelog   # validate CHANGELOG.md (Keep a Changelog)\n\n\
+            \u{00a0} hyalo lint --profile changelog   # validate CHANGELOG.md (Keep a Changelog)\n\
+            \u{00a0} hyalo lint --strict --format github   # inline PR annotations in GitHub Actions\n\n\
             INDEX NOTE: The snapshot index does not accelerate the body pass — body bytes are\n\
             not indexed. The frontmatter pass and file enumeration still benefit from --index.\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\

@@ -13,6 +13,7 @@ pub mod init;
 pub(crate) mod inputs;
 pub mod links;
 pub mod lint;
+pub mod lint_github;
 pub mod lint_rules;
 pub mod madr;
 pub mod madr_lint;

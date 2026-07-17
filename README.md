@@ -461,6 +461,60 @@ It is mutually exclusive with `--glob` and `--file`.
 and `task read` (which are single-file commands and will return an error if
 `--glob` is used).
 
+### GitHub PR annotations (`--format github`)
+
+`hyalo lint --format github` emits one [GitHub Actions workflow command] per
+violation, so findings render as **inline annotations on the PR diff** — no `jq`
+glue required. Errors become `::error`, warnings become `::warning`, and a
+one-line `N errors, M warnings in K files` summary is printed at the end so the
+job log stays readable. The lint still exits non-zero on errors, failing the
+check. `--format github` is lint-only; other subcommands reject it.
+
+Drop this into a workflow to lint your whole vault on every PR:
+
+```yaml
+# .github/workflows/lint-kb.yml
+name: Lint knowledgebase
+on:
+  pull_request:
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Install hyalo (Homebrew, cargo-binstall, or a release binary — see
+      # Installation). The setup-hyalo action is coming in a follow-up.
+      - run: cargo install hyalo --locked
+      # Run from the repo root so annotation paths resolve against the workspace.
+      # `.hyalo.toml` sets `dir = "..."`, so `hyalo lint` targets the vault.
+      - run: hyalo lint --strict --format github
+```
+
+Paths are emitted **relative to the repository root**: vault-relative paths are
+prefixed with the vault dir's path relative to the current directory, so the job
+**must run from the repo root** for annotations to land on the right file/line.
+
+For a diff-aware variant that only annotates files touched on the branch, combine
+it with `--files-from -`:
+
+```yaml
+      - run: |
+          git fetch origin main --depth=1
+          git diff --name-only origin/main -- '**/*.md' \
+            | hyalo lint --strict --files-from - --format github
+```
+
+For **OKF** vaults, add an optional second step to catch reserved-file
+(`index.md` / `log.md`) drift — `hyalo okf index` is dry-run by default and exits
+non-zero when the on-disk artifacts are stale:
+
+```yaml
+      - name: Check OKF reserved-file drift
+        run: hyalo okf index   # dry-run; non-zero exit on drift
+```
+
+[GitHub Actions workflow command]: https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+
 ### Snapshot index
 
 For workflows that run many queries in a short window (CI, automation, LLM tool loops):

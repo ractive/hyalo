@@ -156,7 +156,8 @@ pub(crate) fn create_new(
     // ------------------------------------------------------------------
     let out = match format {
         Format::Text => format!("created {rel_path}\n"),
-        Format::Json => {
+        // `github` is rejected for non-lint commands upstream; treat as JSON here.
+        Format::Json | Format::Github => {
             let val = serde_json::json!({
                 "type": type_name,
                 "file": rel_path,
