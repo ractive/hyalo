@@ -21,6 +21,33 @@ input paths are visible in every output format, and result caps never lie.
 Fixes release blocker **RB-3** (lint half) and **UX-B** from
 [[dogfood-results/dogfood-v0180-okf-profiles-pre-release]].
 
+## Note from iter-173
+
+No scope overlap with iter-173's generator-safety work — it fixed the
+*generator* half of RB-3 (`okf index`/`okf log`/`madr toc` skip a malformed
+concept with an `eprintln!` stderr warning and continue). This iteration
+fixes the *lint* half: a malformed file must become a loud, error-severity
+**lint violation** (`HYALO005`), not a silent stderr note. Don't reuse
+iter-173's skip-and-warn mechanism here — a warning that lint swallows is
+exactly the silent-drop bug this iteration exists to close.
+
+Two things worth reusing from iter-173's implementation as precedent:
+
+- **Stable violation-kind constants + per-violation `autofixable: Option<bool>`**
+  on `InternalViolation` (`crates/hyalo-cli/src/commands/lint.rs`, see
+  `VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT`): `HYALO005` should follow the
+  same shape (a `pub const VIOLATION_KIND_*` / stable rule id, not an inline
+  string) rather than inventing a new pattern.
+- **`root_cause(&anyhow::Error)` helper** in `crates/hyalo-cli/src/commands/okf.rs`
+  (deepest error message in an anyhow chain, for a terse one-line message):
+  reuse or lift it to a shared location instead of duplicating the chain-walk
+  when rendering the `HYALO005` parse-error message.
+
+Also carrying forward iter-172/173's process lesson: write Acceptance
+Criteria as single-line bullets naming the backing test/symbol in backticks
+up front (the `ac-fidelity-check` gate requires it) rather than adding it
+after the fact.
+
 ## Tasks
 
 ### 1. Unparseable frontmatter = error (RB-3)
