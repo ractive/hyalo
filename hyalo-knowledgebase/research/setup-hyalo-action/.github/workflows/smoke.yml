@@ -33,7 +33,12 @@ jobs:
 
       - name: Report resolved version
         shell: bash
-        run: echo "resolved=${{ steps.hyalo.outputs.version }}"
+        env:
+          # Pass through env, not direct ${{ }} interpolation into the script
+          # body — keeps the smoke workflow free of injection surfaces even
+          # though the action validates the tag format.
+          RESOLVED: ${{ steps.hyalo.outputs.version }}
+        run: echo "resolved=$RESOLVED"
 
       - name: Lint the fixture vault
         shell: bash

@@ -474,6 +474,12 @@ Drop this into a workflow to lint your whole vault on every PR. The
 [`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the
 prebuilt binary in seconds — no compilation — so the whole check is two steps:
 
+> **Note**: `ractive/setup-hyalo` is not published yet — the snippets below (and
+> in the agent section) show the intended usage once it ships. Until then,
+> install hyalo with one of the [other methods](#installation) (e.g.
+> `cargo install hyalo-cli --locked`, Homebrew, or a release binary) in place of
+> the `setup-hyalo` step.
+
 ```yaml
 # .github/workflows/lint-kb.yml
 name: Lint knowledgebase

@@ -90,6 +90,14 @@ runs:
             echo "::error::setup-hyalo: could not resolve the latest release tag from the GitHub API"
             exit 1
           fi
+          # The API-resolved tag feeds paths, the download URL, and GITHUB_OUTPUT
+          # (which callers may interpolate into scripts) — hold it to the same
+          # format as the explicit input, so a malformed/spoofed API response
+          # can't smuggle path traversal or shell metacharacters downstream.
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::setup-hyalo: latest release tag '$version' does not look like a version tag (vX.Y.Z)"
+            exit 1
+          fi
         else
           version="$INPUT_VERSION"
         fi
@@ -104,15 +112,36 @@ runs:
           url="https://github.com/${REPO}/releases/download/${version}/${asset}"
           echo "setup-hyalo: downloading ${url}"
           tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
           curl -fsSL ${auth[@]+"${auth[@]}"} -o "${tmp}/${asset}" "$url" \
             || { echo "::error::setup-hyalo: download failed for ${asset} (does release ${version} publish target ${target}?)"; exit 1; }
-          mkdir -p "$cache_root"
+
+          # ---- verify the archive against the release's SHA256SUMS ----------
+          curl -fsSL ${auth[@]+"${auth[@]}"} -o "${tmp}/SHA256SUMS" \
+            "https://github.com/${REPO}/releases/download/${version}/SHA256SUMS" \
+            || { echo "::error::setup-hyalo: release ${version} publishes no SHA256SUMS — refusing to install an unverified archive"; exit 1; }
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
+          else
+            actual="$(shasum -a 256 "${tmp}/${asset}" | awk '{print $1}')"
+          fi
+          expected="$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1; exit}' "${tmp}/SHA256SUMS")"
+          if [ -z "$expected" ]; then
+            echo "::error::setup-hyalo: SHA256SUMS for ${version} has no entry for ${asset}"
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::setup-hyalo: checksum mismatch for ${asset} (expected ${expected}, got ${actual})"
+            exit 1
+          fi
+          echo "setup-hyalo: sha256 verified (${actual})"
+
+          mkdir -p -m 0755 "$cache_root"
           if [ "$ext" = "zip" ]; then
             unzip -q -o "${tmp}/${asset}" -d "$cache_root"
           else
             tar -xzf "${tmp}/${asset}" -C "$cache_root"
           fi
-          rm -rf "$tmp"
           if [ ! -x "${cache_root}/${bin}" ]; then
             chmod +x "${cache_root}/${bin}" 2>/dev/null || true
           fi
