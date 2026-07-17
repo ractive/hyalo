@@ -3,8 +3,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, MadrAction, OkfAction,
-    PropertiesAction, TagsAction, TaskAction, TypesAction, ViewsAction, resolve_single_file,
+    ChangelogAction, Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, MadrAction,
+    OkfAction, PropertiesAction, TagsAction, TaskAction, TypesAction, ViewsAction,
+    resolve_single_file,
 };
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
@@ -429,6 +430,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     let okf_profile_active = ctx.lint_profile.as_deref() == Some("okf");
     let madr_profile_active = ctx.lint_profile.as_deref() == Some("madr");
     let skills_profile_active = ctx.lint_profile.as_deref() == Some("skills");
+    let changelog_profile_active = ctx.lint_profile.as_deref() == Some("changelog");
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
@@ -1776,6 +1778,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 okf_profile: okf_profile_active,
                 madr_profile: madr_profile_active,
                 skills_profile: skills_profile_active,
+                changelog_profile: changelog_profile_active,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
@@ -2233,6 +2236,44 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 let (outcome, exit_override) = crate::commands::madr::run_toc(
                     ctx.dir,
                     adr_dir.as_deref(),
+                    apply,
+                    effective_format,
+                )?;
+                if let Some(code) = exit_override {
+                    ctx.exit_code_override = Some(code);
+                }
+                Ok(outcome)
+            }
+        },
+        Commands::Changelog { action } => match action {
+            ChangelogAction::Release {
+                version,
+                date,
+                apply,
+                dry_run: _,
+            } => {
+                let (outcome, exit_override) = crate::commands::changelog::run_release(
+                    ctx.dir,
+                    &version,
+                    date.as_deref(),
+                    apply,
+                    effective_format,
+                )?;
+                if let Some(code) = exit_override {
+                    ctx.exit_code_override = Some(code);
+                }
+                Ok(outcome)
+            }
+            ChangelogAction::Add {
+                category,
+                message,
+                apply,
+                dry_run: _,
+            } => {
+                let (outcome, exit_override) = crate::commands::changelog::run_add(
+                    ctx.dir,
+                    &category,
+                    &message,
                     apply,
                     effective_format,
                 )?;

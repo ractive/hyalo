@@ -1,11 +1,18 @@
 ---
-title: "Iteration 169 — changelog profile (Keep a Changelog 1.1.0)"
+title: Iteration 169 — changelog profile (Keep a Changelog 1.1.0)
 type: iteration
 date: 2026-07-16
-status: planned
+status: completed
 branch: iter-169/changelog-profile
-tags: [iteration, profiles, changelog, keep-a-changelog, lint, generators]
-related: [research/profile-candidates-beyond-okf.md]
+tags:
+  - iteration
+  - profiles
+  - changelog
+  - keep-a-changelog
+  - lint
+  - generators
+related:
+  - research/profile-candidates-beyond-okf.md
 priority: 7
 depends-on: iteration-168-skills-profile
 ---
@@ -42,37 +49,37 @@ Fourth profile (see [[profile-candidates-beyond-okf]]). Keep a Changelog 1.1.0 (
 
 ### 1. Heading-grammar lint mode (generic capability)
 
-- [ ] Extract/generalize iter-166's `index.md`/`log.md` structure checks into a declarative heading-grammar mechanism usable by profiles (sequence, level, pattern, ordering constraints on headings)
-- [ ] Grammar for changelog: `# Changelog` → optional `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` (semver, strictly descending; dates monotonically non-increasing; optional `[YANKED]` marker) → `###` subsections limited to `Added|Changed|Deprecated|Removed|Fixed|Security`
-- [ ] Link-ref footer cross-check: every `[X.Y.Z]` heading has a matching link reference definition and vice versa
-- [ ] Lints: unknown `###` category, empty section, out-of-order versions, malformed dates
-- [ ] Single-file scope via iter-167's `[schema.bind]`: `"CHANGELOG.md" = "changelog"` — a frontmatter-less type bound purely by path (+ frontmatter exemption), coexisting with the vault's other profiles/config (see [[path-bound-schemas]])
+- [x] Extract/generalize iter-166's `index.md`/`log.md` structure checks into a declarative heading-grammar mechanism usable by profiles (sequence, level, pattern, ordering constraints on headings)
+- [x] Grammar for changelog: `# Changelog` → optional `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` (semver, strictly descending; dates monotonically non-increasing; optional `[YANKED]` marker) → `###` subsections limited to `Added|Changed|Deprecated|Removed|Fixed|Security`
+- [x] Link-ref footer cross-check: every `[X.Y.Z]` heading has a matching link reference definition and vice versa
+- [x] Lints: unknown `###` category, empty section, out-of-order versions, malformed dates
+- [x] Single-file scope via iter-167's `[schema.bind]`: `"CHANGELOG.md" = "changelog"` — a frontmatter-less type bound purely by path (+ frontmatter exemption), coexisting with the vault's other profiles/config (see [[path-bound-schemas]])
 
 ### 2. Release generator
 
-- [ ] `hyalo changelog release <X.Y.Z> [--date YYYY-MM-DD]`: rotate `## [Unreleased]` content into `## [X.Y.Z] - <date>`, re-create empty Unreleased, update footer link refs — dry-run default + `--apply`, idempotency guard (refuse if version exists)
-- [ ] Reuse the dated-entry machinery from `okf log` (iter-165) where it fits. **iter-165 note:** `okf log`'s date-section insertion (`prepend_log_entry` + `find_heading`/`line_end_after` in `crates/hyalo-cli/src/commands/okf.rs`) inserts under an existing `## <date>` heading or creates a fresh one above older sections — the same shape a changelog `## [X.Y.Z] - <date>` rotation needs, but it is date-ordered (descending) whereas changelog wants semver-ordered sections with an `[Unreleased]` pinned at the top. Reuse the "insert-a-new-section-in-order, preserve-the-rest" splice idea; the exact ordering predicate and footer-link-ref rewrite are changelog-specific. `today_iso8601()`/`now_timestamp_tz()` (hyalo-core / okf module) supply the date default.
-- [ ] `hyalo changelog add --category Added --message "..."` (append an entry under Unreleased) — evaluate whether this earns its keep or is scope creep; decide and record
+- [x] `hyalo changelog release <X.Y.Z> [--date YYYY-MM-DD]`: rotate `## [Unreleased]` content into `## [X.Y.Z] - <date>`, re-create empty Unreleased, update footer link refs — dry-run default + `--apply`, idempotency guard (refuse if version exists)
+- [x] Reuse the dated-entry machinery from `okf log` (iter-165) where it fits. **iter-165 note:** `okf log`'s date-section insertion (`prepend_log_entry` + `find_heading`/`line_end_after` in `crates/hyalo-cli/src/commands/okf.rs`) inserts under an existing `## <date>` heading or creates a fresh one above older sections — the same shape a changelog `## [X.Y.Z] - <date>` rotation needs, but it is date-ordered (descending) whereas changelog wants semver-ordered sections with an `[Unreleased]` pinned at the top. Reuse the "insert-a-new-section-in-order, preserve-the-rest" splice idea; the exact ordering predicate and footer-link-ref rewrite are changelog-specific. `today_iso8601()`/`now_timestamp_tz()` (hyalo-core / okf module) supply the date default.
+- [x] `hyalo changelog add --category Added --message "..."` (append an entry under Unreleased) — evaluate whether this earns its keep or is scope creep; decide and record
 
 ### 3. Tests
 
-- [ ] e2e: the keepachangelog.com reference example lints clean; each grammar violation class produces exactly its lint
-- [ ] e2e: `release` rotation round-trip (add entries → release → lint clean → release same version refused)
-- [ ] Dogfood: lint hyalo's own CHANGELOG if present; adopt the profile in this repo if it fits
-- [ ] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
+- [x] e2e: the keepachangelog.com reference example lints clean; each grammar violation class produces exactly its lint
+- [x] e2e: `release` rotation round-trip (add entries → release → lint clean → release same version refused)
+- [x] Dogfood: lint hyalo's own CHANGELOG if present; adopt the profile in this repo if it fits
+- [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
 ### 4. Docs sync (same PR)
 
-- [ ] `--profile` help lists `changelog`; README profiles section extended (now 4 profiles — consider a dedicated README "Profiles" table)
-- [ ] Update [[profile-candidates-beyond-okf]] status for changelog
+- [x] `--profile` help lists `changelog`; README profiles section extended (now 4 profiles — consider a dedicated README "Profiles" table)
+- [x] Update [[profile-candidates-beyond-okf]] status for changelog
 
 ### 5. Retrospective (learnings-propagation — do this LAST, always)
 
-- [ ] Sequence complete — write a consolidated profiles retrospective in the KB (what the profile machinery got right/wrong across okf/madr/skills/changelog) and update [[profile-candidates-beyond-okf]] with revised effort estimates for the deferred candidates (nygard, standard-readme, SSG wave, importers)
+- [x] Sequence complete — write a consolidated profiles retrospective in the KB (what the profile machinery got right/wrong across okf/madr/skills/changelog) and update [[profile-candidates-beyond-okf]] with revised effort estimates for the deferred candidates (nygard, standard-readme, SSG wave, importers)
 
 ## Acceptance Criteria
 
-- [ ] `hyalo lint --profile changelog` fully validates the 1.1.0 grammar incl. footer link refs; reference example passes clean
-- [ ] `hyalo changelog release` rotation is correct, idempotent-guarded, dry-run by default
-- [ ] Heading-grammar mode is generic (declarative), not changelog-hardcoded
-- [ ] Quality gates pass; docs synced; consolidated profiles retrospective written
+- [x] `hyalo lint --profile changelog` fully validates the 1.1.0 grammar incl. footer link refs; reference example passes clean
+- [x] `hyalo changelog release` rotation is correct, idempotent-guarded, dry-run by default
+- [x] Heading-grammar mode is generic (declarative), not changelog-hardcoded — `heading_grammar.rs`'s `HeadingRule`/`TextMatcher`/`scan_headings`/`check_level_rule` carry no changelog-specific logic; `changelog_lint.rs` is the sole consumer, building its grammar from data (`title_rule`, `version_rule`, …)
+- [x] Quality gates pass; docs synced; consolidated profiles retrospective written — `cargo fmt`/clippy/test all green (see Test plan below); README profiles section + `--profile` help updated; retrospective lives in `research/profile-candidates-beyond-okf.md` under "Consolidated profiles retrospective (2026-07-17, sequence complete)"

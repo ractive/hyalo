@@ -254,6 +254,45 @@ hyalo lint --profile skills                        # validate a directory of ski
 
 Three advisory rules layer on top of the schema pass under `hyalo lint --profile skills`: **`SKILL-RESERVED-NAME`** (**error** — `name` is a reserved word `anthropic`/`claude`, which the slug pattern cannot express without look-around), **`SKILL-NAME-DIRNAME`** (warn — `name` must equal its parent directory), and **`SKILL-LINE-BUDGET`** (warn — the body should stay under 500 lines). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set SKILL-… --enabled false`.
 
+## Changelog profile — Keep a Changelog
+
+[Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) is a convention for a human-readable `CHANGELOG.md`: a `# Changelog` title, `## [Unreleased]` pinned above dated `## [X.Y.Z] - YYYY-MM-DD` version sections (newest first), `###` subsections limited to six change categories, and a footer of `[x.y.z]: <url>` link references. Unlike the other profiles, `CHANGELOG.md` is **frontmatter-free** — the whole grammar lives in the body.
+
+```sh
+hyalo init --profile changelog            # scaffold a changelog-ready .hyalo.toml
+hyalo init --profile changelog --claude   # also install the bundled `changelog` skill
+```
+
+The `changelog` profile binds a frontmatter-less `changelog` type to the literal `CHANGELOG.md` (via `[[schema.bind]]`) and exempts it from the frontmatter rules; the grammar is enforced by the `CHANGELOG-*` body rules. It is the first consumer of a new generic **heading-grammar** capability (a declarative *sequence / level / text-pattern* engine, lifted from OKF's hand-rolled reserved-file checks), so later profiles (Nygard ADRs, Standard Readme) can declare a grammar rather than re-implement a scanner.
+
+```sh
+hyalo lint --profile changelog                          # validate CHANGELOG.md
+git diff --name-only origin/main | hyalo lint --profile changelog --files-from -   # CI on a diff
+```
+
+The grammar is **stricter than the other profiles** (a malformed changelog is a real defect), so most rules default to **error**: `CHANGELOG-TITLE`, `CHANGELOG-VERSION-HEADING`, `CHANGELOG-CATEGORY`, `CHANGELOG-VERSION-ORDER` (versions strictly descending), `CHANGELOG-DATE-ORDER` (dates non-increasing), and `CHANGELOG-UNRELEASED-POSITION`. Two soft rules warn: `CHANGELOG-EMPTY-SECTION` and `CHANGELOG-LINK-REF` (every version heading needs a matching footer link ref and vice versa). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set CHANGELOG-… --enabled false`.
+
+A release generator maintains the file deterministically:
+
+```sh
+hyalo changelog add --category Added --message "New export format" --apply   # append under Unreleased
+hyalo changelog release 1.2.0 --dry-run                                      # CI: preview the rotation
+hyalo changelog release 1.2.0 --apply                                        # rotate [Unreleased] → [1.2.0]
+```
+
+**`hyalo changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section (date defaults to today, override with `--date`), recreates an empty `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference (replace `TBD` with the real compare/tag URL). It **refuses** to release a version that already exists. **`hyalo changelog add`** appends `- <message>` under the `### <category>` subsection of `[Unreleased]`, creating the subsection if needed. Both default to `--dry-run` and exit non-zero on drift, so they double as CI checks.
+
+### Profiles at a glance
+
+| Profile | Scope | Binds | Key rules |
+| --- | --- | --- | --- |
+| `okf` | Whole bundle | `type`-required concepts; `index.md`/`log.md` reserved | Permissive (warn-only): citations, reserved-file structure, augmentation guard |
+| `madr` | `docs/decisions/**` | `adr` schema, status lifecycle, `NNNN-slug.md` | `MADR-SUPERSEDE-RESOLVE`, `MADR-DUPLICATE-NUMBER` (warn) |
+| `skills` | `**/SKILL.md` | `skill` schema (`name`/`description` bounds) | `SKILL-RESERVED-NAME` (error), name↔dir + line-budget (warn) |
+| `changelog` | `CHANGELOG.md` | frontmatter-less `changelog` type | `CHANGELOG-*` grammar (mostly error), empty-section + link-ref (warn) |
+
+Profiles are **composable** and **idempotent**: multiple `--profile` runs deep-merge into one `.hyalo.toml` without clobbering each other, `hyalo lint --profile <name>` is an ephemeral overlay that needs no committed config, and a vault initialised with a profile runs its rules under plain `hyalo lint`.
+
 ## Installation
 
 ### Homebrew (macOS & Linux)

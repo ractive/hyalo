@@ -34,6 +34,10 @@ const SUBCOMMANDS: &[&[&str]] = &[
     &["task", "read"],
     &["task", "toggle"],
     &["task", "set"],
+    // changelog profile generators
+    &["changelog"],
+    &["changelog", "release"],
+    &["changelog", "add"],
 ];
 
 #[test]

@@ -1,0 +1,40 @@
+# --- changelog profile (added by `hyalo init --profile changelog`) ---
+# Keep a Changelog 1.1.0 — https://keepachangelog.com/en/1.1.0/
+# `CHANGELOG.md` is a frontmatter-less reserved file whose *body* follows a
+# strict heading grammar (a `# Changelog` title, `## [Unreleased]` /
+# `## [X.Y.Z] - YYYY-MM-DD` version sections newest-first, `###` subsections
+# limited to the six change categories, and a footer of `[x.y.z]: url` link
+# references). The schema layer can only bind the type by path and keep the
+# frontmatter rules quiet; the grammar itself is checked by the
+# `CHANGELOG-*` advisory rules (mostly error-severity) under
+# `hyalo lint --profile changelog`.
+
+# Validate on write (a no-op for the frontmatter-less changelog, but keeps the
+# vault's authoring policy consistent when composed with other profiles).
+validate_on_write = true
+
+# Mark this vault as changelog-flavoured so plain `hyalo lint` runs the changelog
+# grammar rules without `--profile changelog` on every invocation.
+# `hyalo lint --profile changelog` is then an idempotent overlay.
+[lint]
+profile = "changelog"
+
+# `CHANGELOG.md` carries no frontmatter, so exempt it from the required-`type` /
+# frontmatter-presence checks. The grammar is enforced by the `CHANGELOG-*`
+# body rules, not the schema pass.
+[schema]
+exempt = ["CHANGELOG.md"]
+
+# Bind the `changelog` type to the literal `CHANGELOG.md` (first-match-wins
+# literal-path glob). This marks the file for the grammar rules and lets other
+# tooling recognise its effective type. No `type:` frontmatter is required (the
+# file is frontmatter-less); the binding + exemption above coexist.
+[[schema.bind]]
+glob = "CHANGELOG.md"
+type = "changelog"
+
+# The `changelog` type. No property is hard-required (the file is
+# frontmatter-less and exempt); the type exists so the binding resolves and so
+# `hyalo types show changelog` documents the convention.
+[schema.types.changelog]
+required = []
