@@ -820,13 +820,19 @@ Repeatable (AND).\n\
         long_about = "Create .hyalo.toml and optionally set up Claude Code and pi integrations.\n\n\
             Without flags, creates a .hyalo.toml config file.\n\
             With --claude, also installs the hyalo skill for Claude Code.\n\
-            With --pi, also installs the hyalo skill for pi.\n\n\
+            With --pi, also installs the hyalo skill for pi.\n\
+            With --profile <name>, scaffolds a preset vault flavour by merging an\n\
+            embedded config fragment into .hyalo.toml (available: okf). Multiple\n\
+            profiles compose in one vault; re-running upserts without clobbering.\n\
+            With --profile okf --claude, also installs the bundled `okf` skill.\n\n\
             Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo init\n\
             \u{00a0} hyalo --dir kb init\n\
             \u{00a0} hyalo --dir kb init --claude\n\
-            \u{00a0} hyalo --dir kb init --pi"
+            \u{00a0} hyalo --dir kb init --pi\n\
+            \u{00a0} hyalo init --profile okf\n\
+            \u{00a0} hyalo init --profile okf --claude"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
@@ -835,6 +841,10 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
+        /// Scaffold a preset vault flavour (currently: okf) by merging an
+        /// embedded config fragment into .hyalo.toml
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
     },
     /// Remove hyalo configuration and tool integration artifacts
     #[command(

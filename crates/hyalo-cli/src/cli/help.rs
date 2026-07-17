@@ -90,7 +90,7 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     hyalo find --view <NAME> [additional filters...]       Use a saved view
 
   Init (configuration, one-time setup):
-    hyalo init [--claude] [-d/--dir DIR]
+    hyalo init [--claude] [--profile okf] [-d/--dir DIR]
 
   Deinit (remove hyalo configuration):
     hyalo deinit

@@ -42,12 +42,30 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 ///   writes a managed section to `.claude/CLAUDE.md`.
 /// - `pi`: when `true`, also installs the hyalo and hyalo-tidy skills for pi,
 ///   the hyalo extension, and a package.json.
-pub fn run_init(dir: Option<&str>, claude: bool, pi: bool) -> Result<CommandOutcome> {
+pub fn run_init(
+    dir: Option<&str>,
+    claude: bool,
+    pi: bool,
+    profile: Option<&str>,
+) -> Result<CommandOutcome> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
-    run_init_in(dir, claude, pi, &cwd)
+    run_init_in(dir, claude, pi, profile, &cwd)
 }
 
-fn run_init_in(dir: Option<&str>, claude: bool, pi: bool, cwd: &Path) -> Result<CommandOutcome> {
+fn run_init_in(
+    dir: Option<&str>,
+    claude: bool,
+    pi: bool,
+    profile: Option<&str>,
+    cwd: &Path,
+) -> Result<CommandOutcome> {
+    // Resolve the profile up front so an unknown name errors before any files
+    // are written.
+    let profile = match profile {
+        Some(name) => Some(crate::commands::profiles::lookup(name)?),
+        None => None,
+    };
+
     let mut summary = String::new();
 
     // Resolve the directory value once, so we can use it both for .hyalo.toml
@@ -121,6 +139,26 @@ fn run_init_in(dir: Option<&str>, claude: bool, pi: bool, cwd: &Path) -> Result<
         } else {
             writeln!(summary, "created  .hyalo.toml  (dir = \"{dir_value}\")").unwrap();
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Profile: deep-merge the embedded config fragment into .hyalo.toml.
+    // Upsert semantics — composable with other profiles, idempotent on re-run.
+    // ------------------------------------------------------------------
+    if let Some(profile) = profile {
+        let existing_raw = fs::read_to_string(&toml_path)
+            .with_context(|| format!("failed to read {}", toml_path.display()))?;
+        let merged =
+            crate::commands::profiles::merge_into_config(&existing_raw, profile.toml_fragment)
+                .with_context(|| format!("failed to apply profile '{}'", profile.name))?;
+        fs::write(&toml_path, &merged)
+            .with_context(|| format!("failed to write {}", toml_path.display()))?;
+        writeln!(
+            summary,
+            "updated  .hyalo.toml  (merged '{}' profile)",
+            profile.name
+        )
+        .unwrap();
     }
 
     if !claude && !pi {
@@ -215,6 +253,27 @@ fn run_init_in(dir: Option<&str>, claude: bool, pi: bool, cwd: &Path) -> Result<
             fs::write(&claude_md_path, content)
                 .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
             writeln!(summary, "created  .claude/CLAUDE.md (with managed section)").unwrap();
+        }
+
+        // Step 6: install any profile-specific skills (e.g. `okf`).
+        if let Some(profile) = profile {
+            for (skill_dir, skill_body) in profile.skills {
+                let profile_skill_path = cwd
+                    .join(".claude")
+                    .join("skills")
+                    .join(skill_dir)
+                    .join("SKILL.md");
+                let existed = profile_skill_path.exists();
+                let parent = profile_skill_path
+                    .parent()
+                    .context("profile skill path has no parent directory")?;
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create directory {}", parent.display()))?;
+                fs::write(&profile_skill_path, skill_body)
+                    .with_context(|| format!("failed to write {}", profile_skill_path.display()))?;
+                let verb = if existed { "updated" } else { "created" };
+                writeln!(summary, "{verb}  .claude/skills/{skill_dir}/SKILL.md").unwrap();
+            }
         }
     }
 
@@ -346,6 +405,26 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
         .parent()
         .context("tidy skill path has no parent directory")?;
     remove_dir_if_empty(tidy_skill_dir, ".claude/skills/hyalo-tidy/", &mut summary)?;
+
+    // Step 2b: Remove profile skills (e.g. `okf`) and their parent dirs if empty.
+    for profile in crate::commands::profiles::PROFILES {
+        for (skill_dir, _body) in profile.skills {
+            let profile_skill_path = cwd
+                .join(".claude")
+                .join("skills")
+                .join(skill_dir)
+                .join("SKILL.md");
+            let label = format!(".claude/skills/{skill_dir}/SKILL.md");
+            remove_artifact(&profile_skill_path, &label, &mut summary)?;
+            if let Some(parent) = profile_skill_path.parent() {
+                remove_dir_if_empty(
+                    parent,
+                    &format!(".claude/skills/{skill_dir}/"),
+                    &mut summary,
+                )?;
+            }
+        }
+    }
 
     // Step 3: Remove .claude/rules/knowledgebase.md and parent dir if empty.
     let rules_path = cwd.join(".claude").join("rules").join("knowledgebase.md");
@@ -1126,11 +1205,96 @@ mod tests {
     }
 
     #[test]
+    fn run_init_okf_profile_merges_config() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outcome = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected success");
+        };
+        assert!(out.contains("merged 'okf' profile"), "summary: {out}");
+
+        let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert_eq!(parsed.get("site_prefix").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            parsed
+                .get("validate_on_write")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        // dir key from the standard init flow is preserved alongside the merge.
+        assert_eq!(parsed.get("dir").and_then(|v| v.as_str()), Some("."));
+    }
+
+    #[test]
+    fn run_init_okf_profile_claude_installs_skill() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outcome = run_init_in(Some("."), true, false, Some("okf"), tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected success");
+        };
+        assert!(
+            out.contains("created  .claude/skills/okf/SKILL.md"),
+            "{out}"
+        );
+        let skill_path = tmp
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("okf")
+            .join("SKILL.md");
+        assert!(skill_path.exists(), "okf skill installed");
+        let body = fs::read_to_string(&skill_path).unwrap();
+        assert!(body.contains("Open Knowledge Format"));
+    }
+
+    #[test]
+    fn run_init_unknown_profile_errors_before_writing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let err = run_init_in(Some("."), false, false, Some("bogus"), tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("unknown profile 'bogus'"));
+        // No .hyalo.toml written — the profile is validated up front.
+        assert!(!tmp.path().join(".hyalo.toml").exists());
+    }
+
+    #[test]
+    fn run_init_okf_profile_idempotent_on_rerun() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
+        let first = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+        run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
+        let second = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+        assert_eq!(first, second, "re-running the profile must be idempotent");
+    }
+
+    #[test]
+    fn run_deinit_removes_okf_skill() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        run_init_in(Some("."), true, false, Some("okf"), tmp.path()).unwrap();
+        let outcome = run_deinit_in(tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+        assert!(
+            out.contains("removed  .claude/skills/okf/SKILL.md"),
+            "{out}"
+        );
+        assert!(
+            !tmp.path()
+                .join(".claude")
+                .join("skills")
+                .join("okf")
+                .join("SKILL.md")
+                .exists()
+        );
+    }
+
+    #[test]
     fn run_init_overwrites_skills_on_rerun() {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // First run
-        let outcome1 = run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
+        let outcome1 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out1) = outcome1 else {
             panic!("expected success");
         };
@@ -1139,7 +1303,7 @@ mod tests {
         assert!(out1.contains("created  .claude/rules/knowledgebase.md"));
 
         // Second run — should say "updated", not "created"
-        let outcome2 = run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
+        let outcome2 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out2) = outcome2 else {
             panic!("expected success");
         };
@@ -1155,7 +1319,7 @@ mod tests {
         // Create initial .hyalo.toml
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let outcome = run_init_in(Some("newdir"), false, false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected success");
         };
@@ -1177,7 +1341,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = run_init_in(Some("newdir"), false, false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap();
         assert!(matches!(outcome, CommandOutcome::RawOutput(_)));
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
@@ -1193,7 +1357,7 @@ mod tests {
 
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let outcome = run_init_in(None, false, false, tmp.path()).unwrap();
+        let outcome = run_init_in(None, false, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected success");
         };
@@ -1208,7 +1372,7 @@ mod tests {
     fn run_init_rule_uses_detected_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
 
-        let outcome = run_init_in(Some("my-notes"), true, false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("my-notes"), true, false, None, tmp.path()).unwrap();
         assert!(matches!(outcome, CommandOutcome::RawOutput(_)));
 
         let rule_content = fs::read_to_string(
@@ -1294,7 +1458,7 @@ mod tests {
     #[test]
     fn run_init_creates_missing_dir_when_explicit() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_init_in(Some("my-new-docs"), false, false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("my-new-docs"), false, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected RawOutput");
         };
@@ -1312,7 +1476,7 @@ mod tests {
     fn run_init_does_not_create_dir_when_auto_detected() {
         let tmp = tempfile::TempDir::new().unwrap();
         // No --dir flag, auto-detection falls back to "."
-        let outcome = run_init_in(None, false, false, tmp.path()).unwrap();
+        let outcome = run_init_in(None, false, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected RawOutput");
         };
@@ -1330,7 +1494,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
 
-        let outcome = run_init_in(Some("docs"), false, false, tmp.path()).unwrap();
+        let outcome = run_init_in(Some("docs"), false, false, None, tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
             panic!("expected success");
         };
@@ -1403,7 +1567,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // Set up all artifacts that init --claude would create.
-        run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
+        run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
 
         let outcome = run_deinit_in(tmp.path()).unwrap();
         let CommandOutcome::RawOutput(out) = outcome else {
@@ -1451,7 +1615,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // First run with artifacts present.
-        run_init_in(Some("docs"), true, false, tmp.path()).unwrap();
+        run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
         run_deinit_in(tmp.path()).unwrap();
 
         // Second run — no artifacts; must not error and must say "skipped".

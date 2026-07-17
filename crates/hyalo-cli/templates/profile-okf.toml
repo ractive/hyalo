@@ -1,0 +1,50 @@
+# --- OKF profile (added by `hyalo init --profile okf`) ---
+# Open Knowledge Format: a vendor-neutral bundle of markdown "concept" notes.
+# See https://github.com/ractive/hyalo (OKF section) for the concept model.
+
+# Bundle-absolute links (`/tables/x.md`, the spec-recommended §5 form) resolve
+# from the bundle root: `""` strips only the leading `/`, avoiding the
+# auto-derived-prefix collision when a subdir shares the bundle dir name.
+site_prefix = ""
+
+# Keep authoring conformant: validate frontmatter against the schema on write.
+validate_on_write = true
+
+[schema]
+# Reserved OKF files carry no `type`, so exempt them from the required-`type`
+# check. `index.md` (bundle/section index) and `log.md` (changelog) are reserved.
+exempt = ["**/index.md", "**/log.md"]
+
+[schema.default]
+# OKF concepts are identified by their `type`.
+required = ["type"]
+
+# Recommended OKF properties (declared as optional so authoring is not blocked,
+# but type-checked when present).
+[schema.default.properties.title]
+type = "string"
+
+[schema.default.properties.description]
+type = "string"
+
+[schema.default.properties.resource]
+type = "string"
+pattern = "^\\w[\\w+.-]*://"
+
+[schema.default.properties.tags]
+type = "list"
+
+[schema.default.properties.timestamp]
+type = "datetime-tz"
+
+# Common OKF concept types. Quoted keys (spaces) are supported end-to-end.
+# `required_sections` nudge authors toward the OKF-recommended body structure.
+[schema.types."BigQuery Table"]
+required = ["type", "title"]
+required_sections = ["# Schema", "# Citations"]
+
+[schema.types."BigQuery Dataset"]
+required = ["type", "title"]
+
+[schema.types.Reference]
+required = ["type", "title"]
