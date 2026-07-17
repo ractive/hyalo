@@ -2065,3 +2065,343 @@ fn github_format_rejected_for_non_lint() {
         "expected lint-only rejection message; got:\n{stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-174: HYALO005 frontmatter-parse-error + honest caps + skip visibility
+// ---------------------------------------------------------------------------
+
+/// Write a temp file containing the given lines and return its handle.
+fn write_list_file(lines: &[&str]) -> tempfile::NamedTempFile {
+    use std::io::Write as _;
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    for line in lines {
+        writeln!(f, "{line}").unwrap();
+    }
+    f
+}
+
+/// A vault with a single vault under a `dir = "."` schema and one
+/// corrupt-frontmatter file (duplicate YAML key). Returns the tempdir.
+fn setup_vault_with_corrupt_file() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n[schema.default]\nrequired = []\n");
+    // Duplicate mapping key — rejected by the frontmatter parser.
+    write_md(
+        tmp.path(),
+        "corrupt.md",
+        "---\ntitle: A\ntitle: B\n---\n# Body\n",
+    );
+    tmp
+}
+
+/// A corrupt-frontmatter file surfaces as an error-severity `HYALO005`
+/// violation in text/json/github and exits 1 — never `0 files checked, no
+/// issues` (RB-3 / df-own-kb B3).
+#[test]
+fn lint_corrupt_frontmatter_surfaces_hyalo005_all_formats() {
+    let tmp = setup_vault_with_corrupt_file();
+
+    // text
+    let text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "corrupt.md"])
+        .output()
+        .unwrap();
+    assert_eq!(text.status.code().unwrap(), 1, "corrupt file -> exit 1");
+    let text_out = std::str::from_utf8(&text.stdout).unwrap();
+    assert!(
+        text_out.contains("HYALO005") && text_out.contains("could not parse frontmatter"),
+        "text output must name HYALO005 + the parse error; got:\n{text_out}"
+    );
+    assert!(
+        !text_out.contains("0 files checked, no issues"),
+        "corrupt file must never report a clean run; got:\n{text_out}"
+    );
+
+    // json
+    let json = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "corrupt.md"])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code().unwrap(), 1);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("lint json parses");
+    let results = &v["results"];
+    assert_eq!(results["errors"].as_u64().unwrap(), 1, "one error counted");
+    assert_eq!(
+        results["files_checked"].as_u64().unwrap(),
+        1,
+        "corrupt file still counts in files_checked"
+    );
+    let rule = results["files"][0]["rule_groups"][0]["rule"]
+        .as_str()
+        .unwrap();
+    assert_eq!(rule, "HYALO005", "rule id is stable HYALO005");
+
+    // github
+    let gh = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "corrupt.md"])
+        .output()
+        .unwrap();
+    assert_eq!(gh.status.code().unwrap(), 1);
+    let gh_out = std::str::from_utf8(&gh.stdout).unwrap();
+    assert!(
+        gh_out.contains("::error file=corrupt.md,") && gh_out.contains("title=HYALO005::"),
+        "github must emit an ::error annotation titled HYALO005; got:\n{gh_out}"
+    );
+}
+
+/// A full-vault run includes the corrupt file in its counts and exits 1.
+#[test]
+fn lint_full_vault_counts_corrupt_file() {
+    let tmp = setup_vault_with_corrupt_file();
+    // Add a clean file alongside the corrupt one.
+    write_md(tmp.path(), "ok.md", "---\ntitle: Fine\n---\n# Body\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code().unwrap(), 1, "corrupt in vault -> exit 1");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["results"]["errors"].as_u64().unwrap(), 1);
+    assert_eq!(v["results"]["files_checked"].as_u64().unwrap(), 2);
+}
+
+/// HYALO005 is listed by `lint-rules list`, default-on, error by default.
+#[test]
+fn lint_rules_list_includes_hyalo005() {
+    let tmp = setup_vault_with_corrupt_file();
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint-rules", "show", "HYALO005", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let r = &v["results"];
+    assert_eq!(r["id"].as_str().unwrap(), "HYALO005");
+    assert_eq!(r["default_severity"].as_str().unwrap(), "error");
+    assert!(r["default_enabled"].as_bool().unwrap());
+}
+
+/// `--limit 0` means "unlimited" on lint files: it must NOT empty the file list
+/// or drop the error count (which would exit 0 on a corrupt vault). ff-rdp B5.
+#[test]
+fn lint_limit_zero_is_unlimited_not_empty() {
+    let tmp = setup_vault_with_corrupt_file();
+    // A second corrupt file so a truncation-to-N bug would be observable.
+    write_md(tmp.path(), "corrupt2.md", "---\nk: [oops\n---\n# Body\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--limit", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code().unwrap(),
+        1,
+        "--limit 0 must still exit 1 when errors exist"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["results"]["errors"].as_u64().unwrap(),
+        2,
+        "--limit 0 must report all errors, not zero"
+    );
+    let files = v["results"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "--limit 0 must show all files, not empty");
+    assert!(
+        !v["results"]["files_truncated"].as_bool().unwrap(),
+        "--limit 0 lifts the cap, so files_truncated is false"
+    );
+}
+
+/// `--limit N` on json output honors the file cap while keeping the error
+/// counter and `files_truncated` accurate (mapl BUG-4).
+#[test]
+fn lint_limit_n_caps_display_but_counts_stay_honest() {
+    let tmp = setup_vault_with_corrupt_file();
+    write_md(tmp.path(), "corrupt2.md", "---\nk: [oops\n---\n# Body\n");
+    write_md(tmp.path(), "corrupt3.md", "---\nx: y\nx: z\n---\n# Body\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--limit", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code().unwrap(), 1);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // Error count reflects ALL corrupt files, not just the shown one.
+    assert_eq!(v["results"]["errors"].as_u64().unwrap(), 3);
+    assert_eq!(v["results"]["files_checked"].as_u64().unwrap(), 3);
+    assert_eq!(v["results"]["files"].as_array().unwrap().len(), 1);
+    assert!(v["results"]["files_truncated"].as_bool().unwrap());
+}
+
+/// `--format github` never truncates annotations: with more files than the
+/// default 50-file cap, every file still emits its annotation. Regression test
+/// for the "caps stay lifted for github" guarantee.
+#[test]
+fn lint_github_never_truncates_annotations() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n[schema.default]\nrequired = []\n");
+    // 60 corrupt files > the default max_files cap of 50.
+    for i in 0..60 {
+        write_md(
+            tmp.path(),
+            &format!("bad{i:02}.md"),
+            "---\na: 1\na: 2\n---\n# Body\n",
+        );
+    }
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code().unwrap(), 1);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let annotations = stdout
+        .lines()
+        .filter(|l| l.starts_with("::error file=bad"))
+        .count();
+    assert_eq!(
+        annotations, 60,
+        "github must annotate all 60 files, not cap at 50"
+    );
+}
+
+/// Skip-summary line appears in BOTH text and github when `--files-from` drops
+/// input paths, with the correct counters; absent when all inputs resolve (UX-B).
+#[test]
+fn lint_skip_summary_text_and_github() {
+    let tmp = setup_vault_with_corrupt_file();
+    write_md(tmp.path(), "ok.md", "---\ntitle: Fine\n---\n# Body\n");
+    std::fs::write(tmp.path().join("notes.txt"), "not markdown").unwrap();
+
+    // 1 real .md + 2 missing + 1 non-md.
+    let list = write_list_file(&["ok.md", "gone1.md", "gone2.md", "notes.txt"]);
+    let list_path = list.path().to_str().unwrap();
+
+    // text: note on stderr.
+    let text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "--files-from", list_path])
+        .output()
+        .unwrap();
+    let text_err = std::str::from_utf8(&text.stderr).unwrap();
+    assert!(
+        text_err.contains("note: 2 input paths missing")
+            && text_err.contains("1 non-markdown skipped"),
+        "text must print a skip note with counts; got stderr:\n{text_err}"
+    );
+
+    // github: ::notice on stdout.
+    let gh = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "--files-from", list_path])
+        .output()
+        .unwrap();
+    let gh_out = std::str::from_utf8(&gh.stdout).unwrap();
+    assert!(
+        gh_out.contains("::notice::2 input paths missing")
+            && gh_out.contains("1 non-markdown skipped"),
+        "github must emit a ::notice with counts; got:\n{gh_out}"
+    );
+
+    // absent when everything resolves.
+    let clean_list = write_list_file(&["ok.md"]);
+    let clean = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--format",
+            "text",
+            "--files-from",
+            clean_list.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let clean_err = std::str::from_utf8(&clean.stderr).unwrap();
+    assert!(
+        !clean_err.contains("note:"),
+        "no skip note when all inputs resolve; got stderr:\n{clean_err}"
+    );
+}
+
+/// An explicitly named `--file` that is excluded by `[lint] ignore` prints a
+/// notice instead of silently reporting `0 files checked`.
+#[test]
+fn lint_ignored_named_file_prints_notice() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint]\nignore = [\"skip.md\"]\n",
+    );
+    write_md(tmp.path(), "skip.md", "---\ntitle: Skipped\n---\n# Body\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "skip.md"])
+        .output()
+        .unwrap();
+    let stderr = std::str::from_utf8(&out.stderr).unwrap();
+    assert!(
+        stderr.contains("excluded by [lint] ignore") && stderr.contains("skip.md"),
+        "expected an ignore-exclusion notice naming skip.md; got stderr:\n{stderr}"
+    );
+}
+
+/// `--fix --dry-run --format github` marks would-be-fixed violations distinctly
+/// from remaining ones and uses a `N fixable, M remaining` summary — so the
+/// output is not identical to a plain lint run (df-own-kb U6).
+#[test]
+fn lint_github_fix_dry_run_distinguishable() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n[schema.default]\nrequired = []\n");
+    // A bare checkbox is an autofixable HYALO001 violation.
+    write_md(
+        tmp.path(),
+        "fixme.md",
+        "---\ntitle: Fix Me\n---\n[] bare task\n",
+    );
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--fix",
+            "--dry-run",
+            "--format",
+            "github",
+            "fixme.md",
+        ])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    assert!(
+        stdout.contains("::notice") && stdout.contains("[fixable]"),
+        "fixable violations must render as ::notice with a [fixable] title; got:\n{stdout}"
+    );
+    // Distinct summary shape.
+    let last = stdout.lines().rfind(|l| !l.is_empty()).unwrap();
+    assert!(
+        last.contains("fixable") && last.contains("remaining"),
+        "summary must use the fixable/remaining shape; got: {last}"
+    );
+
+    // Plain lint of the same file uses the error/warning summary shape — proving
+    // the two outputs differ.
+    let plain = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "fixme.md"])
+        .output()
+        .unwrap();
+    let plain_out = std::str::from_utf8(&plain.stdout).unwrap();
+    assert_ne!(
+        stdout, plain_out,
+        "fix --dry-run github output must differ from plain lint output"
+    );
+}

@@ -1711,6 +1711,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // separators) as a glob: `vendor/**/*.md`, `legacy/known-bad.md`,
             // `templates/*.md`. An entry without glob meta-characters is matched
             // literally (exact path equality on the normalized path).
+            // `--file`/positional args are "explicit": the user named them
+            // directly rather than sweeping a glob. When an explicit file is
+            // excluded by `[lint] ignore` it must produce a visible notice, not
+            // a silent `0 files checked` (df-scale silent-drop family).
+            let explicit_named = !files_arg.is_empty();
             let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() {
                 file_pairs
             } else {
@@ -1740,13 +1745,36 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     builder.build().ok()
                 };
                 match set {
-                    Some(set) => file_pairs
-                        .into_iter()
-                        .filter(|(_, rel)| {
-                            let norm = rel.replace('\\', "/");
-                            !set.is_match(&norm)
-                        })
-                        .collect(),
+                    Some(set) => {
+                        let mut ignored_named: Vec<String> = Vec::new();
+                        let kept: Vec<_> = file_pairs
+                            .into_iter()
+                            .filter(|(_, rel)| {
+                                let norm = rel.replace('\\', "/");
+                                let matched = set.is_match(&norm);
+                                if matched && explicit_named {
+                                    ignored_named.push(norm);
+                                }
+                                !matched
+                            })
+                            .collect();
+                        // Notice for explicitly named files silently excluded by
+                        // `[lint] ignore` — otherwise the run reports `0 files
+                        // checked, no issues` with no hint why.
+                        if !ignored_named.is_empty() {
+                            let list = ignored_named.join(", ");
+                            let plural = if ignored_named.len() == 1 {
+                                "file"
+                            } else {
+                                "files"
+                            };
+                            crate::warn::warn(format!(
+                                "{} named {plural} excluded by [lint] ignore (not linted): {list}",
+                                ignored_named.len()
+                            ));
+                        }
+                        kept
+                    }
                     // If building the set failed (warning already emitted above),
                     // fall back to no filtering rather than silently ignoring
                     // potentially relevant files.
@@ -1778,10 +1806,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule())
             };
             // CLI --limit overrides the config max_files when provided.
-            let max_files_eff = if github_output {
-                cli_limit.unwrap_or(usize::MAX)
-            } else {
-                cli_limit.unwrap_or_else(|| ctx.md_lint.max_files())
+            // `--limit 0` is documented as "unlimited" (matches `--count
+            // --limit 0`): map it to `usize::MAX` so it lifts the file cap
+            // instead of truncating the list to zero (ff-rdp B5, mapl BUG-4).
+            let max_files_eff = match cli_limit {
+                Some(0) => usize::MAX,
+                Some(n) => n,
+                None if github_output => usize::MAX,
+                None => ctx.md_lint.max_files(),
             };
 
             let mut ext_opts = lint_commands::ExtLintOptions {

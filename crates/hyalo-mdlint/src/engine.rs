@@ -40,6 +40,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     ("HYALO002", DiagSeverity::Error),
     ("HYALO003", DiagSeverity::Warn),
     ("HYALO004", DiagSeverity::Warn),
+    ("HYALO005", DiagSeverity::Error),
 ];
 
 /// Rules that are **default-on** (cheap, structural, low false-positive).
@@ -47,7 +48,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
 static DEFAULT_ON: &[&str] = &[
     "MD001", "MD009", "MD010", "MD011", "MD012", "MD018", "MD019", "MD022", "MD023", "MD031",
     "MD034", "MD040", "MD042", "MD047", // HYALO rules are always default-on
-    "HYALO001", "HYALO002", "HYALO003", "HYALO004",
+    "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005",
 ];
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,15 @@ impl HyaloLintEngine {
                 name: "datetime-format".to_owned(),
                 description: "Schema-declared datetime property has a value that is not a valid ISO 8601 datetime (YYYY-MM-DDThh:mm:ss)".to_owned(),
                 default_severity: DiagSeverity::Warn,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint".to_owned(),
+            },
+            RuleCatalogEntry {
+                id: "HYALO005".to_owned(),
+                name: "frontmatter-parse-error".to_owned(),
+                description: "Frontmatter could not be parsed (invalid YAML, duplicate keys, oversized scalar). The file is otherwise invisible to lint, so this is an error by default and cannot be silently downgraded by a profile.".to_owned(),
+                default_severity: DiagSeverity::Error,
                 default_enabled: true,
                 autofixable: false,
                 source: "hyalo-mdlint".to_owned(),
@@ -854,6 +864,17 @@ mod tests {
         assert!(rules.iter().any(|r| r.id == "HYALO002"));
         assert!(rules.iter().any(|r| r.id == "HYALO003"));
         assert!(rules.iter().any(|r| r.id == "HYALO004"));
+        // HYALO005 (frontmatter-parse-error) is listed, default-on, and error-severity.
+        let h5 = rules
+            .iter()
+            .find(|r| r.id == "HYALO005")
+            .expect("HYALO005 must be in the catalog");
+        assert!(h5.default_enabled, "HYALO005 is default-on");
+        assert_eq!(
+            h5.default_severity,
+            DiagSeverity::Error,
+            "HYALO005 defaults to error severity"
+        );
     }
 
     #[test]

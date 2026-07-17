@@ -82,6 +82,36 @@ fn inject_files_from_counters(
 }
 
 impl OutputPipeline<'_> {
+    /// One-line human-readable summary of `--files-from` input paths that were
+    /// dropped before linting, or `None` when every input resolved (or
+    /// `--files-from` was not used).
+    ///
+    /// Shared verbatim between `--format text` (`note: …` on stderr) and
+    /// `--format github` (`::notice::…` on stdout) so both formats report the
+    /// same dropped-path story a `--format json` consumer already sees in the
+    /// `files_missing` / `files_skipped_*` envelope fields (UX-B).
+    fn skip_summary(&self) -> Option<String> {
+        let c = self.files_from_counters.as_ref()?;
+        let mut parts: Vec<String> = Vec::new();
+        if c.files_missing > 0 {
+            parts.push(format!("{} input paths missing", c.files_missing));
+        }
+        if c.files_skipped_non_md > 0 {
+            parts.push(format!("{} non-markdown skipped", c.files_skipped_non_md));
+        }
+        if c.files_skipped_outside_vault > 0 {
+            parts.push(format!(
+                "{} outside vault skipped",
+                c.files_skipped_outside_vault
+            ));
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(", "))
+        }
+    }
+
     /// Process a command result through the output pipeline.
     /// Prints output to stdout/stderr and returns the exit code.
     pub fn finalize(&self, result: Result<CommandOutcome>) -> i32 {
@@ -131,6 +161,12 @@ impl OutputPipeline<'_> {
                     let rendered =
                         crate::commands::lint_github::render(&value, &self.github_path_prefix);
                     println!("{rendered}");
+                    // Surface dropped `--files-from` input paths as a GitHub
+                    // Actions `::notice::` so a diff-scoped CI run shows in the
+                    // job log that some inputs never reached lint (UX-B).
+                    if let Some(summary) = self.skip_summary() {
+                        println!("::notice::{summary}");
+                    }
                     return 0;
                 }
 
@@ -180,6 +216,16 @@ impl OutputPipeline<'_> {
                         &value,
                     );
                     println!("{formatted}");
+                    // Surface dropped `--files-from` input paths as a stderr
+                    // note so a diff-scoped `--format text` run shows that some
+                    // inputs never reached lint — matching the `::notice::` the
+                    // github format emits (UX-B). JSON stays as-is (the counters
+                    // are already injected into the envelope above).
+                    if self.user_format == Format::Text
+                        && let Some(summary) = self.skip_summary()
+                    {
+                        eprintln!("note: {summary}");
+                    }
                     // In text mode, when a list command returns zero results, emit a
                     // notice on stderr so the user knows the command ran successfully.
                     // Only fires for list commands (total is Some) with empty arrays.
