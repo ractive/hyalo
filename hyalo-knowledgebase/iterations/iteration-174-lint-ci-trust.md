@@ -9,7 +9,7 @@ tags:
   - lint
   - ci
   - fix-wave
-status: in-progress
+status: completed
 branch: iter-174/lint-ci-trust
 ---
 
@@ -52,7 +52,7 @@ after the fact.
 
 ## Tasks
 
-### 1. Unparseable frontmatter = error (RB-3)
+### 1. Unparseable frontmatter = error (RB-3) [5/5]
 
 - [x] New error-severity violation (stable id, e.g. `HYALO005` /
   `frontmatter-parse-error`) emitted by lint for any file whose frontmatter
@@ -69,7 +69,7 @@ after the fact.
 - [x] Changelog + release-notes entry: this is an intentional behavior change
   (previously-invisible corrupt files now fail CI)
 
-### 2. Skip visibility in text/github formats (UX-B)
+### 2. Skip visibility in text/github formats (UX-B) [2/2]
 
 - [x] When any of `files_missing` / `files_skipped_non_md` /
   `files_skipped_outside_vault` is non-zero, `--format text` AND
@@ -79,7 +79,7 @@ after the fact.
 - [x] df-scale repro as e2e: 43-line diff list (15 .md, 13 missing, 28
   non-md) → the line appears in both formats with correct numbers
 
-### 3. Honest caps and limits
+### 3. Honest caps and limits [3/3]
 
 - [x] `lint --format json --detailed`: the 50-file `files[]` cap gets an
   override (honor `--limit`, with `--limit 0` = unlimited) and
@@ -89,14 +89,14 @@ after the fact.
 - [x] `--format github` never truncates annotations (already true) — add a
   regression test asserting caps stay lifted
 
-### 4. Fix-mode distinguishability
+### 4. Fix-mode distinguishability [1/1]
 
 - [x] `--format github` combined with `--fix --dry-run` marks would-be-fixed
   violations distinctly from remaining ones (e.g. `::notice` +
   `[fixable]` title prefix, summary line `N fixable, M remaining`) so the
   output is not identical to plain lint (df-own-kb U6)
 
-### 5. Tests
+### 5. Tests [4/4]
 
 - [x] e2e: corrupt-frontmatter file → exit 1, HYALO005 in text/json/github
   outputs; full-vault run includes the file in counts
@@ -106,7 +106,7 @@ after the fact.
   github + fix dry-run distinguishable output
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 6. Docs sync (same PR)
+### 6. Docs sync (same PR) [3/3]
 
 - [x] README CI section: note the parse-error gate and skip-summary lines
   (they strengthen the PR-check story shipped in iter-170/171)
