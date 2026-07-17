@@ -389,6 +389,75 @@ fn add_places_new_category_before_footer_link_refs_rb4() {
 }
 
 #[test]
+fn add_after_wrapped_last_bullet_lb5() {
+    // LB-5: the target category's last bullet wraps across hanging-indent
+    // continuation lines. `add` must insert the new entry after the complete
+    // wrapped bullet (not split it in half), and must not disturb the footer
+    // link-ref block that follows — end-to-end via the CLI binary, mirroring
+    // `add_places_new_category_before_footer_link_refs_rb4`.
+    let tmp = init_changelog();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n\
+         - **`--format github` annotations are no longer truncated by the file cap**: the\n\
+         \x20 regression is now covered by a test that lints 60 files past the default\n\
+         \x20 50-file cap and asserts all 60 annotations are emitted.\n\n\
+         [Unreleased]: https://x/compare/v1.0.0...HEAD\n[1.0.0]: https://x/tag/v1.0.0\n",
+    );
+    let (json, out) = run(
+        tmp.path(),
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "New entry.",
+            "--apply",
+        ],
+    );
+    assert!(out.status.success(), "add succeeds: {json}");
+    let content = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+
+    // The old wrapped bullet's continuation lines still directly follow its
+    // `- ` line — nothing stranded between them.
+    let old_bullet = content
+        .find("- **`--format github` annotations")
+        .expect("old bullet present");
+    let cont2 = content
+        .find("50-file cap and asserts")
+        .expect("second continuation present");
+    let new_entry = content.find("- New entry.").expect("new entry present");
+    assert!(
+        !content[old_bullet..cont2].contains("- New entry."),
+        "new entry must not split the wrapped bullet:\n{content}"
+    );
+    assert!(
+        cont2 < new_entry,
+        "new entry follows the complete old bullet:\n{content}"
+    );
+
+    // Footer untouched and still at EOF.
+    let footer = content.find("[Unreleased]:").expect("footer preserved");
+    assert!(new_entry < footer, "new entry stays inside the section");
+    assert_eq!(content.matches("[Unreleased]:").count(), 1);
+    assert_eq!(content.matches("[1.0.0]:").count(), 1);
+
+    // Exactly one trailing newline (MD047), no doubled blank lines.
+    assert!(
+        content.ends_with('\n') && !content.ends_with("\n\n"),
+        "MD047 clean"
+    );
+
+    // Lints clean under the changelog profile.
+    let (lint_json, lint_out) = run(tmp.path(), &["lint", "--profile", "changelog"]);
+    assert!(
+        lint_out.status.success(),
+        "conformant after add: {lint_json}"
+    );
+}
+
+#[test]
 fn root_changelog_reachable_from_docs_subdir_vault() {
     // Task 4 / AC: a repo-root CHANGELOG.md with the vault dir set to a docs
     // subdir must be addressable by `changelog add` and `lint --profile

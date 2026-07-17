@@ -79,6 +79,11 @@ and this project adheres to
 - Skip-summary pluralization (`1 input path missing`) and YAML parse errors no
   longer leak library-internal advice (`set DuplicateKeyPolicy in Options if
   acceptable`) in `HYALO005` messages and generator skip warnings.
+- **`changelog add` no longer splits a wrapped multi-line bullet** (LB-5): when
+  the last bullet under a `### Category` had hanging-indent continuation
+  lines, the new entry was inserted after only the bullet's first line,
+  stranding its continuation lines below the new entry. The insertion anchor
+  now scans past a bullet's full continuation block before inserting.
 
 ## [0.18.0] - 2026-07-17
 
