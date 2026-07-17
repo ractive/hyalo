@@ -1,5 +1,15 @@
 # Staged `ractive/setup-hyalo` repo
 
+> **PUBLISHED 2026-07-17** — the live repo at
+> <https://github.com/ractive/setup-hyalo> (tags `v1.0.0`, `v1.0.1`, `v1`) is
+> now the source of truth; this staged copy is a historical snapshot. Delta vs
+> this tree: the smoke fixture lint runs plain `--strict` (no `--format
+> github`) until a hyalo release > v0.17.0 ships the annotations format; this
+> `PUBLISH.md` runbook was not pushed to the public repo. The 6-job smoke
+> matrix is green. Flipping hyalo's `lint-kb` CI job to the action remains
+> **blocked on that next release** — the job uses `--format github`, which the
+> action-installed release binary doesn't have yet.
+
 This directory is the **complete, ready-to-push tree** for the standalone
 `ractive/setup-hyalo` GitHub Action (see [[decision-log#DEC-051]] and
 [[iterations/iteration-171-setup-hyalo-action]]).
