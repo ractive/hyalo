@@ -173,6 +173,10 @@ pub(crate) struct CommandContext<'a> {
     /// When `true`, "no 'type' property" and "undeclared property" warnings are
     /// promoted to errors, and lint exits non-zero on them.
     pub lint_strict: bool,
+    /// Active conformance profile (e.g. `Some("okf")`) from `[lint] profile` in
+    /// `.hyalo.toml` or an explicit `hyalo lint --profile`. Enables that
+    /// profile's advisory lint rules.
+    pub lint_profile: Option<String>,
     /// `--files-from` counters captured during dispatch for commands that resolve
     /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
     /// the output pipeline as `files_from_counters` in the envelope.
@@ -420,6 +424,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     let dir = ctx.dir;
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
+    // Capture the active conformance profile before borrowing `ctx.snapshot_index`
+    // mutably below (the lint arm needs it while that mutable borrow is live).
+    let okf_profile_active = ctx.lint_profile.as_deref() == Some("okf");
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
@@ -1599,6 +1606,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             max_per_rule,
             fix_rule,
             strict: lint_strict_flag,
+            // Profile activation is resolved in run.rs into `ctx.lint_profile`
+            // (it needs the raw config to overlay); the flag itself is consumed
+            // there. Ignore it here.
+            profile: _,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
             // --strict flag wins over config value; config value is the fallback.
@@ -1758,6 +1769,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 index_path,
                 vault_dir: dir,
                 strict: effective_strict,
+                // The active profile is resolved in run.rs (CLI `--profile`
+                // overlay OR `[lint] profile` in config); captured above.
+                okf_profile: okf_profile_active,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(

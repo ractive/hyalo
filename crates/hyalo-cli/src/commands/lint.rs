@@ -1396,6 +1396,9 @@ pub struct ExtLintOptions<'a> {
     /// When `true`, promote "no 'type' property" and "undeclared property in
     /// frontmatter" from `Severity::Warn` to `Severity::Error`.
     pub strict: bool,
+    /// When `true`, run the OKF conformance profile's advisory (warn-level)
+    /// rules in addition to the schema pass. Set by `hyalo lint --profile okf`.
+    pub okf_profile: bool,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1426,6 +1429,8 @@ pub fn lint_files_extended(
     let schema_has_completed = schema_has_completed_status(schema);
 
     let strict = opts.strict;
+    let okf_profile = opts.okf_profile;
+    let vault_dir = opts.vault_dir;
 
     // Process files in parallel. Each worker lints one file.
     let lint_file = |(full_path, rel_path): &(std::path::PathBuf, String)| {
@@ -1441,6 +1446,8 @@ pub fn lint_files_extended(
             opts.fix_rules,
             opts.max_per_rule,
             strict,
+            okf_profile,
+            vault_dir,
         )
     };
     #[cfg(not(miri))]
@@ -1926,6 +1933,8 @@ fn lint_one_file_extended(
     fix_rules: &[String],
     max_per_rule: usize,
     strict: bool,
+    okf_profile: bool,
+    vault_dir: &Path,
 ) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
     // trimmed line changing what counts as a duplicate blank line), so a
@@ -2409,6 +2418,57 @@ fn lint_one_file_extended(
             .push(diag_to_violation(d, false));
     }
 
+    // OKF conformance profile — advisory (warn-level) rules layered on top of
+    // the schema pass. Only runs under `hyalo lint --profile okf`. Every OKF
+    // rule respects `[lint.rules]` enable/disable overrides and the
+    // `--rule`/`--rule-prefix` filters, exactly like the HYALO rules above.
+    if okf_profile {
+        let is_enabled = |rule_id: &str| -> bool {
+            // `[lint.rules.<id>] enabled = false` disables it; default on.
+            let cfg_enabled = md_lint_config
+                .rules
+                .get(rule_id)
+                .and_then(hyalo_mdlint::RuleOverride::enabled)
+                .unwrap_or(true);
+            if !cfg_enabled {
+                return false;
+            }
+            // Honor --rule / --rule-prefix (rule_filter is the resolved id set).
+            rule_filter.is_empty() || rule_filter.iter().any(|r| r == rule_id)
+        };
+        let okf_doc_type = properties.get("type").and_then(|v| v.as_str());
+        let findings = crate::commands::okf_lint::run_okf_rules(
+            rel_path,
+            full_path,
+            &content,
+            body_content,
+            find_body_line_offset(&content, body_start),
+            okf_doc_type,
+            &is_enabled,
+            vault_dir,
+        );
+        for f in findings {
+            // Apply per-rule severity override; OKF rules default to warn.
+            let severity = md_lint_config
+                .rules
+                .get(f.rule_id)
+                .and_then(hyalo_mdlint::RuleOverride::severity)
+                .unwrap_or("warn")
+                .to_owned();
+            violations_by_rule
+                .entry(f.rule_id.to_owned())
+                .or_default()
+                .push(InternalViolation {
+                    line: f.line,
+                    column: 1,
+                    message: f.message,
+                    severity,
+                    fix: None,
+                    fixed: false,
+                });
+        }
+    }
+
     let total_violations = violations_by_rule.values().map(Vec::len).sum();
 
     let _ = max_per_rule; // applied during output construction
@@ -2540,6 +2600,18 @@ fn find_body_start(content: &str) -> usize {
         // No closing delimiter — treat whole file as body.
         0
     }
+}
+
+/// Compute the 1-based file line number on which the body begins, given the
+/// byte offset returned by [`find_body_start`]. Used so OKF findings report
+/// file-absolute line numbers rather than body-relative ones.
+fn find_body_line_offset(content: &str, body_start: usize) -> usize {
+    // Line 1 when there is no frontmatter; otherwise 1 + number of newlines
+    // consumed by the frontmatter block.
+    1 + content[..body_start]
+        .bytes()
+        .filter(|b| *b == b'\n')
+        .count()
 }
 
 /// Check whether any schema type declares `status` as an enum with `completed`.
@@ -2924,6 +2996,7 @@ mod tests {
             index_path: None,
             vault_dir,
             strict,
+            okf_profile: false,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }

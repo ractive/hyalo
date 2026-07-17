@@ -60,6 +60,13 @@ struct LintConfig {
     /// `hyalo lint --strict`.
     #[serde(default)]
     strict: bool,
+    /// Active conformance profile materialized into this config (e.g. `"okf"`),
+    /// written by `hyalo init --profile <name>`. When set, `hyalo lint` runs
+    /// that profile's advisory rules without needing `--profile` on the CLI —
+    /// so plain `hyalo lint` on an initialized vault behaves identically to
+    /// `hyalo lint --profile <name>` (idempotent overlay).
+    #[serde(default)]
+    profile: Option<String>,
 }
 
 /// Raw deserialized representation of `.hyalo.toml`.
@@ -145,6 +152,10 @@ pub(crate) struct ResolvedDefaults {
     /// `false` when the file was missing, unreadable, or malformed (in which
     /// case all other fields are hardcoded defaults).
     pub(crate) loaded_from_file: bool,
+    /// Active conformance profile from `[lint] profile` in `.hyalo.toml`
+    /// (e.g. `Some("okf")`). Enables that profile's advisory lint rules for
+    /// plain `hyalo lint`, matching the ephemeral `--profile` overlay.
+    pub(crate) lint_profile: Option<String>,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -183,6 +194,7 @@ impl ResolvedDefaults {
             case_insensitive_mode: CaseInsensitiveMode::Auto,
             lint_strict: false,
             loaded_from_file: false,
+            lint_profile: None,
         }
     }
 
@@ -334,6 +346,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     };
 
     let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
+    let lint_profile = cfg.lint.as_ref().and_then(|l| l.profile.clone());
 
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
@@ -355,6 +368,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         case_insensitive_mode,
         lint_strict,
         loaded_from_file: true,
+        lint_profile,
     }
 }
 
@@ -443,6 +457,84 @@ fn parse_md_lint_config(raw: Option<&LintConfig>) -> hyalo_mdlint::LintConfig {
     }
 
     config
+}
+
+/// The lint-relevant slice of config re-derived after overlaying a `--profile`
+/// fragment onto the effective `.hyalo.toml`.
+///
+/// A `--profile <name>` overlay is *ephemeral*: it never writes `.hyalo.toml`.
+/// It merges the profile's embedded TOML fragment (the same one
+/// `hyalo init --profile <name>` materializes) into the raw config **in memory**
+/// via [`crate::commands::profiles::merge_into_config`], then re-parses the
+/// merged result. On a vault already initialized with that profile the merge is
+/// idempotent, so the overlay yields the same schema/rules the on-disk config
+/// already had — plain `hyalo lint` and `hyalo lint --profile <name>` behave
+/// identically there.
+pub(crate) struct ProfileOverlay {
+    pub(crate) schema: SchemaConfig,
+    pub(crate) md_lint: hyalo_mdlint::LintConfig,
+    pub(crate) validate_on_write: bool,
+    pub(crate) lint_strict: bool,
+    /// Active profile marker from the merged `[lint] profile` key (the fragment
+    /// itself sets it), so the overlay enables the profile's advisory rules
+    /// even on a vault with no `.hyalo.toml` on disk.
+    pub(crate) lint_profile: Option<String>,
+}
+
+/// Build a [`ProfileOverlay`] by merging the named profile's fragment into the
+/// `.hyalo.toml` found in `config_dir` (empty config if none exists).
+///
+/// Returns an error only when the profile name is unknown or the merge fails
+/// (e.g. an existing `.hyalo.toml` that is not valid TOML). Schema/lint parse
+/// problems degrade to defaults with a warning, matching [`load_config_from`].
+pub(crate) fn overlay_profile(
+    config_dir: &Path,
+    profile_name: &str,
+) -> anyhow::Result<ProfileOverlay> {
+    let profile = crate::commands::profiles::lookup(profile_name)?;
+
+    let existing_raw = match std::fs::read_to_string(config_dir.join(".hyalo.toml")) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            crate::warn::warn(format!(
+                "could not read .hyalo.toml for --profile overlay: {e}; using an empty base"
+            ));
+            String::new()
+        }
+    };
+
+    let merged_raw =
+        crate::commands::profiles::merge_into_config(&existing_raw, profile.toml_fragment)?;
+
+    // Re-parse the merged TOML through the same pipeline the file loader uses so
+    // the overlay honors every schema/lint feature without a forked code path.
+    let cfg: ConfigFile =
+        toml::from_str(&merged_raw).context("merged --profile config is not valid TOML")?;
+
+    let schema_validate_on_write = extract_schema_validate_on_write(cfg.schema.as_ref());
+    let validate_on_write = schema_validate_on_write
+        .or(cfg.validate_on_write)
+        .unwrap_or(false);
+    let schema = parse_schema_from_toml(cfg.schema.as_ref());
+    let md_lint = parse_md_lint_config(cfg.lint.as_ref());
+    let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
+    // The fragment sets `[lint] profile`; fall back to the requested name so the
+    // overlay always advertises an active profile even if a future fragment
+    // omits the key.
+    let lint_profile = cfg
+        .lint
+        .as_ref()
+        .and_then(|l| l.profile.clone())
+        .or_else(|| Some(profile_name.to_owned()));
+
+    Ok(ProfileOverlay {
+        schema,
+        md_lint,
+        validate_on_write,
+        lint_strict,
+        lint_profile,
+    })
 }
 
 #[cfg(test)]
@@ -814,6 +906,23 @@ site_prefix = "docs"
         assert!(
             warned,
             "expected a warning for invalid case_insensitive value"
+        );
+    }
+
+    #[test]
+    fn overlay_profile_lint_strict_reflects_merged_config_only() {
+        // Regression: the caller in `run.rs` used to OR the overlay's
+        // `lint_strict` with the pre-overlay config value, which could keep
+        // strict mode on even when the merged (existing + fragment) config
+        // does not set it. `overlay_profile` re-parses the merged config, so
+        // its `lint_strict` field alone must be the source of truth — no OR
+        // needed by callers. Here the base `.hyalo.toml` has no `[lint]`
+        // section at all, so the merged/overlaid result must not be strict.
+        let dir = make_temp();
+        let overlay = overlay_profile(dir.path(), "okf").expect("okf profile must overlay");
+        assert!(
+            !overlay.lint_strict,
+            "okf profile fragment does not set [lint] strict; overlay must not be strict"
         );
     }
 }

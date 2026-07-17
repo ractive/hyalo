@@ -89,10 +89,14 @@ hyalo find --property type=Reference --tag bitcoin
 hyalo read tables/blocks.md --section "# Schema"
 hyalo read tables/blocks.md --section "# Citations"
 
-# Validate the whole bundle against the OKF profile schema.
-# --strict promotes missing-`type` and undeclared-property warnings to errors,
-# encoding the spec §9 conformance rules (every non-reserved concept has a `type`):
-hyalo lint --strict
+# Validate the whole bundle against the OKF §9 conformance rules.
+# On a vault created with `init --profile okf` these run under a plain `hyalo lint`;
+# on any other checkout (CI, a cloned third-party bundle) add `--profile okf` to
+# overlay them without touching .hyalo.toml. Errors only on missing frontmatter /
+# missing `type`; warns (never rejects) on broken links, reserved-file structure,
+# and citations — the OKF permissive-consumption model:
+hyalo lint --profile okf
+hyalo lint --profile okf --strict   # also fail on undeclared frontmatter properties, for stricter CI gates
 
 # Set / update frontmatter deterministically (never hand-edit the YAML block):
 hyalo set tables/blocks.md --property title="Bitcoin Blocks Table"
@@ -136,6 +140,33 @@ Key rules for these generators:
 - Both default to `--dry-run`; pass `--apply` to write. Do the concept edits first (with
   `hyalo set` / `hyalo new` / `hyalo mv`), then regenerate the reserved files.
 
+## Validating conformance (`lint --profile okf`)
+
+**Validation is the last step of every edit loop.** After changing concepts and
+regenerating `index.md`/`log.md`, check the bundle against the OKF §9 conformance rules:
+
+```bash
+hyalo lint --profile okf            # whole bundle (add nothing extra on an init --profile okf vault)
+hyalo lint --profile okf --strict   # CI gate: also exit non-zero on missing-`type` warnings
+```
+
+What it reports (permissive-consumption: *warn, don't reject*):
+
+- **Error** — the only hard failures, matching SPEC §9: a non-reserved `.md` with no
+  parseable frontmatter, or with an empty/missing `type`. Reserved `index.md`/`log.md`
+  are exempt (frontmatter-free by design).
+- **Warn (never error)** — broken cross-links; reserved-file structure (`index.md`
+  should be a link list, `log.md` date-grouped newest-first); missing/malformed
+  `# Citations`; and a `# Schema`/`# Citations` section emptied out by an edit.
+- **Always allowed** — unknown `type` values and extra frontmatter keys.
+
+Citations are first-class here: keep factual claims cited under a `# Citations` section
+(numbered `1.` or `-` bullets both fine), with links that resolve — bundle-relative or
+`references/…` paths are checked on disk; external `http(s)` URLs are surfaced but not
+network-fetched. Toggle any single rule off with
+`hyalo lint-rules set OKF-CITATIONS-PRESENT --enabled false`; list them with
+`hyalo lint-rules list`.
+
 ## Setting up an OKF bundle
 
 ```bash
@@ -146,7 +177,9 @@ hyalo init --profile okf --claude   # also installs this skill for Claude Code
 The OKF profile's `.hyalo.toml` sets: `[schema.default] required = ["type"]`, the
 recommended props (`title`, `description`, `resource` with a URL pattern, `tags`,
 `timestamp: datetime-tz`), `exempt = ["**/index.md", "**/log.md"]`, `site_prefix = ""`
-for bundle-root links, and `validate_on_write = true` so authoring stays conformant.
+for bundle-root links, `validate_on_write = true` so authoring stays conformant, and
+`[lint] profile = "okf"` so a plain `hyalo lint` runs the §9 conformance + citation rules
+(no `--profile okf` needed on this vault).
 
 ## Example concept
 

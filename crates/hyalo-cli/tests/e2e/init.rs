@@ -1185,19 +1185,25 @@ fn init_profile_okf_bundle_lints_clean_under_strict() {
         .output()
         .unwrap();
 
-    // A minimal OKF bundle: reserved index.md/log.md (no type), one concept.
-    // index.md is the bundle-root exception (may carry a lone `okf_version` key) and
-    // is a pure Markdown link list per the OKF spec; log.md is fully frontmatter-free.
+    // A minimal, fully OKF-conformant bundle: reserved index.md/log.md (no type)
+    // plus one concept. `init --profile okf` writes `[lint] profile = "okf"`, so
+    // plain `hyalo lint` now also runs the OKF advisory (warn-level) rules — the
+    // fixture is shaped to satisfy them (link-list index, date-grouped log,
+    // `# Citations` present) so the bundle lints entirely clean.
     write_md(
         tmp.path(),
         "index.md",
         "---\nokf_version: \"0.1\"\n---\n* [Bitcoin](/concepts/bitcoin.md) - a concept\n",
     );
-    write_md(tmp.path(), "log.md", "Changelog body.\n");
+    write_md(
+        tmp.path(),
+        "log.md",
+        "# Changelog\n\n## 2026-05-28\n\n- **Added** the bitcoin concept.\n",
+    );
     write_md(
         tmp.path(),
         "concepts/bitcoin.md",
-        "---\ntype: concept\ntitle: Bitcoin\ntimestamp: '2026-05-28T22:44:47+00:00'\n---\n\nBody.\n",
+        "---\ntype: concept\ntitle: Bitcoin\ntimestamp: '2026-05-28T22:44:47+00:00'\n---\n\nBody.\n\n# Citations\n\n- [Bitcoin whitepaper](https://bitcoin.org/bitcoin.pdf)\n",
     );
 
     let output = hyalo_no_hints()

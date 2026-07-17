@@ -31,6 +31,7 @@ mod mv_batch;
 mod mv_link_forms;
 mod new;
 mod okf;
+mod okf_profile;
 mod positional_file;
 mod properties;
 mod quiet;
