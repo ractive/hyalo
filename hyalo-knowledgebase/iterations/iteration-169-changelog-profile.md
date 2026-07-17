@@ -22,6 +22,12 @@ Fourth profile (see [[profile-candidates-beyond-okf]]). Keep a Changelog 1.1.0 (
 
 ## Steps / Tasks
 
+**iter-167 retrospective (2026-07-17) — reusable patterns from the madr profile:**
+- **Single-file binding**: changelog needs the schema bound to one file (`CHANGELOG.md`), not a subtree. The shipped `[[schema.bind]]` (`hyalo-core/schema.rs`) already supports a literal-path glob (`glob = "CHANGELOG.md"`, first-match-wins) — reuse it; no new mechanism needed. Bind targets that name an undeclared type warn at config load (`unknown_bind_targets`).
+- **`changelog release` generator**: model on `hyalo madr toc` (`commands/madr.rs`) + the shared `commands/managed_region.rs` helper — `Markers::new("changelog:...")` for any managed region, `GeneratePlan`/`apply_plan`, dry-run-exits-nonzero-on-drift. The rotate-`## [Unreleased]` splice is a managed-region edit; don't hand-roll marker finding.
+- **Heading-grammar lint mode** (task 1 below) is the genuinely new capability here — the `MADR-*` rules were still content-scanning pure fns, not a grammar. Budget for that; the *wiring* (catalog entry + `<name>_profile` bool gated on `ctx.lint_profile`) is copy-paste from `madr_lint`, but the grammar engine is net-new.
+- Profile fragment + `Profile` entry + skill file shape (see `commands/profiles.rs`, `templates/profile-madr.toml`) carries over unchanged.
+
 ### 1. Heading-grammar lint mode (generic capability)
 
 - [ ] Extract/generalize iter-166's `index.md`/`log.md` structure checks into a declarative heading-grammar mechanism usable by profiles (sequence, level, pattern, ordering constraints on headings)

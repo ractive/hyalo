@@ -397,7 +397,18 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
         }
     };
     match SchemaConfig::try_from(raw_cfg) {
-        Ok(cfg) => cfg,
+        Ok(cfg) => {
+            // A `[[schema.bind]]` whose target names an undeclared type binds
+            // nothing — warn so a typo doesn't fail silently.
+            let unknown = cfg.unknown_bind_targets();
+            if !unknown.is_empty() {
+                crate::warn::warn(format!(
+                    "[[schema.bind]] targets an unknown type (no matching [schema.types.*]): {}",
+                    unknown.join(", ")
+                ));
+            }
+            cfg
+        }
         Err(e) => {
             crate::warn::warn(format!("invalid [schema] in .hyalo.toml: {e}"));
             SchemaConfig::default()

@@ -204,6 +204,36 @@ impl HyaloLintEngine {
                 source: "hyalo-mdlint (okf profile)".to_owned(),
             });
         }
+
+        // MADR conformance-profile rules. Same gating model as the OKF rules
+        // above: listed here so `lint-rules list` / `--rule-prefix MADR` see them
+        // and `[lint.rules.MADR-*]` overrides round-trip, but they only execute
+        // under `hyalo lint --profile madr` (or `[lint] profile = "madr"`). Both
+        // are advisory (warn): a dangling supersede or duplicate number is a
+        // smell, not a hard error.
+        let madr_entries = [
+            (
+                "MADR-SUPERSEDE-RESOLVE",
+                "madr-supersede-resolve",
+                "`status: superseded by ADR-NNNN` should point at an existing ADR file",
+            ),
+            (
+                "MADR-DUPLICATE-NUMBER",
+                "madr-duplicate-number",
+                "Two ADR files in a directory should not share the same `NNNN` number",
+            ),
+        ];
+        for (id, name, description) in madr_entries {
+            catalog.push(RuleCatalogEntry {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                description: description.to_owned(),
+                default_severity: DiagSeverity::Warn,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint (madr profile)".to_owned(),
+            });
+        }
         catalog
     }
 

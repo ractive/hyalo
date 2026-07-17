@@ -48,6 +48,76 @@ pub struct SchemaConfig {
     /// forward slashes before matching), so `**/index.md` matches
     /// `index.md`, `sub/index.md`, etc. on every OS.
     pub exempt: ExemptGlobs,
+    /// Ordered path-glob → type bindings (`[schema.bind]`). When a file has no
+    /// explicit `type:` frontmatter, the first binding whose glob matches its
+    /// vault-relative path assigns the *effective* type. Explicit frontmatter
+    /// always wins; see [`SchemaConfig::bound_type_for`].
+    pub bind: SchemaBind,
+}
+
+/// Ordered, compiled `[schema.bind]` path-glob → type map.
+///
+/// Bindings are *ordered*: the first matching glob wins (authors put the most
+/// specific paths first). Each entry is a `(pattern, type_name)` pair; the
+/// patterns are compiled once into individual [`globset::GlobSet`]s so
+/// first-match-wins can be evaluated without re-parsing globs per file.
+#[derive(Debug, Clone, Default)]
+pub struct SchemaBind {
+    /// `(raw_glob, type_name)` in declaration order (preserved for display).
+    entries: Vec<(String, String)>,
+    /// One single-glob `GlobSet` per entry, index-aligned with `entries`.
+    /// `None` for an entry whose glob failed to compile (skipped at match time;
+    /// the config loader surfaces the error separately via `TryFrom`).
+    sets: Vec<Option<globset::GlobSet>>,
+}
+
+impl SchemaBind {
+    /// Build from ordered `(glob, type)` pairs. Invalid globs are kept in
+    /// `entries` (for display) but compile to `None` and never match; the
+    /// config loader reports them as errors via [`SchemaConfig::try_from`].
+    #[must_use]
+    pub fn new(entries: Vec<(String, String)>) -> Self {
+        let sets = entries
+            .iter()
+            .map(|(pat, _)| {
+                globset::GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .ok()
+                    .and_then(|g| globset::GlobSetBuilder::new().add(g).build().ok())
+            })
+            .collect();
+        Self { entries, sets }
+    }
+
+    /// Return the bound type for `rel_path` (vault-relative), or `None` when no
+    /// binding matches. First declared match wins. Paths are normalized to
+    /// forward slashes so Windows-style separators match the same globs.
+    #[must_use]
+    pub fn type_for(&self, rel_path: &str) -> Option<&str> {
+        let normalized = rel_path.replace('\\', "/");
+        for (idx, set) in self.sets.iter().enumerate() {
+            if let Some(set) = set
+                && set.is_match(normalized.as_str())
+            {
+                return Some(self.entries[idx].1.as_str());
+            }
+        }
+        None
+    }
+
+    /// Whether any bindings are configured.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The configured `(glob, type)` entries, in declaration order (for display
+    /// / `hyalo config`).
+    #[must_use]
+    pub fn entries(&self) -> &[(String, String)] {
+        &self.entries
+    }
 }
 
 /// Compiled set of vault-relative exempt globs.
@@ -179,6 +249,34 @@ impl SchemaConfig {
     /// Returns the default-only schema (used for files without a `type` property).
     pub fn default_schema(&self) -> &TypeSchema {
         &self.default
+    }
+
+    /// Resolve the effective type of a file at `rel_path` (vault-relative) that
+    /// carries no explicit `type:` frontmatter, using the `[schema.bind]`
+    /// path-glob bindings. Returns the bound type only when it names a declared
+    /// `[schema.types.*]`; an unknown target is ignored (the config loader warns
+    /// about it separately). Returns `None` when nothing matches.
+    #[must_use]
+    pub fn bound_type_for(&self, rel_path: &str) -> Option<&str> {
+        let bound = self.bind.type_for(rel_path)?;
+        if self.types.contains_key(bound) {
+            Some(bound)
+        } else {
+            None
+        }
+    }
+
+    /// The raw `[schema.bind]` entries whose target type is *not* a declared
+    /// `[schema.types.*]`. Surfaced by the config loader as a warning so a typo
+    /// in a bind target doesn't silently do nothing.
+    #[must_use]
+    pub fn unknown_bind_targets(&self) -> Vec<&str> {
+        self.bind
+            .entries()
+            .iter()
+            .filter(|(_, t)| !self.types.contains_key(t))
+            .map(|(_, t)| t.as_str())
+            .collect()
     }
 }
 
@@ -531,6 +629,27 @@ pub struct RawSchemaConfig {
     /// `hyalo lint` required-`type` / frontmatter-presence rules.
     #[serde(default)]
     pub exempt: Vec<String>,
+    /// Ordered path-glob → type bindings. Declared as an array of tables so the
+    /// declaration order (first-match-wins) is preserved:
+    ///
+    /// ```toml
+    /// [[schema.bind]]
+    /// glob = "docs/decisions/**/*.md"
+    /// type = "adr"
+    /// ```
+    #[serde(default)]
+    pub bind: Vec<RawSchemaBind>,
+}
+
+/// Raw TOML shape for one `[[schema.bind]]` entry.
+#[derive(Debug, Deserialize)]
+pub struct RawSchemaBind {
+    /// Vault-relative glob (forward slashes) selecting the files to bind.
+    pub glob: String,
+    /// The `[schema.types.*]` type assigned to matching files that lack an
+    /// explicit `type:` frontmatter.
+    #[serde(rename = "type")]
+    pub type_name: String,
 }
 
 impl TryFrom<RawSchemaConfig> for SchemaConfig {
@@ -556,10 +675,25 @@ impl TryFrom<RawSchemaConfig> for SchemaConfig {
                 .map_err(|e| format!("[schema] exempt: invalid glob {pat:?}: {e}"))?;
         }
         let exempt = ExemptGlobs::new(raw.exempt);
+        // Validate bind globs eagerly so a malformed pattern is a config error
+        // rather than a silently-dropped binding.
+        for b in &raw.bind {
+            globset::GlobBuilder::new(&b.glob)
+                .literal_separator(true)
+                .build()
+                .map_err(|e| format!("[[schema.bind]]: invalid glob {:?}: {e}", b.glob))?;
+        }
+        let bind = SchemaBind::new(
+            raw.bind
+                .into_iter()
+                .map(|b| (b.glob, b.type_name))
+                .collect(),
+        );
         Ok(Self {
             default,
             types,
             exempt,
+            bind,
         })
     }
 }
@@ -603,6 +737,7 @@ required = ["title"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
         assert_eq!(cfg.default.required, vec!["title".to_owned()]);
@@ -633,6 +768,7 @@ type = "date"
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -668,6 +804,7 @@ required = ["date", "status"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -697,6 +834,7 @@ values = ["planned", "completed"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -723,6 +861,7 @@ required = ["title"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -745,6 +884,7 @@ pattern = "^iter-\\d+/"
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -805,6 +945,7 @@ required = ["title", "date"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -838,6 +979,7 @@ values = ["active", "archived", "draft"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -877,6 +1019,7 @@ values = ["active", "archived", "draft"]
                 default: None,
                 types: HashMap::new(),
                 exempt: Vec::new(),
+                bind: Vec::new(),
             });
         SchemaConfig::try_from(raw_schema)
     }
@@ -1023,6 +1166,82 @@ item_pattern = "bar"
         assert!(
             err.contains("required-sections"),
             "expected 'required-sections' in error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn bind_first_match_wins() {
+        // Two bindings can overlap; declaration order decides.
+        let toml = "\
+[schema.types.adr]
+required = [\"type\"]
+
+[schema.types.note]
+required = [\"type\"]
+
+[[schema.bind]]
+glob = \"docs/decisions/**/*.md\"
+type = \"adr\"
+
+[[schema.bind]]
+glob = \"docs/**/*.md\"
+type = \"note\"
+";
+        let cfg = parse_cfg(toml).expect("should parse");
+        assert_eq!(cfg.bound_type_for("docs/decisions/0001-x.md"), Some("adr"));
+        assert_eq!(cfg.bound_type_for("docs/guide/intro.md"), Some("note"));
+        assert_eq!(cfg.bound_type_for("other/loose.md"), None);
+    }
+
+    #[test]
+    fn bind_normalizes_backslashes() {
+        let toml = "\
+[schema.types.adr]
+required = [\"type\"]
+
+[[schema.bind]]
+glob = \"docs/decisions/**/*.md\"
+type = \"adr\"
+";
+        let cfg = parse_cfg(toml).expect("should parse");
+        assert_eq!(
+            cfg.bound_type_for("docs\\decisions\\0001-x.md"),
+            Some("adr"),
+            "Windows-style separators must match the same glob"
+        );
+    }
+
+    #[test]
+    fn bind_unknown_target_is_ignored_but_reported() {
+        // A binding to a non-existent type does not resolve, but is surfaced by
+        // unknown_bind_targets so the loader can warn.
+        let toml = "\
+[schema.types.adr]
+required = [\"type\"]
+
+[[schema.bind]]
+glob = \"docs/decisions/**/*.md\"
+type = \"typo-type\"
+";
+        let cfg = parse_cfg(toml).expect("should parse");
+        assert_eq!(cfg.bound_type_for("docs/decisions/0001-x.md"), None);
+        assert_eq!(cfg.unknown_bind_targets(), vec!["typo-type"]);
+    }
+
+    #[test]
+    fn bind_invalid_glob_is_config_error() {
+        let toml = "\
+[schema.types.adr]
+required = [\"type\"]
+
+[[schema.bind]]
+glob = \"docs/[unterminated\"
+type = \"adr\"
+";
+        let err = parse_cfg(toml).expect_err("should reject invalid bind glob");
+        assert!(
+            err.contains("schema.bind") && err.contains("invalid glob"),
+            "expected bind glob error, got: {err}"
         );
     }
 }

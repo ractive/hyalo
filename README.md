@@ -205,6 +205,32 @@ Advisory citation rules make the `# Citations` convention first-class: `OKF-CITA
 
 Because the overlay reuses the init fragment, a vault created with `hyalo init --profile okf` (which records `[lint] profile = "okf"`) runs the same rules under a plain `hyalo lint` — `--profile okf` on such a vault is a no-op.
 
+## MADR profile — Architecture Decision Records
+
+[MADR](https://adr.github.io/madr/) (Markdown Architecture Decision Records, 4.0.0) is a lightweight convention for capturing architecture decisions as Markdown files. Each decision is one file under `docs/decisions/`, named `NNNN-slug.md`, with a `status` lifecycle (`proposed` → `accepted` / `rejected`, later `deprecated`, or `superseded by ADR-NNNN`).
+
+```sh
+hyalo init --profile madr            # scaffold an ADR-ready .hyalo.toml
+hyalo init --profile madr --claude   # also install the bundled `madr` skill
+```
+
+The `madr` profile is **pure data over the same machinery as `okf`**, plus two generic mechanisms it is the first consumer of:
+
+- **Path-bound schemas (`[[schema.bind]]`)** — the `adr` type is bound to `docs/decisions/**/*.md`, so the schema applies to *that subtree only*, inside any larger vault. Files there need no explicit `type: adr` frontmatter; the binding supplies it (explicit frontmatter always wins, and a `type:` that disagrees with the binding warns). Bindings are ordered and first-match-wins.
+- **Zero-padded filename tokens (`{n:04}`)** — the `adr` `filename-template` is `docs/decisions/{n:04}-{slug}.md`, producing `0007-use-postgres.md`. The pad width is a rendering minimum, so `1-x.md` and `0002-x.md` are both still recognized as ADRs.
+
+The `adr` type keeps MADR's light frontmatter (`status`, `date`, `decision-makers`/`consulted`/`informed` — the 3.x `deciders` spelling is accepted as an alias) optional-but-typed, and requires the MADR-4 short-template sections `## Context and Problem Statement`, `## Considered Options`, `## Decision Outcome`.
+
+```sh
+hyalo new --type adr --file docs/decisions/0007-use-postgres.md   # scaffold an ADR
+hyalo lint                                                        # validate (profile recorded in config)
+hyalo madr toc --apply                                            # regenerate docs/decisions/README.md
+```
+
+**`hyalo madr toc`** regenerates an ADR table of contents / status dashboard (number, title, status, date) into `docs/decisions/README.md`, inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->` managed region (prose outside is preserved). Like `okf index`, it defaults to `--dry-run` and exits non-zero on drift, so it doubles as a CI check.
+
+Two advisory (warn-level) lint rules layer on top of the schema pass under `hyalo lint --profile madr`: **`MADR-SUPERSEDE-RESOLVE`** (a `status: superseded by ADR-0123` that points at a non-existent `0123-*.md` warns) and **`MADR-DUPLICATE-NUMBER`** (two ADRs sharing an `NNNN` prefix warn). Both are toggleable via `hyalo lint-rules set MADR-… --enabled false` and appear in `hyalo lint-rules list`.
+
 ## Installation
 
 ### Homebrew (macOS & Linux)

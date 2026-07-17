@@ -25,6 +25,12 @@ const OKF_PROFILE_TOML: &str = include_str!("../../templates/profile-okf.toml");
 /// The bundled OKF skill body, embedded at compile time.
 const OKF_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-okf.md");
 
+/// The MADR `.hyalo.toml` fragment, embedded at compile time.
+const MADR_PROFILE_TOML: &str = include_str!("../../templates/profile-madr.toml");
+
+/// The bundled MADR skill body, embedded at compile time.
+const MADR_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-madr.md");
+
 /// A declarative init profile: a TOML fragment plus optional skill files.
 #[derive(Debug)]
 pub struct Profile {
@@ -41,12 +47,21 @@ pub struct Profile {
 
 /// All profiles known to `hyalo init --profile`. Additive by design: new
 /// profiles are new entries here, never new match arms elsewhere.
-pub const PROFILES: &[Profile] = &[Profile {
-    name: "okf",
-    description: "Open Knowledge Format vault (schema, exemptions, bundle-root links)",
-    toml_fragment: OKF_PROFILE_TOML,
-    skills: &[("okf", OKF_SKILL_CONTENT)],
-}];
+pub const PROFILES: &[Profile] = &[
+    Profile {
+        name: "okf",
+        description: "Open Knowledge Format vault (schema, exemptions, bundle-root links)",
+        toml_fragment: OKF_PROFILE_TOML,
+        skills: &[("okf", OKF_SKILL_CONTENT)],
+    },
+    Profile {
+        name: "madr",
+        description: "Markdown Architecture Decision Records (MADR 4.0.0): path-bound `adr` \
+                      schema, status lifecycle, auto-numbered `NNNN-slug.md`",
+        toml_fragment: MADR_PROFILE_TOML,
+        skills: &[("madr", MADR_SKILL_CONTENT)],
+    },
+];
 
 /// Look up a profile by name, or return a helpful error listing the available
 /// profiles.
@@ -191,5 +206,60 @@ required = [\"type\", \"status\"]
         assert_eq!(okf.skills.len(), 1);
         assert_eq!(okf.skills[0].0, "okf");
         assert!(!okf.skills[0].1.is_empty());
+    }
+
+    #[test]
+    fn lookup_finds_madr() {
+        assert_eq!(lookup("madr").unwrap().name, "madr");
+    }
+
+    #[test]
+    fn madr_fragment_is_valid_toml() {
+        let _: toml::Table = toml::from_str(MADR_PROFILE_TOML).expect("MADR fragment must parse");
+    }
+
+    #[test]
+    fn madr_fragment_parses_as_schema() {
+        // The fragment must produce a valid SchemaConfig: an `adr` type, a bind
+        // entry pointing at it, and a parseable status pattern.
+        let merged = merge_into_config("", MADR_PROFILE_TOML).unwrap();
+        let val: toml::Value = toml::from_str(&merged).unwrap();
+        let raw: hyalo_core::schema::RawSchemaConfig = val
+            .get("schema")
+            .and_then(|v| v.clone().try_into().ok())
+            .expect("schema section present");
+        let cfg = hyalo_core::schema::SchemaConfig::try_from(raw).expect("valid schema");
+        assert!(cfg.types.contains_key("adr"), "adr type declared");
+        assert_eq!(
+            cfg.bound_type_for("docs/decisions/0001-x.md"),
+            Some("adr"),
+            "bind resolves ADR files to the adr type"
+        );
+        assert!(
+            cfg.unknown_bind_targets().is_empty(),
+            "bind target must reference a declared type"
+        );
+    }
+
+    #[test]
+    fn madr_declares_a_skill() {
+        let madr = lookup("madr").unwrap();
+        assert_eq!(madr.skills.len(), 1);
+        assert_eq!(madr.skills[0].0, "madr");
+        assert!(!madr.skills[0].1.is_empty());
+    }
+
+    #[test]
+    fn okf_and_madr_compose() {
+        // Both profiles applied to one vault must coexist (composable).
+        let once = merge_into_config("", OKF_PROFILE_TOML).unwrap();
+        let both = merge_into_config(&once, MADR_PROFILE_TOML).unwrap();
+        let parsed: toml::Table = toml::from_str(&both).unwrap();
+        let types = parsed["schema"]["types"].as_table().unwrap();
+        assert!(types.contains_key("adr"), "madr adr type present");
+        assert!(
+            types.contains_key("BigQuery Table"),
+            "okf types preserved alongside madr"
+        );
     }
 }

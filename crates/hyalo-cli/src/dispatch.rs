@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, OkfAction, PropertiesAction,
-    TagsAction, TaskAction, TypesAction, ViewsAction, resolve_single_file,
+    Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, MadrAction, OkfAction,
+    PropertiesAction, TagsAction, TaskAction, TypesAction, ViewsAction, resolve_single_file,
 };
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
@@ -427,6 +427,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     // Capture the active conformance profile before borrowing `ctx.snapshot_index`
     // mutably below (the lint arm needs it while that mutable borrow is live).
     let okf_profile_active = ctx.lint_profile.as_deref() == Some("okf");
+    let madr_profile_active = ctx.lint_profile.as_deref() == Some("madr");
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
@@ -1772,6 +1773,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 // The active profile is resolved in run.rs (CLI `--profile`
                 // overlay OR `[lint] profile` in config); captured above.
                 okf_profile: okf_profile_active,
+                madr_profile: madr_profile_active,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
@@ -2219,6 +2221,24 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 effective_format,
             ),
+        },
+        Commands::Madr { action } => match action {
+            MadrAction::Toc {
+                adr_dir,
+                apply,
+                dry_run: _,
+            } => {
+                let (outcome, exit_override) = crate::commands::madr::run_toc(
+                    ctx.dir,
+                    adr_dir.as_deref(),
+                    apply,
+                    effective_format,
+                )?;
+                if let Some(code) = exit_override {
+                    ctx.exit_code_override = Some(code);
+                }
+                Ok(outcome)
+            }
         },
         // Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config => unreachable!("Config command is handled before dispatch"),

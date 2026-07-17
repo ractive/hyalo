@@ -895,6 +895,7 @@ fn load_schema_from_doc(doc: &toml_edit::DocumentMut) -> Result<SchemaConfig> {
             default: None,
             types: HashMap::new(),
             exempt: Vec::new(),
+            bind: Vec::new(),
         });
     Ok(SchemaConfig::from_raw_lossy(raw_schema))
 }

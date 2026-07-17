@@ -822,9 +822,9 @@ Repeatable (AND).\n\
             With --claude, also installs the hyalo skill for Claude Code.\n\
             With --pi, also installs the hyalo skill for pi.\n\
             With --profile <name>, scaffolds a preset vault flavour by merging an\n\
-            embedded config fragment into .hyalo.toml (available: okf). Multiple\n\
+            embedded config fragment into .hyalo.toml (available: okf, madr). Multiple\n\
             profiles compose in one vault; re-running upserts without clobbering.\n\
-            With --profile okf --claude, also installs the bundled `okf` skill.\n\n\
+            With --profile <name> --claude, also installs the bundled skill for it.\n\n\
             Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo init\n\
@@ -832,7 +832,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo --dir kb init --claude\n\
             \u{00a0} hyalo --dir kb init --pi\n\
             \u{00a0} hyalo init --profile okf\n\
-            \u{00a0} hyalo init --profile okf --claude"
+            \u{00a0} hyalo init --profile okf --claude\n\
+            \u{00a0} hyalo init --profile madr"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
@@ -841,7 +842,7 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
-        /// Scaffold a preset vault flavour (currently: okf) by merging an
+        /// Scaffold a preset vault flavour (okf, madr) by merging an
         /// embedded config fragment into .hyalo.toml
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
@@ -1157,9 +1158,11 @@ Repeatable (AND).\n\
         strict: bool,
         /// Overlay a named conformance profile for this invocation only (no
         /// `.hyalo.toml` change). `okf` enables the Open Knowledge Format §9
-        /// rules plus advisory citation / augmentation checks. Reuses the same
-        /// embedded fragment as `hyalo init --profile okf`, so on a vault
-        /// already initialized that way it is a no-op overlay (idempotent).
+        /// rules plus advisory citation / augmentation checks; `madr` enables
+        /// the MADR ADR schema (path-bound to `docs/decisions/**`) plus the
+        /// supersede / duplicate-number advisory rules. Reuses the same embedded
+        /// fragment as `hyalo init --profile <name>`, so on a vault already
+        /// initialized that way it is a no-op overlay (idempotent).
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
         #[command(flatten)]
@@ -1260,6 +1263,28 @@ Repeatable (AND).\n\
     Okf {
         #[command(subcommand)]
         action: OkfAction,
+    },
+    /// Markdown Architecture Decision Record (MADR) generators
+    #[command(
+        display_order = 811,
+        long_about = "MADR (Markdown Architecture Decision Record) artifact generators.\n\n\
+            Deterministic, LLM-free maintenance of the derived files an ADR directory\n\
+            otherwise hand-maintains. Currently one subcommand:\n\n\
+            - `madr toc` regenerates the ADR table of contents / status dashboard\n\
+              (`<adr-dir>/README.md`) from each ADR's number, title, status and date,\n\
+              inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->` managed region\n\
+              (prose outside is preserved). Defaults to --dry-run and exits non-zero on\n\
+              drift, so it doubles as a CI check.\n\n\
+            VALIDATE: after (re)generating, run `hyalo lint --profile madr` to check\n\
+            ADR conformance (status pattern, required sections, supersede references).\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo madr toc --dry-run              # CI: fail if the TOC is stale\n\
+            \u{00a0} hyalo madr toc --apply                # regenerate docs/decisions/README.md\n\
+            \u{00a0} hyalo madr toc docs/adr --apply       # scope to a custom ADR directory"
+    )]
+    Madr {
+        #[command(subcommand)]
+        action: MadrAction,
     },
     /// Print the effective configuration (resolved .hyalo.toml path, dir, and core settings)
     #[command(
@@ -1364,6 +1389,38 @@ pub(crate) enum OkfAction {
         /// Optional bold action word prefixing the entry (e.g. `Update`, `Add`)
         #[arg(long, value_name = "WORD")]
         action: Option<String>,
+        /// Write changes to disk. Without this flag the command is a dry run.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Preview changes without writing (default behaviour; explicit for clarity)
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MadrAction {
+    /// Regenerate the ADR table of contents / status dashboard
+    #[command(
+        long_about = "Regenerate the ADR table of contents / status dashboard.\n\n\
+            Scans the ADR directory (default `docs/decisions/`, or the DIR argument), reads\n\
+            each ADR's number (from its `NNNN-slug.md` filename), title (frontmatter `title`\n\
+            else the first `# ` heading else the filename stem), `status`, and `date`, and\n\
+            renders a Markdown table into `<adr-dir>/README.md`.\n\n\
+            The table lives inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->`\n\
+            managed region; any prose outside those markers is preserved verbatim across\n\
+            runs. Running with --apply twice is a no-op (idempotent). In --dry-run (the\n\
+            default) the command exits non-zero when the TOC would change — use this in CI.\n\n\
+            SIDE EFFECTS: writes `<adr-dir>/README.md` only with --apply.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo madr toc --dry-run\n\
+            \u{00a0} hyalo madr toc --apply\n\
+            \u{00a0} hyalo madr toc docs/adr --apply"
+    )]
+    Toc {
+        /// ADR directory (vault-relative); defaults to `docs/decisions`
+        #[arg(value_name = "DIR")]
+        adr_dir: Option<String>,
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,

@@ -26,6 +26,7 @@ mod links_iter136;
 mod lint;
 mod lint_rules;
 mod llm_misuse;
+mod madr_profile;
 mod mv;
 mod mv_batch;
 mod mv_link_forms;
