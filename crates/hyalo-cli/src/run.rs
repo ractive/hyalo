@@ -1327,9 +1327,13 @@ fn run_inner() -> Result<(), AppError> {
                 schema = overlay.schema;
                 md_lint = overlay.md_lint;
                 validate_on_write = overlay.validate_on_write;
-                // The profile fragment may set `[lint] strict`; an explicit
-                // `--strict` flag still wins later in dispatch.
-                lint_strict_from_config = overlay.lint_strict || lint_strict_from_config;
+                // `overlay_profile` re-parses the *merged* (existing + fragment)
+                // config, so `overlay.lint_strict` already reflects the correct
+                // combined value — ORing in the pre-overlay value here would
+                // incorrectly keep strict mode on even if the merged config
+                // does not set it. An explicit `--strict` flag still wins later
+                // in dispatch.
+                lint_strict_from_config = overlay.lint_strict;
                 // The explicit --profile activates that profile's advisory rules.
                 lint_profile_active = overlay.lint_profile.or(Some(profile_name.clone()));
             }

@@ -314,3 +314,47 @@ fn okf_log_dry_run_does_not_write() {
         "dry-run must not create log.md"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Drill-down hint: `okf index`/`okf log` point authors at the validator.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn okf_index_output_emits_lint_profile_hint() {
+    let tmp = make_bundle();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--dir", ".", "--format", "json", "okf", "index"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("hyalo lint --profile okf"),
+        "okf index output must hint at the conformance validator: {stdout}"
+    );
+}
+
+#[test]
+fn okf_log_output_emits_lint_profile_hint() {
+    let tmp = make_bundle();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "--dir",
+            ".",
+            "--format",
+            "json",
+            "okf",
+            "log",
+            "--message",
+            "Added a table",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("hyalo lint --profile okf"),
+        "okf log output must hint at the conformance validator: {stdout}"
+    );
+}

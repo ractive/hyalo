@@ -76,9 +76,13 @@ fn trim_cr(line: &str) -> &str {
 
 /// Case-insensitive `.md` suffix test — a heuristic for "this token names a
 /// Markdown file" (so `.MD`/`.Md` count too).
+///
+/// Byte-slicing on a fixed offset (`s.len() - 3`) is unsafe on arbitrary
+/// UTF-8 input: a token ending in a multi-byte character (e.g. a single
+/// 4-byte emoji) can put that offset mid-character and panic. `str::ends_with`
+/// does its own boundary-safe matching, so use that instead.
 fn ends_with_md(s: &str) -> bool {
-    let n = s.len();
-    n >= 3 && s[n - 3..].eq_ignore_ascii_case(".md")
+    s.len() >= 3 && s.to_ascii_lowercase().ends_with(".md")
 }
 
 /// Run every enabled OKF rule against one file.
@@ -457,6 +461,10 @@ fn looks_like_bundle_path(p: &str) -> bool {
 /// Resolve a bundle-relative or bundle-absolute citation path against the vault
 /// root (for `/`-leading) or the file's own directory (otherwise). Stats the
 /// candidate — no directory walk, no network.
+///
+/// Requires the target to be a *file*, not just any filesystem entry: the rule
+/// message promises resolution "to an existing file", so a citation pointing
+/// at a directory must still warn rather than being reported as resolved.
 fn resolves(path_part: &str, full_path: &Path, vault_dir: &Path) -> bool {
     let normalized = path_part.replace('\\', "/");
     let candidate = if let Some(rest) = normalized.strip_prefix('/') {
@@ -467,7 +475,7 @@ fn resolves(path_part: &str, full_path: &Path, vault_dir: &Path) -> bool {
         let base = full_path.parent().unwrap_or(vault_dir);
         base.join(&normalized)
     };
-    candidate.exists()
+    candidate.is_file()
 }
 
 // ---------------------------------------------------------------------------
@@ -759,5 +767,53 @@ mod tests {
             "expected empty-Schema guard: {:?}",
             out.iter().map(|f| &f.message).collect::<Vec<_>>()
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Regression tests for review findings (PR #194)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn ends_with_md_does_not_panic_on_multibyte_tail() {
+        // A token that is (or ends with) a single multi-byte character must not
+        // panic when byte-length is `< 3` after the character's start, or when
+        // the naive `len() - 3` offset would land mid-character.
+        assert!(!ends_with_md("😀"));
+        assert!(!ends_with_md("café"));
+        assert!(!ends_with_md("€"));
+        assert!(ends_with_md("a.md"));
+        assert!(ends_with_md("A.MD"));
+        assert!(!ends_with_md(""));
+    }
+
+    #[test]
+    fn item_is_link_does_not_panic_on_multibyte_token() {
+        // Regression: `item_is_link` (via `ends_with_md`) used to panic on a
+        // citation entry whose first token is a multi-byte, non-`.md` string.
+        assert!(!item_is_link("😀 not a link"));
+    }
+
+    #[test]
+    fn citations_resolve_rejects_directory_target() {
+        // A citation pointing at a directory must not be reported as resolved
+        // — the rule promises resolution to an existing *file*.
+        let tmp = std::env::temp_dir().join(format!(
+            "hyalo-okf-lint-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let sub = tmp.join("references");
+        std::fs::create_dir_all(&sub).unwrap();
+        let entries = "- [Dir](references/)\n";
+        let mut out = Vec::new();
+        check_citations_resolve(entries, 1, &tmp.join("concept.md"), &tmp, &mut out);
+        std::fs::remove_dir_all(&tmp).ok();
+        assert_eq!(
+            out.len(),
+            1,
+            "citation pointing at a directory must warn as unresolved: {:?}",
+            out.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+        assert_eq!(out[0].rule_id, "OKF-CITATIONS-RESOLVE");
     }
 }

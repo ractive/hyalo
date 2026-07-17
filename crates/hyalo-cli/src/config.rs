@@ -908,4 +908,21 @@ site_prefix = "docs"
             "expected a warning for invalid case_insensitive value"
         );
     }
+
+    #[test]
+    fn overlay_profile_lint_strict_reflects_merged_config_only() {
+        // Regression: the caller in `run.rs` used to OR the overlay's
+        // `lint_strict` with the pre-overlay config value, which could keep
+        // strict mode on even when the merged (existing + fragment) config
+        // does not set it. `overlay_profile` re-parses the merged config, so
+        // its `lint_strict` field alone must be the source of truth — no OR
+        // needed by callers. Here the base `.hyalo.toml` has no `[lint]`
+        // section at all, so the merged/overlaid result must not be strict.
+        let dir = make_temp();
+        let overlay = overlay_profile(dir.path(), "okf").expect("okf profile must overlay");
+        assert!(
+            !overlay.lint_strict,
+            "okf profile fragment does not set [lint] strict; overlay must not be strict"
+        );
+    }
 }

@@ -96,7 +96,7 @@ hyalo read tables/blocks.md --section "# Citations"
 # missing `type`; warns (never rejects) on broken links, reserved-file structure,
 # and citations — the OKF permissive-consumption model:
 hyalo lint --profile okf
-hyalo lint --profile okf --strict   # also fail the run on missing-`type` warnings, for CI gates
+hyalo lint --profile okf --strict   # also fail on undeclared frontmatter properties, for stricter CI gates
 
 # Set / update frontmatter deterministically (never hand-edit the YAML block):
 hyalo set tables/blocks.md --property title="Bitcoin Blocks Table"
