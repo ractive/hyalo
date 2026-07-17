@@ -78,6 +78,6 @@ This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[
 ## Acceptance Criteria
 
 - [x] `hyalo init --profile madr` + `new --type adr` + `lint --profile madr` work end-to-end on a fresh ADR directory
-- [x] The profile is pure data over iter-164 machinery (any new rule kinds are generic, not madr-only code)
-- [x] Official MADR 4 template lints clean; dangling supersede reference warns
-- [x] Quality gates pass; docs synced; retrospective applied to iters 168–169
+- [x] The profile is pure data over iter-164 machinery (any new rule kinds are generic, not madr-only code) — `MADR-SUPERSEDE-RESOLVE`/`MADR-DUPLICATE-NUMBER` are ordinary `RuleCatalogEntry`s exposed via `lint-rules list` and suppressible via the generic `[lint.rules.*]` override, verified by `madr_rules_are_generic_catalog_entries_not_hardcoded`
+- [x] Official MADR 4 template lints clean; dangling supersede reference warns — `official_madr4_short_template_lints_clean` uses the real MADR 4.0.0 short-template structure; `dangling_supersede_warns` covers the supersede check
+- [x] Quality gates pass; docs synced; retrospective applied to iters 168–169 — `cargo fmt`/`clippy -D warnings`/`cargo test --workspace -q` all green; README `madr` section + `skill-hyalo-madr.md` updated; iter-168/iter-169 plans carry an "iter-167 retrospective" section
