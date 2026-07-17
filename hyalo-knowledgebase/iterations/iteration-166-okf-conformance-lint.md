@@ -14,6 +14,13 @@ depends-on: iteration-165-okf-index-and-log-generators
 
 Positions hyalo as *the* OKF validator the ecosystem currently lacks. Encodes SPEC §9 as a lint profile, respecting OKF's permissive-consumption model (warn, don't reject). See [[okf-open-knowledge-format]].
 
+**iter-165 retrospective (2026-07-17):** `okf index`/`okf log` shipped in `crates/hyalo-cli/src/commands/okf.rs` (PR #193); a post-merge review pass found and fixed three correctness bugs there worth carrying forward:
+1. **Directory-tree walks must include ancestor-only directories.** The `by_dir` map was originally keyed only by directories that directly contain a concept file — a directory holding *just* subdirectories (no files of its own) was silently skipped, producing a broken `a/index.md` link from its parent. Any new tree-walking logic in step 1's frontmatter/reserved-file checks (or the `#` heading walk in step 3) must independently enumerate every directory, not just ones with direct file children — reuse `okf.rs`'s now-fixed `by_dir`/`child_dirs` pattern rather than re-deriving it.
+2. **CRLF line endings are a recurring blind spot in new `okf` code.** `find_heading`/`prepend_log_entry` in `okf.rs` originally only stripped `\n`, so a CRLF-terminated `log.md` would never match an existing date heading. The rest of the codebase already normalizes/tolerates CRLF explicitly (see `lint.rs`'s frontmatter-terminator handling) — step 1's "reserved files follow §6/§7 structure" rule and step 4's e2e tests should include a CRLF-terminated fixture for `index.md`/`log.md` structure checks, not just LF fixtures.
+3. **Marker/heading string search must anchor on structural position, not first occurrence.** `splice_managed_region` originally used the first `INDEX_END` match, which could sit *before* `INDEX_BEGIN` if the marker text was merely mentioned in prose above the real region. If step 1's reserved-file structure check parses the `<!-- okf:index:begin/end -->` managed region to validate its shape, reuse `okf.rs`'s marker-finding helper (searches for END starting after BEGIN) rather than a naive `str::find`.
+
+No scope changes to the steps below; these are implementation cautions for whoever writes the tree-walk and reserved-file-shape rules in step 1.
+
 ## Goal
 
 `hyalo lint --profile okf` reports exactly the SPEC §9 conformance status of a bundle — erroring only on true violations, warning on everything the spec says MUST NOT be rejected.
