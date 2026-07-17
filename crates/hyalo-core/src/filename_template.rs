@@ -4,6 +4,9 @@
 //! placeholders are:
 //!
 //!   - `{n}`     — a numeric sequence (one or more digits)
+//!   - `{n:0W}`  — a zero-padded numeric sequence of minimum width `W` (e.g.
+//!     `{n:04}` matches/produces `0001`, `0042`, `1234`); more than `W` digits
+//!     are still accepted so the sequence can grow past the pad width.
 //!   - `{slug}`  — a kebab-case slug (letters, digits, `-`, `_`)
 //!   - `{date}`  — an ISO 8601 date (YYYY-MM-DD)
 //!
@@ -29,8 +32,9 @@ pub enum Segment {
 /// Supported placeholder kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placeholder {
-    /// `{n}` — a numeric sequence (one or more digits).
-    N,
+    /// `{n}` — a numeric sequence (one or more digits). The `pad` field carries
+    /// the minimum zero-pad width requested via `{n:0W}` (0 == no padding).
+    N { pad: usize },
     /// `{slug}` — a kebab-case slug (letters, digits, `-`, `_`).
     Slug,
     /// `{date}` — an ISO 8601 date (YYYY-MM-DD).
@@ -38,14 +42,37 @@ pub enum Placeholder {
 }
 
 impl Placeholder {
+    /// Parse a placeholder name (the text between `{` and `}`). Recognizes the
+    /// bare forms `n`/`slug`/`date` plus the padded-number form `n:0W` (e.g.
+    /// `n:04`), where `W` is a positive decimal width.
     fn from_name(name: &str) -> Option<Self> {
         match name {
-            "n" => Some(Self::N),
+            "n" => Some(Self::N { pad: 0 }),
             "slug" => Some(Self::Slug),
             "date" => Some(Self::Date),
-            _ => None,
+            _ => {
+                // Padded-number form: `n:0W` (leading zero is mandatory so the
+                // intent — zero-padding — is explicit and unambiguous).
+                let spec = name.strip_prefix("n:")?;
+                let width = spec.strip_prefix('0')?;
+                let pad: usize = width.parse().ok()?;
+                // `n:0` (width 0) is meaningless; require at least width 1.
+                if pad == 0 {
+                    None
+                } else {
+                    Some(Self::N { pad })
+                }
+            }
         }
     }
+}
+
+/// Render a sequence number for an `{n}` / `{n:0W}` placeholder: zero-padded to
+/// `pad` digits (no padding when `pad == 0`). Reusable by callers that expand a
+/// template into a concrete filename (e.g. `hyalo new` auto-numbering).
+#[must_use]
+pub fn render_number(value: u64, pad: usize) -> String {
+    format!("{value:0pad$}")
 }
 
 /// A parsed filename template.
@@ -116,7 +143,7 @@ impl FilenameTemplate {
         for seg in &self.segments {
             match seg {
                 Segment::Literal(s) => out.push_str(s),
-                Segment::Placeholder(Placeholder::N) => out.push_str("[0-9][0-9]*"),
+                Segment::Placeholder(Placeholder::N { .. }) => out.push_str("[0-9][0-9]*"),
                 Segment::Placeholder(Placeholder::Slug) => out.push('*'),
                 Segment::Placeholder(Placeholder::Date) => {
                     out.push_str("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]");
@@ -190,7 +217,7 @@ fn is_slug_char(c: char) -> bool {
 /// Maximum number of bytes that a placeholder can consume starting at `slice`.
 fn max_placeholder_len(ph: Placeholder, slice: &str) -> usize {
     match ph {
-        Placeholder::N => slice.bytes().take_while(u8::is_ascii_digit).count(),
+        Placeholder::N { .. } => slice.bytes().take_while(u8::is_ascii_digit).count(),
         Placeholder::Slug => slice
             .chars()
             .take_while(|c| is_slug_char(*c))
@@ -210,7 +237,10 @@ fn max_placeholder_len(ph: Placeholder, slice: &str) -> usize {
 /// Minimum number of bytes required by a placeholder.
 fn min_placeholder_len(ph: Placeholder) -> usize {
     match ph {
-        Placeholder::N | Placeholder::Slug => 1,
+        // A padded `{n:0W}` still matches as few as one digit — the pad width is
+        // a *rendering* minimum, not a match floor, so an existing `1-x.md` next
+        // to `0002-x.md` is still recognized as the same type.
+        Placeholder::N { .. } | Placeholder::Slug => 1,
         Placeholder::Date => 10,
     }
 }
@@ -231,7 +261,7 @@ impl std::fmt::Display for ParseError {
             Self::UnknownPlaceholder(name) => {
                 write!(
                     f,
-                    "unknown placeholder {{{name}}} (supported: n, slug, date)"
+                    "unknown placeholder {{{name}}} (supported: n, n:0W, slug, date)"
                 )
             }
         }
@@ -299,5 +329,46 @@ mod tests {
         // Slug can greedily consume hyphens; template must still match.
         let t = FilenameTemplate::parse("{slug}-end").unwrap();
         assert!(t.matches("foo-bar-end"));
+    }
+
+    #[test]
+    fn padded_number_parses_and_matches() {
+        let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
+        // Exactly the pad width, more, and fewer digits all match (pad is a
+        // rendering minimum, not a match floor).
+        assert!(t.matches("decisions/0001-use-postgres.md"));
+        assert!(t.matches("decisions/12345-big-number.md"));
+        assert!(t.matches("decisions/1-terse.md"));
+        assert!(!t.matches("decisions/-no-number.md"));
+    }
+
+    #[test]
+    fn padded_number_glob_is_permissive() {
+        let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
+        // The glob for a padded number is the same permissive digit-run form.
+        assert_eq!(t.to_glob(), "decisions/[0-9][0-9]*-*.md");
+    }
+
+    #[test]
+    fn render_number_zero_pads() {
+        assert_eq!(render_number(1, 4), "0001");
+        assert_eq!(render_number(42, 4), "0042");
+        assert_eq!(render_number(12345, 4), "12345");
+        assert_eq!(render_number(7, 0), "7");
+    }
+
+    #[test]
+    fn bad_pad_specs_are_unknown_placeholders() {
+        // Missing the mandatory leading zero, non-numeric width, and width 0 are
+        // all rejected (they'd be ambiguous or meaningless).
+        for bad in ["{n:4}.md", "{n:0x}.md", "{n:0}.md", "{n:}.md"] {
+            assert!(
+                matches!(
+                    FilenameTemplate::parse(bad).unwrap_err(),
+                    ParseError::UnknownPlaceholder(_)
+                ),
+                "expected {bad} to be rejected"
+            );
+        }
     }
 }

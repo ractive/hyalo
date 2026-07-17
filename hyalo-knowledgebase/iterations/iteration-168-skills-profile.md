@@ -20,6 +20,13 @@ Third profile (see [[profile-candidates-beyond-okf]]). The Agent Skills spec (<h
 
 ## Steps / Tasks
 
+**iter-167 retrospective (2026-07-17) — reusable patterns from the madr profile:**
+- **Profile machinery held with zero new per-profile code** — a profile is a `templates/profile-<name>.toml` fragment + a `Profile` entry in `commands/profiles.rs` + a skill file. Follow that shape for `skills`; no new `--profile` branches.
+- **New generic rule kinds cost little**: `MADR-*` advisory rules = one `commands/madr_lint.rs` (pure fns over content/dir) + a `RuleCatalogEntry` block in `hyalo-mdlint/src/engine.rs` (`default_enabled = true`) + a `<name>_profile` bool threaded from `dispatch.rs`→`lint.rs` gated by `ctx.lint_profile.as_deref() == Some("<name>")`. The skills max-length / dirname-coupling / line-budget rules should copy this wiring verbatim.
+- **Property↔dirname coupling** (skills `name` == parent dir): the `[[schema.bind]]` path-glob → type map (in `hyalo-core/schema.rs`, `SchemaConfig::bound_type_for`, first-match-wins `GlobSet`) is the natural home to *bind* the skills schema to `.claude/skills/**`, but the dirname-equality check itself is a new advisory rule — model it on `MADR-DUPLICATE-NUMBER` (per-file, reads the parent dir).
+- **Generators**: reuse `commands/managed_region.rs` (`Markers::new(prefix).splice(...)` + `GeneratePlan`/`read_old_content`/`apply_plan`, dry-run-exits-nonzero-on-drift) — already extracted and generic. Don't re-derive.
+- **Filename tokens**: `{n:04}` zero-padding shipped in `hyalo-core/filename_template.rs` (`Placeholder::N { pad }`, `render_number`); available if skills needs padded sequences.
+
 ### 1. New generic rule kinds (capability gaps #2/#4 from the survey)
 
 - [ ] **String max-length constraint** on properties (`max-length = 1024`) — generic `PropertyConstraint` extension, also future-proofs MyST/Windsurf

@@ -1,0 +1,73 @@
+# --- MADR profile (added by `hyalo init --profile madr`) ---
+# MADR 4.0.0 — Markdown Architecture Decision Records (https://adr.github.io/madr/).
+# Typed ADR docs with a status lifecycle, living in a subdirectory of a larger
+# vault. The `[[schema.bind]]` entry below scopes the `adr` schema to that
+# subtree only, so this profile composes into any existing vault without
+# forcing every file to be an ADR.
+
+# Validate ADR frontmatter against the schema on write.
+validate_on_write = true
+
+# Mark this vault as MADR-flavoured so plain `hyalo lint` runs the MADR advisory
+# rules (supersede cross-check, duplicate ADR number) without `--profile madr`
+# on every invocation. `hyalo lint --profile madr` is then an idempotent overlay.
+[lint]
+profile = "madr"
+
+# The generated TOC (`README.md`) is a derived artifact, not an ADR — exempt it
+# (and any bundle `index.md`) from the `adr` schema so it is neither validated
+# nor bound. Without this the TOC file would be linted as a malformed ADR.
+[schema]
+exempt = ["docs/decisions/README.md", "docs/decisions/index.md"]
+
+# Bind the ADR schema to the decisions subtree. Files there without an explicit
+# `type:` are validated as `adr`; explicit frontmatter always wins. First match
+# wins, so more specific bindings from other profiles can precede this one.
+[[schema.bind]]
+glob = "docs/decisions/**/*.md"
+type = "adr"
+
+# The ADR type. All MADR-4 frontmatter fields are optional-but-typed: MADR keeps
+# frontmatter light, so authoring is never blocked, but present fields are checked.
+[schema.types.adr]
+# `adr` is identified by the path binding above; no property is hard-required.
+required = []
+# Auto-numbered ADR filenames: `NNNN-slug.md`, zero-padded to 4 digits.
+filename-template = "docs/decisions/{n:04}-{slug}.md"
+required_sections = [
+    "## Context and Problem Statement",
+    "## Considered Options",
+    "## Decision Outcome",
+]
+
+[schema.types.adr.defaults]
+status = "proposed"
+date = "$today"
+
+# MADR 4 status lifecycle. `superseded by ADR-NNNN` is also accepted (a common
+# terminal state) via the pattern property below rather than the enum, because
+# it carries a target number.
+[schema.types.adr.properties.status]
+type = "string"
+pattern = "^(proposed|rejected|accepted|deprecated|superseded by ADR-[0-9]{4})$"
+
+[schema.types.adr.properties.date]
+type = "date"
+
+# Decision roles. MADR 4 uses `decision-makers`; the 3.x spelling `deciders` is
+# accepted as an alias so 3.x ADRs lint clean under the same type (see the
+# knowledgebase decision on the 3.x variant).
+[schema.types.adr.properties.decision-makers]
+type = "string-list"
+
+[schema.types.adr.properties.deciders]
+type = "string-list"
+
+[schema.types.adr.properties.consulted]
+type = "string-list"
+
+[schema.types.adr.properties.informed]
+type = "string-list"
+
+[schema.types.adr.properties.title]
+type = "string"

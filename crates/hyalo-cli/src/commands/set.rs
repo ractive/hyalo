@@ -341,7 +341,10 @@ pub fn set(
                 serde_json::Value::String(s) => Some(s.as_str()),
                 _ => None,
             });
-            let effective_schema = match doc_type {
+            // Explicit `type:` wins; otherwise a `[schema.bind]` path binding
+            // supplies the effective type for validation-on-write.
+            let effective_type = doc_type.or_else(|| schema.bound_type_for(rel_path));
+            let effective_schema = match effective_type {
                 Some(t) => schema.merged_schema_for_type(t),
                 None => schema.default_schema().clone(),
             };
@@ -1195,6 +1198,7 @@ type: post
         let schema = SchemaConfig {
             default: TypeSchema::default(),
             exempt: hyalo_core::schema::ExemptGlobs::default(),
+            bind: hyalo_core::schema::SchemaBind::default(),
             types: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -1258,6 +1262,7 @@ type: post
         let schema = SchemaConfig {
             default: TypeSchema::default(),
             exempt: hyalo_core::schema::ExemptGlobs::default(),
+            bind: hyalo_core::schema::SchemaBind::default(),
             types: {
                 let mut m = HashMap::new();
                 m.insert(

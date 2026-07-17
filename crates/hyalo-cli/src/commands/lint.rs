@@ -61,6 +61,8 @@ impl std::fmt::Display for Severity {
 /// the promotion logic.
 pub const VIOLATION_KIND_MISSING_TYPE: &str = "schema/missing-type";
 pub const VIOLATION_KIND_UNDECLARED_PROPERTY: &str = "schema/undeclared-property";
+/// An explicit `type:` disagrees with the `[schema.bind]` path binding.
+pub const VIOLATION_KIND_BIND_MISMATCH: &str = "schema/bind-mismatch";
 
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize)]
@@ -511,12 +513,17 @@ fn lint_file_with_fix(
 
     let mut violations = validate_properties(rel_path, &final_props, schema);
 
-    // Validate required_sections against the body outline.
+    // Validate required_sections against the body outline. The effective type is
+    // the explicit `type:` else the `[schema.bind]` path binding, so a bound ADR
+    // gets its required sections checked even without frontmatter.
     let doc_type: Option<String> = final_props.get("type").and_then(|v| match v {
         Value::String(s) => Some(s.clone()),
         _ => None,
     });
-    let effective_schema: TypeSchema = match &doc_type {
+    let effective_type: Option<String> = doc_type
+        .clone()
+        .or_else(|| schema.bound_type_for(rel_path).map(ToOwned::to_owned));
+    let effective_schema: TypeSchema = match &effective_type {
         Some(t) => schema.merged_schema_for_type(t),
         None => schema.default_schema().clone(),
     };
@@ -780,9 +787,11 @@ fn is_bundle_root_index(rel_path: &str) -> bool {
     trimmed == "index.md"
 }
 
-/// Try to infer a `type` value for a file at `rel_path` by matching it against
-/// every `[schema.types.*].filename-template`. Returns `None` if zero or more
-/// than one type matches (ambiguous).
+/// Try to infer a `type` value for a file at `rel_path` for `lint --fix` type
+/// insertion. First matches against every `[schema.types.*].filename-template`
+/// (unique match required); if that is ambiguous or empty, falls back to the
+/// `[schema.bind]` path bindings (first-match-wins). Returns `None` when neither
+/// yields a single type.
 fn infer_type_from_path(rel_path: &str, schema: &SchemaConfig) -> Option<String> {
     let mut matches: Vec<String> = Vec::new();
     for (type_name, ts) in &schema.types {
@@ -797,10 +806,10 @@ fn infer_type_from_path(rel_path: &str, schema: &SchemaConfig) -> Option<String>
         }
     }
     if matches.len() == 1 {
-        matches.pop()
-    } else {
-        None
+        return matches.pop();
     }
+    // Filename-template inference was empty or ambiguous — consult path bindings.
+    schema.bound_type_for(rel_path).map(ToOwned::to_owned)
 }
 
 /// Normalize a loose date string to `YYYY-MM-DD`.
@@ -885,8 +894,15 @@ fn validate_properties(
         });
     }
 
-    // Warn when no `type` property is present.
-    if type_value.is_none() && !schema.is_empty() {
+    // Path-bound schema: when no explicit `type:` is present but the file's path
+    // matches a `[schema.bind]` glob, the binding assigns the effective type.
+    // Explicit frontmatter always wins over a binding.
+    let bound_type: Option<&str> = schema.bound_type_for(rel_path);
+
+    // Warn when no `type` property is present *and* no binding covers this file.
+    // A bound file is fully typed by its path, so it neither warns nor validates
+    // against the default-only schema.
+    if type_value.is_none() && bound_type.is_none() && !schema.is_empty() {
         violations.push(Violation {
             severity: Severity::Warn,
             kind: Some(VIOLATION_KIND_MISSING_TYPE),
@@ -894,8 +910,25 @@ fn validate_properties(
         });
     }
 
-    // Determine the effective schema for this file.
-    let effective_schema: TypeSchema = match &doc_type {
+    // Frontmatter ↔ binding mismatch: an explicit `type:` that disagrees with
+    // the path binding is a (warn-level) smell — usually a file in the wrong
+    // directory, or a stale type. Explicit frontmatter still wins.
+    if let (Some(explicit), Some(bound)) = (doc_type.as_deref(), bound_type)
+        && explicit != bound
+    {
+        violations.push(Violation {
+            severity: Severity::Warn,
+            kind: Some(VIOLATION_KIND_BIND_MISMATCH),
+            message: format!(
+                "frontmatter type '{explicit}' disagrees with the path binding for this location (bound to '{bound}')"
+            ),
+        });
+    }
+
+    // Determine the effective schema for this file: explicit type, else the
+    // path-bound type, else the default-only schema.
+    let effective_type: Option<&str> = doc_type.as_deref().or(bound_type);
+    let effective_schema: TypeSchema = match effective_type {
         Some(t) => schema.merged_schema_for_type(t),
         None => schema.default_schema().clone(),
     };
@@ -1399,6 +1432,9 @@ pub struct ExtLintOptions<'a> {
     /// When `true`, run the OKF conformance profile's advisory (warn-level)
     /// rules in addition to the schema pass. Set by `hyalo lint --profile okf`.
     pub okf_profile: bool,
+    /// When `true`, run the MADR conformance profile's advisory (warn-level)
+    /// rules in addition to the schema pass. Set by `hyalo lint --profile madr`.
+    pub madr_profile: bool,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1430,6 +1466,7 @@ pub fn lint_files_extended(
 
     let strict = opts.strict;
     let okf_profile = opts.okf_profile;
+    let madr_profile = opts.madr_profile;
     let vault_dir = opts.vault_dir;
 
     // Process files in parallel. Each worker lints one file.
@@ -1447,6 +1484,7 @@ pub fn lint_files_extended(
             opts.max_per_rule,
             strict,
             okf_profile,
+            madr_profile,
             vault_dir,
         )
     };
@@ -1920,7 +1958,7 @@ struct PerFileLintResult {
 }
 
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn lint_one_file_extended(
     full_path: &Path,
     rel_path: &str,
@@ -1934,6 +1972,7 @@ fn lint_one_file_extended(
     max_per_rule: usize,
     strict: bool,
     okf_profile: bool,
+    madr_profile: bool,
     vault_dir: &Path,
 ) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
@@ -2449,6 +2488,54 @@ fn lint_one_file_extended(
         );
         for f in findings {
             // Apply per-rule severity override; OKF rules default to warn.
+            let severity = md_lint_config
+                .rules
+                .get(f.rule_id)
+                .and_then(hyalo_mdlint::RuleOverride::severity)
+                .unwrap_or("warn")
+                .to_owned();
+            violations_by_rule
+                .entry(f.rule_id.to_owned())
+                .or_default()
+                .push(InternalViolation {
+                    line: f.line,
+                    column: 1,
+                    message: f.message,
+                    severity,
+                    fix: None,
+                    fixed: false,
+                });
+        }
+    }
+
+    // MADR conformance profile — advisory (warn-level) rules layered on top of
+    // the schema pass. Only runs under `hyalo lint --profile madr` (or a vault
+    // whose `.hyalo.toml` sets `[lint] profile = "madr"`). Same override/filter
+    // discipline as the OKF block above.
+    if madr_profile {
+        let is_enabled = |rule_id: &str| -> bool {
+            let cfg_enabled = md_lint_config
+                .rules
+                .get(rule_id)
+                .and_then(hyalo_mdlint::RuleOverride::enabled)
+                .unwrap_or(true);
+            if !cfg_enabled {
+                return false;
+            }
+            rule_filter.is_empty() || rule_filter.iter().any(|r| r == rule_id)
+        };
+        // Effective type: explicit `type:` frontmatter else the path binding.
+        let explicit_type = properties.get("type").and_then(|v| v.as_str());
+        let effective_type = explicit_type.or_else(|| schema.bound_type_for(rel_path));
+        let status = properties.get("status").and_then(|v| v.as_str());
+        let findings = crate::commands::madr_lint::run_madr_rules(
+            rel_path,
+            full_path,
+            effective_type,
+            status,
+            &is_enabled,
+        );
+        for f in findings {
             let severity = md_lint_config
                 .rules
                 .get(f.rule_id)
@@ -2997,6 +3084,7 @@ mod tests {
             vault_dir,
             strict,
             okf_profile: false,
+            madr_profile: false,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }

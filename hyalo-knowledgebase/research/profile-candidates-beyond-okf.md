@@ -16,7 +16,7 @@ Survey of markdown standards/conventions that could become additional `hyalo ini
 Sequence approved: **okf → madr → skills → changelog**, one iteration each, with a mandatory learnings-propagation retrospective at the end of every iteration (review + update the remaining iteration plans before starting the next).
 
 1. **`okf`** — [[iteration-163-okf-frontmatter-foundations]] … [[iteration-166-okf-conformance-lint]]
-2. **`madr`** — [[iteration-167-madr-profile]] (before skills: cheapest, and first proof the profile machinery is data-driven)
+2. **`madr`** — [[iteration-167-madr-profile]] ✅ **SHIPPED (2026-07-17)** — proved the profile machinery is data-driven: pure fragment + two *generic* mechanisms (`[[schema.bind]]` path-bound schemas, `{n:04}` zero-padded filename tokens) + two advisory rules (`MADR-SUPERSEDE-RESOLVE`, `MADR-DUPLICATE-NUMBER`) + `hyalo madr toc`. Decisions taken: 3.x `deciders` handled as a **declared-property alias** in the `adr` type (not a second `madr3` profile); TOC is a **per-profile command group** (`hyalo madr toc`, consistent with `hyalo okf index`). **Deferred:** Nygard/adr-tools headings-only variant → after iter-169's heading-grammar lint mode.
 3. **`skills`** — [[iteration-168-skills-profile]] (adds generic max-length / dirname-coupling / line-budget rule kinds)
 4. **`changelog`** — [[iteration-169-changelog-profile]] (generalizes the heading-grammar lint mode)
 5. **Obsidian `types.json` import** — a bridge feature, one-way and modest (see caveats below; prior finding in [[obsidian-properties]]) — not scheduled
