@@ -81,5 +81,5 @@ Fourth profile (see [[profile-candidates-beyond-okf]]). Keep a Changelog 1.1.0 (
 
 - [x] `hyalo lint --profile changelog` fully validates the 1.1.0 grammar incl. footer link refs; reference example passes clean
 - [x] `hyalo changelog release` rotation is correct, idempotent-guarded, dry-run by default
-- [x] Heading-grammar mode is generic (declarative), not changelog-hardcoded
-- [x] Quality gates pass; docs synced; consolidated profiles retrospective written
+- [x] Heading-grammar mode is generic (declarative), not changelog-hardcoded — `heading_grammar.rs`'s `HeadingRule`/`TextMatcher`/`scan_headings`/`check_level_rule` carry no changelog-specific logic; `changelog_lint.rs` is the sole consumer, building its grammar from data (`title_rule`, `version_rule`, …)
+- [x] Quality gates pass; docs synced; consolidated profiles retrospective written — `cargo fmt`/clippy/test all green (see Test plan below); README profiles section + `--profile` help updated; retrospective lives in `research/profile-candidates-beyond-okf.md` under "Consolidated profiles retrospective (2026-07-17, sequence complete)"
