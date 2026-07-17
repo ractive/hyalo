@@ -69,7 +69,7 @@ pub fn resolve_file_user(
 /// Known noisy suffixes that upstream YAML parser errors (`serde-saphyr`)
 /// append to otherwise-useful messages — internal-API advice ("set
 /// `DuplicateKeyPolicy` in `Options`...") that means nothing to a user
-/// looking at a `HYALO005` lint violation or an OKF/MADR generator skip
+/// looking at a `HYALO005` lint violation or an OKF generator skip
 /// warning. Stripped by [`terse_root_cause`] before the message reaches the
 /// user; the line/column info and the actual cause (e.g. "duplicate mapping
 /// key: type") are left intact.
@@ -85,19 +85,28 @@ const NOISY_ERROR_SUFFIXES: &[&str] = &[", set DuplicateKeyPolicy in Options if 
 /// file itself.
 ///
 /// Shared by the `HYALO005` (`RULE_ID_FRONTMATTER_PARSE_ERROR`) lint
-/// violation message and the OKF/MADR generator skip warnings — both surface
+/// violation message and the OKF generator skip warnings — both surface
 /// a YAML parse error's root cause to the user.
 #[must_use]
 pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
     let root = err.root_cause().to_string();
     let first_line = root.lines().next().unwrap_or(&root).trim();
-    let mut msg = first_line.to_owned();
-    for suffix in NOISY_ERROR_SUFFIXES {
-        if let Some(stripped) = msg.strip_suffix(suffix) {
-            msg = stripped.to_owned();
+    // Strip to a fixed point so one suffix's removal can expose another
+    // (matters once NOISY_ERROR_SUFFIXES grows past a single entry).
+    let mut msg = first_line;
+    loop {
+        let mut stripped_any = false;
+        for suffix in NOISY_ERROR_SUFFIXES {
+            if let Some(stripped) = msg.strip_suffix(suffix) {
+                msg = stripped;
+                stripped_any = true;
+            }
+        }
+        if !stripped_any {
+            break;
         }
     }
-    msg
+    msg.trim_end().to_owned()
 }
 
 /// The `hyalo lint --profile <profile>` hint to attach to a generator command's

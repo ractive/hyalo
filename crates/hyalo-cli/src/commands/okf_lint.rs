@@ -63,22 +63,27 @@ const INDEX_END: &str = "<!-- okf:index:end -->";
 /// folds case so an adopted `INDEX.md` is recognized as reserved exactly
 /// like `hyalo okf index` and the SCHEMA exempt-glob pass already do.
 fn is_index_file(rel_path: &str, case_insensitive: bool) -> bool {
-    let norm = rel_path.replace('\\', "/");
-    if case_insensitive {
-        norm.eq_ignore_ascii_case("index.md") || norm.to_ascii_lowercase().ends_with("/index.md")
-    } else {
-        norm == "index.md" || norm.ends_with("/index.md")
-    }
+    has_reserved_name(rel_path, "index.md", case_insensitive)
 }
 
 /// Is `rel_path` a reserved `log.md`? See [`is_index_file`] for the
 /// `case_insensitive` contract.
 fn is_log_file(rel_path: &str, case_insensitive: bool) -> bool {
-    let norm = rel_path.replace('\\', "/");
+    has_reserved_name(rel_path, "log.md", case_insensitive)
+}
+
+/// Basename comparison behind the reserved-file predicates, allocation-free
+/// (runs once per file per lint invocation). Case folding is ASCII-only
+/// (`eq_ignore_ascii_case`) while the SCHEMA exempt-glob pass folds via
+/// globset's Unicode-aware `(?i)`; the reserved names are pure ASCII, so the
+/// two can only diverge on pathological non-ASCII lookalikes (e.g. U+212A
+/// KELVIN SIGN case-folding to `k`) — accepted, not worth matching exactly.
+fn has_reserved_name(rel_path: &str, name: &str, case_insensitive: bool) -> bool {
+    let base = rel_path.rsplit(['/', '\\']).next().unwrap_or(rel_path);
     if case_insensitive {
-        norm.eq_ignore_ascii_case("log.md") || norm.to_ascii_lowercase().ends_with("/log.md")
+        base.eq_ignore_ascii_case(name)
     } else {
-        norm == "log.md" || norm.ends_with("/log.md")
+        base == name
     }
 }
 
