@@ -50,6 +50,44 @@ fn early_format(
         .unwrap_or_else(|| resolve_format_by_tty(std::io::stdout().is_terminal()))
 }
 
+/// Express the resolved vault `dir` as a path relative to `cwd`, using
+/// forward slashes, for `--format github` annotation prefixing.
+///
+/// GitHub resolves annotation `file=` paths against the workspace (repo) root,
+/// which is assumed to be the CWD. Strategy:
+///
+///   1. If `dir` is already relative (the common case — `.hyalo.toml` sets
+///      `dir = "hyalo-knowledgebase"`), it *is* the CWD-relative prefix; a bare
+///      `.` collapses to the empty prefix.
+///   2. Otherwise, canonicalize both `dir` and `cwd` and strip the CWD prefix.
+///   3. If the vault lies outside the CWD (or canonicalization fails), fall back
+///      to the empty prefix so paths stay vault-relative rather than emitting a
+///      confusing absolute or `../`-laden path.
+fn vault_dir_relative_to_cwd(dir: &std::path::Path, cwd: &std::path::Path) -> String {
+    let to_fwd = |p: &std::path::Path| p.to_string_lossy().replace('\\', "/");
+    let clean = |s: String| -> String {
+        let s = s.strip_prefix("./").unwrap_or(&s).to_owned();
+        let trimmed = s.trim_end_matches('/');
+        if trimmed == "." {
+            String::new()
+        } else {
+            trimmed.to_owned()
+        }
+    };
+
+    if dir.is_relative() {
+        return clean(to_fwd(dir));
+    }
+
+    if let (Ok(dir_abs), Ok(cwd_abs)) = (dunce::canonicalize(dir), dunce::canonicalize(cwd))
+        && let Ok(rel) = dir_abs.strip_prefix(&cwd_abs)
+    {
+        return clean(to_fwd(rel));
+    }
+
+    String::new()
+}
+
 /// Extract the effective index path from whichever subcommand is active.
 ///
 /// Walks the command tree and retrieves `IndexFlags` from the matching arm,
@@ -920,6 +958,49 @@ fn run_inner() -> Result<(), AppError> {
         );
         return Err(AppError::Exit(2));
     }
+    // `--format github` is lint-only: it emits GitHub Actions workflow commands
+    // for lint violations. Reject it for every other subcommand with a clear
+    // message listing the valid formats, so `hyalo find --format github` fails
+    // fast instead of producing meaningless output.
+    if format == Format::Github && !matches!(cli.command, Commands::Lint { .. }) {
+        eprintln!(
+            "{}",
+            crate::output::format_error(
+                Format::Text,
+                "--format github is only supported by `hyalo lint`",
+                None,
+                Some("valid formats for this command are: json, text"),
+                None,
+            )
+        );
+        return Err(AppError::Exit(2));
+    }
+    // `--count` prints a bare integer; it is meaningless alongside the
+    // annotation stream `--format github` produces. Reject the combination.
+    if format == Format::Github && cli.count {
+        eprintln!(
+            "{}",
+            crate::output::format_error(
+                Format::Text,
+                "--count cannot be combined with --format github",
+                None,
+                Some("--format github emits inline annotations; drop --count to see them"),
+                None,
+            )
+        );
+        return Err(AppError::Exit(2));
+    }
+
+    // Compute the annotation path prefix for `--format github`: the vault dir
+    // expressed relative to CWD. GitHub resolves annotation `file=` paths
+    // against the workspace (repo) root, but lint emits vault-relative paths, so
+    // each is prefixed with this. CI is assumed to run from the repo root.
+    let github_path_prefix = if format == Format::Github {
+        vault_dir_relative_to_cwd(&dir, &cwd)
+    } else {
+        String::new()
+    };
+
     // Always force JSON internally so the output pipeline can wrap results in the
     // envelope.  The user-requested format is applied by the pipeline afterwards.
     let effective_format = Format::Json;
@@ -1390,6 +1471,7 @@ fn run_inner() -> Result<(), AppError> {
                     hint_ctx: hint_ctx.as_ref(),
                     count: cli.count,
                     files_from_counters: None,
+                    github_path_prefix: String::new(),
                 };
                 let code = pipeline.finalize(Ok(CommandOutcome::UserError(out)));
                 return if code == 0 {
@@ -1501,6 +1583,7 @@ fn run_inner() -> Result<(), AppError> {
         hint_ctx: hint_ctx.as_ref(),
         count: cli.count,
         files_from_counters: final_files_from_counters,
+        github_path_prefix,
     };
     let code = pipeline.finalize(result);
     // Commands like `lint` may override the exit code even on success output.
@@ -1526,5 +1609,44 @@ mod tests {
     #[test]
     fn resolve_format_by_tty_returns_json_for_pipe() {
         assert_eq!(resolve_format_by_tty(false), Format::Json);
+    }
+
+    /// A relative vault dir is used verbatim as the CWD-relative prefix.
+    #[test]
+    fn vault_prefix_relative_dir_used_verbatim() {
+        let cwd = std::path::Path::new("/repo");
+        assert_eq!(
+            vault_dir_relative_to_cwd(std::path::Path::new("hyalo-knowledgebase"), cwd),
+            "hyalo-knowledgebase"
+        );
+        assert_eq!(
+            vault_dir_relative_to_cwd(std::path::Path::new("sub/kb"), cwd),
+            "sub/kb"
+        );
+        assert_eq!(
+            vault_dir_relative_to_cwd(std::path::Path::new("./kb/"), cwd),
+            "kb"
+        );
+    }
+
+    /// A `.` vault dir (vault == CWD) collapses to an empty prefix.
+    #[test]
+    fn vault_prefix_dot_dir_is_empty() {
+        let cwd = std::path::Path::new("/repo");
+        assert_eq!(
+            vault_dir_relative_to_cwd(std::path::Path::new("."), cwd),
+            ""
+        );
+    }
+
+    /// An absolute vault dir under the CWD is stripped to a relative prefix.
+    #[test]
+    fn vault_prefix_absolute_dir_under_cwd() {
+        let tmp = std::env::temp_dir().join(format!("hyalo-prefix-{}", std::process::id()));
+        let kb = tmp.join("kb");
+        std::fs::create_dir_all(&kb).unwrap();
+        let got = vault_dir_relative_to_cwd(&kb, &tmp);
+        assert_eq!(got, "kb");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

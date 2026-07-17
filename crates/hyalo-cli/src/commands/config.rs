@@ -64,7 +64,8 @@ pub(crate) fn collect_config_report(cwd: &Path) -> anyhow::Result<ConfigReport> 
 /// Run `hyalo config` and return a `CommandOutcome` ready for the output pipeline.
 pub(crate) fn run_config(report: &ConfigReport, format: Format) -> CommandOutcome {
     match format {
-        Format::Json => run_config_json(report),
+        // `github` is rejected for non-lint commands upstream; treat as JSON here.
+        Format::Json | Format::Github => run_config_json(report),
         Format::Text => run_config_text(report),
     }
 }

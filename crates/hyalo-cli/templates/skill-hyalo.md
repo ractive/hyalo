@@ -292,6 +292,12 @@ promotes the "no `type` property" and "undeclared property in frontmatter" warni
 errors, so lint exits non-zero on those cases. Useful in CI and `/hyalo-tidy` to fail
 fast on schema drift.
 
+**GitHub PR annotations:** `hyalo lint --strict --format github` (lint-only) emits
+`::error`/`::warning file=…,line=…,title=<RULE_ID>::<message>` GitHub Actions workflow
+commands so violations render as inline PR annotations, plus a one-line summary. Paths are
+repo-root-relative, so run it from the repository root. Composes with `--files-from -` for a
+diff-aware variant. Other subcommands reject `--format github`.
+
 **Tune which rules run with `hyalo lint-rules`** (list / show / set / remove). Reach for it when a rule is too noisy on your KB style — disable it or change its severity rather than living with the warnings:
 
 ```bash

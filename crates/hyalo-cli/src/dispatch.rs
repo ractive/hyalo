@@ -1756,14 +1756,33 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let md_engine = hyalo_mdlint::HyaloLintEngine::create()
                 .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
 
-            let max_per_rule_eff =
-                max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule());
+            // `--format github` emits one annotation per violation, so every
+            // finding must be materialized: force `detailed` and lift the
+            // per-rule / per-file caps. Otherwise the summary-mode truncation
+            // would silently drop annotations from the PR check.
+            let github_output = ctx.user_format == crate::output::Format::Github;
+
+            let max_per_rule_eff = if github_output {
+                // `usize::MAX`, not `0` — the fix-mode output path uses
+                // `.take(n)`/`.min(n)` to cap violations shown per rule, so `0`
+                // would truncate every rule group to zero shown violations and
+                // silently drop annotations. The non-fix path separately bypasses
+                // this cap via `opts.detailed`, but fix-mode does not, so the
+                // sentinel must mean "unlimited" in both paths.
+                usize::MAX
+            } else {
+                max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule())
+            };
             // CLI --limit overrides the config max_files when provided.
-            let max_files_eff = cli_limit.unwrap_or_else(|| ctx.md_lint.max_files());
+            let max_files_eff = if github_output {
+                cli_limit.unwrap_or(usize::MAX)
+            } else {
+                cli_limit.unwrap_or_else(|| ctx.md_lint.max_files())
+            };
 
             let mut ext_opts = lint_commands::ExtLintOptions {
                 fix: fix_mode,
-                detailed,
+                detailed: detailed || github_output,
                 rule_filter: rule.as_deref(),
                 rule_prefix: rule_prefix.as_deref(),
                 max_per_rule: max_per_rule_eff,

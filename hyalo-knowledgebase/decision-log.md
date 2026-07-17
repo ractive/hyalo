@@ -721,3 +721,34 @@ the catalog so `lint-rules set OKF-* --enabled false` writes a real override. Pe
 permissive-consumption model every OKF rule is **warn** — SPEC §9 errors come only from the
 schema pass (missing frontmatter / empty-or-missing `type`); broken links, reserved-file
 structure, and citation issues never reject.
+
+## DEC-050: `hyalo lint --format github` for PR Annotations, as a Third Output Format (2026-07-17)
+
+**Decision:** Add `github` to the `--format` value set as a **lint-only** output mode that
+emits one GitHub Actions workflow command per violation
+(`::error file=<path>,line=<line>,title=<RULE_ID>::<message>`, warnings → `::warning`),
+followed by a one-line `N errors, M warnings in K files` summary. Every other subcommand
+rejects `--format github` with a clear message listing the valid formats. Annotation paths
+are emitted **relative to the repository root** — vault-relative paths are prefixed with the
+vault dir's path relative to CWD — so CI must run from the repo root.
+
+**Why:**
+- **No polyglot glue.** Native workflow-command output means findings render as inline PR
+  annotations without a `jq` transform, which the no-polyglot-tooling rule forbids anyway.
+- **Reuses the existing lint payload.** The renderer walks the same
+  `files[].rule_groups[].violations[]` shape the text/json formatters consume; only the
+  presentation differs. `--strict`, `--rule`/`--rule-prefix`, `--limit`, and `[lint] ignore`
+  compose unchanged; exit codes are unchanged.
+- **Lint-only keeps the contract honest.** Workflow commands only make sense for
+  file/line/message findings. Rejecting `github` elsewhere avoids meaningless output and a
+  fake-general format. It is deliberately **not** accepted as a `.hyalo.toml` `format` value.
+
+**Consequences:** Rendering lives in `crates/hyalo-cli/src/commands/lint_github.rs` (escaping
+per the workflow-command spec: `%`→`%25`, `\r`→`%0D`, `\n`→`%0A`; properties also `:`→`%3A`,
+`,`→`%2C`). `--format github` forces `detailed` and lifts the per-rule/per-file caps in
+dispatch so no annotation is silently dropped, and is rejected together with `--count`/`--jq`.
+The repo dogfoods this via a `lint-kb` CI job. Frozen historical trees
+(`iterations/done/**`, `backlog/done/**`, `dogfood-results/**`, `reviews/**`, `research/**`,
+`promotion-plan.md`) are added to `[lint] ignore`, and `HYALO002` is downgraded to **warn**
+in this vault because completed iterations legitimately keep a trailing unchecked
+housekeeping task — so the gate protects the live knowledgebase without churning history.

@@ -24,6 +24,11 @@ pub(crate) struct OutputPipeline<'a> {
     pub count: bool,
     /// When `--files-from` was used, inject skip counters into the envelope.
     pub files_from_counters: Option<FilesFromCounters>,
+    /// Path prefix for `--format github` annotations: the vault dir expressed
+    /// relative to CWD, prepended to each vault-relative file path so GitHub
+    /// resolves annotations against the repo root. Empty when the vault dir is
+    /// the CWD. Only consulted when `user_format == Format::Github`.
+    pub github_path_prefix: String,
 }
 
 /// Inject `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`
@@ -116,6 +121,18 @@ impl OutputPipeline<'_> {
                         return 2;
                     }
                 };
+
+                // `--format github`: render lint violations as GitHub Actions
+                // workflow commands (inline PR annotations) plus a summary line.
+                // This bypasses the JSON envelope, hints, and jq entirely — those
+                // are rejected for `github` upstream. `github` is lint-only, so
+                // `value` here is always the extended lint payload.
+                if self.user_format == Format::Github {
+                    let rendered =
+                        crate::commands::lint_github::render(&value, &self.github_path_prefix);
+                    println!("{rendered}");
+                    return 0;
+                }
 
                 // Generate hints when a context is available. Pass through
                 // the `--files-from` counters so iter-143's counter-aware

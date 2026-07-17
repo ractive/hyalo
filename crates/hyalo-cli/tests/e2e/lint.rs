@@ -1858,3 +1858,210 @@ fn lint_okf_bundle_absolute_links_not_broken() {
         "bundle-absolute link should resolve, not appear broken; stdout: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// --format github (GitHub Actions annotations)
+// ---------------------------------------------------------------------------
+
+/// A vault with errors + warnings emits `::error`/`::warning` workflow commands
+/// (paths relative to the repo root — here the vault IS the CWD, so no prefix)
+/// plus a summary line, and exits 1.
+#[test]
+fn lint_github_emits_annotations_and_exits_one() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "missing_date.md"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 1, "errors -> exit 1");
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    // A missing required property is an error annotation on the right file.
+    assert!(
+        stdout.contains("::error file=missing_date.md,"),
+        "expected error annotation for missing_date.md; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("title=SCHEMA::") && stdout.contains("missing required property"),
+        "expected SCHEMA title + message; got:\n{stdout}"
+    );
+    // Summary line is the last non-empty line.
+    let last = stdout.lines().rfind(|l| !l.is_empty()).unwrap();
+    assert!(
+        last.contains("error") && last.contains("warning") && last.contains(" in "),
+        "expected summary line; got: {last}"
+    );
+}
+
+/// A clean vault under `--format github` prints only the summary line and exits 0.
+#[test]
+fn lint_github_clean_vault_summary_only_exit_zero() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "clean.md"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0, "clean -> exit 0");
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    assert!(
+        !stdout.contains("::error") && !stdout.contains("::warning"),
+        "clean vault should have no annotations; got:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0 errors, 0 warnings in 0 files",
+        "expected summary-only output"
+    );
+}
+
+/// `--strict` flips the missing-`type` annotation from `::warning` to `::error`.
+#[test]
+fn lint_github_strict_promotes_warning_to_error() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.default]
+required = ["title"]
+
+[schema.types.note]
+required = ["title"]
+"#,
+    );
+    // A file with `title` but no `type` — triggers the missing-type warning.
+    write_md(
+        tmp.path(),
+        "no_type.md",
+        md!(r"
+---
+title: No Type
+---
+Body.
+"),
+    );
+
+    // Without --strict: missing-type is a warning.
+    let warn_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github", "no_type.md"])
+        .output()
+        .unwrap();
+    let warn_stdout = std::str::from_utf8(&warn_out.stdout).unwrap();
+    assert!(
+        warn_stdout.contains("::warning file=no_type.md,"),
+        "expected warning annotation without --strict; got:\n{warn_stdout}"
+    );
+    assert_eq!(warn_out.status.code().unwrap(), 0, "warning-only -> exit 0");
+
+    // With --strict: promoted to an error, exit 1.
+    let strict_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "github", "no_type.md"])
+        .output()
+        .unwrap();
+    let strict_stdout = std::str::from_utf8(&strict_out.stdout).unwrap();
+    assert!(
+        strict_stdout.contains("::error file=no_type.md,"),
+        "expected error annotation with --strict; got:\n{strict_stdout}"
+    );
+    assert_eq!(
+        strict_out.status.code().unwrap(),
+        1,
+        "strict error -> exit 1"
+    );
+}
+
+/// Paths are prefixed with the vault dir relative to CWD when linting from a
+/// parent directory (`--dir sub/kb`), so annotations resolve against the repo root.
+#[test]
+fn lint_github_prefixes_paths_when_dir_below_cwd() {
+    let tmp = TempDir::new().unwrap();
+    let kb = tmp.path().join("kb");
+    std::fs::create_dir_all(&kb).unwrap();
+    write_schema_toml(
+        &kb,
+        r#"[schema.default]
+required = ["title"]
+"#,
+    );
+    write_md(
+        &kb,
+        "bad.md",
+        md!(r"
+---
+title: Bad
+status: nope
+---
+Body.
+"),
+    );
+
+    // Run from the parent (repo root), pointing --dir at the vault subdir.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--dir", "kb", "--format", "github", "bad.md"])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    // Every annotation path must be prefixed with the vault dir.
+    for line in stdout.lines().filter(|l| l.starts_with("::")) {
+        assert!(
+            line.contains("file=kb/bad.md"),
+            "annotation path should be repo-root-relative (kb/bad.md); got: {line}"
+        );
+    }
+}
+
+/// `--fix --dry-run --format github` uses the fix-mode payload shape
+/// (`remaining_groups`, not `rule_groups`) — the renderer must still emit
+/// annotations for violations that fix mode can't resolve (a missing required
+/// property isn't autofixable), not silently produce zero annotations.
+#[test]
+fn lint_github_fix_dry_run_emits_remaining_violations() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--fix",
+            "--dry-run",
+            "--format",
+            "github",
+            "missing_date.md",
+        ])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    assert!(
+        stdout.contains("::error file=missing_date.md,"),
+        "expected a remaining-violation annotation under --fix --dry-run; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("missing required property"),
+        "expected the SCHEMA message; got:\n{stdout}"
+    );
+    assert_eq!(output.status.code().unwrap(), 1, "errors -> exit 1");
+}
+
+/// `--format github` is rejected for non-lint subcommands with a clear error.
+#[test]
+fn github_format_rejected_for_non_lint() {
+    let tmp = setup_vault_with_schema();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--format", "github", "note"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        2,
+        "non-lint github -> exit 2"
+    );
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    assert!(
+        stderr.contains("only supported by `hyalo lint`"),
+        "expected lint-only rejection message; got:\n{stderr}"
+    );
+}
