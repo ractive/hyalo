@@ -239,9 +239,11 @@ impl HyaloLintEngine {
         // and MADR rules above: listed here so `lint-rules list` /
         // `--rule-prefix SKILL` see them and `[lint.rules.SKILL-*]` overrides
         // round-trip, but they only execute under `hyalo lint --profile skills`
-        // (or `[lint] profile = "skills"`). Both are advisory (warn): a
-        // name/dirname mismatch or an over-budget body is a smell, not a hard
-        // error — the hard `name`/`description` constraints are the schema's job.
+        // (or `[lint] profile = "skills"`). A reserved `name` is a hard spec
+        // violation (error); the dirname mismatch and over-budget body are
+        // smells, not hard errors, so they default to warn — the hard `name`
+        // regex/length and `description` length constraints are the schema's
+        // job (see `hyalo-cli/templates/profile-skills.toml`).
         let skill_entries = [
             (
                 "SKILL-RESERVED-NAME",

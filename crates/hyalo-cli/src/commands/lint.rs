@@ -1062,24 +1062,32 @@ fn validate_constraint(
             // Length bounds are measured in Unicode scalar values (chars), so a
             // 1024-char cap counts characters, not bytes — matching how humans
             // and the Agent Skills spec reason about a description's length.
-            let len = s.chars().count();
-            if let Some(min) = min_length
-                && len < *min
-            {
-                return vec![Violation {
-                    severity: Severity::Error,
-                    kind: None,
-                    message: format!("property \"{name}\" is {len} characters; minimum is {min}"),
-                }];
-            }
-            if let Some(max) = max_length
-                && len > *max
-            {
-                return vec![Violation {
-                    severity: Severity::Error,
-                    kind: None,
-                    message: format!("property \"{name}\" is {len} characters; maximum is {max}"),
-                }];
+            // Only pay for the O(n) char count when a bound is actually set —
+            // most `string` properties have neither.
+            if min_length.is_some() || max_length.is_some() {
+                let len = s.chars().count();
+                if let Some(min) = min_length
+                    && len < *min
+                {
+                    return vec![Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" is {len} characters; minimum is {min}"
+                        ),
+                    }];
+                }
+                if let Some(max) = max_length
+                    && len > *max
+                {
+                    return vec![Violation {
+                        severity: Severity::Error,
+                        kind: None,
+                        message: format!(
+                            "property \"{name}\" is {len} characters; maximum is {max}"
+                        ),
+                    }];
+                }
             }
             if let Some(pat) = pattern {
                 // Compile (or look up) the regex once per pattern per call.
@@ -1461,9 +1469,9 @@ pub struct ExtLintOptions<'a> {
     /// When `true`, run the MADR conformance profile's advisory (warn-level)
     /// rules in addition to the schema pass. Set by `hyalo lint --profile madr`.
     pub madr_profile: bool,
-    /// When `true`, run the Agent Skills conformance profile's advisory
-    /// (warn-level) rules in addition to the schema pass. Set by
-    /// `hyalo lint --profile skills`.
+    /// When `true`, run the Agent Skills conformance profile's rules
+    /// (mostly warn-level; `SKILL-RESERVED-NAME` defaults to error) in
+    /// addition to the schema pass. Set by `hyalo lint --profile skills`.
     pub skills_profile: bool,
 }
 
@@ -2589,9 +2597,11 @@ fn lint_one_file_extended(
         }
     }
 
-    // Agent Skills conformance profile — advisory (warn-level) rules layered on
-    // top of the schema pass. Only runs under `hyalo lint --profile skills` (or
-    // a vault whose `.hyalo.toml` sets `[lint] profile = "skills"`). Same
+    // Agent Skills conformance profile — rules layered on top of the schema
+    // pass. Only runs under `hyalo lint --profile skills` (or a vault whose
+    // `.hyalo.toml` sets `[lint] profile = "skills"`). Mostly advisory
+    // (warn-level): `SKILL-RESERVED-NAME` is the exception and defaults to
+    // error severity (a reserved `name` is a hard spec violation). Same
     // override/filter discipline as the OKF/MADR blocks above.
     if skills_profile {
         let is_enabled = |rule_id: &str| -> bool {
