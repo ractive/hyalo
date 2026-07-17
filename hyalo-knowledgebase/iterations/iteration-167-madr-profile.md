@@ -44,6 +44,8 @@ This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[
 - [ ] Supersede cross-check: `status: superseded by ADR-0123` → warn if `0123-*.md` doesn't exist in the ADR dir
 - [ ] Filename↔content coupling: warn when the `NNNN` prefix duplicates an existing ADR number (capability gap #2 from the survey — first minimal cut)
 
+**iter-166 note (2026-07-17) — reusable lint-wiring pattern:** iter-166's `OKF-*` rules established the shape new advisory rules should follow; copy it rather than re-deriving: (1) register each rule as a `RuleCatalogEntry` in `hyalo-mdlint/src/engine.rs` with `default_enabled = true` so `lint-rules list`/`show`/`set --enabled false` work and round-trip a real override even when the rule is "on by default"; (2) gate actual execution on the active profile at the CLI layer (`lint.rs`'s `okf_profile: bool` flag threaded from `dispatch.rs`), not inside the rule itself; (3) respect `[lint.rules.<ID>]` enable/severity overrides *and* `--rule`/`--rule-prefix` filters via a single `is_enabled` predicate closure passed into the rule-running function, so profile rules compose with the generic lint surface for free. Also reuse `overlay_profile()` (`config.rs`) verbatim for the `--profile madr` overlay — don't re-derive the merge-then-reparse flow, and note the OR-vs-overwrite bug iter-166 fixed there (the overlay's `lint_strict` must be taken as-is post-merge, not ORed with the pre-overlay value, or a future fragment that means to leave `strict` unset would incorrectly inherit `true` from an unrelated existing config).
+
 ### 3. TOC / dashboard generator
 
 - [ ] Decide command shape: per-profile group `hyalo madr toc` (consistent with `hyalo okf index`) vs a generic profile-keyed generator — leaning per-profile group; record decision in [[okf-open-knowledge-format]] CLI-design section
@@ -53,6 +55,7 @@ This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[
 
 - [ ] e2e: `init --profile madr` in a temp dir; `hyalo new --type adr` produces `NNNN-slug.md` with the next number; lint passes on the MADR 4 template examples from the spec repo
 - [ ] e2e: supersede cross-check fires on a dangling reference; 3.x `deciders` accepted per the chosen mechanism
+- [ ] e2e: CRLF-terminated ADR files (frontmatter + TOC managed region) lint/generate identically to LF. **iter-166 note (2026-07-17):** CRLF has now bitten new `okf` code twice (iter-165's `find_heading`/`prepend_log_entry`, iter-166's date-heading/citation scanners) — treat it as a standing requirement for any new line-oriented parsing here, not an edge case to remember later.
 - [ ] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
 ### 5. Docs sync (same PR)
