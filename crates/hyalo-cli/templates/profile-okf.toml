@@ -15,7 +15,7 @@ validate_on_write = true
 # without needing `--profile okf` on every invocation. `hyalo lint --profile
 # okf` on such a vault is then a no-op overlay (idempotent).
 [lint]
-profile = "okf"
+profiles = ["okf"]
 
 [schema]
 # Reserved OKF files carry no `type`, so exempt them from the required-`type`

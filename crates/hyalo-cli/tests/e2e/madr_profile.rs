@@ -50,7 +50,10 @@ fn init_madr() -> TempDir {
 fn init_writes_madr_config() {
     let tmp = init_madr();
     let cfg = std::fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
-    assert!(cfg.contains("profile = \"madr\""), "records lint profile");
+    assert!(
+        cfg.contains("profiles = [\"madr\"]"),
+        "records lint profile"
+    );
     assert!(cfg.contains("[[schema.bind]]"), "writes a bind entry");
     assert!(
         cfg.contains("docs/decisions/**/*.md"),

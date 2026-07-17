@@ -60,13 +60,34 @@ struct LintConfig {
     /// `hyalo lint --strict`.
     #[serde(default)]
     strict: bool,
-    /// Active conformance profile materialized into this config (e.g. `"okf"`),
-    /// written by `hyalo init --profile <name>`. When set, `hyalo lint` runs
-    /// that profile's advisory rules without needing `--profile` on the CLI —
-    /// so plain `hyalo lint` on an initialized vault behaves identically to
-    /// `hyalo lint --profile <name>` (idempotent overlay).
+    /// Active conformance profiles materialized into this config (e.g.
+    /// `["okf", "madr"]`), written by `hyalo init --profile <name>`. When set,
+    /// plain `hyalo lint` runs *every* listed profile's advisory rules without
+    /// needing `--profile` on the CLI — so an initialized vault behaves
+    /// identically to `hyalo lint --profile <name>` for each active profile
+    /// (idempotent overlay). Multiple profiles compose here.
+    #[serde(default)]
+    profiles: Vec<String>,
+    /// Deprecated single-profile alias for [`LintConfig::profiles`]. Accepted as
+    /// a one-element compat form: `profile = "okf"` behaves like
+    /// `profiles = ["okf"]`. `hyalo init --profile` now writes `profiles`.
     #[serde(default)]
     profile: Option<String>,
+}
+
+impl LintConfig {
+    /// The effective list of active conformance profiles: the `profiles` list
+    /// plus the deprecated singular `profile` alias (appended if not already
+    /// present), preserving order.
+    fn active_profiles(&self) -> Vec<String> {
+        let mut out = self.profiles.clone();
+        if let Some(single) = &self.profile
+            && !out.iter().any(|p| p == single)
+        {
+            out.push(single.clone());
+        }
+        out
+    }
 }
 
 /// Raw deserialized representation of `.hyalo.toml`.
@@ -152,10 +173,12 @@ pub(crate) struct ResolvedDefaults {
     /// `false` when the file was missing, unreadable, or malformed (in which
     /// case all other fields are hardcoded defaults).
     pub(crate) loaded_from_file: bool,
-    /// Active conformance profile from `[lint] profile` in `.hyalo.toml`
-    /// (e.g. `Some("okf")`). Enables that profile's advisory lint rules for
-    /// plain `hyalo lint`, matching the ephemeral `--profile` overlay.
-    pub(crate) lint_profile: Option<String>,
+    /// Active conformance profiles from `[lint] profiles` (or the deprecated
+    /// `[lint] profile` alias) in `.hyalo.toml` (e.g. `["okf", "madr"]`).
+    /// Enables every listed profile's advisory lint rules for plain
+    /// `hyalo lint`, matching the ephemeral `--profile` overlay. Multiple
+    /// profiles compose.
+    pub(crate) lint_profiles: Vec<String>,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -194,7 +217,7 @@ impl ResolvedDefaults {
             case_insensitive_mode: CaseInsensitiveMode::Auto,
             lint_strict: false,
             loaded_from_file: false,
-            lint_profile: None,
+            lint_profiles: Vec::new(),
         }
     }
 
@@ -346,7 +369,19 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     };
 
     let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
-    let lint_profile = cfg.lint.as_ref().and_then(|l| l.profile.clone());
+    // Deprecation: the singular `[lint] profile = "..."` is a compat alias for
+    // the `profiles` list. Warn so vaults migrate, but keep honoring it.
+    if cfg.lint.as_ref().is_some_and(|l| l.profile.is_some()) {
+        crate::warn::warn(
+            "deprecated: '[lint] profile' in .hyalo.toml — use the list form \
+             'profiles = [\"<name>\"]' (multiple profiles compose)",
+        );
+    }
+    let lint_profiles = cfg
+        .lint
+        .as_ref()
+        .map(LintConfig::active_profiles)
+        .unwrap_or_default();
 
     ResolvedDefaults {
         dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
@@ -368,7 +403,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         case_insensitive_mode,
         lint_strict,
         loaded_from_file: true,
-        lint_profile,
+        lint_profiles,
     }
 }
 
@@ -486,10 +521,11 @@ pub(crate) struct ProfileOverlay {
     pub(crate) md_lint: hyalo_mdlint::LintConfig,
     pub(crate) validate_on_write: bool,
     pub(crate) lint_strict: bool,
-    /// Active profile marker from the merged `[lint] profile` key (the fragment
-    /// itself sets it), so the overlay enables the profile's advisory rules
-    /// even on a vault with no `.hyalo.toml` on disk.
-    pub(crate) lint_profile: Option<String>,
+    /// Active profile markers from the merged `[lint] profiles` list (the
+    /// fragment itself contributes its name), so the overlay enables every
+    /// active profile's advisory rules even on a vault with no `.hyalo.toml` on
+    /// disk. The requested `--profile <name>` is always present.
+    pub(crate) lint_profiles: Vec<String>,
 }
 
 /// Build a [`ProfileOverlay`] by merging the named profile's fragment into the
@@ -530,21 +566,25 @@ pub(crate) fn overlay_profile(
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
     let md_lint = parse_md_lint_config(cfg.lint.as_ref());
     let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
-    // The fragment sets `[lint] profile`; fall back to the requested name so the
-    // overlay always advertises an active profile even if a future fragment
-    // omits the key.
-    let lint_profile = cfg
+    // The fragment contributes its name to `[lint] profiles`; ensure the
+    // requested `--profile <name>` is always present even if a future fragment
+    // omits the key. The union preserves any profiles the on-disk config
+    // already activated (composed overlay).
+    let mut lint_profiles = cfg
         .lint
         .as_ref()
-        .and_then(|l| l.profile.clone())
-        .or_else(|| Some(profile_name.to_owned()));
+        .map(LintConfig::active_profiles)
+        .unwrap_or_default();
+    if !lint_profiles.iter().any(|p| p == profile_name) {
+        lint_profiles.push(profile_name.to_owned());
+    }
 
     Ok(ProfileOverlay {
         schema,
         md_lint,
         validate_on_write,
         lint_strict,
-        lint_profile,
+        lint_profiles,
     })
 }
 
@@ -917,6 +957,133 @@ site_prefix = "docs"
         assert!(
             warned,
             "expected a warning for invalid case_insensitive value"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // iter-172: [lint] profiles list + compat alias
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn lint_profiles_list_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[lint]\nprofiles = [\"okf\", \"madr\"]\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.lint_profiles,
+            vec!["okf".to_owned(), "madr".to_owned()],
+            "both listed profiles active"
+        );
+    }
+
+    #[test]
+    fn lint_profile_singular_is_compat_alias() {
+        // The deprecated `profile = "okf"` maps to a one-element list.
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[lint]\nprofile = \"okf\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.lint_profiles, vec!["okf".to_owned()]);
+    }
+
+    #[test]
+    fn lint_profile_singular_emits_deprecation_warning() {
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[lint]\nprofile = \"okf\"\n",
+        )
+        .unwrap();
+
+        let _ = load_config_from(dir.path());
+        assert!(
+            crate::warn::any_tracked_starts_with("deprecated: '[lint] profile'"),
+            "singular profile alias should warn"
+        );
+    }
+
+    #[test]
+    fn lint_profiles_and_alias_union_without_duplicates() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[lint]\nprofiles = [\"okf\"]\nprofile = \"okf\"\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.lint_profiles,
+            vec!["okf".to_owned()],
+            "duplicate alias is not appended twice"
+        );
+    }
+
+    #[test]
+    fn lint_profiles_empty_by_default() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.lint_profiles.is_empty());
+    }
+
+    #[test]
+    fn overlay_profile_composes_with_file_activated_profiles() {
+        // A `--profile skills` overlay on a vault whose `.hyalo.toml` already
+        // activates okf must yield BOTH profiles active (composed, not
+        // replaced) — this is the flag-vs-file parity the plan requires.
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[lint]\nprofiles = [\"okf\"]\n[schema]\nexempt = [\"**/index.md\"]\n",
+        )
+        .unwrap();
+
+        let overlay = overlay_profile(dir.path(), "skills").expect("skills overlay");
+        assert!(
+            overlay.lint_profiles.contains(&"okf".to_owned()),
+            "file-activated okf survives the overlay: {:?}",
+            overlay.lint_profiles
+        );
+        assert!(
+            overlay.lint_profiles.contains(&"skills".to_owned()),
+            "requested skills is active: {:?}",
+            overlay.lint_profiles
+        );
+    }
+
+    #[test]
+    fn overlay_profile_honors_user_exempt_additions() {
+        // mapl BUG-6: a `--profile` overlay must honor user `[schema] exempt`
+        // additions exactly like the file path does (union, not clobber).
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[schema]\nexempt = [\"my/private/**\"]\n",
+        )
+        .unwrap();
+
+        let overlay = overlay_profile(dir.path(), "okf").expect("okf overlay");
+        assert!(
+            overlay.schema.exempt.is_exempt("my/private/secret.md"),
+            "user exempt addition honored by the --profile overlay"
+        );
+        assert!(
+            overlay.schema.exempt.is_exempt("bundle/index.md"),
+            "okf exempt also active"
         );
     }
 

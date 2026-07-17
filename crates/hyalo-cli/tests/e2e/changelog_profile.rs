@@ -101,7 +101,7 @@ fn init_writes_changelog_config() {
     let tmp = init_changelog();
     let cfg = std::fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
     assert!(
-        cfg.contains("profile = \"changelog\""),
+        cfg.contains("profiles = [\"changelog\"]"),
         "records lint profile"
     );
     assert!(cfg.contains("[[schema.bind]]"), "writes a bind entry");

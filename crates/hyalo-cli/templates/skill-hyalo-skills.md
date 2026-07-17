@@ -52,7 +52,7 @@ frontmatter. Explicit frontmatter always wins.
 
 The hard `name` (regex/length) and `description` (length, no tags) constraints are enforced
 by the schema itself. On a vault initialised with `hyalo init --profile skills` (which sets
-`[lint] profile = "skills"`), plain `hyalo lint` runs these rules too.
+`[lint] profiles = ["skills"]`), plain `hyalo lint` runs these rules too.
 
 ## Scaffold
 

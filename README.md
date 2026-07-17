@@ -166,7 +166,7 @@ The `okf` profile merges a declarative config fragment into `.hyalo.toml`:
 - `validate_on_write = true` — authoring stays conformant.
 - Seed `[schema.types.*]` for common OKF concept types with recommended `# Schema`/`# Citations` sections.
 
-Profiles are **composable** and **idempotent**: multiple `--profile` runs coexist in one vault (the fragment is deep-merged, upserting only its own keys), and re-running never clobbers other config. With `--claude`, the bundled `okf` skill teaches Claude the OKF concept model, reserved-file rules, link forms, and the exact hyalo commands — hyalo owns the deterministic frontmatter/link mechanics while the LLM does the semantic work.
+Profiles are **composable** and **idempotent**: multiple `--profile` runs coexist in one vault. The fragment is deep-merged, and array config keys **union** rather than clobber — each profile's `[schema] exempt` globs, `[[schema.bind]]` entries, `[schema.default] required` fields, and `[lint] profiles` markers all accumulate, so a later `init --profile` never shrinks an earlier one's config or your hand-added entries. Hand-written comments and key order survive the merge, re-running is byte-idempotent, and when a profile overwrites a differing **scalar** value it prints a `conflict: <key> "<old>" -> "<new>"` line to stderr — nothing is lost silently. With `--claude`, the bundled `okf` skill teaches Claude the OKF concept model, reserved-file rules, link forms, and the exact hyalo commands — hyalo owns the deterministic frontmatter/link mechanics while the LLM does the semantic work.
 
 ### Reserved-file generators (`okf index` / `okf log`)
 
@@ -203,7 +203,7 @@ The profile honours OKF's **permissive-consumption** model — *warn, don't reje
 
 Advisory citation rules make the `# Citations` convention first-class: `OKF-CITATIONS-PRESENT` (a claim-bearing concept should cite), `OKF-CITATIONS-WELL-FORMED` (entries are links — both numbered `1.` and `-` bullet lists accepted), and `OKF-CITATIONS-RESOLVE` (bundle-relative / `references/…` links resolve on disk; external `http(s)` URLs are surfaced but not network-checked). Each OKF rule is individually toggleable with `hyalo lint-rules set OKF-… --enabled false` and appears in `hyalo lint-rules list`.
 
-Because the overlay reuses the init fragment, a vault created with `hyalo init --profile okf` (which records `[lint] profile = "okf"`) runs the same rules under a plain `hyalo lint` — `--profile okf` on such a vault is a no-op.
+Because the overlay reuses the init fragment, a vault created with `hyalo init --profile okf` (which records `[lint] profiles = ["okf"]`) runs the same rules under a plain `hyalo lint` — `--profile okf` on such a vault is a no-op.
 
 ## MADR profile — Architecture Decision Records
 
@@ -216,7 +216,7 @@ hyalo init --profile madr --claude   # also install the bundled `madr` skill
 
 The `madr` profile is **pure data over the same machinery as `okf`**, plus two generic mechanisms it is the first consumer of:
 
-- **Path-bound schemas (`[[schema.bind]]`)** — the `adr` type is bound to `docs/decisions/**/*.md`, so the schema applies to *that subtree only*, inside any larger vault. Files there need no explicit `type: adr` frontmatter; the binding supplies it (explicit frontmatter always wins, and a `type:` that disagrees with the binding warns). Bindings are ordered and first-match-wins.
+- **Path-bound schemas (`[[schema.bind]]`)** — the `adr` type is bound to `docs/decisions/**/*.md`, so the schema applies to *that subtree only*, inside any larger vault. Files there need no explicit `type: adr` frontmatter; the binding supplies it (explicit frontmatter always wins, and a `type:` that disagrees with the binding warns). **Bind = typing:** a bound file satisfies a `required = ["type"]` gate through its binding, so a spec-valid frontmatter-less `SKILL.md`, MADR ADR, or `CHANGELOG.md` lints clean without a hand-written `type:` key (its type-specific required properties are still enforced). Bindings are ordered and first-match-wins.
 - **Zero-padded filename tokens (`{n:04}`)** — the `adr` `filename-template` is `docs/decisions/{n:04}-{slug}.md`, producing `0007-use-postgres.md`. The pad width is a rendering minimum, so `1-x.md` and `0002-x.md` are both still recognized as ADRs.
 
 The `adr` type keeps MADR's light frontmatter (`status`, `date`, `decision-makers`/`consulted`/`informed` — the 3.x `deciders` spelling is accepted as an alias) optional-but-typed, and requires the MADR-4 short-template sections `## Context and Problem Statement`, `## Considered Options`, `## Decision Outcome`.

@@ -822,8 +822,11 @@ Repeatable (AND).\n\
             With --claude, also installs the hyalo skill for Claude Code.\n\
             With --pi, also installs the hyalo skill for pi.\n\
             With --profile <name>, scaffolds a preset vault flavour by merging an\n\
-            embedded config fragment into .hyalo.toml (available: okf, madr, skills).\n\
-            Multiple profiles compose in one vault; re-running upserts without clobbering.\n\
+            embedded config fragment into .hyalo.toml (available: okf, madr, skills,\n\
+            changelog). Multiple profiles compose in one vault: array keys (exempt,\n\
+            binds, [lint] profiles) union instead of clobbering, comments survive, and\n\
+            re-running is idempotent. A changed scalar prints a `conflict:` line to\n\
+            stderr — nothing is lost silently.\n\
             With --profile <name> --claude, also installs the bundled skill for it.\n\n\
             Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
             EXAMPLES:\n\
@@ -1084,8 +1087,11 @@ Repeatable (AND).\n\
             (error), and warns — never rejects — on reserved-file (`index.md`/`log.md`) structure,\n\
             broken cross-links, missing/malformed `# Citations`, and augmentation regressions.\n\
             The overlay reuses the same fragment `hyalo init --profile okf` materializes, so on a\n\
-            vault already initialized that way plain `hyalo lint` behaves identically. Unknown\n\
-            `type` values and extra frontmatter keys are always accepted (permissive model).\n\
+            vault already initialized that way plain `hyalo lint` behaves identically. When the\n\
+            vault's `.hyalo.toml` already activates profiles via `[lint] profiles`, a `--profile`\n\
+            flag *composes* with them (adds, never replaces) and honors user `[schema] exempt`\n\
+            additions exactly like file activation. Unknown `type` values and extra frontmatter\n\
+            keys are always accepted (permissive model).\n\
             `--profile madr` binds an `adr` schema to `docs/decisions/**` and warns on dangling\n\
             supersedes / duplicate ADR numbers. `--profile skills` binds a `skill` schema to\n\
             `**/SKILL.md` (Agent Skills spec): it errors on `name` regex/length/reserved-word\n\

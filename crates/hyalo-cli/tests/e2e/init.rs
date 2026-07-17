@@ -1186,7 +1186,7 @@ fn init_profile_okf_bundle_lints_clean_under_strict() {
         .unwrap();
 
     // A minimal, fully OKF-conformant bundle: reserved index.md/log.md (no type)
-    // plus one concept. `init --profile okf` writes `[lint] profile = "okf"`, so
+    // plus one concept. `init --profile okf` writes `[lint] profiles = ["okf"]`, so
     // plain `hyalo lint` now also runs the OKF advisory (warn-level) rules — the
     // fixture is shaped to satisfy them (link-list index, date-grouped log,
     // `# Citations` present) so the bundle lints entirely clean.

@@ -35,6 +35,7 @@ mod new;
 mod okf;
 mod okf_profile;
 mod positional_file;
+mod profile_composition;
 mod properties;
 mod quiet;
 mod read;

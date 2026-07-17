@@ -17,7 +17,7 @@ validate_on_write = true
 # grammar rules without `--profile changelog` on every invocation.
 # `hyalo lint --profile changelog` is then an idempotent overlay.
 [lint]
-profile = "changelog"
+profiles = ["changelog"]
 
 # `CHANGELOG.md` carries no frontmatter, so exempt it from the required-`type` /
 # frontmatter-presence checks. The grammar is enforced by the `CHANGELOG-*`

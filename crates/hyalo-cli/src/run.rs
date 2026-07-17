@@ -1392,9 +1392,10 @@ fn run_inner() -> Result<(), AppError> {
     let case_insensitive_mode = config.case_insensitive_mode;
     let mut md_lint = config.md_lint;
     let mut lint_strict_from_config = config.lint_strict;
-    // Active conformance profile: from `[lint] profile` in `.hyalo.toml`, or
-    // overridden by an explicit `--profile` overlay below.
-    let mut lint_profile_active = config.lint_profile;
+    // Active conformance profiles: from `[lint] profiles` in `.hyalo.toml`, or
+    // extended by an explicit `--profile` overlay below (which composes rather
+    // than replaces, so a `--profile` flag adds to the file-activated set).
+    let mut lint_profiles_active = config.lint_profiles;
 
     // `hyalo lint --profile <name>` overlays an embedded config fragment for this
     // invocation only (no `.hyalo.toml` write). The overlay reuses the same
@@ -1419,8 +1420,11 @@ fn run_inner() -> Result<(), AppError> {
                 // does not set it. An explicit `--strict` flag still wins later
                 // in dispatch.
                 lint_strict_from_config = overlay.lint_strict;
-                // The explicit --profile activates that profile's advisory rules.
-                lint_profile_active = overlay.lint_profile.or(Some(profile_name.clone()));
+                // The explicit --profile activates every profile the merged
+                // (existing file + fragment) config declares, so a `--profile`
+                // flag *adds* to whatever `[lint] profiles` the vault already
+                // activates rather than replacing it.
+                lint_profiles_active = overlay.lint_profiles;
             }
             Err(e) => {
                 return Err(AppError::User(crate::output::format_error(
@@ -1547,7 +1551,7 @@ fn run_inner() -> Result<(), AppError> {
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,
         lint_strict: lint_strict_from_config,
-        lint_profile: lint_profile_active,
+        lint_profiles: lint_profiles_active,
         files_from_counters: None,
     };
 

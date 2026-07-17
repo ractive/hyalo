@@ -174,10 +174,11 @@ pub(crate) struct CommandContext<'a> {
     /// When `true`, "no 'type' property" and "undeclared property" warnings are
     /// promoted to errors, and lint exits non-zero on them.
     pub lint_strict: bool,
-    /// Active conformance profile (e.g. `Some("okf")`) from `[lint] profile` in
-    /// `.hyalo.toml` or an explicit `hyalo lint --profile`. Enables that
-    /// profile's advisory lint rules.
-    pub lint_profile: Option<String>,
+    /// Active conformance profiles (e.g. `["okf", "madr"]`) from
+    /// `[lint] profiles` in `.hyalo.toml` or an explicit `hyalo lint --profile`.
+    /// Enables every listed profile's advisory lint rules. Multiple profiles
+    /// compose — all their rules fire in one lint pass.
+    pub lint_profiles: Vec<String>,
     /// `--files-from` counters captured during dispatch for commands that resolve
     /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
     /// the output pipeline as `files_from_counters` in the envelope.
@@ -427,10 +428,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     let effective_format = ctx.effective_format;
     // Capture the active conformance profile before borrowing `ctx.snapshot_index`
     // mutably below (the lint arm needs it while that mutable borrow is live).
-    let okf_profile_active = ctx.lint_profile.as_deref() == Some("okf");
-    let madr_profile_active = ctx.lint_profile.as_deref() == Some("madr");
-    let skills_profile_active = ctx.lint_profile.as_deref() == Some("skills");
-    let changelog_profile_active = ctx.lint_profile.as_deref() == Some("changelog");
+    let profile_active = |name: &str| ctx.lint_profiles.iter().any(|p| p == name);
+    let okf_profile_active = profile_active("okf");
+    let madr_profile_active = profile_active("madr");
+    let skills_profile_active = profile_active("skills");
+    let changelog_profile_active = profile_active("changelog");
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
@@ -1610,7 +1612,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             max_per_rule,
             fix_rule,
             strict: lint_strict_flag,
-            // Profile activation is resolved in run.rs into `ctx.lint_profile`
+            // Profile activation is resolved in run.rs into `ctx.lint_profiles`
             // (it needs the raw config to overlay); the flag itself is consumed
             // there. Ignore it here.
             profile: _,
