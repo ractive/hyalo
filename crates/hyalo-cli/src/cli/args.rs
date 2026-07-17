@@ -153,7 +153,8 @@ pub(crate) fn build_version_string() -> &'static str {
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
-        Override with --site-prefix <PREFIX>, or --site-prefix \"\" to disable. Also settable in .hyalo.toml.\n\n\
+        Override with --site-prefix <PREFIX>, or --site-prefix \"\" to disable. Also settable in .hyalo.toml. \
+        For bundle-root resolution (e.g. OKF bundles where `/x/y.md` is relative to the bundle root), set `site_prefix = \"\"` so only the leading `/` is stripped — this also avoids mis-stripping when a bundle subdir shares its name with the vault dir.\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
         \u{00a0} format = \"text\"       # pin format regardless of TTY detection\n\
@@ -1023,6 +1024,10 @@ Repeatable (AND).\n\
             When no `[schema]` section exists, this pass exits 0 with zero violations.\n\
             Schema extensions `item_pattern` (per-item regex on `string-list` properties) and\n\
             `required-sections` (required body outline on type schemas) are validated here.\n\n\
+            EXEMPT FILES: `[schema] exempt = [\"**/index.md\", \"**/log.md\"]` lists vault-relative\n\
+            globs for reserved files that are bound to no schema — they skip the missing-`type`\n\
+            warning, required-property checks, and undeclared-property warnings (useful for OKF\n\
+            bundle reserved files). Matching is cross-platform (forward-slash normalized).\n\n\
             REQUIRED EMPTINESS: a required property whose value is YAML null (`tags: ~`) or\n\
             an empty array (`tags: []`) is treated as semantically equivalent to absent and\n\
             reported as an error (e.g. `required property \"tags\" must not be empty`). The\n\
@@ -1203,7 +1208,7 @@ Repeatable (AND).\n\
         display_order = 899,
         long_about = "Print the effective configuration for the current working directory.\n\n\
             Shows which .hyalo.toml is active (or none), its raw contents, and the effective\n\
-            values: config_path, cwd, dir, format, hints, site_prefix.\n\n\
+            values: config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
             OUTPUT: Line-by-line in text format; JSON object with --format json.\n\
             SIDE EFFECTS: None (read-only)."
     )]
@@ -1323,7 +1328,7 @@ pub(crate) enum TypesAction {
     },
     /// Create or update a type schema's required fields, defaults, or property constraints
     #[command(
-        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/number/boolean/list/enum).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
     )]
     Set {
         /// Type name to update

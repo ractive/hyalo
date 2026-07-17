@@ -917,6 +917,7 @@ mod tests {
         let schema = SchemaConfig {
             default: TypeSchema::default(),
             types,
+            ..Default::default()
         };
         let act = activation_for("HYALO002", &schema).unwrap();
         assert!(act.satisfied, "schema with completed → satisfied");

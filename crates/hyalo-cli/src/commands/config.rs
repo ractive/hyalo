@@ -31,6 +31,8 @@ pub(crate) struct ConfigReport {
     pub hints: bool,
     /// Resolved site prefix (from config or `None`).
     pub site_prefix: Option<String>,
+    /// Vault-relative exempt globs from `[schema] exempt` (files bound to no schema).
+    pub exempt: Vec<String>,
 }
 
 /// Build and return the config report for `cwd`.
@@ -55,6 +57,7 @@ pub(crate) fn collect_config_report(cwd: &Path) -> anyhow::Result<ConfigReport> 
         format: resolved.format,
         hints: resolved.hints,
         site_prefix: resolved.site_prefix,
+        exempt: resolved.schema.exempt.patterns().to_vec(),
     })
 }
 
@@ -75,6 +78,7 @@ fn run_config_json(report: &ConfigReport) -> CommandOutcome {
         "format": report.format,
         "hints": report.hints,
         "site_prefix": report.site_prefix,
+        "exempt": report.exempt,
     });
 
     CommandOutcome::success(format_success(Format::Json, &obj))
@@ -88,9 +92,14 @@ fn run_config_text(report: &ConfigReport) -> CommandOutcome {
 
     let format_str = report.format.as_deref().unwrap_or("(none)");
     let site_prefix_str = report.site_prefix.as_deref().unwrap_or("(none)");
+    let exempt_str = if report.exempt.is_empty() {
+        "(none)".to_owned()
+    } else {
+        report.exempt.join(", ")
+    };
 
     let mut out = format!(
-        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\n",
+        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,

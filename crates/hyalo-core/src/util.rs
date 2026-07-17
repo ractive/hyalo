@@ -103,6 +103,56 @@ pub fn is_iso8601_datetime(s: &str) -> bool {
     hour < 24 && minute < 60 && second < 60
 }
 
+/// Returns `true` for RFC 3339 / ISO 8601 timezone-aware datetimes, i.e. a
+/// `YYYY-MM-DDThh:mm:ss` wall-clock time **followed by an explicit offset**:
+/// either the literal `Z` (UTC / Zulu) or a numeric offset `±hh:mm`.
+///
+/// Examples that return `true`:
+/// - `2026-05-28T14:30:00Z`
+/// - `2026-05-28T22:44:47+00:00`
+/// - `2026-05-28T22:44:47-05:30`
+///
+/// A naive datetime with no offset (`2026-05-28T14:30:00`) returns `false` —
+/// a tz-aware property must carry a zone, and a naive property must not.
+/// Fractional seconds and other RFC 3339 extensions are intentionally not
+/// accepted (mirrors the strict grammar of [`is_iso8601_datetime`]).
+pub fn is_iso8601_datetime_tz(s: &str) -> bool {
+    // Split off the offset suffix, then validate the leading naive datetime.
+    let Some(base) = s.get(..19) else {
+        return false;
+    };
+    if !is_iso8601_datetime(base) {
+        return false;
+    }
+    let offset = &s[19..];
+    is_valid_tz_offset(offset)
+}
+
+/// Validate a timezone offset suffix: either `Z` or `±hh:mm` with hh in 0–23
+/// and mm in 0–59.
+fn is_valid_tz_offset(offset: &str) -> bool {
+    if offset == "Z" {
+        return true;
+    }
+    // Numeric offset: sign, two-digit hour, colon, two-digit minute.
+    if offset.len() != 6 {
+        return false;
+    }
+    let b = offset.as_bytes();
+    if b[0] != b'+' && b[0] != b'-' {
+        return false;
+    }
+    if b[3] != b':' {
+        return false;
+    }
+    if !b[1..3].iter().all(u8::is_ascii_digit) || !b[4..6].iter().all(u8::is_ascii_digit) {
+        return false;
+    }
+    let hour: u32 = offset[1..3].parse().unwrap_or(99);
+    let minute: u32 = offset[4..6].parse().unwrap_or(99);
+    hour < 24 && minute < 60
+}
+
 /// Returns the number of days in the given month of the given year.
 /// Months outside 1–12 return 0.
 fn days_in_month(year: u32, month: u32) -> u32 {
@@ -186,6 +236,42 @@ mod tests {
         assert!(!is_iso8601_datetime("2026-06-04T14:60:00")); // minute 60
         assert!(!is_iso8601_datetime("2026-06-04T14:30:60")); // second 60
         assert!(!is_iso8601_datetime("2023-02-29T00:00:00")); // 2023 not a leap year
+    }
+
+    #[test]
+    fn iso8601_datetime_tz_valid() {
+        // Z / Zulu suffix (blog-example spelling, unquoted YAML)
+        assert!(is_iso8601_datetime_tz("2026-05-28T14:30:00Z"));
+        // Numeric offsets (sample-bundle spelling)
+        assert!(is_iso8601_datetime_tz("2026-05-28T22:44:47+00:00"));
+        assert!(is_iso8601_datetime_tz("2026-05-28T22:44:47-05:30"));
+        assert!(is_iso8601_datetime_tz("2026-05-28T22:44:47+14:00"));
+        assert!(is_iso8601_datetime_tz("2024-02-29T23:59:59Z")); // leap year
+    }
+
+    #[test]
+    fn iso8601_datetime_tz_invalid() {
+        assert!(!is_iso8601_datetime_tz(""));
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00")); // naive: no offset
+        assert!(!is_iso8601_datetime_tz("2026-05-28")); // date only
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00z")); // lowercase z
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00+2:00")); // hour not padded
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00+02")); // missing minutes
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00+0200")); // missing colon
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00+25:00")); // offset hour 25
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00+02:60")); // offset minute 60
+        assert!(!is_iso8601_datetime_tz("2026-13-28T14:30:00Z")); // bad month
+        assert!(!is_iso8601_datetime_tz("2026-05-28T24:00:00Z")); // hour 24
+        assert!(!is_iso8601_datetime_tz("garbage"));
+    }
+
+    #[test]
+    fn naive_and_tz_datetime_are_disjoint() {
+        // A naive datetime is never tz-aware, and vice-versa.
+        assert!(is_iso8601_datetime("2026-05-28T14:30:00"));
+        assert!(!is_iso8601_datetime_tz("2026-05-28T14:30:00"));
+        assert!(is_iso8601_datetime_tz("2026-05-28T14:30:00Z"));
+        assert!(!is_iso8601_datetime("2026-05-28T14:30:00Z"));
     }
 
     #[test]

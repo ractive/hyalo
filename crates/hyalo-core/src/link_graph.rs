@@ -1058,6 +1058,93 @@ mod tests {
     }
 
     #[test]
+    fn strip_site_prefix_disabled_keeps_full_path() {
+        // None (disabled) strips only the leading slash — the OKF bundle-root form.
+        assert_eq!(
+            strip_site_prefix("/tables/customers.md", None),
+            "tables/customers.md"
+        );
+        assert_eq!(strip_site_prefix("/index.md", None), "index.md");
+    }
+
+    #[test]
+    fn strip_site_prefix_active_prefix_mis_strips_collision() {
+        // With an active prefix that matches a real subdir, the segment is
+        // stripped — the collision the plan warns about.
+        assert_eq!(
+            strip_site_prefix("/tables/customers.md", Some("tables")),
+            "customers.md"
+        );
+        // A non-matching prefix is left intact (just the slash goes).
+        assert_eq!(
+            strip_site_prefix("/tables/customers.md", Some("docs")),
+            "tables/customers.md"
+        );
+    }
+
+    #[test]
+    fn okf_bundle_absolute_link_resolves_from_root() {
+        // OKF spec §5: `/tables/customers.md` is bundle-root-relative. With
+        // site_prefix = None (the effective value an OKF vault gets from
+        // `--site-prefix ""` / `site_prefix = ""`), only the leading `/` is
+        // stripped, so it resolves to `tables/customers.md` from the bundle
+        // root — no prefix mis-stripping.
+        let vault = create_vault(&[
+            ("index.md", "See [customers](/tables/customers.md)\n"),
+            ("tables/customers.md", "# Customers\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let graph = build.graph;
+
+        let bl = graph.backlinks("tables/customers.md");
+        assert_eq!(
+            bl.len(),
+            1,
+            "bundle-absolute link should resolve from bundle root"
+        );
+        assert_eq!(bl[0].source, PathBuf::from("index.md"));
+        // No broken/raw link left behind.
+        assert!(graph.backlinks("/tables/customers.md").is_empty());
+    }
+
+    #[test]
+    fn okf_bundle_dir_name_collision_needs_empty_prefix() {
+        // Edge case from the iteration plan: a bundle whose auto-derived
+        // site_prefix collides with a top-level subdir name (`tables`) would
+        // MIS-STRIP `/tables/x.md` → `x.md` if the prefix were active. This
+        // asserts the documented fix: disabling the prefix (None) keeps the
+        // full `tables/` segment so the link resolves correctly, while the
+        // colliding prefix would have broken it.
+        let vault = create_vault(&[
+            ("index.md", "[x](/tables/x.md)\n"),
+            ("tables/x.md", "# X\n"),
+        ]);
+
+        // Correct: prefix disabled → resolves from root.
+        let ok = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        assert_eq!(
+            ok.backlinks("tables/x.md").len(),
+            1,
+            "with prefix disabled the collision is avoided"
+        );
+
+        // Demonstrates the hazard: an active `tables` prefix mis-strips the
+        // segment, so the link no longer points at the real file.
+        let bad = LinkGraph::build(vault.path(), Some("tables"), None)
+            .unwrap()
+            .graph;
+        assert!(
+            bad.backlinks("tables/x.md").is_empty(),
+            "an auto-derived colliding prefix mis-strips the path (hence OKF vaults set site_prefix = \"\")"
+        );
+        assert_eq!(
+            bad.backlinks("x.md").len(),
+            1,
+            "the colliding prefix strips `tables/`, pointing at the wrong path"
+        );
+    }
+
+    #[test]
     fn self_links_present_in_raw_backlinks() {
         // backlinks() returns the raw index — self-links are included.
         // Filtering is delegated to is_self_link() at the CLI layer.

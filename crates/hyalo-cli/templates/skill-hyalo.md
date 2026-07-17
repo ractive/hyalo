@@ -331,7 +331,9 @@ type = "string"
 pattern = "^iter-\\d+/"
 ```
 
-Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `datetime` (YYYY-MM-DDThh:mm:ss), `number`, `boolean`, `list`, `string-list` (optional `item_pattern` regex), `enum` (with `values`).
+Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `datetime` (naive YYYY-MM-DDThh:mm:ss, no offset), `datetime-tz` (timezone-aware RFC 3339: YYYY-MM-DDThh:mm:ss plus `Z` or `±hh:mm`, e.g. `2026-05-28T22:44:47+00:00`), `number`, `boolean`, `list`, `string-list` (optional `item_pattern` regex), `enum` (with `values`). `datetime` and `datetime-tz` are disjoint — a naive value never satisfies `datetime-tz` and vice-versa.
+
+Reserved-file exemption: `[schema] exempt = ["**/index.md", "**/log.md"]` binds matching files to no schema (they skip missing-`type`, required-property, and undeclared-property checks). Globs are vault-relative and cross-platform.
 
 **`required` empty-value semantics:** a required property whose value is YAML null (`tags: ~`) or an empty array (`tags: []`) is an error (`required property "tags" must not be empty`). Vacuous values convey no information for a required field, so they're treated as semantically equivalent to absent. This fires regardless of declared constraint type. Atomic-typed required properties (`string`, `date`, `number`, ...) only need to be present — an empty string or zero still satisfies them. So `required = ["tags"]` + `type = "list"` is the idiomatic way to enforce non-empty tags; no separate `min_items` knob exists.
 

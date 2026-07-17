@@ -294,6 +294,46 @@ fn types_set_property_type_datetime() {
     );
 }
 
+#[test]
+fn types_set_property_type_datetime_tz() {
+    let tmp = setup_with_type();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args([
+            "types",
+            "set",
+            "note",
+            "--property-type",
+            "timestamp=datetime-tz",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let toml_content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        toml_content.contains("type = \"datetime-tz\""),
+        "expected datetime-tz constraint in TOML, got: {toml_content}"
+    );
+
+    // types show should surface the datetime-tz constraint in JSON.
+    let show = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "note", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(show.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(
+        json["results"]["properties"]["timestamp"]["type"],
+        "datetime-tz"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // types set --property-values (enum)
 // ---------------------------------------------------------------------------

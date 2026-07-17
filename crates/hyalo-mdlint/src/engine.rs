@@ -244,13 +244,16 @@ impl HyaloLintEngine {
     /// properties present in frontmatter.
     ///
     /// The caller is responsible for filtering `properties` against the
-    /// effective schema so that only schema-declared `datetime` fields with
-    /// string values are passed in. Pairs whose value is not a string are
-    /// ignored (a separate SCHEMA-level violation covers type mismatches).
+    /// effective schema so that only schema-declared `datetime`/`datetime-tz`
+    /// fields with string values are passed in. Each triple is
+    /// `(name, value, is_tz)` where `is_tz` marks a `datetime-tz`-typed
+    /// property (validated against the tz-aware grammar). Triples whose value
+    /// is not a string are ignored (a separate SCHEMA-level violation covers
+    /// type mismatches).
     pub fn lint_frontmatter_hyalo004(
         &self,
         _rel_path: &str,
-        datetime_pairs: &[(&str, &str)],
+        datetime_pairs: &[(&str, &str, bool)],
         config: &LintConfig,
         rule_filter: &[String],
         strict: bool,
