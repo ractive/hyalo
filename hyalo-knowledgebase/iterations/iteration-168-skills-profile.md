@@ -40,13 +40,13 @@ Third profile (see [[profile-candidates-beyond-okf]]). The Agent Skills spec (<h
 - **Word acceptance-criteria checkboxes with the actual test/symbol name, not just the claim** — `ac-fidelity-check.sh`'s heuristic (and, more importantly, human/agent re-verification later) matches backtick-quoted symbols and `test_`-prefixed fn names against the diff. iter-167's ACs originally said things like "Official MADR 4 template lints clean" with no backing test at all (the existing fixture was a hand-rolled equivalent, not the literal spec template) — write the test *and* name it in the checkbox from the start, e.g. "`hyalo lint --profile skills` catches the description-length violation (`description_over_1024_chars_errors`)".
 - **A task that says "record decision in [[doc]]"** is itself a checkable claim — iter-167's TOC-command-shape task said this and initially didn't do it; caught only in PR review. If a task promises a KB cross-reference, do it before ticking the box, not "implicitly satisfied by the code existing."
 
-### 1. New generic rule kinds (capability gaps #2/#4 from the survey)
+### 1. New generic rule kinds (capability gaps #2/#4 from the survey) [3/3]
 
 - [x] **String max-length constraint** on properties (`max-length = 1024`) — generic `PropertyConstraint` extension, also future-proofs MyST/Windsurf
 - [x] **Property↔dirname coupling rule**: property value must equal parent directory name (generic: `equals = "$parent-dir"` or a dedicated lint rule) — needed for `name`. Exclude the file itself when scanning; add a self-reference/degenerate-case regression test (see iter-167 PR-review retrospective above)
 - [x] **Per-file line-budget lint** (warn above N body lines; spec recommends <500)
 
-### 2. Profile fragment
+### 2. Profile fragment [5/5]
 
 - [x] `[schema.types.skill]` — dispatched by path via iter-167's `[schema.bind]`: `"**/SKILL.md" = "skill"` (resolves the filename-dispatch question; see [[path-bound-schemas]])
 - [x] `name`: required, pattern `^[a-z0-9]+(-[a-z0-9]+)*$`, 1–64 chars, ≠ reserved words (`anthropic`, `claude`), == parent dirname
@@ -54,23 +54,23 @@ Third profile (see [[profile-candidates-beyond-okf]]). The Agent Skills spec (<h
 - [x] Optional: `license`, `compatibility` (≤500), `metadata` (map — note: hyalo treats objects as text; validate presence only, don't type it), `allowed-tools`
 - [x] Line budget: warn >500 body lines
 
-### 3. Scaffolding
+### 3. Scaffolding [2/2]
 
 - [x] `hyalo new --type skill` (or `--profile`-aware equivalent) creates `<name>/SKILL.md` with compliant frontmatter; name validated up front
 - [x] Optional companion dirs (`scripts/`, `references/`, `assets/`) documented, not created by default
 
-### 4. Tests
+### 4. Tests [3/3]
 
-- [x] e2e: lint this repo's `.claude/skills/` and the bundled templates — fix any violations found (dogfooding!)
+- [x] e2e: lint this repo's own `.claude/skills/` directory — fix any violations found (dogfooding!). `crates/hyalo-cli/templates/*.md` are `skill-*.md` scaffolding sources (not literal `SKILL.md` files), so the `**/SKILL.md` glob does not apply to them — nothing to lint there.
 - [x] Unit: name regex edge cases (leading/trailing/consecutive hyphens), reserved words, dirname mismatch, description length bounds
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 5. Docs sync (same PR)
+### 5. Docs sync (same PR) [2/2]
 
 - [x] `--profile` help lists `skills`; README profiles section extended
 - [x] Update [[profile-candidates-beyond-okf]] status for skills
 
-### 6. Retrospective (learnings-propagation — do this LAST, always)
+### 6. Retrospective (learnings-propagation — do this LAST, always) [1/1]
 
 - [x] Review [[iteration-169-changelog-profile]] against implementation learnings (esp. how filename-based dispatch and the new rule kinds landed) — update its scope/design/tasks before starting it
 
