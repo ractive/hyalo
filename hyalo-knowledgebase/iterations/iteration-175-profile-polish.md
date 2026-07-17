@@ -32,6 +32,29 @@ mediums from [[dogfood-results/dogfood-v0180-okf-profiles-pre-release]].
 - **Neutral OKF profile**: no BigQuery/Reference example types in the
   shipped fragment.
 
+## Note from iter-174
+
+No scope overlap — iter-174 was lint/CI-trust only (HYALO005 parse-error
+gate, honest caps, skip visibility, fix-mode distinguishability); it didn't
+touch profiles, `changelog`, `hyalo new`, or `madr toc`. Two things worth
+reusing as precedent when implementing this iteration's tasks:
+
+- **Config-driven walker filtering precedent**: `[lint] ignore` exclusion
+  (with a visible notice when it drops an explicitly named `--file`, see
+  `crates/hyalo-cli/src/dispatch.rs` around the `lint_ignore` filter) is the
+  closest existing pattern to task 3's `[scan] include` — same shape
+  (glob-set match against vault-relative paths), opposite direction
+  (include instead of exclude). Reuse the glob-set-building helper rather
+  than re-deriving it.
+- **Don't duplicate root-cause helpers**: iter-174 added `terse_root_cause`
+  in `lint.rs` as a near-copy of `commands::okf::root_cause` instead of
+  lifting it to a shared location (own plan note said to reuse/lift it, but
+  it shipped duplicated under time pressure). If task 5 or 6 touches error
+  message rendering, consider consolidating both into one shared helper
+  instead of adding a third copy.
+
+No other scope adaptation needed — this iteration's tasks stand as written.
+
 ## Tasks
 
 ### 1. `changelog add` placement (RB-4)
