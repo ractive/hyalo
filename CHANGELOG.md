@@ -1,6 +1,69 @@
 # Changelog
 
-## 0.17.0 — 2026-07-11
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Maintained with
+`hyalo lint --profile changelog` and `hyalo changelog release`/`add`.
+
+## [Unreleased]
+
+## [0.18.0] - 2026-07-17
+
+### Added
+
+- **OKF (Open Knowledge Format) support** (iters 163–166): `datetime-tz`
+  property type (timezone-aware timestamps, disjoint from naive `datetime`);
+  `[schema] exempt` glob list binding reserved files (`index.md`, `log.md`) to
+  no schema, honored by lint and validate-on-write; `hyalo init --profile okf`
+  writes an OKF-ready `.hyalo.toml` and installs a bundled `okf` skill with
+  `--claude`; `hyalo okf index` / `hyalo okf log` reserved-file generators
+  (deterministic, managed-region-aware, dry-run by default with a non-zero
+  exit on drift); `hyalo lint --profile okf` applies the same profile fragment
+  as an ephemeral overlay and adds six warn-level OKF conformance rules
+  (reserved-file structure, citations, augmentation guards). Bundle-root
+  absolute links are supported via `site_prefix = ""`.
+- **Composable profiles**: profiles are declarative TOML fragments deep-merged
+  (upserted) into `.hyalo.toml` — multiple `init --profile <p>` runs coexist
+  in one vault, re-running a profile is idempotent, and user-authored keys the
+  profile doesn't own are never touched (iter-164).
+- **`madr` profile** (iter-167): `adr` schema type (status lifecycle,
+  supersede pattern, MADR 3.x `deciders` alias, required
+  Context/Options/Decision sections) bound to `docs/decisions/**` via the new
+  generic `[[schema.bind]]` path-bound schemas (ordered, first-match-wins
+  globs, wired into lint, validate-on-write, and fix); `{n:04}` zero-padded
+  filename-template tokens; `MADR-SUPERSEDE-RESOLVE` and
+  `MADR-DUPLICATE-NUMBER` advisory lints; `hyalo madr toc` dashboard
+  generator.
+- **`skills` profile** (iter-168): validates Agent Skills `<name>/SKILL.md`
+  files (path-bound `skill` schema, name↔dirname coupling, reserved names,
+  description and body-length budgets) with three advisory rules; generic
+  string `min_length`/`max_length` schema constraints.
+- **`changelog` profile** (iter-169): validates `CHANGELOG.md` against the
+  Keep a Changelog 1.1.0 grammar (heading sequence, semver-descending
+  versions, category subsections, footer link references) through a new
+  reusable declarative heading-grammar engine, with eight `CHANGELOG-*` lint
+  rules; `hyalo changelog release <X.Y.Z>` rotates `[Unreleased]` into a dated
+  version section and `hyalo changelog add` appends categorized entries —
+  both dry-run by default. This file is maintained with them.
+- **`hyalo lint --format github`** (iter-170): emits one GitHub Actions
+  workflow command per violation (`::error` / `::warning` with repo-root
+  relative paths and spec-compliant escaping) so findings render as inline PR
+  annotations; lint-only; output caps are lifted so no annotation is silently
+  dropped.
+- **Companion GitHub Action**
+  [`ractive/setup-hyalo`](https://github.com/ractive/setup-hyalo) (iter-171):
+  installs the prebuilt hyalo binary on any runner (checksum-verified against
+  the release `SHA256SUMS`, tool-cached); the README documents the two-step
+  PR-check recipe and the `claude-code-action` agent recipe.
+
+### Changed
+
+- This repository's own knowledgebase is linted in CI on every PR
+  (`lint-kb` job, `hyalo lint --strict --format github`) (iter-170).
+
+## [0.17.0] - 2026-07-11
 
 ### Added
 
@@ -29,7 +92,16 @@
 - Two `clippy` findings from the Rust 1.97 toolchain (`question_mark`,
   `unneeded_wildcard_pattern`).
 
-## 0.16.1 — 2026-07-10
+## [0.16.1] - 2026-07-10
+
+### Changed
+
+- Release pipeline hardening from the v0.16.0 rollout: `hyalo-mdlint` is now
+  published to crates.io (between `hyalo-core` and `hyalo-cli`), duplicate
+  publishes are treated as success ("already exists"), a per-target
+  `rust-cache` key stops cross containers restoring host-glibc build scripts,
+  and a manually-dispatchable `publish-crates.yml` can resume a partial
+  crates.io publish without re-running the release matrix.
 
 ### Fixed
 
@@ -42,20 +114,166 @@
   `cargo install` binary. The hardening stands as prevention; the shell-out
   path remains the fallback for local builds.
 
-### Internal
+## [0.16.0] - 2026-07-10
 
-- Release pipeline hardening from the v0.16.0 rollout: `hyalo-mdlint` is now
-  published to crates.io (between `hyalo-core` and `hyalo-cli`), duplicate
-  publishes are treated as success ("already exists"), a per-target
-  `rust-cache` key stops cross containers restoring host-glibc build scripts,
-  and a manually-dispatchable `publish-crates.yml` can resume a partial
-  crates.io publish without re-running the release matrix.
+### Added
 
-## 0.16.0 — 2026-07-10
+- **iter-159**: `hyalo init --pi` installs pi skill artifacts
+  (`.pi/skills/{hyalo,hyalo-tidy}`, `.pi/extensions/hyalo.ts`,
+  `.pi/package.json`); `hyalo deinit` removes them.
+- **iter-155**: `datetime` schema property type
+  (`YYYY-MM-DDThh:mm:ss`), with `$today` expansion in defaults.
+- **iter-156**: `required` properties now reject empty values (`[]`, `~`,
+  `""`) — a required `tags` must be non-empty, no separate knob needed.
+- **iter-147**: Hardened `--files-from` on `task toggle` / `task set`.
+  `--line` is now rejected at clap parse time when combined with
+  `--files-from` (line numbers are per-file and don't compose across a
+  list), and `--files-from` without `--all` or `--section` returns a
+  clear user error. Help-text examples on `task set` now include
+  `--files-from` and `--glob` forms (`task toggle` already had them).
+- **iter-145**: `task toggle` and `task set` now accept
+  `--files-from <file|->` and `--glob <pattern>` via the unified input
+  resolver. Multi-file selection flattens all per-file task results into a
+  single array in the standard
+  `{"results": [...], "total": N, "hints": [...]}` envelope.
+- **iter-145**: `task read`, `read`, and `backlinks` now accept
+  `--files-from` (resolved to a single file, consistent with their
+  single-file policy). `--glob` is explicitly rejected with a clear error
+  for these commands.
+- **Quality-gate xtask** (`cargo run -p xtask -- check-ac-fidelity |
+  check-feature-fanout | check-help-drift`): three PR-time guards that catch
+  partial implementations (AC-fidelity), cross-command flag inconsistency
+  (feature-fanout matrix), and help-text drift before merge. Wired into a new
+  `quality-gates.yml` CI workflow.
+- **`EXAMPLES:` blocks on every subcommand `--help`** (`find`, `set`, `task`,
+  `summary`, `read`, `links`, `create-index`, `types`, `properties`, `tags`,
+  `backlinks`, `remove`, `append`, `views`, `init`, `lint-rules`) —
+  LLM-ergonomics fix so agents don't need to escalate to top-level
+  `hyalo help` to find idiomatic patterns. An integration test guards against
+  future regressions.
+- **`--files-from <PATH>`** flag on `find`, `lint`, `mv`, `set`, `remove`, and
+  `append`: supply a newline-separated list of file paths (or `-` to read from
+  stdin) and the command operates on exactly that set, bypassing the directory
+  walk. Non-`.md` paths, paths outside the vault, and missing files are
+  silently skipped; counters appear in the JSON envelope as `files_missing`,
+  `files_skipped_non_md`, and `files_skipped_outside_vault`. Enables
+  diff-aware CI workflows: `git diff --name-only origin/main | hyalo lint
+  --files-from -`. Mutually exclusive with `--glob` and `--file`.
+- **`item_pattern`** on `string-list` properties: per-item regex validation
+  at `hyalo lint` time. Declare `type = "string-list"` and
+  `item_pattern = "^..."` in `[schema.types.X.properties.Y]`. Each list item
+  is matched against the regex; violations include the item index and pattern.
+- **`required-sections`** on type schemas: declares the body outline a
+  document of this type must contain. Entries are `"## Heading"` strings
+  (level encoded by hash count); order-significant; extras are silently
+  allowed. Enforced by `hyalo lint`.
+- **`hyalo new --type <name> --file <vault-relative-path>`**: schema-driven
+  file scaffolder that emits a placeholder skeleton (required frontmatter +
+  required sections, all values `TBD` / type-appropriate empties). Designed to
+  produce a file that fails lint — the lint loop is the agent feedback
+  mechanism.
+- `properties rename --dry-run` and `tags rename --dry-run` — preview which
+  files would be modified without writing to disk.
+- `find --fields outline` — alias for `--fields sections`.
+- `--stemmer` / `--language` now accepts ISO 639-1 two-letter codes (e.g.
+  `en`, `de`, `fr`) in addition to full language names.
+- `create-index` output now notes when replacing an existing index file.
+- `lint` hints now suggest adding unfixable files (e.g. unclosed frontmatter)
+  to `[lint] ignore` in `.hyalo.toml` instead of only showing "See defined
+  type schemas".
+- **Case-insensitive link resolution.** Wikilinks and markdown links now
+  resolve even when the target file's path differs in case (e.g.
+  `[[api/fetch]]` matches `API/Fetch.md`). Controlled via `.hyalo.toml`:
+  `[links] case_insensitive = "auto"` (default), `true`, or `false`.
+  `"auto"` enables it on case-insensitive filesystems (macOS, Windows).
+- New lint rule `link-case-mismatch`: warns when a link resolves only via
+  case-insensitive fallback, suggesting the canonical-case path.
+- `links fix` now detects and offers to fix case-mismatched links.
+- `task set --dry-run` — preview which tasks would be changed without
+  modifying the file.
 
-### Highlights since 2026-06 (iter-149 … iter-160, PR #186)
+### Changed
 
-#### Fixed
+- **Breaking:** the hybrid `--index [=PATH]` flag has been split into two
+  orthogonal flags:
+  - `--index` is now a pure boolean; no value accepted.
+  - `--index-file <PATH>` specifies an explicit index file and implies
+    `--index`.
+
+  Migration:
+
+      hyalo find --index=./my.idx
+      hyalo find --index-file=./my.idx
+
+  `--index` and `--index-file` are **no longer global** — they appear only on
+  subcommands that actually consume the snapshot index (`find`, `summary`,
+  `tags summary/rename`, `properties summary/rename`, `backlinks`, `lint`,
+  `links fix`, `read`, `set`, `remove`, `append`, `mv`, `task *`). They no
+  longer appear on `create-index`, `drop-index`, `init`, `completion`,
+  `views *`, or `types *`.
+- **Breaking:** `properties rename` and `tags rename` JSON output now uses
+  `skipped_count` (integer) instead of `skipped` (array) for consumers that
+  parse the JSON output.
+- **iter-148** (NEW-5): `hyalo summary --format json` no longer duplicates the
+  `dir` field inside `results`. It is now present only at the top-level
+  envelope (`.dir`); `.results.dir` is absent. This is a breaking JSON shape
+  change — callers must read `.dir` instead of `.results.dir`.
+- **iter-157** (performance): the wikilink stem map is lazy and index-seeded —
+  indexed queries no longer walk the vault on every invocation (MDN `summary`:
+  2.9 s → 0.6 s on a 114 MB index).
+- **iter-150**: link-handling refactor unifying wikilink written-form
+  preservation across `mv`/`links fix`.
+- **iter-148** (NEW-4): `hyalo set --help`, `hyalo remove --help`, and `hyalo
+  append --help` now list `--files-from` in the `--file` mutual-exclusion
+  sentence. Previously only `--glob` was mentioned; the flag itself already
+  worked.
+- **iter-146**: `hyalo --version` now includes the git short-sha and commit
+  date — e.g. `hyalo 0.16.0 (abc123def456 2026-05-26)`. A `+dirty` suffix is
+  appended when the working tree had uncommitted changes at build time.
+  Builds without a `.git` directory (crates.io tarball, offline) fall back
+  silently to the bare `hyalo <semver>` form. Set
+  `CARGO_HYALO_FORCE_NO_GIT=1` to force the bare form; CI can pre-supply
+  `GIT_COMMIT` + `GIT_COMMIT_DATE` to skip the shell-out.
+- **iter-145**: Unified file-input resolver (`commands/inputs.rs`) replaces
+  three separate seams: `resolve_files_from_for_command`, `collect_files`,
+  and `resolve_single_file`. All `<FILE>`/`--file` commands now go through
+  the single `resolve_inputs` entry point with a per-command
+  `ResolutionPolicy` that captures single-vs-multi semantics.
+- **iter-144**: Index-suggestion hints. Two new automatic hints surface
+  `hyalo create-index` when no snapshot index is active:
+  - **Slow-query hint** — fires on `find`, `lint`, `backlinks`,
+    `properties summary`, `tags summary`, `summary`, and `read` when the
+    command takes longer than 500 ms. Suppressed by `--quiet` or when
+    `--index`/`--index-file` is already in use.
+  - **Large-vault summary hint** — fires from `hyalo summary` when the
+    vault contains more than 500 files and no index is active.
+
+  Both hints count toward the existing `MAX_HINTS` cap and are suppressed
+  by `--no-hints` like all other hints.
+- **iter-143**: New `hyalo lint` hint — when SCHEMA violations land on a file
+  with a declared `type:`, `hyalo types show <T>` is surfaced as the
+  next-step. Generic across all SCHEMA failure modes (`required`, `pattern`,
+  `item_pattern`, `required_sections`, type-mismatch). Suppressed when
+  `--rule SCHEMA` or `--rule-prefix HYALO` is already active. Capped at 2
+  distinct types per invocation.
+- **iter-143**: `hyalo types show <T>` now suggests `hyalo new --type <T>`
+  when the type declares any `required` properties.
+- **iter-143**: `--files-from` callers (any command that accepts it) get
+  counter-aware advice hints: `<N> input path(s) did not exist on disk` and
+  `<N> input path(s) were outside the vault`. Prepended so the `MAX_HINTS`
+  cap doesn't crowd them out behind generic next-step hints.
+- `--index` semantics: bare `--index` now unambiguously uses `.hyalo-index`
+  in the vault directory. Use `--index-file <PATH>` for a non-default path.
+- Removed three `unsafe { from_utf8_unchecked }` blocks in the scanner; the
+  ASCII-only mutation paths now go through safe `String::from_utf8`. Only
+  `unsafe` left in the codebase is `libc::kill(pid, 0)` for PID-liveness in
+  the snapshot index. See [decision-log DEC-042] and
+  `research/miri-unsafe-audit.md`.
+- Internal: Miri scaffolding — `justfile` recipes (`just miri`,
+  `just miri-filter`, `just miri-all`) and `#[cfg(not(miri))]` gates around
+  `rayon::par_iter` with serial fallback. Manual gate only, not in CI.
+
+### Fixed
 
 - **iter-160 (CRITICAL)**: `lint-rules set --severity/--enabled` no longer
   panics (SIGABRT) when `.hyalo.toml` carries `lint` as a non-table scalar —
@@ -83,29 +301,6 @@
   via `find --tag` (write/query symmetry).
 - **iter-154 / iter-149**: `mv` and `new` patch an existing snapshot index in
   place instead of leaving it stale.
-
-#### Added
-
-- **iter-159**: `hyalo init --pi` installs pi skill artifacts
-  (`.pi/skills/{hyalo,hyalo-tidy}`, `.pi/extensions/hyalo.ts`,
-  `.pi/package.json`); `hyalo deinit` removes them.
-- **iter-155**: `datetime` schema property type
-  (`YYYY-MM-DDThh:mm:ss`), with `$today` expansion in defaults.
-- **iter-156**: `required` properties now reject empty values (`[]`, `~`,
-  `""`) — a required `tags` must be non-empty, no separate knob needed.
-
-#### Performance
-
-- **iter-157**: the wikilink stem map is lazy and index-seeded — indexed
-  queries no longer walk the vault on every invocation (MDN `summary`:
-  2.9 s → 0.6 s on a 114 MB index).
-- **iter-150**: link-handling refactor unifying wikilink written-form
-  preservation across `mv`/`links fix`.
-
-### Earlier 0.16.0 development (up to iter-148)
-
-#### Fixed
-
 - **iter-148** (NEW-3): `--files-from` now correctly strips a multi-segment
   `--dir` prefix from repo-relative paths when `--dir` is passed explicitly on
   the CLI. The marquee recipe `git diff --name-only | hyalo --dir files/en-us
@@ -117,214 +312,53 @@
   fix` hints would otherwise fill all `MAX_HINTS=5` slots. The hint is
   prepended (highest priority) rather than appended, so it is visible on real
   large vaults like MDN where health-hint pressure is highest.
-
-#### Changed
-
-- **iter-148** (NEW-5): `hyalo summary --format json` no longer duplicates the
-  `dir` field inside `results`. It is now present only at the top-level
-  envelope (`.dir`); `.results.dir` is absent. This is a breaking JSON shape
-  change — callers must read `.dir` instead of `.results.dir`.
-- **iter-148** (NEW-4): `hyalo set --help`, `hyalo remove --help`, and `hyalo
-  append --help` now list `--files-from` in the `--file` mutual-exclusion
-  sentence. Previously only `--glob` was mentioned; the flag itself already
-  worked.
-
-#### Added
-
-- **iter-147**: Hardened `--files-from` on `task toggle` / `task set`.
-  `--line` is now rejected at clap parse time when combined with
-  `--files-from` (line numbers are per-file and don't compose across a
-  list), and `--files-from` without `--all` or `--section` returns a
-  clear user error. Help-text examples on `task set` now include
-  `--files-from` and `--glob` forms (`task toggle` already had them).
-
-- **iter-145**: `task toggle` and `task set` now accept
-  `--files-from <file|->` and `--glob <pattern>` via the unified input
-  resolver. Multi-file selection flattens all per-file task results into a
-  single array in the standard
-  `{"results": [...], "total": N, "hints": [...]}` envelope.
-- **iter-145**: `task read`, `read`, and `backlinks` now accept
-  `--files-from` (resolved to a single file, consistent with their
-  single-file policy). `--glob` is explicitly rejected with a clear error
-  for these commands.
-
-#### Changed
-
-- **iter-146**: `hyalo --version` now includes the git short-sha and commit
-  date — e.g. `hyalo 0.16.0 (abc123def456 2026-05-26)`. A `+dirty` suffix is
-  appended when the working tree had uncommitted changes at build time.
-  Builds without a `.git` directory (crates.io tarball, offline) fall back
-  silently to the bare `hyalo <semver>` form. Set
-  `CARGO_HYALO_FORCE_NO_GIT=1` to force the bare form; CI can pre-supply
-  `GIT_COMMIT` + `GIT_COMMIT_DATE` to skip the shell-out.
-
-- **iter-145**: Unified file-input resolver (`commands/inputs.rs`) replaces
-  three separate seams: `resolve_files_from_for_command`, `collect_files`,
-  and `resolve_single_file`. All `<FILE>`/`--file` commands now go through
-  the single `resolve_inputs` entry point with a per-command
-  `ResolutionPolicy` that captures single-vs-multi semantics.
-
-- **iter-144**: Index-suggestion hints. Two new automatic hints surface
-  `hyalo create-index` when no snapshot index is active:
-  - **Slow-query hint** — fires on `find`, `lint`, `backlinks`,
-    `properties summary`, `tags summary`, `summary`, and `read` when the
-    command takes longer than 500 ms. Suppressed by `--quiet` or when
-    `--index`/`--index-file` is already in use.
-  - **Large-vault summary hint** — fires from `hyalo summary` when the
-    vault contains more than 500 files and no index is active.
-  Both hints count toward the existing `MAX_HINTS` cap and are suppressed
-  by `--no-hints` like all other hints.
-
-#### Changed
-
-- **iter-143**: New `hyalo lint` hint — when SCHEMA violations land on a file
-  with a declared `type:`, `hyalo types show <T>` is surfaced as the
-  next-step. Generic across all SCHEMA failure modes (`required`, `pattern`,
-  `item_pattern`, `required_sections`, type-mismatch). Suppressed when
-  `--rule SCHEMA` or `--rule-prefix HYALO` is already active. Capped at 2
-  distinct types per invocation.
-- **iter-143**: `hyalo types show <T>` now suggests `hyalo new --type <T>`
-  when the type declares any `required` properties.
-- **iter-143**: `--files-from` callers (any command that accepts it) get
-  counter-aware advice hints: `<N> input path(s) did not exist on disk` and
-  `<N> input path(s) were outside the vault`. Prepended so the `MAX_HINTS`
-  cap doesn't crowd them out behind generic next-step hints.
-
-#### Fixed
-
 - **iter-143**: `--index --files-from` now consults the snapshot for
   membership instead of falling through to `is_file()`. Paths that exist on
   disk but are absent from the snapshot count as `files_missing` —
   consistent with the `--index` contract ("snapshot is the source of
   truth"). Closes the deferred item from iter-139.
-
-- **NEW-1**: `item_pattern` lint validation now reports every offending item in a
-  `string-list` property (with its index) instead of short-circuiting after the first.
-  Same fix for the per-item "expected string, got <kind>" branch.
-- **NEW-2**: `--files-from` now strips the full configured `--dir` prefix (multi-segment
-  paths like `files/en-us/x.md` with `--dir files/en-us`), not just the last component.
-  Forward-slash normalisation handles Windows-flavoured input. Vault-relative literal
-  paths still win over strip-and-retry. The all-missing stderr hint quotes the actual
-  configured `dir`.
-- **NEW-3**: `hyalo new --help` no longer claims it errors when the parent directory is
-  missing (iter-140 BUG-4 made it `create_dir_all`). Help text scrubbed.
-- **NEW-4**: `--files-from` trims leading/trailing whitespace per line before resolving,
-  so `printf '  edge.md\n'` no longer reports the path as missing.
-- **NEW-5**: `create-index` accepts `--index-file PATH` as a synonym for `-o/--output`.
-  Conflicting values (`-o A --index-file B`) produce a clear error. The stale-index
-  warning no longer fires when output was redirected away from the default location.
-- **NEW-6**: `--files-from` input is deduplicated by resolved vault-relative path,
-  preserving first-seen order (uses `IndexSet`). Pipelines like `git log --name-only`
-  no longer cause `lint` to re-lint or `find` to return duplicates.
-- **BUG-1**: `required_sections` schema enforcement was dead code in the grouped lint
-  path (`lint_one_file_extended`). It now calls `validate_required_sections` and reports
-  missing or out-of-order sections as `SCHEMA` errors.
-- **BUG-2**: `--files-from` now strips the vault-dir basename prefix from repo-relative
-  paths (e.g. `kb/notes/foo.md` with `--dir kb` resolves to `notes/foo.md`). Emits a
-  hint to stderr when every entry was missing.
-- **BUG-3**: Canonical TOML key for required body sections is now `required_sections`
-  (snake_case). The old `required-sections` (kebab) is accepted as a deprecated alias and
-  emits a warning on load.
-- **BUG-4**: `hyalo new` now creates parent directories automatically (`create_dir_all`)
-  instead of returning an error when they are missing.
-- **BUG-5**: `hyalo new` scaffold no longer emits a double trailing newline; output ends
-  with exactly one `\n`, eliminating MD047 false positives.
-- **BUG-6/7**: `--files-from` counters (`files_missing`, `files_skipped_non_md`,
-  `files_skipped_outside_vault`) are now under `.results` in the JSON envelope. For `lint`
-  (results is an object) they are inserted directly; for `find` (results was a bare array)
-  the array is promoted to `{"files": [...], "files_missing": N, ...}`.
-
-#### Added
-
-- **Quality-gate xtask** (`cargo run -p xtask -- check-ac-fidelity | check-feature-fanout | check-help-drift`): three PR-time guards that catch partial implementations (AC-fidelity), cross-command flag inconsistency (feature-fanout matrix), and help-text drift before merge. Wired into a new `quality-gates.yml` CI workflow.
-
-- **`EXAMPLES:` blocks on every subcommand `--help`** (`find`, `set`, `task`, `summary`,
-  `read`, `links`, `create-index`, `types`, `properties`, `tags`, `backlinks`, `remove`,
-  `append`, `views`, `init`, `lint-rules`) — LLM-ergonomics fix so agents don't need to
-  escalate to top-level `hyalo help` to find idiomatic patterns. An integration test
-  guards against future regressions.
-- **`--files-from <PATH>`** flag on `find`, `lint`, `mv`, `set`, `remove`, and `append`:
-  supply a newline-separated list of file paths (or `-` to read from stdin) and the command
-  operates on exactly that set, bypassing the directory walk. Non-`.md` paths, paths outside
-  the vault, and missing files are silently skipped; counters appear in the JSON envelope as
-  `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`. Enables
-  diff-aware CI workflows: `git diff --name-only origin/main | hyalo lint --files-from -`.
-  Mutually exclusive with `--glob` and `--file`.
-- **`item_pattern`** on `string-list` properties: per-item regex validation
-  at `hyalo lint` time. Declare `type = "string-list"` and `item_pattern = "^..."` in
-  `[schema.types.X.properties.Y]`. Each list item is matched against the regex;
-  violations include the item index and pattern.
-- **`required-sections`** on type schemas: declares the body outline a document
-  of this type must contain. Entries are `"## Heading"` strings (level encoded by
-  hash count); order-significant; extras are silently allowed. Enforced by `hyalo lint`.
-- **`hyalo new --type <name> --file <vault-relative-path>`**: schema-driven file
-  scaffolder that emits a placeholder skeleton (required frontmatter + required
-  sections, all values `TBD` / type-appropriate empties). Designed to produce a
-  file that fails lint — the lint loop is the agent feedback mechanism.
-
-### Earlier 0.16.0 development (up to 2026-05-23)
-
-#### Breaking changes
-
-- The hybrid `--index [=PATH]` flag has been split into two orthogonal flags:
-  - `--index` is now a pure boolean; no value accepted.
-  - `--index-file <PATH>` specifies an explicit index file and implies `--index`.
-
-  Migration:
-
-      hyalo find --index=./my.idx
-      hyalo find --index-file=./my.idx
-
-  `--index` and `--index-file` are **no longer global** — they appear only on
-  subcommands that actually consume the snapshot index (`find`, `summary`,
-  `tags summary/rename`, `properties summary/rename`, `backlinks`, `lint`,
-  `links fix`, `read`, `set`, `remove`, `append`, `mv`, `task *`). They no
-  longer appear on `create-index`, `drop-index`, `init`, `completion`,
-  `views *`, or `types *`.
-
-- `properties rename` and `tags rename` JSON output now uses `skipped_count`
-  (integer) instead of `skipped` (array). This is a breaking change for
-  consumers that parse the JSON output.
-
-#### Added
-
-- `properties rename --dry-run` and `tags rename --dry-run` — preview which
-  files would be modified without writing to disk.
-- `find --fields outline` — alias for `--fields sections`.
-- `--stemmer` / `--language` now accepts ISO 639-1 two-letter codes (e.g.
-  `en`, `de`, `fr`) in addition to full language names.
-- `create-index` output now notes when replacing an existing index file.
-- `lint` hints now suggest adding unfixable files (e.g. unclosed frontmatter)
-  to `[lint] ignore` in `.hyalo.toml` instead of only showing "See defined
-  type schemas".
-
-- **Case-insensitive link resolution.** Wikilinks and markdown links now
-  resolve even when the target file's path differs in case (e.g.
-  `[[api/fetch]]` matches `API/Fetch.md`). Controlled via `.hyalo.toml`:
-  `[links] case_insensitive = "auto"` (default), `true`, or `false`.
-  `"auto"` enables it on case-insensitive filesystems (macOS, Windows).
-- New lint rule `link-case-mismatch`: warns when a link resolves only via
-  case-insensitive fallback, suggesting the canonical-case path.
-- `links fix` now detects and offers to fix case-mismatched links.
-- `task set --dry-run` — preview which tasks would be changed without
-  modifying the file.
-- Security: snapshot index (``.hyalo-index``) now validates entry paths on load
-  — rejects traversal (``..``), absolute paths, and null bytes.
-- Security: snapshot index files larger than 512 MB are rejected to prevent
-  OOM from crafted files.
-
-#### Changed
-
-- `--index` semantics: bare `--index` now unambiguously uses `.hyalo-index`
-  in the vault directory. Use `--index-file <PATH>` for a non-default path.
-- Removed three `unsafe { from_utf8_unchecked }` blocks in the scanner; the
-  ASCII-only mutation paths now go through safe `String::from_utf8`. Only
-  `unsafe` left in the codebase is `libc::kill(pid, 0)` for PID-liveness in
-  the snapshot index. See [decision-log DEC-042] and
-  `research/miri-unsafe-audit.md`.
-
-#### Fixed
-
+- **NEW-1**: `item_pattern` lint validation now reports every offending item
+  in a `string-list` property (with its index) instead of short-circuiting
+  after the first. Same fix for the per-item "expected string, got <kind>"
+  branch.
+- **NEW-2**: `--files-from` now strips the full configured `--dir` prefix
+  (multi-segment paths like `files/en-us/x.md` with `--dir files/en-us`), not
+  just the last component. Forward-slash normalisation handles
+  Windows-flavoured input. Vault-relative literal paths still win over
+  strip-and-retry. The all-missing stderr hint quotes the actual configured
+  `dir`.
+- **NEW-3**: `hyalo new --help` no longer claims it errors when the parent
+  directory is missing (iter-140 BUG-4 made it `create_dir_all`). Help text
+  scrubbed.
+- **NEW-4**: `--files-from` trims leading/trailing whitespace per line before
+  resolving, so `printf '  edge.md\n'` no longer reports the path as missing.
+- **NEW-5**: `create-index` accepts `--index-file PATH` as a synonym for
+  `-o/--output`. Conflicting values (`-o A --index-file B`) produce a clear
+  error. The stale-index warning no longer fires when output was redirected
+  away from the default location.
+- **NEW-6**: `--files-from` input is deduplicated by resolved vault-relative
+  path, preserving first-seen order (uses `IndexSet`). Pipelines like
+  `git log --name-only` no longer cause `lint` to re-lint or `find` to return
+  duplicates.
+- **BUG-1**: `required_sections` schema enforcement was dead code in the
+  grouped lint path (`lint_one_file_extended`). It now calls
+  `validate_required_sections` and reports missing or out-of-order sections
+  as `SCHEMA` errors.
+- **BUG-2**: `--files-from` now strips the vault-dir basename prefix from
+  repo-relative paths (e.g. `kb/notes/foo.md` with `--dir kb` resolves to
+  `notes/foo.md`). Emits a hint to stderr when every entry was missing.
+- **BUG-3**: Canonical TOML key for required body sections is now
+  `required_sections` (snake_case). The old `required-sections` (kebab) is
+  accepted as a deprecated alias and emits a warning on load.
+- **BUG-4**: `hyalo new` now creates parent directories automatically
+  (`create_dir_all`) instead of returning an error when they are missing.
+- **BUG-5**: `hyalo new` scaffold no longer emits a double trailing newline;
+  output ends with exactly one `\n`, eliminating MD047 false positives.
+- **BUG-6/7**: `--files-from` counters (`files_missing`,
+  `files_skipped_non_md`, `files_skipped_outside_vault`) are now under
+  `.results` in the JSON envelope. For `lint` (results is an object) they are
+  inserted directly; for `find` (results was a bare array) the array is
+  promoted to `{"files": [...], "files_missing": N, ...}`.
 - `hyalo backlinks <target.md>` now finds incoming short-form `[[basename]]`
   wikilinks that unambiguously resolve to the target — previously they were
   silently dropped while `find --fields links` resolved them correctly. The
@@ -339,8 +373,15 @@
   the on-disk filename as `LinkCaseMismatch` (was `ShortFormStemMismatch`).
   Same user intent — fix the casing — and now consistent across platforms.
 
-#### Internal
+### Security
 
-- Miri scaffolding: `justfile` recipes (`just miri`, `just miri-filter`,
-  `just miri-all`) and `#[cfg(not(miri))]` gates around `rayon::par_iter`
-  with serial fallback. Manual gate only, not in CI.
+- Snapshot index (`.hyalo-index`) now validates entry paths on load —
+  rejects traversal (`..`), absolute paths, and null bytes.
+- Snapshot index files larger than 512 MB are rejected to prevent OOM from
+  crafted files.
+
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/ractive/hyalo/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/ractive/hyalo/compare/v0.16.1...v0.17.0
+[0.16.1]: https://github.com/ractive/hyalo/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/ractive/hyalo/compare/v0.15.0...v0.16.0
