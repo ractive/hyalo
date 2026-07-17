@@ -168,6 +168,24 @@ The `okf` profile merges a declarative config fragment into `.hyalo.toml`:
 
 Profiles are **composable** and **idempotent**: multiple `--profile` runs coexist in one vault (the fragment is deep-merged, upserting only its own keys), and re-running never clobbers other config. With `--claude`, the bundled `okf` skill teaches Claude the OKF concept model, reserved-file rules, link forms, and the exact hyalo commands — hyalo owns the deterministic frontmatter/link mechanics while the LLM does the semantic work.
 
+### Reserved-file generators (`okf index` / `okf log`)
+
+OKF bundles keep two *derived* reserved files that are otherwise hand-maintained: `index.md` (a Markdown link list of the concepts in each directory) and `log.md` (a date-grouped changelog). hyalo regenerates both deterministically — no LLM, no cloud:
+
+```bash
+hyalo okf index --dry-run          # CI: exits non-zero if any index.md is stale
+hyalo okf index --apply            # regenerate every directory's index.md
+hyalo okf index tables --apply     # scope to a subtree
+
+hyalo okf log --message "Added blocks table" --apply
+hyalo okf log tables --action Update --message "Refreshed schema" --apply
+```
+
+- **`okf index`** walks each directory, groups its child concepts by frontmatter `type` (untyped concepts fall under `Other`), and emits `* [title](relative-link) - description` lines (title falls back to the filename stem; description optional). Immediate subdirectories are listed under a `Subdirectories` group. The generated list lives inside a stable managed region delimited by `<!-- okf:index:begin -->` / `<!-- okf:index:end -->` markers, so any hand-written prose outside the markers is preserved verbatim across runs. The bundle-root `index.md`'s lone `okf_version` frontmatter key is kept. Links are relative and forward-slashed (cross-platform). Running `--apply` twice is a no-op (idempotent); `--dry-run` (the default) exits non-zero on drift, so it doubles as a **CI freshness check**.
+- **`okf log`** prepends a dated entry under today's `YYYY-MM-DD` heading (newest first) to a scope-selectable `log.md`. The `TARGET` argument picks the log: a directory (`TARGET/log.md`), a `log.md` path (written directly), or omitted (the bundle-root `log.md`, per SPEC §7 directory-local scope). `--action Update` prefixes a bold action word. The file is created (frontmatter-free) when absent, and `TARGET` is validated to stay inside the bundle.
+
+Both generators default to `--dry-run` and mutate only with `--apply`, matching hyalo's `links fix` / `links auto` convention.
+
 ## Installation
 
 ### Homebrew (macOS & Linux)

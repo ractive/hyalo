@@ -31,7 +31,7 @@ Fourth profile (see [[profile-candidates-beyond-okf]]). Keep a Changelog 1.1.0 (
 ### 2. Release generator
 
 - [ ] `hyalo changelog release <X.Y.Z> [--date YYYY-MM-DD]`: rotate `## [Unreleased]` content into `## [X.Y.Z] - <date>`, re-create empty Unreleased, update footer link refs — dry-run default + `--apply`, idempotency guard (refuse if version exists)
-- [ ] Reuse the dated-entry machinery from `okf log` (iter-165) where it fits
+- [ ] Reuse the dated-entry machinery from `okf log` (iter-165) where it fits. **iter-165 note:** `okf log`'s date-section insertion (`prepend_log_entry` + `find_heading`/`line_end_after` in `crates/hyalo-cli/src/commands/okf.rs`) inserts under an existing `## <date>` heading or creates a fresh one above older sections — the same shape a changelog `## [X.Y.Z] - <date>` rotation needs, but it is date-ordered (descending) whereas changelog wants semver-ordered sections with an `[Unreleased]` pinned at the top. Reuse the "insert-a-new-section-in-order, preserve-the-rest" splice idea; the exact ordering predicate and footer-link-ref rewrite are changelog-specific. `today_iso8601()`/`now_timestamp_tz()` (hyalo-core / okf module) supply the date default.
 - [ ] `hyalo changelog add --category Added --message "..."` (append an entry under Unreleased) — evaluate whether this earns its keep or is scope creep; decide and record
 
 ### 3. Tests
