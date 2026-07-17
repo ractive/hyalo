@@ -31,6 +31,11 @@ use crate::output::{CommandOutcome, Format, format_error};
 const INDEX_BEGIN: &str = "<!-- okf:index:begin -->";
 const INDEX_END: &str = "<!-- okf:index:end -->";
 
+/// Drill-down hint pointing authors from the generators to the conformance
+/// validator. Surfaced in `okf index`/`okf log` JSON payloads and referenced
+/// in the command help.
+const OKF_LINT_HINT: &str = "hyalo lint --profile okf  # validate bundle conformance";
+
 /// The canonical OKF frontmatter key order (`reference_agent`'s `bundle`
 /// package emits keys in this order). Used by [`normalize_key_order`].
 pub const OKF_KEY_ORDER: &[&str] = &[
@@ -185,6 +190,7 @@ pub fn run_index(
         "scanned": plans.len(),
         "changed": changed.len(),
         "files": results,
+        "hint": OKF_LINT_HINT,
     });
 
     // In dry-run mode, drift (any changed file) is a non-zero exit for CI.
@@ -486,6 +492,7 @@ pub fn run_log(
         "date": today,
         "entry": entry_line,
         "created": old_content.is_empty(),
+        "hint": OKF_LINT_HINT,
     });
     Ok(CommandOutcome::success(payload.to_string()))
 }

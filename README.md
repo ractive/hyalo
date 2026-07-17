@@ -186,6 +186,25 @@ hyalo okf log tables --action Update --message "Refreshed schema" --apply
 
 Both generators default to `--dry-run` and mutate only with `--apply`, matching hyalo's `links fix` / `links auto` convention.
 
+### Validate an OKF bundle (`lint --profile okf`)
+
+`hyalo lint --profile okf` checks a bundle against the OKF [SPEC §9](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) conformance rules. It is an **ephemeral overlay** — it merges the same fragment `hyalo init --profile okf` writes, in memory, without touching `.hyalo.toml` — so it works on CI or a freshly cloned third-party bundle with no config at all:
+
+```bash
+hyalo lint --profile okf                 # validate the whole bundle
+git diff --name-only origin/main | hyalo lint --profile okf --files-from -   # scope to a diff in CI
+```
+
+The profile honours OKF's **permissive-consumption** model — *warn, don't reject*:
+
+- **Errors only** on the two things SPEC §9 makes hard requirements: a non-reserved `.md` with no parseable frontmatter block, or one whose block lacks a non-empty `type`. Reserved `index.md`/`log.md` are exempt (they are frontmatter-free by design).
+- **Warns, never rejects,** on everything the spec says a consumer MUST NOT reject on: broken cross-links, reserved-file structure drift (`index.md` should be a link list; `log.md` should be date-grouped, newest-first), missing or malformed `# Citations`, and augmentation regressions (a `# Schema`/`# Citations` section emptied out).
+- **Always accepts** unknown `type` values and extra frontmatter keys.
+
+Advisory citation rules make the `# Citations` convention first-class: `OKF-CITATIONS-PRESENT` (a claim-bearing concept should cite), `OKF-CITATIONS-WELL-FORMED` (entries are links — both numbered `1.` and `-` bullet lists accepted), and `OKF-CITATIONS-RESOLVE` (bundle-relative / `references/…` links resolve on disk; external `http(s)` URLs are surfaced but not network-checked). Each OKF rule is individually toggleable with `hyalo lint-rules set OKF-… --enabled false` and appears in `hyalo lint-rules list`.
+
+Because the overlay reuses the init fragment, a vault created with `hyalo init --profile okf` (which records `[lint] profile = "okf"`) runs the same rules under a plain `hyalo lint` — `--profile okf` on such a vault is a no-op.
+
 ## Installation
 
 ### Homebrew (macOS & Linux)

@@ -691,3 +691,33 @@ during the migration (multi-line pre-package-command flattening, cargo run
 stack overflow, hoppy's debug xtask man-page generation overflowing the
 Windows stack) that lint and the fixture selftest could not. All three
 repos' dry-runs were green on v0.1.3 before merge.
+
+## DEC-049: OKF Conformance as a Lint Profile Overlay, Not an `okf lint` Subcommand (2026-07-17)
+
+**Decision:** Ship OKF §9 conformance validation as `hyalo lint --profile okf` — an
+ephemeral overlay that merges the same `profile-okf.toml` fragment `init --profile okf`
+materializes (via the shared `profiles::merge_into_config`) and re-parses it — rather than
+a dedicated `okf lint` subcommand or a hard-coded ruleset. The profile fragment now also
+stamps `[lint] profile = "okf"`, so on an initialized vault a plain `hyalo lint` runs the
+same rules; `--profile okf` there is a no-op (idempotent).
+
+**Why:**
+- **One code path.** `--profile` composes with the whole existing lint surface (`--fix`,
+  `--rule`, `--strict`, `--files-from`) with no forked logic — the overlay only re-derives
+  `SchemaConfig`/`LintConfig` before dispatch.
+- **Works config-free.** CI and cloned third-party bundles have no `.hyalo.toml`; the
+  overlay merges the fragment onto an empty base, so validation Just Works.
+- **DRY + idempotent by construction.** Reusing the init fragment-merge means the overlay
+  and materialized config can never drift, and re-merging an already-okf config is a no-op.
+- **No new noun.** An `okf lint` subcommand would duplicate lint's flags and diverge; the
+  profile is data, added by one entry, not a parallel command (mirrors DEC on data-driven
+  init profiles).
+
+**Consequences:** OKF advisory rules (`OKF-INDEX-STRUCTURE`, `OKF-LOG-STRUCTURE`,
+`OKF-CITATIONS-{PRESENT,WELL-FORMED,RESOLVE}`, `OKF-AUGMENTATION-GUARD`) live in
+`crates/hyalo-cli/src/commands/okf_lint.rs`, run only when the profile is active
+(gated by a runtime flag, not the mdlint engine), and carry `default_enabled = true` in
+the catalog so `lint-rules set OKF-* --enabled false` writes a real override. Per the OKF
+permissive-consumption model every OKF rule is **warn** — SPEC §9 errors come only from the
+schema pass (missing frontmatter / empty-or-missing `type`); broken links, reserved-file
+structure, and citation issues never reject.

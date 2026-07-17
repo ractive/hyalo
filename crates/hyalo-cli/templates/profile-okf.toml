@@ -10,6 +10,13 @@ site_prefix = ""
 # Keep authoring conformant: validate frontmatter against the schema on write.
 validate_on_write = true
 
+# Mark this vault as OKF-flavoured so plain `hyalo lint` runs the OKF §9
+# conformance rules (advisory citation / reserved-file / augmentation checks)
+# without needing `--profile okf` on every invocation. `hyalo lint --profile
+# okf` on such a vault is then a no-op overlay (idempotent).
+[lint]
+profile = "okf"
+
 [schema]
 # Reserved OKF files carry no `type`, so exempt them from the required-`type`
 # check. `index.md` (bundle/section index) and `log.md` (changelog) are reserved.

@@ -1066,6 +1066,16 @@ Repeatable (AND).\n\
             \u{00a0} --rule <ID>             restrict to a single rule\n\
             \u{00a0} --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
             \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\n\
+            CONFORMANCE PROFILES: --profile <NAME> overlays an embedded ruleset for this\n\
+            invocation without touching `.hyalo.toml` — useful for CI or third-party bundles.\n\
+            `--profile okf` encodes the Open Knowledge Format §9 conformance rules: it requires\n\
+            a parseable frontmatter block with a non-empty `type` on every non-reserved `.md`\n\
+            (error), and warns — never rejects — on reserved-file (`index.md`/`log.md`) structure,\n\
+            broken cross-links, missing/malformed `# Citations`, and augmentation regressions.\n\
+            The overlay reuses the same fragment `hyalo init --profile okf` materializes, so on a\n\
+            vault already initialized that way plain `hyalo lint` behaves identically. Unknown\n\
+            `type` values and extra frontmatter keys are always accepted (permissive model).\n\
+            Composes with --fix, --rule, --strict, and --files-from.\n\n\
             AUTO-FIX: With --fix, hyalo applies frontmatter fixes (insert defaults, correct enum\n\
             typos, normalize dates, infer type) and body fixes from autofixable rules. Body fixes\n\
             are applied in `(start, end, rule_id)` order; overlapping fixes are deferred and\n\
@@ -1080,7 +1090,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo lint --max-per-rule 0\n\
             \u{00a0} hyalo lint --fix --dry-run\n\
             \u{00a0} hyalo lint --fix-rule HYALO001\n\
-            \u{00a0} hyalo lint --fix\n\n\
+            \u{00a0} hyalo lint --fix\n\
+            \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\n\
             INDEX NOTE: The snapshot index does not accelerate the body pass — body bytes are\n\
             not indexed. The frontmatter pass and file enumeration still benefit from --index.\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
@@ -1144,6 +1155,13 @@ Repeatable (AND).\n\
         /// Overrides `[lint] strict` in `.hyalo.toml` for this invocation.
         #[arg(long)]
         strict: bool,
+        /// Overlay a named conformance profile for this invocation only (no
+        /// `.hyalo.toml` change). `okf` enables the Open Knowledge Format §9
+        /// rules plus advisory citation / augmentation checks. Reuses the same
+        /// embedded fragment as `hyalo init --profile okf`, so on a vault
+        /// already initialized that way it is a no-op overlay (idempotent).
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
         #[command(flatten)]
         index_flags: IndexFlags,
     },
@@ -1229,12 +1247,15 @@ Repeatable (AND).\n\
             Both default to --dry-run and mutate only with --apply (the `links fix`/`links\n\
             auto` convention). `okf index --dry-run` exits non-zero on drift, so it doubles\n\
             as a CI check that the committed `index.md` files are up to date.\n\n\
+            VALIDATE: after (re)generating, run `hyalo lint --profile okf` to check the\n\
+            bundle against the OKF §9 conformance rules (warn-not-reject per the spec).\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo okf index --dry-run          # CI: fail if index.md files are stale\n\
             \u{00a0} hyalo okf index --apply            # regenerate all index.md files\n\
             \u{00a0} hyalo okf index tables --apply     # scope to a subtree\n\
             \u{00a0} hyalo okf log --message \"Added blocks table\" --apply\n\
-            \u{00a0} hyalo okf log tables --action Update --message \"...\" --apply"
+            \u{00a0} hyalo okf log tables --action Update --message \"...\" --apply\n\
+            \u{00a0} hyalo lint --profile okf           # validate bundle conformance"
     )]
     Okf {
         #[command(subcommand)]

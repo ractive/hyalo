@@ -15,6 +15,7 @@ pub(crate) mod mutation;
 pub mod mv;
 pub mod new;
 pub mod okf;
+pub mod okf_lint;
 pub mod profiles;
 pub mod properties;
 pub mod read;

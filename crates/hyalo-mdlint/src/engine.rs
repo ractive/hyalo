@@ -149,6 +149,61 @@ impl HyaloLintEngine {
             },
         ];
         catalog.extend_from_slice(&hyalo_entries);
+
+        // OKF conformance-profile rules. These only *execute* under
+        // `hyalo lint --profile okf` (or a vault whose `.hyalo.toml` sets
+        // `[lint] profile = "okf"`); the CLI gates them at runtime. They are
+        // listed here so `lint-rules list` / `--rule-prefix OKF` see them and
+        // `[lint.rules.OKF-*]` overrides round-trip. `default_enabled = true`
+        // means "on when the profile is active" — so `lint-rules set
+        // OKF-* --enabled false` writes a real override that suppresses the rule
+        // under the profile (a `false == default` set would be a silent no-op).
+        // They are advisory (warn) per the OKF permissive-consumption model:
+        // SPEC §9 says a consumer MUST NOT reject on broken links or
+        // reserved-file structure.
+        let okf_entries = [
+            (
+                "OKF-INDEX-STRUCTURE",
+                "okf-index-structure",
+                "Reserved `index.md` should be a Markdown link list (OKF §6)",
+            ),
+            (
+                "OKF-LOG-STRUCTURE",
+                "okf-log-structure",
+                "Reserved `log.md` should be date-grouped, newest first (OKF §7)",
+            ),
+            (
+                "OKF-CITATIONS-PRESENT",
+                "okf-citations-present",
+                "Claim-bearing concept doc should have a `# Citations` section (OKF §8)",
+            ),
+            (
+                "OKF-CITATIONS-WELL-FORMED",
+                "okf-citations-well-formed",
+                "`# Citations` entries should be a list of links, not free prose (OKF §8)",
+            ),
+            (
+                "OKF-CITATIONS-RESOLVE",
+                "okf-citations-resolve",
+                "Bundle-relative / `references/` citation links should resolve to a file",
+            ),
+            (
+                "OKF-AUGMENTATION-GUARD",
+                "okf-augmentation-guard",
+                "`# Schema` / `# Citations` sections should not be present-but-empty",
+            ),
+        ];
+        for (id, name, description) in okf_entries {
+            catalog.push(RuleCatalogEntry {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                description: description.to_owned(),
+                default_severity: DiagSeverity::Warn,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint (okf profile)".to_owned(),
+            });
+        }
         catalog
     }
 

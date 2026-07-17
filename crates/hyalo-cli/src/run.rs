@@ -1300,13 +1300,50 @@ fn run_inner() -> Result<(), AppError> {
 
     let config_language_owned = config.search_language.clone();
     let config_default_limit = config.default_limit;
-    let schema = config.schema;
+    let mut schema = config.schema;
     let frontmatter_link_props_owned = config.frontmatter_link_props;
-    let validate_on_write = config.validate_on_write;
+    let mut validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
     let case_insensitive_mode = config.case_insensitive_mode;
-    let md_lint = config.md_lint;
-    let lint_strict_from_config = config.lint_strict;
+    let mut md_lint = config.md_lint;
+    let mut lint_strict_from_config = config.lint_strict;
+    // Active conformance profile: from `[lint] profile` in `.hyalo.toml`, or
+    // overridden by an explicit `--profile` overlay below.
+    let mut lint_profile_active = config.lint_profile;
+
+    // `hyalo lint --profile <name>` overlays an embedded config fragment for this
+    // invocation only (no `.hyalo.toml` write). The overlay reuses the same
+    // fragment-merge code as `hyalo init --profile <name>`, so on a vault already
+    // initialized that way it is idempotent — plain `hyalo lint` and
+    // `hyalo lint --profile <name>` yield identical schema/rules. An unknown
+    // profile is a hard user error surfaced before dispatch.
+    if let Commands::Lint {
+        profile: Some(profile_name),
+        ..
+    } = &cli.command
+    {
+        match crate::config::overlay_profile(&config_dir, profile_name) {
+            Ok(overlay) => {
+                schema = overlay.schema;
+                md_lint = overlay.md_lint;
+                validate_on_write = overlay.validate_on_write;
+                // The profile fragment may set `[lint] strict`; an explicit
+                // `--strict` flag still wins later in dispatch.
+                lint_strict_from_config = overlay.lint_strict || lint_strict_from_config;
+                // The explicit --profile activates that profile's advisory rules.
+                lint_profile_active = overlay.lint_profile.or(Some(profile_name.clone()));
+            }
+            Err(e) => {
+                return Err(AppError::User(crate::output::format_error(
+                    format,
+                    &format!("{e:#}"),
+                    None,
+                    None,
+                    None,
+                )));
+            }
+        }
+    }
 
     // Propagate the configured frontmatter-link property list into the loaded
     // snapshot so that per-file refreshes (`rescan_entry` / `rename_entry`) use
@@ -1420,6 +1457,7 @@ fn run_inner() -> Result<(), AppError> {
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,
         lint_strict: lint_strict_from_config,
+        lint_profile: lint_profile_active,
         files_from_counters: None,
     };
 
