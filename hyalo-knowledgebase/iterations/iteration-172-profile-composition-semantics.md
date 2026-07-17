@@ -35,7 +35,7 @@ and the bind-typing leak from
 
 ## Tasks
 
-### 1. Merge engine (`profiles.rs`)
+### 1. Merge engine (`profiles.rs`) [4/4]
 
 - [x] Array keys **union** on merge instead of replace: `[schema] exempt`,
   `[lint] ignore`, `[schema.default] required`, and `[[schema.bind]]`
@@ -51,7 +51,7 @@ and the bind-typing leak from
   unioned exempt survive, then make it pass (ff-rdp saw binds compose,
   skills-audit saw them clobbered — find out which path differs)
 
-### 2. `[lint] profiles` list
+### 2. `[lint] profiles` list [3/3]
 
 - [x] `[lint] profiles = ["okf", "madr"]` — all listed profiles' native rules
   are active in plain `hyalo lint`; `profile = "okf"` (singular string) stays
@@ -62,13 +62,13 @@ and the bind-typing leak from
   file config — it must honor user `[schema] exempt` additions exactly like
   the file path does (fixes mapl BUG-6 flag-vs-file divergence)
 
-### 3. Bind = typing
+### 3. Bind = typing [1/1]
 
 - [x] A `[[schema.bind]]` match satisfies `required = ["type"]` for the bound
   file — a spec-valid frontmatter-less SKILL.md / MADR file lints clean under
   composed okf+skills / okf+madr (fixes df-own-kb B5 / ff-rdp B2)
 
-### 4. Tests
+### 4. Tests [5/5]
 
 - [x] Unit: union semantics per key incl. `required` (user
   `["title","type"]` + profile `["type"]` → both survive), bind dedup,
@@ -82,20 +82,17 @@ and the bind-typing leak from
   them (identical results to `[lint] profiles` file activation)
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 5. Docs sync (same PR)
+### 5. Docs sync (same PR) [3/3]
 
 - [x] `init --help` composition claims match the new reality; README profiles
   section documents `profiles` list + conflict warnings
 - [x] Bundled skill templates that mention `[lint] profile` updated
 - [x] Retrospective task: adapt iteration-173..175 plans to what landed here
 
-## Acceptance criteria
+## Acceptance Criteria [4/4]
 
-- [x] The ff-rdp dogfood branch scenario needs no hand-editing of
-  `.hyalo.toml`: three `init --profile` runs produce a config where all
-  reserved-file exemptions and all binds are active simultaneously
-- [x] No silent loss: any changed scalar prints a conflict line; arrays never
-  shrink on profile init
+- [x] The ff-rdp dogfood branch scenario needs no hand-editing of `.hyalo.toml`: three `init --profile` runs produce a config where all reserved-file exemptions and all binds are active simultaneously (`three_profile_inits_keep_all_binds_and_exempt`)
+- [x] No silent loss: any changed scalar prints a conflict line (`scalar_conflict_is_reported_not_silent`); arrays never shrink on profile init (`array_change_is_not_reported_as_conflict`)
 - [x] Frontmatter-less bound files (SKILL.md, ADR) lint clean under composed
   profiles
 - [x] Hand-written TOML comments survive `init --profile`
