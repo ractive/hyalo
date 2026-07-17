@@ -2,11 +2,16 @@
 //!
 //! A *heading grammar* is a small declarative description of the ATX-heading
 //! skeleton a document type is expected to follow: the sequence of sections,
-//! their level, a pattern the heading text must match, and ordering constraints
-//! between sibling sections. iter-166 first hand-rolled these checks for OKF's
-//! reserved `index.md` / `log.md` files (`okf_lint.rs`); iter-169 lifts them
-//! into this reusable engine so the changelog profile (and later Nygard ADRs,
-//! Standard Readme, …) can declare a grammar rather than re-implement a scanner.
+//! their level, and a pattern the heading text must match. iter-166 first
+//! hand-rolled these checks for OKF's reserved `index.md` / `log.md` files
+//! (`okf_lint.rs`); iter-169 lifts the level/text-matching primitive into this
+//! reusable engine so the changelog profile (and later Nygard ADRs, Standard
+//! Readme, …) can declare per-level rules rather than re-implement a scanner.
+//! Ordering constraints between sibling sections (e.g. changelog's
+//! version/date descending checks) are *not* part of this engine yet — they
+//! stay in the consuming profile's own module (see `changelog_lint.rs`) until
+//! a second consumer needs the same shape, at which point they should be
+//! generalized here too.
 //!
 //! The engine is intentionally small and self-contained:
 //!
@@ -14,10 +19,11 @@
 //!   returning each heading's level, text, and 1-based line (a trimmed-down
 //!   sibling of `okf_lint::scan_sections`; no byte-range bookkeeping is needed
 //!   for pure heading-shape rules).
-//! - A [`HeadingGrammar`] is a list of [`HeadingRule`]s. Each rule targets
-//!   headings of a given level and optionally matches their text against a
-//!   [`TextMatcher`]. A grammar is *checked* against the scanned headings and
-//!   yields [`GrammarFinding`]s (level + text + ordering violations).
+//! - A [`HeadingRule`] targets headings of a given level and matches their
+//!   text against a [`TextMatcher`]. [`check_level_rule`] checks a rule
+//!   against the scanned headings and appends a [`GrammarFinding`] for each
+//!   heading at that level whose text does not match (level/text violations
+//!   only — see the ordering note above).
 //!
 //! Severity is deliberately **per-rule** (`GrammarFinding.rule_id` +
 //! `default_severity`): OKF's structure rules are warn-only (permissive), but a

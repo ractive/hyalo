@@ -30,9 +30,12 @@ const CHANGELOG_FILE: &str = "CHANGELOG.md";
 
 /// A parsed view of a changelog sufficient for the release/add splices.
 struct Changelog {
-    /// Raw lines (without their trailing `\n`), preserving `\r` where present.
+    /// Raw lines with both the trailing `\n` and any trailing `\r` stripped;
+    /// the EOL style is tracked separately via `crlf` and restored on render.
     lines: Vec<String>,
-    /// True when the source used CRLF line endings (round-tripped on write).
+    /// True when every line ending in the source was CRLF (round-tripped on
+    /// write). A file with mixed or no CRLF endings renders as LF, so a
+    /// same-EOL file never gets silently rewritten to a different style.
     crlf: bool,
     /// True when the source file ended with a trailing newline.
     trailing_newline: bool,
@@ -40,7 +43,13 @@ struct Changelog {
 
 impl Changelog {
     fn parse(content: &str) -> Self {
-        let crlf = content.contains("\r\n");
+        // Only treat the file as CRLF when *every* newline is preceded by
+        // `\r` — a mixed-EOL file (or one with none) renders as LF so we
+        // never normalize a file's line endings as an unintended side effect
+        // of a `release`/`add` splice.
+        let newline_count = content.matches('\n').count();
+        let crlf_count = content.matches("\r\n").count();
+        let crlf = newline_count > 0 && newline_count == crlf_count;
         let trailing_newline = content.ends_with('\n');
         let lines: Vec<String> = content
             .split('\n')
@@ -531,6 +540,26 @@ mod tests {
         let cl = Changelog::parse(&crlf);
         assert!(cl.crlf);
         assert_eq!(cl.render(), crlf);
+    }
+
+    #[test]
+    fn mixed_eol_does_not_render_as_crlf() {
+        // A file with only one CRLF newline among many LF newlines must not be
+        // detected as a CRLF file — that would silently rewrite every other
+        // line ending on the next `release`/`add` splice (Copilot review
+        // finding on PR #197).
+        let mixed = "# Changelog\r\n\n## [Unreleased]\n";
+        let cl = Changelog::parse(mixed);
+        assert!(!cl.crlf, "mixed EOLs must not be treated as CRLF");
+        // Rendering normalizes to LF (not a byte-identical round trip, but a
+        // stable single style rather than reproducing the mix).
+        assert!(!cl.render().contains("\r\n"));
+    }
+
+    #[test]
+    fn no_newlines_does_not_render_as_crlf() {
+        let cl = Changelog::parse("# Changelog");
+        assert!(!cl.crlf);
     }
 
     #[test]

@@ -100,7 +100,20 @@ pub(crate) fn run_changelog_rules(
         level: 1,
         matcher: TextMatcher::Exact("Changelog"),
     };
-    heading_grammar::check_level_rule(&headings, &title_rule, is_enabled, &mut grammar_out);
+    if headings.iter().any(|h| h.level == 1) {
+        // `check_level_rule` only visits *existing* level-1 headings, so a file
+        // with zero H1s (e.g. one that starts straight at `## [Unreleased]`)
+        // would silently pass. Only delegate to it when at least one H1 exists;
+        // the `else` branch below covers the "missing entirely" case.
+        heading_grammar::check_level_rule(&headings, &title_rule, is_enabled, &mut grammar_out);
+    } else if is_enabled("CHANGELOG-TITLE") {
+        grammar_out.push(GrammarFinding {
+            rule_id: "CHANGELOG-TITLE",
+            default_severity: "error",
+            line: body_line_offset,
+            message: "changelog must start with a `# Changelog` H1 heading (none found)".to_owned(),
+        });
+    }
 
     let version_rule = HeadingRule {
         rule_id: "CHANGELOG-VERSION-HEADING",
@@ -557,6 +570,34 @@ All notable changes to this project will be documented in this file.
                 .default_severity,
             "error"
         );
+    }
+
+    #[test]
+    fn missing_title_entirely_errors() {
+        // No H1 at all (starts straight at the version heading) — must still
+        // trip CHANGELOG-TITLE, not silently pass (check_level_rule alone only
+        // visits *existing* H1s, so this needs the explicit "no H1" branch).
+        let c = "## [1.0.0] - 2020-01-01\n\n### Added\n\n- x.\n\n[1.0.0]: u\n";
+        let out = run(c);
+        assert!(
+            ids(&out).contains(&"CHANGELOG-TITLE"),
+            "missing title must error: {:?}",
+            out.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            out.iter()
+                .find(|f| f.rule_id == "CHANGELOG-TITLE")
+                .unwrap()
+                .default_severity,
+            "error"
+        );
+    }
+
+    #[test]
+    fn missing_title_respects_disabled_rule() {
+        let c = "## [1.0.0] - 2020-01-01\n\n### Added\n\n- x.\n\n[1.0.0]: u\n";
+        let out = run_changelog_rules(c, c, 1, &|id| id != "CHANGELOG-TITLE");
+        assert!(!ids(&out).contains(&"CHANGELOG-TITLE"));
     }
 
     #[test]
