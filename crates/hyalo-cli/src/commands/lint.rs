@@ -2691,6 +2691,7 @@ fn lint_one_file_extended(
             okf_doc_type,
             &is_enabled,
             vault_dir,
+            case_insensitive,
         );
         for f in findings {
             // Apply per-rule severity override; OKF rules default to warn.

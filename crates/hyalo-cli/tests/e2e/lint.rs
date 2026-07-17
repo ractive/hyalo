@@ -2554,3 +2554,101 @@ fn lint_exempt_glob_case_insensitive_false_does_not_exempt_uppercase_index() {
         String::from_utf8_lossy(&output2.stdout)
     );
 }
+
+// ---------------------------------------------------------------------------
+// OKF profile: reserved-file predicates (is_index_file/is_log_file) honor
+// `[links] case_insensitive` too (same fix-wave, okf_lint.rs half of the bug).
+//
+// The SCHEMA exempt-glob pass (tested above) is one of two independent
+// reserved-file checks; `--profile okf`'s own `is_index_file`/`is_log_file`
+// used to be hard-coded case-sensitive, so an adopted `INDEX.md` was exempt
+// from SCHEMA but still fell through to the concept-doc rules (spurious
+// `OKF-CITATIONS-PRESENT`) instead of being treated as the reserved index.
+// ---------------------------------------------------------------------------
+
+/// `[links] case_insensitive = "true"` + `--profile okf`: an `INDEX.md` with
+/// no `# Citations` section must NOT get `OKF-CITATIONS-PRESENT` (it is now
+/// recognized as the reserved index, not a concept doc) — it may still warn
+/// `OKF-INDEX-STRUCTURE` because its body is prose, not a link list.
+#[test]
+fn lint_okf_profile_case_insensitive_true_index_skips_citations_present() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"true\"\n",
+    );
+    // Prose body, no link list and no `# Citations` — would trip both
+    // OKF-INDEX-STRUCTURE (not a link list) and, if misclassified as a
+    // concept doc, OKF-CITATIONS-PRESENT.
+    write_md(
+        tmp.path(),
+        "INDEX.md",
+        "---\ntype: BigQuery Table\n---\nThis is prose, not a link list.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--profile", "okf"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let rule_ids: Vec<&str> = json["results"]["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["rule_groups"].as_array())
+        .flatten()
+        .filter_map(|g| g["rule"].as_str())
+        .collect();
+
+    assert!(
+        !rule_ids.contains(&"OKF-CITATIONS-PRESENT"),
+        "case-folded INDEX.md must not be treated as a concept doc: stdout={stdout}"
+    );
+    assert!(
+        rule_ids.contains(&"OKF-INDEX-STRUCTURE"),
+        "case-folded INDEX.md should still get OKF-INDEX-STRUCTURE for its prose body: stdout={stdout}"
+    );
+}
+
+/// `[links] case_insensitive = "false"` + `--profile okf`: behavior is
+/// unchanged from before this whole fix wave — `INDEX.md` is treated as an
+/// ordinary concept doc and DOES get `OKF-CITATIONS-PRESENT` when it lacks a
+/// `# Citations` section.
+#[test]
+fn lint_okf_profile_case_insensitive_false_index_keeps_citations_present() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"false\"\n",
+    );
+    write_md(
+        tmp.path(),
+        "INDEX.md",
+        "---\ntype: BigQuery Table\n---\nThis is prose, not a link list.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json", "--profile", "okf"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    let rule_ids: Vec<&str> = json["results"]["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f["rule_groups"].as_array())
+        .flatten()
+        .filter_map(|g| g["rule"].as_str())
+        .collect();
+
+    assert!(
+        rule_ids.contains(&"OKF-CITATIONS-PRESENT"),
+        "with case_insensitive=false, INDEX.md must remain an ordinary concept doc: stdout={stdout}"
+    );
+}
