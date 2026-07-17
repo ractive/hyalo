@@ -35,8 +35,9 @@ leaving the LLM to do only the semantic work.
   prose). Hierarchy is implicit from the directory layout.
 - **Provenance** = a `# Citations` section plus git history. Conventional headings (SHOULD):
   `# Schema`, `# Examples`, `# Citations`.
-- **Reserved files** `index.md` and `log.md` are **frontmatter-free by design**. The
-  *bundle-root* `index.md` MAY carry a single `okf_version: "0.1"` key and nothing else.
+- **Reserved files** `index.md` and `log.md` are **frontmatter-free by design**, with one
+  exception: the *bundle-root* `index.md` MAY carry a single `okf_version: "0.1"` key and
+  nothing else — every other `index.md`/`log.md` (including nested ones) has no frontmatter.
   - `index.md` = a pure Markdown link list: `* [Title](path) - description`.
   - `log.md` = a date-grouped chronological history (newest first, `YYYY-MM-DD` headings).
 - **Permissive consumption:** consumers MUST NOT reject on missing optional fields, unknown
@@ -95,7 +96,7 @@ hyalo lint --strict
 
 # Set / update frontmatter deterministically (never hand-edit the YAML block):
 hyalo set tables/blocks.md --property title="Bitcoin Blocks Table"
-hyalo append tables/blocks.md --property tags=bigquery
+hyalo set tables/blocks.md --tag bigquery
 
 # Find broken cross-links (advisory only — the spec forbids rejecting on them):
 hyalo find --broken-links

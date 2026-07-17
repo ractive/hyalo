@@ -1186,12 +1186,14 @@ fn init_profile_okf_bundle_lints_clean_under_strict() {
         .unwrap();
 
     // A minimal OKF bundle: reserved index.md/log.md (no type), one concept.
+    // index.md is the bundle-root exception (may carry a lone `okf_version` key) and
+    // is a pure Markdown link list per the OKF spec; log.md is fully frontmatter-free.
     write_md(
         tmp.path(),
         "index.md",
-        "---\nokf_version: \"0.1\"\n---\nSee [bitcoin](/concepts/bitcoin.md)\n",
+        "---\nokf_version: \"0.1\"\n---\n* [Bitcoin](/concepts/bitcoin.md) - a concept\n",
     );
-    write_md(tmp.path(), "log.md", "---\n---\nChangelog body.\n");
+    write_md(tmp.path(), "log.md", "Changelog body.\n");
     write_md(
         tmp.path(),
         "concepts/bitcoin.md",

@@ -148,7 +148,7 @@ All artifacts are idempotent — re-running `hyalo init --claude` updates to the
 
 ## OKF (Open Knowledge Format)
 
-[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is a vendor-neutral format for **knowledge bundles**: a directory of Markdown "concept" files with YAML frontmatter, distributed as a git repo or tarball. Every concept has exactly one required field — `type` — plus recommended `title`, `description`, `resource`, `tags`, and an RFC 3339 `timestamp`. Reserved `index.md`/`log.md` files are frontmatter-free.
+[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is a vendor-neutral format for **knowledge bundles**: a directory of Markdown "concept" files with YAML frontmatter, distributed as a git repo or tarball. Every concept has exactly one required field — `type` — plus recommended `title`, `description`, `resource`, `tags`, and an RFC 3339 `timestamp`. Reserved `index.md`/`log.md` files are frontmatter-free, except the bundle-root `index.md`, which may carry a single `okf_version` key and nothing else.
 
 hyalo makes OKF a first-class target:
 
