@@ -9,6 +9,39 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`okf index` / `madr toc` non-destructive adopt** (iter-173): a marker-less
+  `index.md`/`README.md` is now *adopted* — its entire hand-written body is
+  preserved and the managed region is appended after it (dry-run reports
+  `adopt (preserving N existing lines)`). The old overwrite behavior is opt-in
+  via a new `--replace` flag. On case-insensitive filesystems an existing
+  `INDEX.md` is recognized as the reserved file and adopted by its on-disk
+  casing.
+- **`[okf] ignore` config**: vault-relative globs (`_template/**`,
+  `test/fixture-vault/**`) the OKF generators skip, independent of
+  `[lint] ignore`.
+
+### Changed
+
+- Generated `index.md`/`log.md`/`README.md` managed regions now emit a blank
+  line after the begin marker and before the end marker, so a freshly generated
+  file passes MD022 — ending the `lint --fix` ↔ `okf index` revert ping-pong.
+- `okf index` / `okf log` / `madr toc` `--format text` output now renders
+  readable per-file lines instead of a mis-nested `files: action: create` key
+  dump.
+
+### Fixed
+
+- **Malformed-file policy** (iter-173): `okf index` now skips a concept with
+  unparseable frontmatter with a per-file stderr warning and continues, instead
+  of aborting the whole run on the first bad file (exit code 2 is reserved for
+  real I/O/config errors; drift stays exit 1). A scoped run (`okf index
+  <subtree>`) no longer dies on a malformed file elsewhere in the vault.
+- `SCHEMA` "missing required property" violations now report
+  `autofixable: false` when no schema `default` exists for the property (so
+  `--fix` cannot synthesize a value), instead of a misleading `true`.
+
 ## [0.18.0] - 2026-07-17
 
 ### Added

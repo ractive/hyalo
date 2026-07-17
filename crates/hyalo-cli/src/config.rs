@@ -33,6 +33,18 @@ struct LinksConfig {
     case_insensitive: Option<String>,
 }
 
+/// OKF generator configuration from `[okf]` in `.hyalo.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OkfConfig {
+    /// Vault-relative glob patterns whose files `okf index`/`okf log` neither
+    /// index nor generate into. Independent of `[lint] ignore`: use it to keep
+    /// the generators out of template/fixture trees (`_template/**`,
+    /// `test/fixture-vault/**`). Matched against forward-slash paths.
+    #[serde(default)]
+    ignore: Vec<String>,
+}
+
 /// Lint configuration from `[lint]` in `.hyalo.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -114,6 +126,8 @@ struct ConfigFile {
     search: Option<SearchConfig>,
     /// Link extraction configuration (frontmatter property names to scan).
     links: Option<LinksConfig>,
+    /// OKF generator configuration (`[okf]` section).
+    okf: Option<OkfConfig>,
     /// When `true`, schema validation runs automatically on every `set`/`append`.
     /// Accepted as a top-level key for backwards compatibility; the documented
     /// location is `[schema] validate_on_write`.
@@ -154,6 +168,8 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) validate_on_write: bool,
     /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore`.
     pub(crate) lint_ignore: Vec<String>,
+    /// Vault-relative globs the OKF generators skip. From `[okf] ignore`.
+    pub(crate) okf_ignore: Vec<String>,
     /// Markdown linting config (max caps, per-rule overrides).
     pub(crate) md_lint: hyalo_mdlint::LintConfig,
     /// Parsed schema configuration from `[schema.*]` sections.
@@ -211,6 +227,7 @@ impl ResolvedDefaults {
             frontmatter_link_props: None,
             validate_on_write: false,
             lint_ignore: Vec::new(),
+            okf_ignore: Vec::new(),
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
             default_limit: None,
@@ -397,6 +414,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .as_ref()
             .map(|l| l.ignore.clone())
             .unwrap_or_default(),
+        okf_ignore: cfg.okf.map(|o| o.ignore).unwrap_or_default(),
         md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
         default_limit: cfg.default_limit,
@@ -802,6 +820,36 @@ site_prefix = "docs"
 
         let resolved = load_config_from(dir.path());
         assert!(resolved.lint_ignore.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // [okf] ignore config
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn okf_ignore_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[okf]\nignore = [\"_template/**\", \"test/fixture-vault/**\"]\n",
+        )
+        .unwrap();
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.okf_ignore,
+            vec![
+                "_template/**".to_owned(),
+                "test/fixture-vault/**".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn okf_ignore_defaults_empty() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.okf_ignore.is_empty());
     }
 
     // ---------------------------------------------------------------------------

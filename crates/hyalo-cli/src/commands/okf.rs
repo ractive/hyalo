@@ -64,6 +64,32 @@ struct ConceptEntry {
     description: Option<String>,
 }
 
+/// The kind of change a planned `index.md` regeneration represents. Reported in
+/// the JSON payload's `action` field and the dry-run text notice.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexAction {
+    /// The file did not exist and will be created.
+    Create,
+    /// The file exists with a managed region that will be updated in place.
+    Update,
+    /// The file exists WITHOUT markers; its body is preserved and the managed
+    /// region is appended (non-destructive adoption).
+    Adopt,
+    /// The file exists without markers and `--replace` discards its body.
+    Replace,
+}
+
+impl IndexAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            IndexAction::Create => "create",
+            IndexAction::Update => "update",
+            IndexAction::Adopt => "adopt",
+            IndexAction::Replace => "replace",
+        }
+    }
+}
+
 /// Result of planning a single `index.md` regeneration.
 struct IndexPlan {
     /// Vault-relative path of the `index.md` (forward slashes).
@@ -72,14 +98,13 @@ struct IndexPlan {
     new_content: String,
     /// The current on-disk content (empty string when the file is absent).
     old_content: String,
+    /// The kind of change this plan represents.
+    action: IndexAction,
 }
 
 impl IndexPlan {
     fn changed(&self) -> bool {
         self.new_content != self.old_content
-    }
-    fn is_new(&self) -> bool {
-        self.old_content.is_empty()
     }
 }
 
@@ -93,6 +118,9 @@ pub fn run_index(
     dir: &Path,
     scope: Option<&str>,
     apply: bool,
+    replace: bool,
+    ignore: &[String],
+    case_insensitive: bool,
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     // Resolve the optional scope directory to a vault-relative prefix.
@@ -106,6 +134,16 @@ pub fn run_index(
         }
     };
 
+    let mode = if replace {
+        AdoptMode::Replace
+    } else {
+        AdoptMode::Adopt
+    };
+
+    // Compile the `[okf] ignore` globs once. A bad pattern emits a warning and
+    // disables filtering (fail-open) so we never silently drop content.
+    let ignore_set = build_ignore_globset(ignore);
+
     let files = discovery::discover_files(dir).context("failed to scan vault for concepts")?;
 
     // Group concept files by their containing directory (vault-relative, forward
@@ -115,14 +153,32 @@ pub fn run_index(
     // Ensure every directory that contains concepts (or is the root) gets an
     // index. Also record child subdirectories per directory.
     let mut child_dirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Count of files skipped for unparseable frontmatter (surfaced in payload).
+    let mut skipped_malformed = 0usize;
 
     for full in &files {
         let rel = discovery::relative_path(dir, full);
+        let parent = parent_dir(&rel);
+
+        // Files matching an `[okf] ignore` glob are neither entries nor index
+        // targets — skip them entirely (don't even register their directory).
+        if let Some(set) = &ignore_set
+            && set.is_match(rel.replace('\\', "/"))
+        {
+            continue;
+        }
+
+        // Out-of-scope files must not influence the run at all: a malformed file
+        // in `iterations/` must never break `okf index rdp` (RB-3). Skip before
+        // reading frontmatter so a bad file outside scope is invisible.
+        if !dir_in_scope(&parent, scope_prefix.as_deref()) {
+            continue;
+        }
+
         let file_name = Path::new(&rel)
             .file_name()
             .map(|n| n.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        let parent = parent_dir(&rel);
 
         // Register the directory (even if it only holds reserved files) so the
         // bundle root and every subdir gets an index entry key.
@@ -134,8 +190,18 @@ pub fn run_index(
             continue;
         }
 
-        let entry = read_concept_entry(full, &rel, &parent)?;
-        by_dir.entry(parent).or_default().push(entry);
+        // Skip-and-warn on unparseable frontmatter instead of aborting the whole
+        // run: one malformed concept must not stop every other index from being
+        // generated (RB-3).
+        match read_concept_entry(full, &rel, &parent) {
+            Ok(entry) => {
+                by_dir.entry(parent).or_default().push(entry);
+            }
+            Err(err) => {
+                skipped_malformed += 1;
+                eprintln!("warning: skipping {rel}: {}", root_cause(&err));
+            }
+        }
     }
 
     // Always ensure the bundle root has an index, even in an empty vault.
@@ -159,7 +225,7 @@ pub fn run_index(
             continue;
         }
         let subdirs = child_dirs.get(parent).cloned().unwrap_or_default();
-        let plan = plan_index(dir, parent, entries, &subdirs)?;
+        let plan = plan_index(dir, parent, entries, &subdirs, mode, case_insensitive)?;
         plans.push(plan);
     }
     plans.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -177,10 +243,17 @@ pub fn run_index(
     let results: Vec<serde_json::Value> = changed
         .iter()
         .map(|p| {
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "file": p.rel_path,
-                "action": if p.is_new() { "create" } else { "update" },
-            })
+                "action": p.action.as_str(),
+            });
+            // On an adopt, report how many existing lines are being preserved so
+            // `--dry-run` can print an explicit "preserving N existing lines"
+            // notice, distinct from a plain update.
+            if p.action == IndexAction::Adopt {
+                obj["preserved_lines"] = serde_json::Value::from(count_lines(&p.old_content));
+            }
+            obj
         })
         .collect();
 
@@ -189,6 +262,7 @@ pub fn run_index(
         "apply": apply,
         "scanned": plans.len(),
         "changed": changed.len(),
+        "skipped_malformed": skipped_malformed,
         "files": results,
         "hint": OKF_LINT_HINT,
     });
@@ -259,16 +333,27 @@ fn read_concept_entry(full: &Path, rel: &str, parent: &str) -> Result<ConceptEnt
 }
 
 /// Plan the regeneration of one directory's `index.md`.
+///
+/// `case_insensitive` is the effective FS case-fold setting (from
+/// `[links] case_insensitive`, auto-detected). When on, an existing
+/// `INDEX.md`/`Index.md` on disk is recognized as *the* reserved file and its
+/// on-disk casing is preserved on adopt — so a marker-less hand-curated
+/// `INDEX.md` is never orphaned or destroyed by writing a sibling `index.md`.
 fn plan_index(
     dir: &Path,
     parent: &str,
     entries: &[ConceptEntry],
     subdirs: &[String],
+    mode: AdoptMode,
+    case_insensitive: bool,
 ) -> Result<IndexPlan> {
+    // Resolve the on-disk filename, honoring an existing case variant when the
+    // filesystem is case-insensitive.
+    let file_name = existing_index_file_name(dir, parent, case_insensitive);
     let rel_path = if parent.is_empty() {
-        "index.md".to_owned()
+        file_name.clone()
     } else {
-        format!("{parent}/index.md")
+        format!("{parent}/{file_name}")
     };
     let full = dir.join(&rel_path);
 
@@ -278,14 +363,53 @@ fn plan_index(
         String::new()
     };
 
+    let action = if old_content.is_empty() {
+        IndexAction::Create
+    } else if find_marker_pair(&old_content).is_some() {
+        IndexAction::Update
+    } else if mode == AdoptMode::Replace {
+        IndexAction::Replace
+    } else {
+        IndexAction::Adopt
+    };
+
     let generated = render_index_body(entries, subdirs, parent);
-    let new_content = splice_managed_region(&old_content, &generated, parent.is_empty());
+    let new_content = splice_managed_region(&old_content, &generated, parent.is_empty(), mode);
 
     Ok(IndexPlan {
         rel_path,
         new_content,
         old_content,
+        action,
     })
+}
+
+/// Determine the on-disk filename to use for a directory's index. Defaults to
+/// `index.md`; when `case_insensitive` is set and a different-cased variant
+/// (e.g. `INDEX.md`) physically exists in the directory, that exact casing is
+/// returned so the generator targets the real file instead of creating a
+/// case-only-different sibling the FS would silently collide with.
+fn existing_index_file_name(dir: &Path, parent: &str, case_insensitive: bool) -> String {
+    const DEFAULT: &str = "index.md";
+    if !case_insensitive {
+        return DEFAULT.to_owned();
+    }
+    let dir_full = if parent.is_empty() {
+        dir.to_path_buf()
+    } else {
+        dir.join(parent)
+    };
+    let Ok(read) = std::fs::read_dir(&dir_full) else {
+        return DEFAULT.to_owned();
+    };
+    for dirent in read.flatten() {
+        let name = dirent.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.eq_ignore_ascii_case(DEFAULT) {
+            return name.to_owned();
+        }
+    }
+    DEFAULT.to_owned()
 }
 
 /// Render the managed list body (between the markers, exclusive).
@@ -358,23 +482,71 @@ fn render_entry_line(e: &ConceptEntry) -> String {
     }
 }
 
-/// Splice the generated body into `old_content`'s managed region, preserving
-/// prose outside the markers. When no markers exist, produce a fresh file:
-/// - the bundle-root `index.md` keeps a leading `okf_version` frontmatter block
-///   if the old file had one;
-/// - otherwise a minimal `# Index` heading precedes the managed block.
-fn splice_managed_region(old_content: &str, generated: &str, is_root: bool) -> String {
-    let managed = format!("{INDEX_BEGIN}\n{generated}\n{INDEX_END}");
+/// How a marker-less existing file is handled when regenerating its managed
+/// region.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AdoptMode {
+    /// Non-destructive default: preserve the whole existing body and append the
+    /// managed region after it. Never drops hand-written content.
+    Adopt,
+    /// Destructive: overwrite a marker-less file with a fresh managed file,
+    /// discarding the existing body (opt-in via `--replace`).
+    Replace,
+}
 
-    // Search for INDEX_END starting *after* INDEX_BEGIN so a stray mention of
-    // the end-marker text in prose above the managed region (or in a code
-    // block) can't be picked up as the closing marker and corrupt the splice.
-    let markers = old_content.find(INDEX_BEGIN).and_then(|begin| {
+/// The managed region block, wrapped so its inner content passes MD022
+/// (blank lines around the headings the generated body starts/ends with).
+///
+/// Shape: `<begin>\n\n<generated>\n\n<end>` — the blank line after `begin`
+/// separates it from the first `## ` heading in `generated`, and the blank
+/// line before `end` separates it from the last list item. This is what stops
+/// the `lint --fix` ↔ `okf index` revert ping-pong (RB-3): `lint --fix` no
+/// longer wants to insert the blank lines the generator now already emits.
+fn managed_block(generated: &str) -> String {
+    // Normalize the generated body's surrounding whitespace so the wrap always
+    // produces exactly one blank line after BEGIN and before END — regardless
+    // of whether `generated` already carries trailing newlines. A stray double
+    // blank line here is what MD012 (`lint --fix`) would strip, re-introducing
+    // the drift ping-pong this wrapping is meant to kill.
+    let body = generated.trim_matches('\n');
+    format!("{INDEX_BEGIN}\n\n{body}\n\n{INDEX_END}")
+}
+
+/// Locate a valid `<begin>…<end>` marker pair in `old_content`, returning the
+/// byte range `(begin_offset, end_offset)` where `end_offset` is the start of
+/// the end marker. `None` when no valid pair exists.
+///
+/// The end marker is searched for strictly *after* the begin marker so a stray
+/// mention of the end-marker text in prose (or a code block) above the real
+/// managed region can't be mistaken for the closer.
+fn find_marker_pair(old_content: &str) -> Option<(usize, usize)> {
+    old_content.find(INDEX_BEGIN).and_then(|begin| {
         old_content[begin + INDEX_BEGIN.len()..]
             .find(INDEX_END)
             .map(|rel_end| (begin, begin + INDEX_BEGIN.len() + rel_end))
-    });
-    if let Some((begin, end)) = markers {
+    })
+}
+
+/// Splice the generated body into `old_content`'s managed region, preserving
+/// prose outside the markers.
+///
+/// When markers already exist, the region between them is replaced in place.
+/// When no markers exist:
+/// - [`AdoptMode::Adopt`] (default) preserves the entire existing body and
+///   appends the managed region after it — never dropping content;
+/// - [`AdoptMode::Replace`] discards the body and writes a fresh managed file.
+///
+/// A fresh/replaced file gets a leading `okf_version` frontmatter block on the
+/// bundle root (if the old file had one) and a minimal `# Index` heading.
+fn splice_managed_region(
+    old_content: &str,
+    generated: &str,
+    is_root: bool,
+    mode: AdoptMode,
+) -> String {
+    let managed = managed_block(generated);
+
+    if let Some((begin, end)) = find_marker_pair(old_content) {
         let before = &old_content[..begin];
         let after = &old_content[end + INDEX_END.len()..];
         let mut result = String::with_capacity(before.len() + managed.len() + after.len());
@@ -384,7 +556,24 @@ fn splice_managed_region(old_content: &str, generated: &str, is_root: bool) -> S
         return ensure_trailing_newline(&result);
     }
 
-    // No (valid) markers → fresh file.
+    // No markers. Non-destructive adopt: keep the existing body verbatim and
+    // append the managed region after it. Only --replace discards the body.
+    if mode == AdoptMode::Adopt && !old_content.trim().is_empty() {
+        let mut result = String::with_capacity(old_content.len() + managed.len() + 2);
+        result.push_str(old_content);
+        // Guarantee a blank line between the preserved body and the region so
+        // the appended `<begin>` marker sits on its own paragraph (MD022 safe).
+        if !result.ends_with("\n\n") {
+            while result.ends_with('\n') {
+                result.pop();
+            }
+            result.push_str("\n\n");
+        }
+        result.push_str(&managed);
+        return ensure_trailing_newline(&result);
+    }
+
+    // Fresh file (empty on disk, or --replace on a marker-less file).
     let mut result = String::new();
     if is_root && let Some(fm) = extract_okf_version_frontmatter(old_content) {
         result.push_str(&fm);
@@ -393,6 +582,12 @@ fn splice_managed_region(old_content: &str, generated: &str, is_root: bool) -> S
     result.push_str("# Index\n\n");
     result.push_str(&managed);
     ensure_trailing_newline(&result)
+}
+
+/// Count of lines in `s` (used to describe how many existing lines an adopt
+/// preserves). An empty string has zero lines.
+fn count_lines(s: &str) -> usize {
+    if s.is_empty() { 0 } else { s.lines().count() }
 }
 
 /// Extract a leading `okf_version` frontmatter block (`---\nokf_version: ...\n---`)
@@ -423,6 +618,45 @@ fn ensure_trailing_newline(s: &str) -> String {
     } else {
         format!("{s}\n")
     }
+}
+
+/// Build a [`globset::GlobSet`] from `[okf] ignore` patterns. Each pattern is a
+/// vault-relative glob (`_template/**`, `test/fixture-vault/**`) matched against
+/// forward-slash paths. Returns `None` when the list is empty or any pattern is
+/// invalid (fail-open with a warning — never silently drop files).
+fn build_ignore_globset(patterns: &[String]) -> Option<globset::GlobSet> {
+    use globset::{GlobBuilder, GlobSetBuilder};
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = GlobSetBuilder::new();
+    let mut build_failed = false;
+    for pat in patterns {
+        match GlobBuilder::new(pat)
+            .literal_separator(true)
+            .backslash_escape(true)
+            .build()
+        {
+            Ok(g) => {
+                builder.add(g);
+            }
+            Err(e) => {
+                crate::warn::warn(format!("invalid [okf] ignore pattern {pat:?}: {e}"));
+                build_failed = true;
+            }
+        }
+    }
+    if build_failed {
+        return None;
+    }
+    builder.build().ok()
+}
+
+/// The deepest error message in an `anyhow` chain, for a terse one-line stderr
+/// warning (the `root_cause` is the concrete parse/IO failure, not the wrapping
+/// "failed to parse frontmatter of X" context we add ourselves).
+fn root_cause(err: &anyhow::Error) -> String {
+    err.root_cause().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -831,7 +1065,7 @@ mod tests {
         let old = format!(
             "# Index\n\nIntro prose.\n\n{INDEX_BEGIN}\nOLD LIST\n{INDEX_END}\n\nFooter note.\n"
         );
-        let out = splice_managed_region(&old, "* [X](x.md)", false);
+        let out = splice_managed_region(&old, "* [X](x.md)", false, AdoptMode::Adopt);
         assert!(out.contains("Intro prose."));
         assert!(out.contains("Footer note."));
         assert!(out.contains("* [X](x.md)"));
@@ -845,7 +1079,7 @@ mod tests {
         let old = format!(
             "# Index\n\nSee marker `{INDEX_END}` in the docs.\n\n{INDEX_BEGIN}\nOLD LIST\n{INDEX_END}\n\nFooter note.\n"
         );
-        let out = splice_managed_region(&old, "* [X](x.md)", false);
+        let out = splice_managed_region(&old, "* [X](x.md)", false, AdoptMode::Adopt);
         assert!(
             out.contains("See marker"),
             "prose before begin marker must survive: {out}"
@@ -858,17 +1092,88 @@ mod tests {
     #[test]
     fn splice_fresh_root_keeps_okf_version() {
         let old = "---\nokf_version: \"0.1\"\n---\n\n# Old\n";
-        let out = splice_managed_region(old, "* [X](x.md)", true);
+        // --replace on the marker-less root: discards the `# Old` body but keeps
+        // the okf_version frontmatter.
+        let out = splice_managed_region(old, "* [X](x.md)", true, AdoptMode::Replace);
         assert!(out.contains("okf_version: \"0.1\""));
         assert!(out.contains(INDEX_BEGIN));
         assert!(out.contains("* [X](x.md)"));
+        assert!(!out.contains("# Old"), "replace discards body: {out}");
     }
 
     #[test]
     fn splice_is_idempotent() {
-        let first = splice_managed_region("", "* [X](x.md)", false);
-        let second = splice_managed_region(&first, "* [X](x.md)", false);
+        let first = splice_managed_region("", "* [X](x.md)", false, AdoptMode::Adopt);
+        let second = splice_managed_region(&first, "* [X](x.md)", false, AdoptMode::Adopt);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn splice_adopts_marker_less_body() {
+        // A marker-less hand-written file: adopt must preserve every line and
+        // append the managed region after it.
+        let old = "# Curated\n\nHand-written intro.\n\n- manual item\n";
+        let out = splice_managed_region(old, "* [X](x.md)", false, AdoptMode::Adopt);
+        assert!(out.contains("# Curated"), "heading preserved: {out}");
+        assert!(
+            out.contains("Hand-written intro."),
+            "prose preserved: {out}"
+        );
+        assert!(
+            out.contains("- manual item"),
+            "manual list preserved: {out}"
+        );
+        assert!(out.contains(INDEX_BEGIN));
+        assert!(out.contains("* [X](x.md)"));
+        // A blank line must precede the appended begin marker (MD022).
+        assert!(
+            out.contains(&format!("\n\n{INDEX_BEGIN}")),
+            "blank line before appended region: {out}"
+        );
+    }
+
+    #[test]
+    fn splice_adopt_is_idempotent_second_pass() {
+        // First adopt appends the region; a second pass finds the markers and
+        // updates in place (no duplicate region, no re-appended body).
+        let old = "# Curated\n\nProse.\n";
+        let first = splice_managed_region(old, "* [X](x.md)", false, AdoptMode::Adopt);
+        let second = splice_managed_region(&first, "* [X](x.md)", false, AdoptMode::Adopt);
+        assert_eq!(first, second, "adopt then update is idempotent");
+        assert_eq!(
+            second.matches(INDEX_BEGIN).count(),
+            1,
+            "only one managed region: {second}"
+        );
+    }
+
+    #[test]
+    fn splice_replace_discards_marker_less_body() {
+        let old = "# Curated\n\nHand-written that --replace throws away.\n";
+        let out = splice_managed_region(old, "* [X](x.md)", false, AdoptMode::Replace);
+        assert!(!out.contains("Hand-written"), "replace drops body: {out}");
+        assert!(out.contains("# Index"));
+        assert!(out.contains(INDEX_BEGIN));
+    }
+
+    #[test]
+    fn managed_block_has_md022_blank_lines() {
+        let block = managed_block("## Group\n\n* [X](x.md)");
+        assert!(
+            block.starts_with(&format!("{INDEX_BEGIN}\n\n")),
+            "blank line after begin: {block}"
+        );
+        assert!(
+            block.ends_with(&format!("\n\n{INDEX_END}")),
+            "blank line before end: {block}"
+        );
+    }
+
+    #[test]
+    fn count_lines_counts() {
+        assert_eq!(count_lines(""), 0);
+        assert_eq!(count_lines("one line"), 1);
+        assert_eq!(count_lines("a\nb\nc\n"), 3);
     }
 
     #[test]

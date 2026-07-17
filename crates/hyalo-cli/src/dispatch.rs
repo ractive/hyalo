@@ -154,6 +154,8 @@ pub(crate) struct CommandContext<'a> {
     pub validate_on_write: bool,
     /// Vault-relative paths excluded from `hyalo lint`. From `[lint] ignore` in `.hyalo.toml`.
     pub lint_ignore: &'a [String],
+    /// Vault-relative globs the OKF generators skip. From `[okf] ignore` in `.hyalo.toml`.
+    pub okf_ignore: &'a [String],
     /// Markdown lint configuration from `[lint]` in `.hyalo.toml`.
     pub md_lint: &'a hyalo_mdlint::LintConfig,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
@@ -2221,11 +2223,16 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 scope,
                 apply,
                 dry_run: _,
+                replace,
             } => {
+                let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
                 let (outcome, exit_override) = crate::commands::okf::run_index(
                     ctx.dir,
                     scope.as_deref(),
                     apply,
+                    replace,
+                    ctx.okf_ignore,
+                    case_insensitive,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {
@@ -2253,11 +2260,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 adr_dir,
                 apply,
                 dry_run: _,
+                replace,
             } => {
                 let (outcome, exit_override) = crate::commands::madr::run_toc(
                     ctx.dir,
                     adr_dir.as_deref(),
                     apply,
+                    replace,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {

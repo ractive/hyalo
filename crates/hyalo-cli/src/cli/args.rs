@@ -1396,13 +1396,24 @@ pub(crate) enum OkfAction {
             `<!-- okf:index:begin -->` and `<!-- okf:index:end -->` markers; any prose\n\
             outside those markers is preserved verbatim across runs. The bundle-root\n\
             `index.md`'s lone `okf_version` frontmatter key is preserved.\n\n\
+            NON-DESTRUCTIVE ADOPT: an existing `index.md` WITHOUT markers is *adopted* —\n\
+            its entire hand-written body is preserved and the managed region is appended\n\
+            after it (dry-run reports `adopt (preserving N existing lines)`). Pass\n\
+            --replace to instead overwrite such a file with a fresh managed index,\n\
+            discarding its body. On case-insensitive filesystems an existing `INDEX.md`\n\
+            is recognized as the reserved file and adopted by its on-disk casing.\n\n\
+            SCOPING: files matching a `[okf] ignore` glob in `.hyalo.toml` (e.g.\n\
+            `_template/**`) are neither indexed nor generated into. A concept with\n\
+            unparseable frontmatter is skipped with a stderr warning (the run continues\n\
+            and every other index is still generated).\n\n\
             Running with --apply twice is a no-op (idempotent). In --dry-run (the default)\n\
             the command exits non-zero when any `index.md` would change — use this in CI.\n\n\
             SIDE EFFECTS: writes `index.md` files only with --apply.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo okf index --dry-run\n\
             \u{00a0} hyalo okf index --apply\n\
-            \u{00a0} hyalo okf index tables --apply"
+            \u{00a0} hyalo okf index tables --apply\n\
+            \u{00a0} hyalo okf index --apply --replace   # overwrite marker-less index.md"
     )]
     Index {
         /// Optional directory (vault-relative) to scope regeneration to a subtree
@@ -1414,6 +1425,11 @@ pub(crate) enum OkfAction {
         /// Preview changes without writing (default behaviour; explicit for clarity)
         #[arg(long)]
         dry_run: bool,
+        /// Overwrite a marker-less `index.md`, discarding its hand-written body.
+        /// Without this flag such a file is *adopted*: its body is preserved and
+        /// the managed region is appended (non-destructive default).
+        #[arg(long)]
+        replace: bool,
     },
     /// Prepend a dated entry to a scope-selectable `log.md`
     #[command(
@@ -1467,7 +1483,9 @@ pub(crate) enum MadrAction {
             renders a Markdown table into `<adr-dir>/README.md`.\n\n\
             The table lives inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->`\n\
             managed region; any prose outside those markers is preserved verbatim across\n\
-            runs. Running with --apply twice is a no-op (idempotent). In --dry-run (the\n\
+            runs. An existing marker-less `README.md` is *adopted* (its hand-written body\n\
+            is preserved and the TOC region appended); pass --replace to overwrite it\n\
+            instead. Running with --apply twice is a no-op (idempotent). In --dry-run (the\n\
             default) the command exits non-zero when the TOC would change — use this in CI.\n\n\
             SIDE EFFECTS: writes `<adr-dir>/README.md` only with --apply.\n\n\
             EXAMPLES:\n\
@@ -1485,6 +1503,11 @@ pub(crate) enum MadrAction {
         /// Preview changes without writing (default behaviour; explicit for clarity)
         #[arg(long)]
         dry_run: bool,
+        /// Overwrite a marker-less `README.md`, discarding its hand-written body.
+        /// Without this flag such a file is *adopted*: its body is preserved and
+        /// the managed region is appended (non-destructive default).
+        #[arg(long)]
+        replace: bool,
     },
 }
 

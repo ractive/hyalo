@@ -16,7 +16,9 @@ use anyhow::{Context, Result};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::commands::managed_region::{GeneratePlan, Markers, apply_plan, read_old_content};
+use crate::commands::managed_region::{
+    AdoptMode, GeneratePlan, Markers, apply_plan, read_old_content,
+};
 use crate::output::{CommandOutcome, Format, format_error};
 
 /// Managed-region marker prefix for the ADR TOC.
@@ -48,6 +50,7 @@ pub fn run_toc(
     dir: &Path,
     adr_dir: Option<&str>,
     apply: bool,
+    replace: bool,
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     let adr_rel_normalized = adr_dir.unwrap_or(DEFAULT_ADR_DIR).replace('\\', "/");
@@ -72,8 +75,14 @@ pub fn run_toc(
 
     let toc_rel = format!("{adr_rel}/README.md");
     let old_content = read_old_content(dir, &toc_rel)?;
-    let new_content =
-        Markers::new(TOC_PREFIX).splice(&old_content, &body, "# Architecture Decision Records");
+    let markers = Markers::new(TOC_PREFIX);
+    let mode = if replace {
+        AdoptMode::Replace
+    } else {
+        AdoptMode::Adopt
+    };
+    let had_markers = markers.has_markers(&old_content);
+    let new_content = markers.splice(&old_content, &body, "# Architecture Decision Records", mode);
 
     let plan = GeneratePlan {
         rel_path: toc_rel,
@@ -86,16 +95,27 @@ pub fn run_toc(
         apply_plan(dir, &plan)?;
     }
 
-    let payload = serde_json::json!({
+    // `adopt` (marker-less body preserved) reports the count of preserved lines,
+    // matching `okf index`'s dry-run notice.
+    let action = if changed {
+        plan.action_str(had_markers)
+    } else {
+        "unchanged"
+    };
+
+    let mut payload = serde_json::json!({
         "command": "madr toc",
         "apply": apply,
         "adr_dir": adr_rel,
         "adrs": entries.len(),
         "changed": changed,
         "file": plan.rel_path,
-        "action": if changed { if plan.is_new() { "create" } else { "update" } } else { "unchanged" },
+        "action": action,
         "hint": "hyalo lint --profile madr  # validate ADR conformance",
     });
+    if action == "adopt" {
+        payload["preserved_lines"] = serde_json::Value::from(plan.old_content.lines().count());
+    }
 
     let exit_override = if !apply && changed { Some(1) } else { None };
 
@@ -344,7 +364,7 @@ mod tests {
         .unwrap();
 
         // First apply creates the README.
-        let (_out, exit) = run_toc(tmp.path(), None, true, Format::Json).unwrap();
+        let (_out, exit) = run_toc(tmp.path(), None, true, false, Format::Json).unwrap();
         assert_eq!(exit, None, "apply never sets a drift exit code");
         let readme = adr.join("README.md");
         assert!(readme.is_file());
@@ -353,12 +373,12 @@ mod tests {
         assert!(content.contains("<!-- madr:toc:begin -->"));
 
         // Dry-run now reports no drift (exit None).
-        let (_out2, exit2) = run_toc(tmp.path(), None, false, Format::Json).unwrap();
+        let (_out2, exit2) = run_toc(tmp.path(), None, false, false, Format::Json).unwrap();
         assert_eq!(exit2, None, "no drift after apply");
 
         // Re-apply is a no-op (idempotent).
         let before = std::fs::read_to_string(&readme).unwrap();
-        run_toc(tmp.path(), None, true, Format::Json).unwrap();
+        run_toc(tmp.path(), None, true, false, Format::Json).unwrap();
         let after = std::fs::read_to_string(&readme).unwrap();
         assert_eq!(before, after);
     }
@@ -370,14 +390,14 @@ mod tests {
         std::fs::create_dir_all(&adr).unwrap();
         std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
         // No README yet → dry-run must signal drift (exit 1).
-        let (_out, exit) = run_toc(tmp.path(), None, false, Format::Json).unwrap();
+        let (_out, exit) = run_toc(tmp.path(), None, false, false, Format::Json).unwrap();
         assert_eq!(exit, Some(1));
     }
 
     #[test]
     fn missing_adr_dir_is_user_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let (out, exit) = run_toc(tmp.path(), None, false, Format::Json).unwrap();
+        let (out, exit) = run_toc(tmp.path(), None, false, false, Format::Json).unwrap();
         assert!(matches!(out, CommandOutcome::UserError(_)));
         assert_eq!(exit, None);
     }
@@ -393,7 +413,8 @@ mod tests {
         std::fs::create_dir_all(&adr).unwrap();
         std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
 
-        let (out, exit) = run_toc(tmp.path(), Some("docs\\adr"), true, Format::Json).unwrap();
+        let (out, exit) =
+            run_toc(tmp.path(), Some("docs\\adr"), true, false, Format::Json).unwrap();
         assert_eq!(exit, None, "apply never sets a drift exit code: {out:?}");
         // The README must land at docs/adr/README.md, not a mixed-separator path.
         assert!(adr.join("README.md").is_file());

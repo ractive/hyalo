@@ -1389,6 +1389,7 @@ fn run_inner() -> Result<(), AppError> {
     let frontmatter_link_props_owned = config.frontmatter_link_props;
     let mut validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
+    let okf_ignore = config.okf_ignore;
     let case_insensitive_mode = config.case_insensitive_mode;
     let mut md_lint = config.md_lint;
     let mut lint_strict_from_config = config.lint_strict;
@@ -1545,6 +1546,7 @@ fn run_inner() -> Result<(), AppError> {
         schema: &schema,
         validate_on_write,
         lint_ignore: &lint_ignore,
+        okf_ignore: &okf_ignore,
         md_lint: &md_lint,
         case_insensitive_mode,
         exit_code_override: None,

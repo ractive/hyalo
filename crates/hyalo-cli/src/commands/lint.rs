@@ -64,6 +64,11 @@ pub const VIOLATION_KIND_UNDECLARED_PROPERTY: &str = "schema/undeclared-property
 /// An explicit `type:` disagrees with the `[schema.bind]` path binding.
 pub const VIOLATION_KIND_BIND_MISMATCH: &str = "schema/bind-mismatch";
 
+/// A required property that is missing/empty AND has no declared `default`, so
+/// `--fix` cannot synthesize a value (mapl BUG-3). Carried on the SCHEMA
+/// violation so its group is reported `autofixable: false` instead of `true`.
+pub const VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT: &str = "schema/missing-required-no-default";
+
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize)]
 pub struct Violation {
@@ -956,18 +961,26 @@ fn validate_properties(
         if type_satisfied_by_bind && req == "type" {
             continue;
         }
+        // `--fix` can synthesize a missing/empty required property only when the
+        // schema declares a `default` for it; otherwise no value can be invented
+        // (mapl BUG-3), so the resulting violation is tagged not-autofixable.
+        let missing_kind = if effective_schema.defaults.contains_key(req.as_str()) {
+            None
+        } else {
+            Some(VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT)
+        };
         match properties.get(req.as_str()) {
             None => {
                 violations.push(Violation {
                     severity: Severity::Error,
-                    kind: None,
+                    kind: missing_kind,
                     message: format!("missing required property \"{req}\"{type_hint}"),
                 });
             }
             Some(v) if v.is_null() || v.as_array().is_some_and(Vec::is_empty) => {
                 violations.push(Violation {
                     severity: Severity::Error,
-                    kind: None,
+                    kind: missing_kind,
                     message: format!("required property \"{req}\" must not be empty{type_hint}"),
                 });
             }
@@ -1707,6 +1720,7 @@ pub fn lint_files_extended(
                                     severity: v.severity.clone(),
                                     fix: v.fix.clone(),
                                     fixed: v.fixed,
+                                    autofixable: v.autofixable,
                                 })
                                 .collect()
                         } else {
@@ -1721,6 +1735,7 @@ pub fn lint_files_extended(
                                     severity: v.severity.clone(),
                                     fix: v.fix.clone(),
                                     fixed: v.fixed,
+                                    autofixable: v.autofixable,
                                 })
                                 .collect()
                         };
@@ -1754,7 +1769,11 @@ pub fn lint_files_extended(
                         shown,
                         truncated,
                         severity: group_severity(&remaining_owned),
-                        autofixable: true,
+                        // Autofixable only if at least one remaining SCHEMA
+                        // violation could still be fixed (mapl BUG-3).
+                        autofixable: remaining_owned
+                            .iter()
+                            .any(|v| v.autofixable.unwrap_or(true)),
                         violations: body_violations,
                     });
                     continue;
@@ -1874,7 +1893,12 @@ pub fn lint_files_extended(
                 rules_seen.insert(rule_id.clone());
 
                 let autofixable = if rule_id == "SCHEMA" {
-                    true
+                    // The SCHEMA group folds several checks; it is autofixable
+                    // only if at least one member is (per-violation
+                    // `autofixable`). A group made up entirely of
+                    // non-synthesizable missing-required violations reports
+                    // `false` (mapl BUG-3).
+                    violations.iter().any(|v| v.autofixable.unwrap_or(true))
                 } else {
                     md_lint_engine
                         .available_rules()
@@ -1960,6 +1984,13 @@ struct InternalViolation {
     /// (SCHEMA) violations — frontmatter fixes are tracked separately via
     /// `fix_actions`.
     fixed: bool,
+    /// Whether `--fix` could resolve THIS specific violation. Meaningful for
+    /// SCHEMA violations, whose group otherwise reports a single coarse
+    /// `autofixable`: a "missing required property" with no declared default
+    /// cannot be synthesized (mapl BUG-3), so it is `false` here while a
+    /// missing-but-defaulted property is `true`. `None` = use the group/rule
+    /// default (body rules, where autofixability is a property of the rule).
+    autofixable: Option<bool>,
 }
 
 /// Severity label for a group of violations under one rule id.
@@ -2063,6 +2094,7 @@ fn lint_one_file_extended(
                 severity: "warn".to_owned(),
                 fix: None,
                 fixed: false,
+                autofixable: None,
             }],
         );
         return Ok(PerFileLintResult {
@@ -2109,6 +2141,7 @@ fn lint_one_file_extended(
                     severity: "error".to_owned(),
                     fix: None,
                     fixed: false,
+                    autofixable: None,
                 }],
             );
             return Ok(PerFileLintResult {
@@ -2179,6 +2212,11 @@ fn lint_one_file_extended(
                 Severity::Error => "error",
                 Severity::Warn => "warn",
             };
+            // A missing/empty required property with no declared default cannot
+            // be synthesized by `--fix` (mapl BUG-3): tag it not-autofixable so
+            // the SCHEMA group reports `autofixable: false` unless some other
+            // SCHEMA violation in the file is fixable.
+            let autofixable = Some(v.kind != Some(VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT));
             violations_by_rule
                 .entry("SCHEMA".to_owned())
                 .or_default()
@@ -2189,6 +2227,7 @@ fn lint_one_file_extended(
                     severity: sev.to_owned(),
                     fix: None,
                     fixed: false,
+                    autofixable,
                 });
         }
     }
@@ -2211,6 +2250,7 @@ fn lint_one_file_extended(
                 severity: sev.to_owned(),
                 fix: None,
                 fixed: false,
+                autofixable: None,
             });
     }
 
@@ -2256,6 +2296,7 @@ fn lint_one_file_extended(
                 severity: sev.to_owned(),
                 fix: None,
                 fixed: false,
+                autofixable: None,
             });
     }
 
@@ -2314,6 +2355,7 @@ fn lint_one_file_extended(
                             severity: sev.to_owned(),
                             fix: None,
                             fixed: false,
+                            autofixable: None,
                         }
                     })
                     .collect();
@@ -2354,6 +2396,7 @@ fn lint_one_file_extended(
                         severity: sev.to_owned(),
                         fix: None,
                         fixed: false,
+                        autofixable: None,
                     });
             }
         }
@@ -2501,6 +2544,7 @@ fn lint_one_file_extended(
             severity: format!("{}", d.severity),
             fix,
             fixed,
+            autofixable: None,
         }
     };
     for d in fixed_diagnostics {
@@ -2565,6 +2609,7 @@ fn lint_one_file_extended(
                     severity,
                     fix: None,
                     fixed: false,
+                    autofixable: None,
                 });
         }
     }
@@ -2613,6 +2658,7 @@ fn lint_one_file_extended(
                     severity,
                     fix: None,
                     fixed: false,
+                    autofixable: None,
                 });
         }
     }
@@ -2666,6 +2712,7 @@ fn lint_one_file_extended(
                     severity,
                     fix: None,
                     fixed: false,
+                    autofixable: None,
                 });
         }
     }
@@ -2716,6 +2763,7 @@ fn lint_one_file_extended(
                         severity,
                         fix: None,
                         fixed: false,
+                        autofixable: None,
                     });
             }
         }
@@ -3144,6 +3192,52 @@ mod tests {
                 .iter()
                 .any(|v| v.severity == Severity::Error
                     && v.message.contains("missing required property \"date\""))
+        );
+    }
+
+    #[test]
+    fn missing_required_no_default_is_not_autofixable() {
+        // mapl BUG-3: a missing required property with no schema default cannot
+        // be synthesized by --fix, so its violation is tagged not-autofixable.
+        let schema = make_schema(&["title", "date"], "note", &[], HashMap::new());
+        let props: IndexMap<String, Value> = IndexMap::new(); // nothing present
+        let violations = validate_properties("note.md", &props, &schema);
+        let date_v = violations
+            .iter()
+            .find(|v| v.message.contains("missing required property \"date\""))
+            .expect("date must be flagged");
+        assert_eq!(
+            date_v.kind,
+            Some(VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT),
+            "no-default missing-required is tagged not-autofixable"
+        );
+    }
+
+    #[test]
+    fn missing_required_with_default_is_autofixable() {
+        // When the schema declares a default, --fix CAN synthesize the value, so
+        // the violation is NOT tagged with the no-default kind.
+        let mut default = TypeSchema {
+            required: vec!["title".to_owned(), "status".to_owned()],
+            ..Default::default()
+        };
+        default
+            .defaults
+            .insert("status".to_owned(), "draft".to_owned());
+        let schema = SchemaConfig {
+            default,
+            ..Default::default()
+        };
+        let props: IndexMap<String, Value> = IndexMap::new();
+        let violations = validate_properties("note.md", &props, &schema);
+        let status_v = violations
+            .iter()
+            .find(|v| v.message.contains("missing required property \"status\""))
+            .expect("status must be flagged");
+        assert_ne!(
+            status_v.kind,
+            Some(VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT),
+            "a defaulted missing-required stays autofixable"
         );
     }
 
@@ -3934,6 +4028,7 @@ type = \"skill\"
             severity: severity.to_owned(),
             fix: None,
             fixed: false,
+            autofixable: None,
         }
     }
 

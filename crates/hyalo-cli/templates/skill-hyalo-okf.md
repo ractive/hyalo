@@ -121,6 +121,7 @@ deterministically (no LLM). Run these after adding, editing, moving, or removing
 hyalo okf index --dry-run          # preview (default); exits non-zero if any index.md is stale
 hyalo okf index --apply            # write the regenerated index.md files
 hyalo okf index tables --apply     # scope to a single subtree
+hyalo okf index --apply --replace  # overwrite a marker-less index.md (destructive; rarely needed)
 
 # Prepend a dated entry to a log.md (newest first, under a YYYY-MM-DD heading).
 # TARGET selects the log: a directory -> TARGET/log.md, a log.md path, or omitted -> bundle root.
@@ -133,6 +134,15 @@ Key rules for these generators:
 - **`okf index` owns only a managed region** delimited by `<!-- okf:index:begin -->` /
   `<!-- okf:index:end -->`. Prose you write outside those markers is preserved — put any
   bundle overview above the begin marker.
+- **Adopting a hand-written `index.md` is non-destructive.** The first `--apply` on an
+  existing `index.md` that has *no* markers keeps its entire body and appends the managed
+  region after it (dry-run says `adopt (preserving N existing lines)`); it never overwrites
+  your content. Use `--replace` only when you deliberately want to discard the old body.
+- **Malformed concepts don't abort the run.** A concept with unparseable frontmatter is
+  skipped with a stderr warning and every other index is still generated; scope a run
+  (`hyalo okf index <subtree>`) to stay clear of a bad file elsewhere in the vault. Keep the
+  generators out of template/fixture trees with `[okf] ignore = ["_template/**", ...]` in
+  `.hyalo.toml`.
 - It **preserves the bundle-root `index.md`'s `okf_version`** key and never adds frontmatter
   to nested `index.md`/`log.md` files.
 - It is **idempotent** (running `--apply` twice changes nothing) and **CI-friendly**:
