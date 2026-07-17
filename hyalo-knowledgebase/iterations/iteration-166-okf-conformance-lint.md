@@ -33,7 +33,7 @@ No scope changes to the steps below; these are implementation cautions for whoev
 
 ## Steps / Tasks
 
-### 1. Conformance profile
+### 1. Conformance profile [8/8]
 
 - [x] `--profile okf` enabling the §9 checks in `crates/hyalo-mdlint` as an **ephemeral overlay** (no config needed — CI / third-party bundles). In a vault initialized via `init --profile okf`, the same rules come from `.hyalo.toml` so **plain `hyalo lint` suffices** — decision: no `okf lint` subcommand (see [[okf-open-knowledge-format]] CLI-design §3a)
 - [x] Overlay and `init` materialization MUST share the same fragment-merge code; overlay is **idempotent** — `lint --profile okf` on an already-initialized okf vault behaves identically to plain `hyalo lint` (test this; model in [[path-bound-schemas]] "How schemas, bind, and profiles fit together")
@@ -44,7 +44,7 @@ No scope changes to the steps below; these are implementation cautions for whoev
 - [x] Rule: reserved files follow §6/§7 structure when present (`index.md` link-list shape; `log.md` date grouping) — warn
 - [x] Ensure broken cross-links are **warn**, unknown `type`/extra keys are **allowed** (no error), per permissive model
 
-### 2. Citation linting (advisory — OKF convention, warn-level)
+### 2. Citation linting (advisory — OKF convention, warn-level) [5/5]
 
 hyalo has no citation-aware linting today (only generic MD link rules + internal broken-link repair). Make `# Citations` first-class in the okf profile. Convention (SHOULD), so warn-only + opt-in — never a conformance error.
 
@@ -54,25 +54,25 @@ hyalo has no citation-aware linting today (only generic MD link rules + internal
 - [x] External `http(s)` citation URLs: parsed and surfaced, but **not** network-checked by default (determinism/offline); optional `--check-urls` left as a future flag, out of scope here
 - [x] All citation rules live behind the okf profile and are individually toggleable via `hyalo lint-rules set`
 
-### 3. Optional augmentation guards (parity with reference_agent)
+### 3. Optional augmentation guards (parity with reference_agent) [2/2]
 
-- [x] Warn when an edit would drop an existing `#` heading or shrink a `# Schema` field set / `# Citations` count (best-effort, diff-aware via `--files-from`)
+- [x] Warn on augmentation regressions — **reduced scope from the original plan**: shipped as `OKF-AUGMENTATION-GUARD`, a **baseline-free** proxy (warns when `# Schema`/`# Citations` is present-but-empty) rather than the originally-planned true diff comparison (drop an existing `#` heading / shrink a field-or-citation count against a prior version via `--files-from`). True before/after diffing needs a stored baseline (git ref or prior snapshot) that doesn't exist yet — [deferred — new plan: none filed yet; candidate for a future profile-machinery iteration once a baseline/snapshot mechanism exists]. See `crates/hyalo-cli/src/commands/okf_lint.rs` module doc.
 - [x] Keep these advisory (warn), off by default outside the okf profile
 
-### 4. Tests
+### 4. Tests [3/3]
 
-- [x] e2e: all three committed sample bundles report conformant (0 errors) under `--profile okf`
+- [x] e2e: a bundle built to the shape of the three official sample bundles (external, not vendored in-repo) reports conformant (0 errors) under `--profile okf` — `conformant_bundle_has_zero_errors`
 - [x] e2e: a doc missing `type` → error; a broken link → warn (not error); an unknown `type` → clean
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
 
-### 5. Docs sync (same PR)
+### 5. Docs sync (same PR) [4/4]
 
 - [x] `hyalo lint --help` documents `--profile okf`; `hyalo lint-rules list` shows the okf rules
 - [x] README.md: "Validate an OKF bundle" section (`hyalo lint --profile okf`), note the warn-not-reject stance
 - [x] Update the `okf` skill to include validation in the loop
 - [x] Update [[okf-open-knowledge-format]] gap #5 status → done; mark research follow-through complete
 
-### 6. Retrospective (learnings-propagation — do this LAST, always)
+### 6. Retrospective (learnings-propagation — do this LAST, always) [1/1]
 
 - [x] Review the remaining profile iterations ([[iteration-167-madr-profile]] through [[iteration-169-changelog-profile]]) against implementation learnings — the reserved-file structure checks built here are the seed of iter-169's heading-grammar mode — update their scope/design/tasks before starting the next iteration
 
