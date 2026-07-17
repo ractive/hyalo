@@ -1212,6 +1212,34 @@ Repeatable (AND).\n\
         #[command(flatten)]
         index_flags: IndexFlags,
     },
+    /// Open Knowledge Format (OKF) artifact generators: regenerate `index.md` / maintain `log.md`
+    #[command(
+        long_about = "Deterministically (re)generate the derived reserved files of an OKF bundle.\n\n\
+            OKF bundles keep two reserved, frontmatter-free files that are otherwise\n\
+            hand-maintained: `index.md` (a Markdown link list of the concepts in each\n\
+            directory) and `log.md` (a date-grouped changelog). These generators produce\n\
+            both deterministically — no LLM, no cloud — from the concepts' frontmatter.\n\n\
+            Subcommands:\n\
+            - index: Regenerate every directory's `index.md` from child concepts, grouped\n\
+              by `type`, with relative links. Writes into a stable managed region\n\
+              (delimited by `<!-- okf:index:begin -->` / `<!-- okf:index:end -->` markers)\n\
+              so hand-written prose outside the markers is preserved. Idempotent.\n\
+            - log: Prepend a dated entry under today's `YYYY-MM-DD` heading (newest first)\n\
+              to a scope-selectable `log.md` (bundle-root by default; §7 directory-local).\n\n\
+            Both default to --dry-run and mutate only with --apply (the `links fix`/`links\n\
+            auto` convention). `okf index --dry-run` exits non-zero on drift, so it doubles\n\
+            as a CI check that the committed `index.md` files are up to date.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo okf index --dry-run          # CI: fail if index.md files are stale\n\
+            \u{00a0} hyalo okf index --apply            # regenerate all index.md files\n\
+            \u{00a0} hyalo okf index tables --apply     # scope to a subtree\n\
+            \u{00a0} hyalo okf log --message \"Added blocks table\" --apply\n\
+            \u{00a0} hyalo okf log tables --action Update --message \"...\" --apply"
+    )]
+    Okf {
+        #[command(subcommand)]
+        action: OkfAction,
+    },
     /// Print the effective configuration (resolved .hyalo.toml path, dir, and core settings)
     #[command(
         name = "config",
@@ -1245,6 +1273,82 @@ Repeatable (AND).\n\
         /// Target shell
         #[arg(value_enum)]
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum OkfAction {
+    /// Regenerate every directory's `index.md` from concept frontmatter
+    #[command(
+        long_about = "Regenerate the reserved `index.md` in every directory from the frontmatter\n\
+            of its child concepts.\n\n\
+            For each directory, concepts are grouped by their `type` (untyped concepts fall\n\
+            under an `Other` group) and rendered as `* [title](relative-link) - description`\n\
+            lines; the title falls back to the filename stem and the description is optional.\n\
+            Immediate subdirectories are listed under a `Subdirectories` group. Links are\n\
+            relative to the `index.md`'s own directory and always use forward slashes\n\
+            (cross-platform).\n\n\
+            The generated list lives inside a stable managed region delimited by\n\
+            `<!-- okf:index:begin -->` and `<!-- okf:index:end -->` markers; any prose\n\
+            outside those markers is preserved verbatim across runs. The bundle-root\n\
+            `index.md`'s lone `okf_version` frontmatter key is preserved.\n\n\
+            Running with --apply twice is a no-op (idempotent). In --dry-run (the default)\n\
+            the command exits non-zero when any `index.md` would change — use this in CI.\n\n\
+            SIDE EFFECTS: writes `index.md` files only with --apply.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo okf index --dry-run\n\
+            \u{00a0} hyalo okf index --apply\n\
+            \u{00a0} hyalo okf index tables --apply"
+    )]
+    Index {
+        /// Optional directory (vault-relative) to scope regeneration to a subtree
+        #[arg(value_name = "DIR")]
+        scope: Option<String>,
+        /// Write changes to disk. Without this flag the command is a dry run.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Preview changes without writing (default behaviour; explicit for clarity)
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Prepend a dated entry to a scope-selectable `log.md`
+    #[command(
+        long_about = "Prepend a dated entry to the reserved `log.md` changelog.\n\n\
+            Per SPEC §7 a `log.md` MAY appear at any level of the hierarchy and records the\n\
+            history of that scope (directory-local, not bundle-wide). TARGET selects which\n\
+            `log.md` is written:\n\
+            - a directory  → writes/creates `TARGET/log.md`\n\
+            - a `log.md` path → writes that file directly\n\
+            - omitted      → the bundle-root `log.md`\n\n\
+            The entry is inserted under today's `YYYY-MM-DD` heading, newest first: if the\n\
+            heading already exists the entry becomes its first bullet, otherwise a fresh\n\
+            dated section is inserted above older ones. `--action Update` prefixes a bold\n\
+            action word (`- **Update:** ...`), a convention (not required per §7). The file\n\
+            is created (with no frontmatter — it is a reserved file) when absent.\n\n\
+            TARGET is validated to stay inside the vault/bundle; paths that escape are\n\
+            rejected. Defaults to --dry-run; pass --apply to write.\n\n\
+            SIDE EFFECTS: writes/creates one `log.md` only with --apply.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo okf log --message \"Added blocks table\" --apply\n\
+            \u{00a0} hyalo okf log tables --action Update --message \"Refreshed schema\" --apply\n\
+            \u{00a0} hyalo okf log tables/log.md --message \"...\" --apply"
+    )]
+    Log {
+        /// Directory or `log.md` path selecting which log to write (default: bundle-root)
+        #[arg(value_name = "TARGET")]
+        target: Option<String>,
+        /// The log entry text (required)
+        #[arg(long, value_name = "TEXT", required = true)]
+        message: String,
+        /// Optional bold action word prefixing the entry (e.g. `Update`, `Add`)
+        #[arg(long, value_name = "WORD")]
+        action: Option<String>,
+        /// Write changes to disk. Without this flag the command is a dry run.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Preview changes without writing (default behaviour; explicit for clarity)
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

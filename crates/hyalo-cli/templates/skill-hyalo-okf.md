@@ -60,8 +60,8 @@ Keep these separate. Never make the LLM reinvent the mechanical layer:
   check. Do **not** add a `type` to them.
 - The bundle-root `index.md` may carry a lone `okf_version: "0.1"` key — nothing else.
 - `index.md` bodies are link lists; `log.md` bodies are dated changelog entries. These are
-  *derived* data — regenerate them from the concept set rather than hand-editing when
-  possible.
+  *derived* data — **regenerate them with `hyalo okf index` / `hyalo okf log`** rather than
+  hand-editing (see "Maintaining reserved files" below).
 
 ## Link forms
 
@@ -104,6 +104,37 @@ hyalo find --broken-links
 # Move a concept and rewrite inbound links across the bundle:
 hyalo mv tables/blocks.md --to tables/bitcoin_blocks.md
 ```
+
+## Maintaining reserved files (`index.md` / `log.md`)
+
+`index.md` and `log.md` are *derived* — never hand-edit them. hyalo regenerates both
+deterministically (no LLM). Run these after adding, editing, moving, or removing concepts:
+
+```bash
+# Regenerate every directory's index.md from concept frontmatter.
+# Concepts are grouped by `type`; entries are `* [title](relative-link) - description`
+# (title falls back to the filename; description optional); subdirectories are listed too.
+hyalo okf index --dry-run          # preview (default); exits non-zero if any index.md is stale
+hyalo okf index --apply            # write the regenerated index.md files
+hyalo okf index tables --apply     # scope to a single subtree
+
+# Prepend a dated entry to a log.md (newest first, under a YYYY-MM-DD heading).
+# TARGET selects the log: a directory -> TARGET/log.md, a log.md path, or omitted -> bundle root.
+hyalo okf log --message "Added the blocks table" --apply
+hyalo okf log tables --action Update --message "Refreshed the schema section" --apply
+```
+
+Key rules for these generators:
+
+- **`okf index` owns only a managed region** delimited by `<!-- okf:index:begin -->` /
+  `<!-- okf:index:end -->`. Prose you write outside those markers is preserved — put any
+  bundle overview above the begin marker.
+- It **preserves the bundle-root `index.md`'s `okf_version`** key and never adds frontmatter
+  to nested `index.md`/`log.md` files.
+- It is **idempotent** (running `--apply` twice changes nothing) and **CI-friendly**:
+  `hyalo okf index --dry-run` exits non-zero when the committed `index.md` files are stale.
+- Both default to `--dry-run`; pass `--apply` to write. Do the concept edits first (with
+  `hyalo set` / `hyalo new` / `hyalo mv`), then regenerate the reserved files.
 
 ## Setting up an OKF bundle
 

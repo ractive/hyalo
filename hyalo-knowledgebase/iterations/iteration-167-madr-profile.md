@@ -47,7 +47,7 @@ This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[
 ### 3. TOC / dashboard generator
 
 - [ ] Decide command shape: per-profile group `hyalo madr toc` (consistent with `hyalo okf index`) vs a generic profile-keyed generator — leaning per-profile group; record decision in [[okf-open-knowledge-format]] CLI-design section
-- [ ] Generate a TOC/index of ADRs (number, title, status, date), dry-run default + `--apply`, idempotent, managed-region markers (reuse iter-165 machinery)
+- [ ] Generate a TOC/index of ADRs (number, title, status, date), dry-run default + `--apply`, idempotent, managed-region markers (reuse iter-165 machinery). **iter-165 note:** the managed-region splice (`<!-- okf:index:begin/end -->` markers, prose-preserving `splice_managed_region`) and the plan/diff → dry-run-exits-nonzero-on-drift pattern live in `crates/hyalo-cli/src/commands/okf.rs` but are currently module-private and OKF-marker-specific. Extract a small shared helper (parametrize the marker prefix, e.g. `<!-- madr:toc:begin -->`) rather than copy-pasting; the `IndexPlan { rel_path, new_content, old_content }` + `changed()`/`is_new()` shape and the `atomic_write` apply loop carry over directly.
 
 ### 4. Tests
 

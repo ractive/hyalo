@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, PropertiesAction, TagsAction,
-    TaskAction, TypesAction, ViewsAction, resolve_single_file,
+    Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, OkfAction, PropertiesAction,
+    TagsAction, TaskAction, TypesAction, ViewsAction, resolve_single_file,
 };
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
@@ -2174,6 +2174,38 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             index_path,
             effective_format,
         ),
+        Commands::Okf { action } => match action {
+            OkfAction::Index {
+                scope,
+                apply,
+                dry_run: _,
+            } => {
+                let (outcome, exit_override) = crate::commands::okf::run_index(
+                    ctx.dir,
+                    scope.as_deref(),
+                    apply,
+                    effective_format,
+                )?;
+                if let Some(code) = exit_override {
+                    ctx.exit_code_override = Some(code);
+                }
+                Ok(outcome)
+            }
+            OkfAction::Log {
+                target,
+                message,
+                action: log_action,
+                apply,
+                dry_run: _,
+            } => crate::commands::okf::run_log(
+                ctx.dir,
+                target.as_deref(),
+                &message,
+                log_action.as_deref(),
+                apply,
+                effective_format,
+            ),
+        },
         // Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config => unreachable!("Config command is handled before dispatch"),
     }
