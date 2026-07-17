@@ -2083,10 +2083,7 @@ fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (u
             if is_fix_mode {
                 if rule_id == "SCHEMA" {
                     // Post-fix SCHEMA remainder, or all originals if no fix pass ran.
-                    let remaining = r
-                        .post_fix_schema_remaining
-                        .as_ref()
-                        .unwrap_or(violations);
+                    let remaining = r.post_fix_schema_remaining.as_ref().unwrap_or(violations);
                     for v in remaining {
                         tally(&v.severity);
                     }
