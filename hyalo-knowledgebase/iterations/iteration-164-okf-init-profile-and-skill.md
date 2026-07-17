@@ -75,7 +75,7 @@ Makes OKF a first-class, discoverable target. Depends on [[iteration-163-okf-fro
 - [x] `hyalo init --profile okf` produces a config under which a real OKF sample bundle lints clean
 - [x] The `okf` skill is installed by `--claude` and references only real, current hyalo commands
 - [x] Default `init` behavior unchanged; global `--format json|text` still works on `init`
-- [x] Quality gates pass; docs + skill updated in the same PR
+- [x] Quality gates pass; docs + skill updated in the same PR — verified locally 2026-07-17: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace -q` (822+53+25 passed) all green; README.md, `init --help`, and `templates/skill-hyalo-okf.md` all touched in this PR's diff
 
 ## Retrospective (2026-07-17)
 
