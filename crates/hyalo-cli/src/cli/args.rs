@@ -837,7 +837,8 @@ Repeatable (AND).\n\
             \u{00a0} hyalo init --profile okf\n\
             \u{00a0} hyalo init --profile okf --claude\n\
             \u{00a0} hyalo init --profile madr\n\
-            \u{00a0} hyalo init --profile skills"
+            \u{00a0} hyalo init --profile skills\n\
+            \u{00a0} hyalo init --profile changelog"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
@@ -846,8 +847,8 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
-        /// Scaffold a preset vault flavour (okf, madr, skills) by merging an
-        /// embedded config fragment into .hyalo.toml
+        /// Scaffold a preset vault flavour (okf, madr, skills, changelog) by
+        /// merging an embedded config fragment into .hyalo.toml
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
     },

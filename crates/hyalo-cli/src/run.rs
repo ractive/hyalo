@@ -18,6 +18,20 @@ use crate::output::{CommandOutcome, Format};
 use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
 use hyalo_core::index::SnapshotIndex;
 
+/// The explicit `--profile <name>` from a command, if any. Only `hyalo lint`
+/// accepts an ephemeral `--profile` overlay today; the scan-include installer
+/// consults this so a `--profile skills` run reaches `.claude/skills/` even on
+/// a vault not yet initialized with the profile.
+fn active_profile_name(command: &Commands) -> Option<&str> {
+    match command {
+        Commands::Lint {
+            profile: Some(name),
+            ..
+        } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
 /// Resolve the default output format based on whether stdout is a TTY.
 ///
 /// - TTY (interactive terminal): `Format::Text` — human-readable by default.
@@ -668,8 +682,13 @@ fn run_inner() -> Result<(), AppError> {
                 crate::output::Format::Json
             }
         });
-        let report =
-            crate::commands::config::collect_config_report(&cwd).map_err(AppError::Internal)?;
+        // A `--dir` override wins over the config's own `dir`: report the
+        // effective vault directory the rest of the CLI would use, not the
+        // config-file value it shadows (ff-rdp B6). When `--dir` names a
+        // directory that has its own `.hyalo.toml`, load from there.
+        let dir_override = cli.dir.as_deref();
+        let report = crate::commands::config::collect_config_report(&cwd, dir_override)
+            .map_err(AppError::Internal)?;
         match crate::commands::config::run_config(&report, format) {
             CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
                 // Sanitized because the text-mode RawOutput branch echoes the raw
@@ -742,6 +761,26 @@ fn run_inner() -> Result<(), AppError> {
     };
     // The directory where .hyalo.toml lives. Views/types are stored there.
     let config_dir = config.config_dir.clone();
+
+    // Install the `[scan] include` globs process-wide so every command's file
+    // discovery descends into the opted-in hidden dot-subtrees. A `--profile`
+    // overlay (below) can add to this via its fragment; union those in now so
+    // an un-initialized vault run with `--profile skills` still reaches
+    // `.claude/skills/`.
+    {
+        let mut include = config.scan_include.clone();
+        if let Some(profile_name) = active_profile_name(&cli.command) {
+            let extra = crate::config::overlay_scan_include(&config_dir, profile_name);
+            for pat in extra {
+                if !include.contains(&pat) {
+                    include.push(pat);
+                }
+            }
+        }
+        for (pat, msg) in hyalo_core::discovery::set_scan_include(&include) {
+            crate::warn::warn(format!("invalid [scan] include glob {pat:?}: {msg}"));
+        }
+    }
 
     // Warn when --dir is redundant: the user passed a dir that matches what
     // .hyalo.toml would have resolved to anyway. Only fires when .hyalo.toml
@@ -1390,6 +1429,7 @@ fn run_inner() -> Result<(), AppError> {
     let mut validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
     let okf_ignore = config.okf_ignore;
+    let changelog_path = config.changelog_path;
     let case_insensitive_mode = config.case_insensitive_mode;
     let mut md_lint = config.md_lint;
     let mut lint_strict_from_config = config.lint_strict;
@@ -1547,6 +1587,7 @@ fn run_inner() -> Result<(), AppError> {
         validate_on_write,
         lint_ignore: &lint_ignore,
         okf_ignore: &okf_ignore,
+        changelog_path: changelog_path.as_deref(),
         md_lint: &md_lint,
         case_insensitive_mode,
         exit_code_override: None,

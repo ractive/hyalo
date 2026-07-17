@@ -2520,6 +2520,7 @@ dependencies = [
  "anyhow",
  "clap",
  "serde",
+ "tempfile",
  "toml 1.1.2+spec-1.1.0",
  "walkdir",
 ]

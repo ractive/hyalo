@@ -3,7 +3,7 @@ name: skills
 user_invocable: false
 description: >
   Author and validate Agent Skills (SKILL.md) with hyalo. Use this skill whenever you are
-  creating or editing a skill — a `<name>/SKILL.md` directory whose frontmatter carries a
+  creating or editing a skill — a name/SKILL.md directory whose frontmatter carries a
   `name` slug and a `description`, per the Agent Skills specification
   (https://agentskills.io/specification). Trigger it when: scaffolding a new skill,
   validating a directory of skills against the spec (name regex/length, reserved words,
@@ -40,7 +40,13 @@ does the semantic work (the instructions the skill contains).
 
 The `skill` schema is bound to `**/SKILL.md` via `[[schema.bind]]`, so any `SKILL.md`
 anywhere in the tree is validated as a skill without needing explicit `type: skill`
-frontmatter. Explicit frontmatter always wins.
+frontmatter (in fact `hyalo new --type skill` omits the redundant `type:` key for a
+bound path, since SKILL.md carries none per the spec). Explicit frontmatter always wins.
+
+The profile also ships `[scan] include = [".claude/skills/**"]`, which re-admits the
+canonical (hidden) Claude Code skill location to the vault walker (`.git` stays
+excluded). Without it, `.claude/skills/**/SKILL.md` would be invisible to `find`/`lint`;
+with it, skills lint in place — no relocation.
 
 ## Validate
 

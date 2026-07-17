@@ -9,6 +9,14 @@
 # Validate skill frontmatter against the schema on write.
 validate_on_write = true
 
+# Reach the canonical Claude Code skill location. The vault walker skips hidden
+# dot-directories by default, so `.claude/skills/**/SKILL.md` would be invisible
+# to every command. This opts that one subtree back in (never `.git`, which is
+# always excluded) so the `**/SKILL.md` bind above can actually see and lint
+# skills where Claude Code stores them — without relocating any files.
+[scan]
+include = [".claude/skills/**"]
+
 # Mark this vault as skills-flavoured so plain `hyalo lint` runs the Agent Skills
 # advisory rules (name↔dirname coupling, 500-line body budget) without
 # `--profile skills` on every invocation. `hyalo lint --profile skills` is then

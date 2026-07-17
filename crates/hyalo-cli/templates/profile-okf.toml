@@ -44,14 +44,15 @@ type = "list"
 [schema.default.properties.timestamp]
 type = "datetime-tz"
 
-# Common OKF concept types. Quoted keys (spaces) are supported end-to-end.
-# `required_sections` nudge authors toward the OKF-recommended body structure.
-[schema.types."BigQuery Table"]
-required = ["type", "title"]
-required_sections = ["# Schema", "# Citations"]
-
-[schema.types."BigQuery Dataset"]
-required = ["type", "title"]
-
-[schema.types.Reference]
-required = ["type", "title"]
+# OKF is vendor-neutral: the profile ships no example concept types, because a
+# real vault's `type` values are domain-specific (a data catalog, a research
+# library, an API reference all differ). Declare your own types under
+# `[schema.types.<name>]` so authoring nudges match your domain. Quoted keys
+# (spaces) are supported end-to-end, and `required_sections` steers authors
+# toward the OKF-recommended body structure, e.g.:
+#
+#   [schema.types."Data Table"]
+#   required = ["type", "title"]
+#   required_sections = ["# Schema", "# Citations"]
+#
+# See the bundled `okf` skill ("Adding domain types") for the full recipe.

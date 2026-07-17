@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod ac_fidelity;
+mod bundled_skills;
 mod feature_fanout;
 mod help_drift;
 mod stubs;
@@ -24,6 +25,8 @@ enum Commands {
     CheckFeatureFanout,
     /// Gate 3: verify help text has EXAMPLES blocks and no stale wording.
     CheckHelpDrift,
+    /// Gate: verify every bundled skill template passes the skills profile.
+    CheckBundledSkills,
     /// Stub — not yet implemented (iter-142b).
     CheckDeadPrimitives(stubs::StubArgs),
     /// Stub — not yet implemented (iter-142b).
@@ -36,6 +39,7 @@ fn main() {
         Commands::CheckAcFidelity(args) => ac_fidelity::run(args),
         Commands::CheckFeatureFanout => feature_fanout::run(),
         Commands::CheckHelpDrift => help_drift::run(),
+        Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
     };

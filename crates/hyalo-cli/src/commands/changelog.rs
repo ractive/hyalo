@@ -26,7 +26,67 @@ use crate::commands::changelog_lint::CATEGORIES;
 use crate::output::{CommandOutcome, Format, format_error};
 
 /// Default changelog filename (vault-relative).
-const CHANGELOG_FILE: &str = "CHANGELOG.md";
+pub(crate) const CHANGELOG_FILE: &str = "CHANGELOG.md";
+
+/// Resolve the effective `CHANGELOG.md` path for the changelog commands.
+///
+/// Precedence:
+/// 1. `config_path` — the raw `[changelog] path` value from `.hyalo.toml`,
+///    resolved *relative to `config_dir`* (the directory the config lives in).
+///    This may point outside the vault `dir` (e.g. `../CHANGELOG.md` for a
+///    repo-root changelog when the vault is a docs subdir).
+/// 2. Otherwise `dir/CHANGELOG.md` (the historical default).
+///
+/// The resolved path is validated to stay within `config_dir`'s repo root: an
+/// absolute `path`, or one that escapes above `config_dir` after normalization,
+/// is rejected — mirroring the `mv` vault-escape guard so a config typo can't
+/// make the tool write to an arbitrary location.
+///
+/// # Errors
+/// Returns an error when `config_path` is absolute or traverses above
+/// `config_dir`.
+pub(crate) fn resolve_changelog_file(
+    dir: &Path,
+    config_dir: &Path,
+    config_path: Option<&str>,
+) -> Result<std::path::PathBuf> {
+    let Some(raw) = config_path else {
+        return Ok(dir.join(CHANGELOG_FILE));
+    };
+    let raw_norm = raw.replace('\\', "/");
+    anyhow::ensure!(
+        !Path::new(&raw_norm).is_absolute() && !raw_norm.starts_with('/'),
+        "[changelog] path must be relative to the config directory, not absolute: {raw}"
+    );
+    // Join onto config_dir, then verify the lexically-normalized result does not
+    // climb above config_dir (bounded `..` back into config_dir is fine; net
+    // escape is not).
+    let joined = config_dir.join(&raw_norm);
+    let mut depth: i32 = 0;
+    let mut escaped = false;
+    for comp in Path::new(&raw_norm).components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    escaped = true;
+                    break;
+                }
+            }
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::CurDir => {}
+            _ => {
+                escaped = true;
+                break;
+            }
+        }
+    }
+    anyhow::ensure!(
+        !escaped,
+        "[changelog] path escapes the config directory: {raw}"
+    );
+    Ok(joined)
+}
 
 /// A parsed view of a changelog sufficient for the release/add splices.
 struct Changelog {
@@ -138,18 +198,30 @@ fn is_iso_date(s: &str) -> bool {
         && b[8..].iter().all(u8::is_ascii_digit)
 }
 
+/// A short display name for the changelog file used in messages and JSON
+/// output: the file name (e.g. `CHANGELOG.md`) so output stays stable
+/// regardless of where the file physically lives.
+fn changelog_display(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || CHANGELOG_FILE.to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
 /// `hyalo changelog release <X.Y.Z> [--date YYYY-MM-DD] [--apply]`.
 ///
 /// Rotates `## [Unreleased]` content into a new dated version section. Returns
 /// the outcome and an optional exit-code override (1 when a dry run would
 /// change the file, matching the `okf index` / `madr toc` CI convention).
 pub fn run_release(
-    dir: &Path,
+    changelog_file: &Path,
     version: &str,
     date: Option<&str>,
     apply: bool,
+    active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
+    let display = changelog_display(changelog_file);
     if !is_semver(version) {
         return Ok((
             CommandOutcome::UserError(format_error(
@@ -181,21 +253,21 @@ pub fn run_release(
         None => hyalo_core::schema::today_iso8601(),
     };
 
-    let full = dir.join(CHANGELOG_FILE);
+    let full = changelog_file.to_path_buf();
     if !full.is_file() {
         return Ok((
             CommandOutcome::UserError(format_error(
                 format,
-                "CHANGELOG.md not found",
-                Some(CHANGELOG_FILE),
+                &format!("{display} not found"),
+                Some(&display),
                 Some("create a CHANGELOG.md with an `## [Unreleased]` section first"),
                 None,
             )),
             None,
         ));
     }
-    let old_content = std::fs::read_to_string(&full)
-        .with_context(|| format!("failed to read {CHANGELOG_FILE}"))?;
+    let old_content =
+        std::fs::read_to_string(&full).with_context(|| format!("failed to read {display}"))?;
     let mut cl = Changelog::parse(&old_content);
 
     // Idempotency guard: refuse to release an already-present version.
@@ -203,7 +275,7 @@ pub fn run_release(
         return Ok((
             CommandOutcome::UserError(format_error(
                 format,
-                &format!("version `[{version}]` already exists in CHANGELOG.md"),
+                &format!("version `[{version}]` already exists in {display}"),
                 Some(version),
                 Some("bump to a new version, or remove the existing section first"),
                 None,
@@ -216,7 +288,7 @@ pub fn run_release(
         return Ok((
             CommandOutcome::UserError(format_error(
                 format,
-                "no `## [Unreleased]` section found in CHANGELOG.md",
+                &format!("no `## [Unreleased]` section found in {display}"),
                 None,
                 Some("add an `## [Unreleased]` section to accumulate entries into"),
                 None,
@@ -232,17 +304,17 @@ pub fn run_release(
     let changed = new_content != old_content;
     if apply && changed {
         hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
-            .with_context(|| format!("failed to write {CHANGELOG_FILE}"))?;
+            .with_context(|| format!("failed to write {display}"))?;
     }
 
     let payload = serde_json::json!({
         "command": "changelog release",
         "apply": apply,
-        "file": CHANGELOG_FILE,
+        "file": display,
         "version": version,
         "date": date_owned,
         "changed": changed,
-        "hint": "hyalo lint --profile changelog  # validate the rotated changelog",
+        "hint": crate::commands::profile_lint_hint("changelog", active_profiles, "validate the rotated changelog"),
     });
     let exit_override = if !apply && changed { Some(1) } else { None };
     Ok((
@@ -311,12 +383,14 @@ fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
 /// Appends `- <message>` under the `### <category>` subsection of
 /// `## [Unreleased]`, creating the section / subsection when missing.
 pub fn run_add(
-    dir: &Path,
+    changelog_file: &Path,
     category: &str,
     message: &str,
     apply: bool,
+    active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
+    let display = changelog_display(changelog_file);
     let Some(canonical) = CATEGORIES.iter().find(|c| c.eq_ignore_ascii_case(category)) else {
         return Ok((
             CommandOutcome::UserError(format_error(
@@ -342,10 +416,9 @@ pub fn run_add(
         ));
     }
 
-    let full = dir.join(CHANGELOG_FILE);
+    let full = changelog_file.to_path_buf();
     let old_content = if full.is_file() {
-        std::fs::read_to_string(&full)
-            .with_context(|| format!("failed to read {CHANGELOG_FILE}"))?
+        std::fs::read_to_string(&full).with_context(|| format!("failed to read {display}"))?
     } else {
         // Fresh changelog skeleton.
         "# Changelog\n\n## [Unreleased]\n".to_owned()
@@ -369,17 +442,17 @@ pub fn run_add(
     let changed = new_content != old_content;
     if apply && changed {
         hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
-            .with_context(|| format!("failed to write {CHANGELOG_FILE}"))?;
+            .with_context(|| format!("failed to write {display}"))?;
     }
 
     let payload = serde_json::json!({
         "command": "changelog add",
         "apply": apply,
-        "file": CHANGELOG_FILE,
+        "file": display,
         "category": canonical,
         "message": message.trim(),
         "changed": changed,
-        "hint": "hyalo lint --profile changelog  # validate the changelog",
+        "hint": crate::commands::profile_lint_hint("changelog", active_profiles, "validate the changelog"),
     });
     let exit_override = if !apply && changed { Some(1) } else { None };
     Ok((
@@ -391,13 +464,20 @@ pub fn run_add(
 /// Insert `- message` under `### <category>` within the `[Unreleased]` section
 /// (heading at `unreleased_idx`), creating the subsection if it is missing.
 fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, message: &str) {
-    // Bound of the Unreleased section: up to the next `## ` heading or EOF.
+    // Bound of the Unreleased section: the earliest of the next `## ` heading,
+    // the footer link-reference block, or EOF. Keep-a-Changelog files end with
+    // a block of `[label]: url` link-reference definitions; the `[Unreleased]`
+    // section is frequently the *last* `## ` section, so without stopping at the
+    // footer we would splice a new `### Category` *after* those definitions —
+    // producing a non-conformant file that then fails its own lint (RB-4). We
+    // therefore also stop at the first footer link-ref line so entries always
+    // land inside the section body.
     let section_end = cl
         .lines
         .iter()
         .enumerate()
         .skip(unreleased_idx + 1)
-        .find(|(_, l)| l.starts_with("## "))
+        .find(|(_, l)| l.starts_with("## ") || link_def_label(l).is_some())
         .map_or(cl.lines.len(), |(i, _)| i);
 
     let cat_heading = format!("### {category}");
@@ -526,6 +606,67 @@ mod tests {
         let seg = &out[unrel..v1];
         assert!(seg.contains("### Fixed"));
         assert!(seg.contains("- A bug."));
+    }
+
+    /// RB-4: a conformant KaC file whose `[Unreleased]` is the last `## `
+    /// section (only the footer link-ref block follows) must get new entries
+    /// *inside* the section, never after the link-ref definitions.
+    const UNRELEASED_LAST: &str = "\
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- Existing feature.
+
+[Unreleased]: https://x/compare/v1.0.0...HEAD
+[1.0.0]: https://x/tag/v1.0.0
+";
+
+    #[test]
+    fn add_new_category_lands_before_footer_link_refs() {
+        let mut cl = Changelog::parse(UNRELEASED_LAST);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Fixed", "A bug.");
+        let out = cl.render();
+        let fixed_pos = out.find("### Fixed").expect("Fixed subsection added");
+        let footer_pos = out.find("[Unreleased]:").expect("footer preserved");
+        assert!(
+            fixed_pos < footer_pos,
+            "new category must precede the footer link refs:\n{out}"
+        );
+        // The bug entry lands under Fixed, above the footer.
+        let entry_pos = out.find("- A bug.").unwrap();
+        assert!(entry_pos < footer_pos, "entry before footer:\n{out}");
+        // Footer link refs are intact and not duplicated.
+        assert_eq!(out.matches("[Unreleased]:").count(), 1);
+        assert_eq!(out.matches("[1.0.0]:").count(), 1);
+    }
+
+    #[test]
+    fn add_existing_category_lands_before_footer_link_refs() {
+        let mut cl = Changelog::parse(UNRELEASED_LAST);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Added", "Second feature.");
+        let out = cl.render();
+        let entry_pos = out.find("- Second feature.").unwrap();
+        let footer_pos = out.find("[Unreleased]:").unwrap();
+        assert!(
+            entry_pos < footer_pos,
+            "appended entry stays inside the section:\n{out}"
+        );
+    }
+
+    #[test]
+    fn add_output_is_md047_clean() {
+        // The rendered file must end with exactly one trailing newline (MD047).
+        let mut cl = Changelog::parse(UNRELEASED_LAST);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Fixed", "A bug.");
+        let out = cl.render();
+        assert!(out.ends_with('\n'), "file ends with a newline");
+        assert!(!out.ends_with("\n\n"), "no trailing blank line (MD047)");
     }
 
     #[test]

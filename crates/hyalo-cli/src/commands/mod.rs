@@ -65,6 +65,25 @@ pub fn resolve_file_user(
     }
     discovery::resolve_file(dir, path_arg)
 }
+
+/// The `hyalo lint --profile <profile>` hint to attach to a generator command's
+/// output — or `None` when it would be redundant.
+///
+/// Commands like `okf index`, `madr toc`, and `changelog add/release` suggest
+/// running `hyalo lint --profile <p>` to validate their output. But on a vault
+/// whose `.hyalo.toml` already activates `<p>` via `[lint] profiles`, plain
+/// `hyalo lint` runs that profile's rules — so the `--profile` flag is
+/// redundant noise (hoppy UX-2). In that case, return the plain
+/// `hyalo lint` form instead (still useful), stripping the redundant flag.
+#[must_use]
+pub(crate) fn profile_lint_hint(profile: &str, active_profiles: &[String], note: &str) -> String {
+    let redundant = active_profiles.iter().any(|p| p == profile);
+    if redundant {
+        format!("hyalo lint  # {note}")
+    } else {
+        format!("hyalo lint --profile {profile}  # {note}")
+    }
+}
 use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild, SnapshotIndex, VaultIndex};
 use std::path::{Path, PathBuf};
 

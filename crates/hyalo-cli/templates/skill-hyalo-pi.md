@@ -2,7 +2,7 @@
 name: hyalo
 user_invocable: false
 description: >
-  Use the hyalo CLI (via the bash tool) instead of read/edit/grep/write when working with markdown (.md) files
+  Use the hyalo CLI instead of read/edit/grep/write when working with markdown (.md) files
   that have YAML frontmatter. This skill MUST be consulted whenever pi is working with
   markdown documentation directories, knowledgebases, wikis, notes, Obsidian-compatible
   collections, Zettelkasten systems, iteration plans, or any collection of .md files with

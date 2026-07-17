@@ -884,6 +884,18 @@ fn validate_type_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("type name cannot be empty".to_owned());
     }
+    // `default` is reserved: it names the fallback `[schema.default]` table, not
+    // a concrete type. `hyalo types set default …` would silently create a
+    // phantom `[schema.types.default]` type that never binds to anything
+    // (user-service BUG-A3). Reject it and point at the real table.
+    if name.eq_ignore_ascii_case("default") {
+        return Err(
+            "'default' is a reserved name for the fallback schema — edit \
+             `[schema.default]` in .hyalo.toml directly (it applies to every \
+             untyped file); `types set` only manages concrete `[schema.types.*]` types"
+                .to_owned(),
+        );
+    }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -1043,6 +1055,47 @@ mod tests {
         assert!(validate_type_name("iteration").is_ok());
         assert!(validate_type_name("my-type").is_ok());
         assert!(validate_type_name("my_type").is_ok());
+    }
+
+    #[test]
+    fn validate_type_name_rejects_reserved_default() {
+        let err = validate_type_name("default").unwrap_err();
+        assert!(
+            err.contains("[schema.default]"),
+            "points at the table: {err}"
+        );
+        // Case-insensitive.
+        assert!(validate_type_name("Default").is_err());
+    }
+
+    #[test]
+    fn set_type_default_is_user_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = set_type(
+            tmp.path(),
+            "default",
+            &["title".to_owned()],
+            &[],
+            &[],
+            &[],
+            None,
+            false,
+            Format::Json,
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, CommandOutcome::UserError(_)),
+            "types set default must be a user error"
+        );
+        // No phantom type table was written.
+        let toml_path = tmp.path().join(".hyalo.toml");
+        if toml_path.exists() {
+            let contents = std::fs::read_to_string(&toml_path).unwrap();
+            assert!(
+                !contents.contains("[schema.types.default]"),
+                "must not create a phantom default type"
+            );
+        }
     }
 
     #[test]

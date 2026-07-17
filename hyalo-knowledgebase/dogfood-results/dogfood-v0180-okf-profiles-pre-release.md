@@ -79,12 +79,23 @@ changelog** gets non-conformant output that then fails its own lint.
 `changelog release` places its footer ref correctly; the defect is specific
 to `add`. Minimal repro in the user-event-service agent report.
 
+**Status: FIXED (iter-175).** `changelog add` now bounds the `[Unreleased]`
+section at the footer link-ref block, so new entries land inside the section;
+output stays MD047-clean. Regression tests: unit tests in `changelog.rs`
+(`add_new_category_lands_before_footer_link_refs`, `add_output_is_md047_clean`)
+and e2e `add_places_new_category_before_footer_link_refs_rb4`.
+
 ### RB-5: The bundled `skills` skill fails its own skills profile (HIGH, embarrassment class)
 
 Its `description` contains a literal `<` (from `` `<name>/SKILL.md` ``),
 which the profile's `description` pattern `^[^<]*$` forbids. Fix the wording
 and add a CI/xtask step linting the bundled skill templates with
 `--profile skills` so a self-violation can't ship again.
+
+**Status: FIXED (iter-175).** The `skills` skill description no longer contains
+`<`, and a new `cargo run -p xtask -- check-bundled-skills` gate (wired into
+`quality-gates.yml`) lints every bundled `skill-*.md` as installed under the
+skills profile, failing CI on any error-severity violation.
 
 ## High-impact UX gaps (fix with the blockers if possible)
 
@@ -93,6 +104,12 @@ and add a CI/xtask step linting the bundled skill templates with
   Claude Code skill location (4 of 5 real SKILL.md files in ff-rdp were
   unreachable). Allow-list dot-dirs for bind matching or document the
   limitation prominently.
+  **Status: FIXED (iter-175).** New `[scan] include = ["glob", …]` config key
+  re-admits specific hidden subtrees to the walker (honored by every command;
+  `.git` stays hard-excluded). The skills profile ships
+  `[scan] include = [".claude/skills/**"]`, and an ephemeral `--profile skills`
+  run installs it too, so `.claude/skills/**/SKILL.md` is discoverable and
+  lintable in place. e2e: `scan_include_reaches_claude_skills_dir`.
 - **UX-B: skip counters are JSON-only** — the diff-aware CI pipeline
   (`git diff … | hyalo lint --files-from -`) silently dropped 41 of 43 input
   paths with zero indication in `--format text` or `--format github` output.

@@ -164,7 +164,8 @@ The `okf` profile merges a declarative config fragment into `.hyalo.toml`:
 - `[schema] exempt = ["**/index.md", "**/log.md"]` — reserved files skip the required-`type` check.
 - `site_prefix = ""` — bundle-absolute links (`/tables/x.md`, the spec-recommended form) resolve from the bundle root.
 - `validate_on_write = true` — authoring stays conformant.
-- Seed `[schema.types.*]` for common OKF concept types with recommended `# Schema`/`# Citations` sections.
+
+The profile is **vendor-neutral**: it ships **no example `[schema.types.*]`** (a real vault's concept `type` values are domain-specific). Declare your own domain types under `[schema.types."<name>"]` — quoted keys with spaces are supported — with recommended `# Schema` / `# Citations` `required_sections`. The bundled `okf` skill's "Adding domain types" section walks through it.
 
 Profiles are **composable** and **idempotent**: multiple `--profile` runs coexist in one vault. The fragment is deep-merged, and array config keys **union** rather than clobber — each profile's `[schema] exempt` globs, `[[schema.bind]]` entries, `[schema.default] required` fields, and `[lint] profiles` markers all accumulate, so a later `init --profile` never shrinks an earlier one's config or your hand-added entries. Hand-written comments and key order survive the merge, re-running is byte-idempotent, and when a profile overwrites a differing **scalar** value it prints a `conflict: <key> "<old>" -> "<new>"` line to stderr — nothing is lost silently. With `--claude`, the bundled `okf` skill teaches Claude the OKF concept model, reserved-file rules, link forms, and the exact hyalo commands — hyalo owns the deterministic frontmatter/link mechanics while the LLM does the semantic work.
 
@@ -262,6 +263,13 @@ hyalo lint --profile skills                        # validate a directory of ski
 
 Three advisory rules layer on top of the schema pass under `hyalo lint --profile skills`: **`SKILL-RESERVED-NAME`** (**error** — `name` is a reserved word `anthropic`/`claude`, which the slug pattern cannot express without look-around), **`SKILL-NAME-DIRNAME`** (warn — `name` must equal its parent directory), and **`SKILL-LINE-BUDGET`** (warn — the body should stay under 500 lines). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set SKILL-… --enabled false`.
 
+**Reaching `.claude/skills/`.** The vault walker skips hidden dot-directories by default, so the canonical Claude Code skill location would be invisible. The `skills` profile therefore ships `[scan] include = [".claude/skills/**"]`, a general walker escape hatch that re-admits specific hidden subtrees (never `.git`, which is always excluded). With it, `hyalo find`/`lint` reach `.claude/skills/**/SKILL.md` in place — no relocation:
+
+```toml
+[scan]
+include = [".claude/skills/**"]   # honored by every command that scans the vault
+```
+
 ## Changelog profile — Keep a Changelog
 
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) is a convention for a human-readable `CHANGELOG.md`: a `# Changelog` title, `## [Unreleased]` pinned above dated `## [X.Y.Z] - YYYY-MM-DD` version sections (newest first), `###` subsections limited to six change categories, and a footer of `[x.y.z]: <url>` link references. Unlike the other profiles, `CHANGELOG.md` is **frontmatter-free** — the whole grammar lives in the body.
@@ -288,7 +296,17 @@ hyalo changelog release 1.2.0 --dry-run                                      # C
 hyalo changelog release 1.2.0 --apply                                        # rotate [Unreleased] → [1.2.0]
 ```
 
-**`hyalo changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section (date defaults to today, override with `--date`), recreates an empty `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference (replace `TBD` with the real compare/tag URL). It **refuses** to release a version that already exists. **`hyalo changelog add`** appends `- <message>` under the `### <category>` subsection of `[Unreleased]`, creating the subsection if needed. Both default to `--dry-run` and exit non-zero on drift, so they double as CI checks.
+**`hyalo changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section (date defaults to today, override with `--date`), recreates an empty `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference (replace `TBD` with the real compare/tag URL). It **refuses** to release a version that already exists. **`hyalo changelog add`** appends `- <message>` under the `### <category>` subsection of `[Unreleased]` — always **inside** the section, before the footer link-reference block, with a single trailing newline — creating the subsection if needed. Both default to `--dry-run` and exit non-zero on drift, so they double as CI checks.
+
+**Repo-root `CHANGELOG.md` with a docs-subdir vault.** When your vault dir is a subdirectory (`dir = "docs"`) but `CHANGELOG.md` lives at the repo root, point the changelog commands at it with `[changelog] path` — resolved relative to the config file's directory (it may sit outside the vault dir, but never above the repo root):
+
+```toml
+dir = "docs"
+[changelog]
+path = "CHANGELOG.md"   # the repo-root file, beside .hyalo.toml
+```
+
+`hyalo init --profile changelog --dir docs` writes this key automatically when a root `CHANGELOG.md` already exists. With it, `hyalo changelog add`/`release` and `hyalo lint --profile changelog` all operate on the root file with no `--dir .` gymnastics.
 
 ### Profiles at a glance
 

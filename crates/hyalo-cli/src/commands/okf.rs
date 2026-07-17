@@ -31,11 +31,6 @@ use crate::output::{CommandOutcome, Format, format_error};
 const INDEX_BEGIN: &str = "<!-- okf:index:begin -->";
 const INDEX_END: &str = "<!-- okf:index:end -->";
 
-/// Drill-down hint pointing authors from the generators to the conformance
-/// validator. Surfaced in `okf index`/`okf log` JSON payloads and referenced
-/// in the command help.
-const OKF_LINT_HINT: &str = "hyalo lint --profile okf  # validate bundle conformance";
-
 /// The canonical OKF frontmatter key order (`reference_agent`'s `bundle`
 /// package emits keys in this order). Used by [`normalize_key_order`].
 pub const OKF_KEY_ORDER: &[&str] = &[
@@ -114,6 +109,7 @@ impl IndexPlan {
 /// (vault-relative). `apply` writes changes; otherwise this is a dry run and
 /// returns exit code 1 (via `exit_code_override`) when any `index.md` would
 /// change — the CI drift signal.
+#[allow(clippy::too_many_arguments)]
 pub fn run_index(
     dir: &Path,
     scope: Option<&str>,
@@ -121,6 +117,7 @@ pub fn run_index(
     replace: bool,
     ignore: &[String],
     case_insensitive: bool,
+    active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     // Resolve the optional scope directory to a vault-relative prefix.
@@ -264,7 +261,7 @@ pub fn run_index(
         "changed": changed.len(),
         "skipped_malformed": skipped_malformed,
         "files": results,
-        "hint": OKF_LINT_HINT,
+        "hint": crate::commands::profile_lint_hint("okf", active_profiles, "validate bundle conformance"),
     });
 
     // In dry-run mode, drift (any changed file) is a non-zero exit for CI.
@@ -678,6 +675,7 @@ pub fn run_log(
     message: &str,
     action: Option<&str>,
     apply: bool,
+    active_profiles: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     if message.trim().is_empty() {
@@ -726,7 +724,7 @@ pub fn run_log(
         "date": today,
         "entry": entry_line,
         "created": old_content.is_empty(),
-        "hint": OKF_LINT_HINT,
+        "hint": crate::commands::profile_lint_hint("okf", active_profiles, "validate bundle conformance"),
     });
     Ok(CommandOutcome::success(payload.to_string()))
 }

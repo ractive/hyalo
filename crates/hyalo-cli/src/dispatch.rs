@@ -156,6 +156,10 @@ pub(crate) struct CommandContext<'a> {
     pub lint_ignore: &'a [String],
     /// Vault-relative globs the OKF generators skip. From `[okf] ignore` in `.hyalo.toml`.
     pub okf_ignore: &'a [String],
+    /// Raw `[changelog] path` value (config-dir-relative), if set. Resolved
+    /// against `config_dir` by the changelog commands. `None` = default
+    /// `CHANGELOG.md` in the vault dir.
+    pub changelog_path: Option<&'a str>,
     /// Markdown lint configuration from `[lint]` in `.hyalo.toml`.
     pub md_lint: &'a hyalo_mdlint::LintConfig,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
@@ -1685,7 +1689,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 glob
             };
 
-            let file_pairs = match crate::commands::collect_files(
+            let mut file_pairs = match crate::commands::collect_files(
                 dir,
                 &files_arg,
                 &effective_glob,
@@ -1694,6 +1698,38 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 crate::commands::FilesOrOutcome::Files(f) => f,
                 crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
             };
+
+            // Reach a repo-root CHANGELOG.md that lives *outside* the vault dir.
+            // When the changelog profile is active and `[changelog] path`
+            // resolves to a file the vault walk can't see (the common
+            // docs-subdir layout), add it to the lint set so
+            // `lint --profile changelog` validates the real file without
+            // `--dir .` gymnastics. Only for an unscoped run (no explicit
+            // `--file`/`--glob`), so a targeted lint is never surprised by an
+            // extra file.
+            if files_arg.is_empty()
+                && effective_glob.is_empty()
+                && ctx.lint_profiles.iter().any(|p| p == "changelog")
+                && let Ok(changelog_file) = crate::commands::changelog::resolve_changelog_file(
+                    dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                )
+                && changelog_file.is_file()
+            {
+                let rel = hyalo_core::discovery::relative_path(dir, &changelog_file);
+                // Only inject when the file is outside the vault dir (a relative
+                // path that climbs out, or an absolute one) — an in-vault
+                // CHANGELOG.md was already discovered by the walk.
+                let outside = rel.starts_with("..") || std::path::Path::new(&rel).is_absolute();
+                let already = file_pairs.iter().any(|(p, _)| p == &changelog_file);
+                if outside && !already {
+                    let display = changelog_file
+                        .file_name()
+                        .map_or_else(|| rel.clone(), |n| n.to_string_lossy().into_owned());
+                    file_pairs.push((changelog_file, display));
+                }
+            }
 
             let fix_mode = if fix {
                 if dry_run {
@@ -2265,6 +2301,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     replace,
                     ctx.okf_ignore,
                     case_insensitive,
+                    &ctx.lint_profiles,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {
@@ -2284,6 +2321,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 &message,
                 log_action.as_deref(),
                 apply,
+                &ctx.lint_profiles,
                 effective_format,
             ),
         },
@@ -2299,6 +2337,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     adr_dir.as_deref(),
                     apply,
                     replace,
+                    ctx.schema,
+                    &ctx.lint_profiles,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {
@@ -2314,11 +2354,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 dry_run: _,
             } => {
-                let (outcome, exit_override) = crate::commands::changelog::run_release(
+                let changelog_file = crate::commands::changelog::resolve_changelog_file(
                     ctx.dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                )?;
+                let (outcome, exit_override) = crate::commands::changelog::run_release(
+                    &changelog_file,
                     &version,
                     date.as_deref(),
                     apply,
+                    &ctx.lint_profiles,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {
@@ -2332,11 +2378,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 dry_run: _,
             } => {
-                let (outcome, exit_override) = crate::commands::changelog::run_add(
+                let changelog_file = crate::commands::changelog::resolve_changelog_file(
                     ctx.dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                )?;
+                let (outcome, exit_override) = crate::commands::changelog::run_add(
+                    &changelog_file,
                     &category,
                     &message,
                     apply,
+                    &ctx.lint_profiles,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {
