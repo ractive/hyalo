@@ -50,7 +50,8 @@ pub fn run_toc(
     apply: bool,
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
-    let adr_rel = adr_dir.unwrap_or(DEFAULT_ADR_DIR).trim_end_matches('/');
+    let adr_rel_normalized = adr_dir.unwrap_or(DEFAULT_ADR_DIR).replace('\\', "/");
+    let adr_rel = adr_rel_normalized.trim_end_matches('/');
     let adr_full = dir.join(adr_rel);
 
     if !adr_full.is_dir() {
@@ -379,5 +380,22 @@ mod tests {
         let (out, exit) = run_toc(tmp.path(), None, false, Format::Json).unwrap();
         assert!(matches!(out, CommandOutcome::UserError(_)));
         assert_eq!(exit, None);
+    }
+
+    #[test]
+    fn backslash_adr_dir_produces_forward_slash_toc_path() {
+        // A Windows-style `adr_dir` override (backslash separators, as a user
+        // might type on that platform) must not leak into `toc_rel`/README's
+        // path as mixed separators — the generator always deals in
+        // forward-slash vault-relative paths internally.
+        let tmp = tempfile::tempdir().unwrap();
+        let adr = tmp.path().join("docs").join("adr");
+        std::fs::create_dir_all(&adr).unwrap();
+        std::fs::write(adr.join("0001-x.md"), "---\nstatus: proposed\n---\n# X\n").unwrap();
+
+        let (out, exit) = run_toc(tmp.path(), Some("docs\\adr"), true, Format::Json).unwrap();
+        assert_eq!(exit, None, "apply never sets a drift exit code: {out:?}");
+        // The README must land at docs/adr/README.md, not a mixed-separator path.
+        assert!(adr.join("README.md").is_file());
     }
 }

@@ -173,6 +173,24 @@ fn resolving_supersede_is_clean() {
 }
 
 #[test]
+fn self_referential_supersede_still_warns() {
+    // A malformed `status: superseded by ADR-NNNN` that names its own file's
+    // number must not be treated as "resolved" just because a file with that
+    // number exists — the only file with that number is the ADR itself.
+    let tmp = init_madr();
+    write_md(
+        tmp.path(),
+        "docs/decisions/0099-self.md",
+        &md_adr("Self-referential", "superseded by ADR-0099", None),
+    );
+    let (json, _out) = run(tmp.path(), &["lint"]);
+    assert!(
+        rule_fired(&json["results"], "MADR-SUPERSEDE-RESOLVE"),
+        "self-referential supersede must still warn: {json}"
+    );
+}
+
+#[test]
 fn duplicate_number_warns() {
     let tmp = init_madr();
     write_md(

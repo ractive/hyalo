@@ -100,11 +100,17 @@ fn parse_superseded_target(status: &str) -> Option<u32> {
 /// The 4-digit-padded number that a supersede target would resolve to (e.g.
 /// `123` → `0123`). Kept as a helper so the `{target:04}` formatting stays in
 /// one place for the existence check and the message.
+///
+/// Excludes `full_path` itself: a file whose own number happens to equal its
+/// supersede target (a malformed but possible `status: superseded by
+/// ADR-NNNN` self-reference on ADR `NNNN`) must not be treated as resolving
+/// its own dangling reference.
 fn supersede_target_exists(full_path: &Path, target: u32) -> bool {
     let Some(dir) = full_path.parent() else {
         return false;
     };
-    number_prefix_exists(dir, target)
+    let self_name = full_path.file_name().and_then(|n| n.to_str());
+    number_prefix_exists(dir, target, self_name)
 }
 
 /// Extract the leading `NNNN` ADR number from a file's basename (`0007-x.md` →
@@ -124,15 +130,19 @@ fn adr_number(rel_path: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// Does any file in `dir` have a basename starting with `<number>-` (numerically
-/// equal, ignoring zero-padding, e.g. both `7-` and `0007-`)?
-fn number_prefix_exists(dir: &Path, number: u32) -> bool {
+/// Does any file in `dir`, other than `exclude_name`, have a basename starting
+/// with `<number>-` (numerically equal, ignoring zero-padding, e.g. both `7-`
+/// and `0007-`)?
+fn number_prefix_exists(dir: &Path, number: u32, exclude_name: Option<&str>) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
+        if Some(name) == exclude_name {
+            continue;
+        }
         if !name.to_ascii_lowercase().ends_with(".md") {
             continue;
         }

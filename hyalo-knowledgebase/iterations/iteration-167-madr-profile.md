@@ -25,7 +25,7 @@ This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[
 
 ## Goal
 
-`hyalo init --profile madr` + `hyalo lint` make an ADR directory inside a larger vault schema-valid, scaffoldable with auto-numbered filenames, and lintable — with a generated TOC/status dashboard (parity with `adr generate toc`).
+`hyalo init --profile madr` + `hyalo lint` make an ADR directory inside a larger vault schema-valid, scaffoldable via `hyalo new --type adr --file <NNNN-slug.md>` (caller supplies the number; auto-numbering deferred), and lintable — with a generated TOC/status dashboard (parity with `adr generate toc`).
 
 ## Steps / Tasks
 
@@ -60,7 +60,7 @@ This iteration also ships **`[schema.bind]` — path-bound schemas** (design: [[
 
 ### 4. Tests
 
-- [x] e2e: `init --profile madr` in a temp dir; `hyalo new --type adr` produces `NNNN-slug.md` with the next number; lint passes on the MADR 4 template examples from the spec repo
+- [x] e2e: `init --profile madr` in a temp dir; `hyalo new --type adr --file docs/decisions/NNNN-slug.md` scaffolds the ADR skeleton at a caller-supplied `NNNN-slug.md` path (auto-computing "the next number" is **not** implemented — `--file` requires the number explicitly; deferred, see [[iteration-168-skills-profile]] retrospective note); lint passes on the MADR 4 template examples from the spec repo
 - [x] e2e: supersede cross-check fires on a dangling reference; 3.x `deciders` accepted per the chosen mechanism
 - [x] e2e: CRLF-terminated ADR files (frontmatter + TOC managed region) lint/generate identically to LF. **iter-166 note (2026-07-17):** CRLF has now bitten new `okf` code twice (iter-165's `find_heading`/`prepend_log_entry`, iter-166's date-heading/citation scanners) — treat it as a standing requirement for any new line-oriented parsing here, not an edge case to remember later.
 - [x] `cargo fmt` / clippy `-D warnings` / `cargo test --workspace -q` green
