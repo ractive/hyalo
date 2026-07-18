@@ -78,6 +78,5 @@ and misleading variants
 
 ## Acceptance Criteria
 
-- [x] e2e: every emitted hint, executed verbatim in the same context,
-  returns results consistent with the hint's description and counts
+- [x] e2e: every emitted hint, executed verbatim in the same context, returns results consistent with the hint's description and counts — covered by `find_orphan_show_all_hint_reproduces_orphan_scope` (BUG-8, re-runs the hinted command and asserts the result count matches) and `summary_large_vault_hint_fires_for_large_vault` / `summary_large_vault_hint_absent_for_small_vault` (BUG-7, asserts `--dir` propagation)
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
