@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -49,13 +52,17 @@ jobs:
   # repo-root-relative because the job runs from the checkout root. The lint
   # exits non-zero on errors, failing the check. Annotations are
   # platform-independent, so this runs on ubuntu only.
+  #
+  # The binary comes from the published setup-hyalo action (latest release)
+  # rather than a source build — this doubles as an end-to-end dogfood of the
+  # release-artifact install path (iter-171). Unlike the other actions here,
+  # setup-hyalo is deliberately NOT pinned to a SHA: floating on the
+  # first-party mutable `@v1` tag is the recorded design (DEC-051) and exactly
+  # what consumers run — which is the point of the dogfood.
   lint-kb:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Build hyalo
-        run: cargo build --release -p hyalo-cli
+      - uses: ractive/setup-hyalo@v1
       - name: Lint knowledgebase
-        run: ./target/release/hyalo lint --strict --format github
+        run: hyalo lint --strict --format github
