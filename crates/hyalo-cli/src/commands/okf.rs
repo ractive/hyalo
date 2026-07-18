@@ -61,7 +61,7 @@ struct ConceptEntry {
 
 /// The kind of change a planned `index.md` regeneration represents. Reported in
 /// the JSON payload's `action` field and the dry-run text notice.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum IndexAction {
     /// The file did not exist and will be created.
     Create,
@@ -72,6 +72,11 @@ enum IndexAction {
     Adopt,
     /// The file exists without markers and `--replace` discards its body.
     Replace,
+    /// The file exists with malformed markers (dangling/reversed/duplicate); it
+    /// is left byte-identical and reported so the operator can fix it by hand.
+    /// Rewriting across a malformed marker would delete hand-written prose
+    /// (BUG-3), so the safe action is to skip.
+    Skip,
 }
 
 impl IndexAction {
@@ -81,8 +86,95 @@ impl IndexAction {
             IndexAction::Update => "update",
             IndexAction::Adopt => "adopt",
             IndexAction::Replace => "replace",
+            IndexAction::Skip => "skip",
         }
     }
+}
+
+/// The state of the `okf:index` managed-region markers in an existing file.
+///
+/// Only [`MarkerState::Healthy`] and [`MarkerState::None`] are safe to splice;
+/// everything else is malformed and must be skipped (never rewritten) so a
+/// dangling/reversed marker can't cause the second apply to delete the prose
+/// after it (BUG-3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MarkerState {
+    /// No markers at all — a marker-less file (adopt/replace/create applies).
+    None,
+    /// Exactly one begin followed by exactly one end, in order — the region
+    /// spans `(begin_offset, end_offset)` (end_offset is the start of END).
+    Healthy(usize, usize),
+    /// A begin with no matching end after it.
+    DanglingBegin,
+    /// An end with no begin before it.
+    DanglingEnd,
+    /// More than one begin and/or more than one end marker.
+    Duplicate,
+}
+
+impl MarkerState {
+    /// A human-readable description of the marker problem for warnings.
+    fn problem(self) -> &'static str {
+        match self {
+            MarkerState::None | MarkerState::Healthy(..) => "",
+            MarkerState::DanglingBegin => {
+                "dangling `<!-- okf:index:begin -->` with no matching `<!-- okf:index:end -->`"
+            }
+            MarkerState::DanglingEnd => {
+                "dangling `<!-- okf:index:end -->` with no preceding `<!-- okf:index:begin -->`"
+            }
+            MarkerState::Duplicate => "duplicate `okf:index` managed-region markers",
+        }
+    }
+}
+
+/// Classify the `okf:index` markers in `content`.
+///
+/// The check is anchored on the first *ordered* BEGIN→END pair, so a stray
+/// mention of a marker in prose or a code fence above the real region does not
+/// make an otherwise-healthy file look malformed (that tolerance is the whole
+/// reason the splice is position-anchored). Given the first ordered pair:
+///
+/// - a genuine *second* region — a BEGIN that starts after the first END — is a
+///   [`MarkerState::Duplicate`];
+/// - otherwise the pair is [`MarkerState::Healthy`].
+///
+/// With no ordered pair, a lone BEGIN is [`MarkerState::DanglingBegin`], a lone
+/// END (including the reversed `end … begin` case) is
+/// [`MarkerState::DanglingEnd`], and nothing at all is [`MarkerState::None`].
+fn classify_markers(content: &str) -> MarkerState {
+    match find_ordered_pair(content) {
+        Some((begin, end)) => {
+            // A BEGIN starting after the first END is a second managed region —
+            // a real duplicate, not a stray prose mention before the region.
+            let after_region = end + INDEX_END.len();
+            if content[after_region..].contains(INDEX_BEGIN) {
+                MarkerState::Duplicate
+            } else {
+                MarkerState::Healthy(begin, end)
+            }
+        }
+        None => {
+            if content.contains(INDEX_BEGIN) {
+                MarkerState::DanglingBegin
+            } else if content.contains(INDEX_END) {
+                MarkerState::DanglingEnd
+            } else {
+                MarkerState::None
+            }
+        }
+    }
+}
+
+/// Find the first BEGIN and the first END that appears strictly after it,
+/// returning `(begin_offset, end_offset)` where `end_offset` is the start of
+/// the end marker. `None` when there is no such ordered pair.
+fn find_ordered_pair(content: &str) -> Option<(usize, usize)> {
+    content.find(INDEX_BEGIN).and_then(|begin| {
+        content[begin + INDEX_BEGIN.len()..]
+            .find(INDEX_END)
+            .map(|rel_end| (begin, begin + INDEX_BEGIN.len() + rel_end))
+    })
 }
 
 /// Result of planning a single `index.md` regeneration.
@@ -95,11 +187,17 @@ struct IndexPlan {
     old_content: String,
     /// The kind of change this plan represents.
     action: IndexAction,
+    /// When [`IndexAction::Skip`], the marker problem that caused the skip
+    /// (for the run summary + warning). Empty otherwise.
+    skip_reason: &'static str,
 }
 
 impl IndexPlan {
     fn changed(&self) -> bool {
         self.new_content != self.old_content
+    }
+    fn is_skip(&self) -> bool {
+        self.action == IndexAction::Skip
     }
 }
 
@@ -196,10 +294,10 @@ pub fn run_index(
             }
             Err(err) => {
                 skipped_malformed += 1;
-                eprintln!(
-                    "warning: skipping {rel}: {}",
+                crate::warn::warn(format!(
+                    "skipping {rel}: {}",
                     crate::commands::terse_root_cause(&err)
-                );
+                ));
             }
         }
     }
@@ -230,18 +328,45 @@ pub fn run_index(
     }
     plans.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
-    let changed: Vec<&IndexPlan> = plans.iter().filter(|p| p.changed()).collect();
+    // Files whose managed-region markers are malformed (dangling/reversed/
+    // duplicate): reported and warned, never rewritten (BUG-3).
+    let skipped_markers: Vec<&IndexPlan> = plans.iter().filter(|p| p.is_skip()).collect();
+    for plan in &skipped_markers {
+        crate::warn::warn(format!(
+            "skipping {}: {} (nothing was written)",
+            plan.rel_path, plan.skip_reason
+        ));
+    }
 
+    // A malformed-marker file is byte-identical to its plan, so `changed()`
+    // already excludes it; filter defensively on the action too.
+    let changed: Vec<&IndexPlan> = plans
+        .iter()
+        .filter(|p| p.changed() && !p.is_skip())
+        .collect();
+
+    // Per-file write failures must not abort the run mid-way (BUG-11): warn,
+    // record the target, and keep going. The exit code reflects the partial
+    // failure without leaving the remaining files unwritten.
+    let mut write_failures: Vec<String> = Vec::new();
     if apply {
         for plan in &changed {
             let full = dir.join(&plan.rel_path);
-            hyalo_core::fs_util::atomic_write(&full, plan.new_content.as_bytes())
-                .with_context(|| format!("failed to write {}", plan.rel_path))?;
+            if let Err(err) = hyalo_core::fs_util::atomic_write(&full, plan.new_content.as_bytes())
+            {
+                crate::warn::warn(format!(
+                    "failed to write {}: {} — skipping this file, continuing",
+                    plan.rel_path,
+                    crate::commands::terse_root_cause(&err)
+                ));
+                write_failures.push(plan.rel_path.clone());
+            }
         }
     }
 
-    let results: Vec<serde_json::Value> = changed
+    let mut results: Vec<serde_json::Value> = changed
         .iter()
+        .filter(|p| !write_failures.contains(&p.rel_path))
         .map(|p| {
             let mut obj = serde_json::json!({
                 "file": p.rel_path,
@@ -257,21 +382,44 @@ pub fn run_index(
         })
         .collect();
 
+    // Report the skipped malformed-marker files so `--dry-run` surfaces them and
+    // apply records why they were left alone.
+    for plan in &skipped_markers {
+        results.push(serde_json::json!({
+            "file": plan.rel_path,
+            "action": IndexAction::Skip.as_str(),
+            "reason": plan.skip_reason,
+        }));
+    }
+
     let payload = serde_json::json!({
         "command": "okf index",
         "apply": apply,
         "scanned": plans.len(),
-        "changed": changed.len(),
+        "changed": changed.len() - write_failures.len(),
         "skipped_malformed": skipped_malformed,
+        "skipped_markers": skipped_markers.len(),
+        "write_failures": write_failures,
         "files": results,
         "hint": crate::commands::profile_lint_hint("okf", active_profiles, "validate bundle conformance"),
     });
 
-    // In dry-run mode, drift (any changed file) is a non-zero exit for CI.
-    let exit_override = if !apply && !changed.is_empty() {
-        Some(1)
-    } else {
+    // Exit code:
+    // - apply with any write failure → non-zero (partial failure, BUG-11).
+    // - dry-run with drift (any changed file) → non-zero for CI.
+    // Malformed-marker skips do not by themselves fail an apply (they are a
+    // pre-existing hand-edit problem, not a generator failure), but they DO
+    // count as drift in dry-run so CI surfaces them.
+    let exit_override = if apply {
+        if write_failures.is_empty() {
+            None
+        } else {
+            Some(1)
+        }
+    } else if changed.is_empty() && skipped_markers.is_empty() {
         None
+    } else {
+        Some(1)
     };
 
     Ok((
@@ -357,15 +505,49 @@ fn plan_index(
     };
     let full = dir.join(&rel_path);
 
+    // Impossible target: the path exists but is not a regular file (e.g. a
+    // directory literally named `index.md`). Writing would fail at apply time;
+    // detect it during planning so dry-run reports it instead of claiming
+    // `create`, and apply skips it cleanly instead of erroring after the fact
+    // (BUG-11). Report the same way as a malformed-marker skip.
+    if full.exists() && !full.is_file() {
+        return Ok(IndexPlan {
+            rel_path,
+            new_content: String::new(),
+            old_content: String::new(),
+            action: IndexAction::Skip,
+            skip_reason: "target exists but is not a regular file (a directory named index.md?)",
+        });
+    }
+
     let old_content = if full.is_file() {
         std::fs::read_to_string(&full).with_context(|| format!("failed to read {rel_path}"))?
     } else {
         String::new()
     };
 
+    let marker_state = classify_markers(&old_content);
+
+    // Malformed markers (dangling/reversed/duplicate) are never rewritten:
+    // splicing across a dangling marker would delete the hand-written prose
+    // that follows it on a later apply (BUG-3). Leave the file byte-identical
+    // and report the problem so the operator can fix it.
+    if matches!(
+        marker_state,
+        MarkerState::DanglingBegin | MarkerState::DanglingEnd | MarkerState::Duplicate
+    ) {
+        return Ok(IndexPlan {
+            rel_path,
+            new_content: old_content.clone(),
+            old_content,
+            action: IndexAction::Skip,
+            skip_reason: marker_state.problem(),
+        });
+    }
+
     let action = if old_content.is_empty() {
         IndexAction::Create
-    } else if find_marker_pair(&old_content).is_some() {
+    } else if matches!(marker_state, MarkerState::Healthy(..)) {
         IndexAction::Update
     } else if mode == AdoptMode::Replace {
         IndexAction::Replace
@@ -374,13 +556,20 @@ fn plan_index(
     };
 
     let generated = render_index_body(entries, subdirs, parent);
-    let new_content = splice_managed_region(&old_content, &generated, parent.is_empty(), mode);
+    let new_content = splice_managed_region(
+        &old_content,
+        &generated,
+        parent.is_empty(),
+        mode,
+        marker_state,
+    );
 
     Ok(IndexPlan {
         rel_path,
         new_content,
         old_content,
         action,
+        skip_reason: "",
     })
 }
 
@@ -435,7 +624,12 @@ fn render_index_body(entries: &[ConceptEntry], subdirs: &[String], parent: &str)
         sorted.dedup();
         for sub in sorted {
             let name = sub.rsplit('/').next().unwrap_or(&sub);
-            let _ = writeln!(out, "* [{name}]({name}/index.md)");
+            let _ = writeln!(
+                out,
+                "* [{}]({})",
+                escape_link_text(name),
+                encode_link_destination(&format!("{name}/index.md"))
+            );
         }
         out.push('\n');
     }
@@ -475,11 +669,72 @@ fn render_index_body(entries: &[ConceptEntry], subdirs: &[String], parent: &str)
 }
 
 /// Render one `* [title](link) - description` line.
+///
+/// The title is escaped for link-text (`[`/`]` backslash-escaped), the
+/// destination is angle-bracket-wrapped or percent-encoded when it contains
+/// spaces or other link-breaking characters, and any newlines in the
+/// description are collapsed to single spaces — so the emitted bullet is always
+/// a valid single-line CommonMark link list item (BUG-10).
 fn render_entry_line(e: &ConceptEntry) -> String {
+    let title = escape_link_text(&e.title);
+    let link = encode_link_destination(&e.link);
     match &e.description {
-        Some(d) => format!("* [{}]({}) - {}\n", e.title, e.link, d),
-        None => format!("* [{}]({})\n", e.title, e.link),
+        Some(d) => format!("* [{title}]({link}) - {}\n", collapse_whitespace(d)),
+        None => format!("* [{title}]({link})\n"),
     }
+}
+
+/// Escape a string for use as CommonMark link text (`[text]`). Backslash-escapes
+/// `[` and `]` (which would otherwise open/close a nested bracket and break the
+/// link) and collapses any embedded newlines to spaces so the bullet stays on
+/// one line.
+fn escape_link_text(text: &str) -> String {
+    let collapsed = collapse_whitespace(text);
+    let mut out = String::with_capacity(collapsed.len());
+    for ch in collapsed.chars() {
+        if ch == '[' || ch == ']' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Encode a link destination so it is a valid CommonMark inline-link target.
+///
+/// A destination with no spaces, control chars, or unbalanced/`<`/`>` parens is
+/// emitted verbatim. Otherwise it is wrapped in `<...>` (CommonMark's explicit
+/// destination form), with any literal `<`, `>`, or `\` inside it
+/// backslash-escaped. Newlines — which cannot appear even inside `<...>` — are
+/// percent-encoded so the destination is never split across lines.
+fn encode_link_destination(dest: &str) -> String {
+    let needs_wrap = dest.chars().any(|c| {
+        c.is_whitespace() || c.is_control() || c == '<' || c == '>' || c == '(' || c == ')'
+    });
+    if !needs_wrap {
+        return dest.to_owned();
+    }
+    let mut out = String::with_capacity(dest.len() + 2);
+    out.push('<');
+    for ch in dest.chars() {
+        match ch {
+            '\n' => out.push_str("%0A"),
+            '\r' => out.push_str("%0D"),
+            '<' | '>' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out.push('>');
+    out
+}
+
+/// Collapse every run of whitespace (including newlines) in `s` to a single
+/// space and trim the ends. Used to keep generated bullets on one line.
+fn collapse_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// How a marker-less existing file is handled when regenerating its managed
@@ -512,23 +767,13 @@ fn managed_block(generated: &str) -> String {
     format!("{INDEX_BEGIN}\n\n{body}\n\n{INDEX_END}")
 }
 
-/// Locate a valid `<begin>…<end>` marker pair in `old_content`, returning the
-/// byte range `(begin_offset, end_offset)` where `end_offset` is the start of
-/// the end marker. `None` when no valid pair exists.
-///
-/// The end marker is searched for strictly *after* the begin marker so a stray
-/// mention of the end-marker text in prose (or a code block) above the real
-/// managed region can't be mistaken for the closer.
-fn find_marker_pair(old_content: &str) -> Option<(usize, usize)> {
-    old_content.find(INDEX_BEGIN).and_then(|begin| {
-        old_content[begin + INDEX_BEGIN.len()..]
-            .find(INDEX_END)
-            .map(|rel_end| (begin, begin + INDEX_BEGIN.len() + rel_end))
-    })
-}
-
 /// Splice the generated body into `old_content`'s managed region, preserving
 /// prose outside the markers.
+///
+/// `marker_state` is the pre-classified marker arrangement (from
+/// [`classify_markers`]). Only [`MarkerState::Healthy`] and [`MarkerState::None`]
+/// reach here — malformed states are skipped before planning — so this function
+/// splices a healthy region in place or, absent markers, adopts/replaces/creates.
 ///
 /// When markers already exist, the region between them is replaced in place.
 /// When no markers exist:
@@ -543,10 +788,11 @@ fn splice_managed_region(
     generated: &str,
     is_root: bool,
     mode: AdoptMode,
+    marker_state: MarkerState,
 ) -> String {
     let managed = managed_block(generated);
 
-    if let Some((begin, end)) = find_marker_pair(old_content) {
+    if let MarkerState::Healthy(begin, end) = marker_state {
         let before = &old_content[..begin];
         let after = &old_content[end + INDEX_END.len()..];
         let mut result = String::with_capacity(before.len() + managed.len() + after.len());
@@ -684,6 +930,21 @@ pub fn run_log(
         )));
     }
 
+    // `--action ""` is a user error, mirroring `--message ""` — an empty action
+    // word is never intended and would silently degrade to a plain bullet
+    // (BUG-12/consistency). An omitted `--action` is fine (`None`).
+    if let Some(a) = action
+        && a.trim().is_empty()
+    {
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            "log action must not be empty",
+            None,
+            Some("omit --action, or pass a non-empty word like --action Update"),
+            None,
+        )));
+    }
+
     let rel_path = match resolve_log_target(dir, target) {
         Ok(p) => p,
         Err(msg) => {
@@ -694,6 +955,19 @@ pub fn run_log(
     };
     let full = dir.join(&rel_path);
 
+    // The target must be a regular file or absent — a directory named `log.md`
+    // (or any non-file at that path) can't be written; reject it in both
+    // dry-run and apply so they agree (BUG-11 parity for `okf log`).
+    if full.exists() && !full.is_file() {
+        return Ok(CommandOutcome::UserError(format_error(
+            format,
+            &format!("target '{rel_path}' exists but is not a regular file"),
+            target,
+            None,
+            None,
+        )));
+    }
+
     let old_content = if full.is_file() {
         std::fs::read_to_string(&full).with_context(|| format!("failed to read {rel_path}"))?
     } else {
@@ -701,9 +975,14 @@ pub fn run_log(
     };
 
     let today = hyalo_core::schema::today_iso8601();
+    // Collapse the message onto a single logical bullet: continuation lines are
+    // indented two spaces so they stay part of the list item instead of
+    // producing an unindented paragraph or a literal `## fake heading` that
+    // corrupts the log structure (BUG-14).
+    let message_body = indent_continuation(message.trim());
     let entry_line = match action.map(str::trim).filter(|a| !a.is_empty()) {
-        Some(a) => format!("- **{a}:** {}", message.trim()),
-        None => format!("- {}", message.trim()),
+        Some(a) => format!("- **{a}:** {message_body}"),
+        None => format!("- {message_body}"),
     };
 
     let new_content = prepend_log_entry(&old_content, &today, &entry_line);
@@ -723,6 +1002,36 @@ pub fn run_log(
         "hint": crate::commands::profile_lint_hint("okf", active_profiles, "validate bundle conformance"),
     });
     Ok(CommandOutcome::success(payload.to_string()))
+}
+
+/// Indent the continuation lines of a (possibly multi-line) log message so the
+/// whole thing renders as one Markdown list item.
+///
+/// The first line stays as-is (it follows the `- ` / `- **Action:** ` marker);
+/// every subsequent non-empty line is prefixed with two spaces so it is a lazy
+/// continuation of the bullet rather than a new block. Blank lines and lines
+/// that would start a heading (`#`) or a new list marker are still indented, so
+/// a `## fake heading` in the message can never break out of the list (BUG-14).
+/// Trailing `\r` from CRLF input is stripped.
+fn indent_continuation(message: &str) -> String {
+    let mut lines = message.split('\n');
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let mut out = String::with_capacity(message.len());
+    out.push_str(first.strip_suffix('\r').unwrap_or(first));
+    for line in lines {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        out.push('\n');
+        if line.trim().is_empty() {
+            // Keep an empty continuation line empty (no trailing whitespace) so
+            // it doesn't trip trailing-space lint, but still inside the item.
+            continue;
+        }
+        out.push_str("  ");
+        out.push_str(line);
+    }
+    out
 }
 
 /// Insert `entry_line` under a `## <date>` heading in `content`, newest first.
@@ -829,7 +1138,14 @@ fn resolve_scope(dir: &Path, scope: Option<&str>) -> std::result::Result<Option<
         return Ok(None);
     }
     let full = dir.join(&rel);
-    if full.exists() && !full.is_dir() {
+    if !full.exists() {
+        // A typo'd scope must not vacuously pass a CI freshness check (BUG-13):
+        // `okf index no-such-dir` used to report `0 scanned`, exit 0. Reject it.
+        return Err(format!(
+            "scope '{raw}' does not exist (no such directory in the vault)"
+        ));
+    }
+    if !full.is_dir() {
         return Err(format!("scope '{raw}' is not a directory"));
     }
     Ok(Some(rel))
@@ -855,6 +1171,15 @@ fn resolve_log_target(dir: &Path, target: Option<&str>) -> std::result::Result<S
     if full.is_file() {
         return Err(format!(
             "target '{raw}' is a file but not a log.md; pass a directory or a log.md path"
+        ));
+    }
+    // A directory target must already exist. Otherwise dry-run and apply
+    // disagree: dry-run happily reports `(created)` (exit 0) while apply fails
+    // to create a temp file in the missing parent (exit 2) — BUG-15. Reject a
+    // nonexistent directory with a hint to create it first.
+    if !full.exists() {
+        return Err(format!(
+            "target directory '{raw}' does not exist; create it first (mkdir), then log into it"
         ));
     }
     Ok(format!("{rel}/log.md"))
@@ -968,6 +1293,12 @@ pub fn now_timestamp_tz() -> String {
 mod tests {
     use super::*;
 
+    /// Test shim: classify `old` and splice, mirroring what `plan_index` does
+    /// for the healthy/marker-less cases (malformed states never reach splice).
+    fn splice_for_test(old: &str, generated: &str, is_root: bool, mode: AdoptMode) -> String {
+        splice_managed_region(old, generated, is_root, mode, classify_markers(old))
+    }
+
     #[test]
     fn key_order_canonical() {
         let keys: Vec<String> = ["timestamp", "title", "type", "extra", "tags"]
@@ -1059,7 +1390,7 @@ mod tests {
         let old = format!(
             "# Index\n\nIntro prose.\n\n{INDEX_BEGIN}\nOLD LIST\n{INDEX_END}\n\nFooter note.\n"
         );
-        let out = splice_managed_region(&old, "* [X](x.md)", false, AdoptMode::Adopt);
+        let out = splice_for_test(&old, "* [X](x.md)", false, AdoptMode::Adopt);
         assert!(out.contains("Intro prose."));
         assert!(out.contains("Footer note."));
         assert!(out.contains("* [X](x.md)"));
@@ -1073,7 +1404,7 @@ mod tests {
         let old = format!(
             "# Index\n\nSee marker `{INDEX_END}` in the docs.\n\n{INDEX_BEGIN}\nOLD LIST\n{INDEX_END}\n\nFooter note.\n"
         );
-        let out = splice_managed_region(&old, "* [X](x.md)", false, AdoptMode::Adopt);
+        let out = splice_for_test(&old, "* [X](x.md)", false, AdoptMode::Adopt);
         assert!(
             out.contains("See marker"),
             "prose before begin marker must survive: {out}"
@@ -1088,7 +1419,7 @@ mod tests {
         let old = "---\nokf_version: \"0.1\"\n---\n\n# Old\n";
         // --replace on the marker-less root: discards the `# Old` body but keeps
         // the okf_version frontmatter.
-        let out = splice_managed_region(old, "* [X](x.md)", true, AdoptMode::Replace);
+        let out = splice_for_test(old, "* [X](x.md)", true, AdoptMode::Replace);
         assert!(out.contains("okf_version: \"0.1\""));
         assert!(out.contains(INDEX_BEGIN));
         assert!(out.contains("* [X](x.md)"));
@@ -1097,8 +1428,8 @@ mod tests {
 
     #[test]
     fn splice_is_idempotent() {
-        let first = splice_managed_region("", "* [X](x.md)", false, AdoptMode::Adopt);
-        let second = splice_managed_region(&first, "* [X](x.md)", false, AdoptMode::Adopt);
+        let first = splice_for_test("", "* [X](x.md)", false, AdoptMode::Adopt);
+        let second = splice_for_test(&first, "* [X](x.md)", false, AdoptMode::Adopt);
         assert_eq!(first, second);
     }
 
@@ -1107,7 +1438,7 @@ mod tests {
         // A marker-less hand-written file: adopt must preserve every line and
         // append the managed region after it.
         let old = "# Curated\n\nHand-written intro.\n\n- manual item\n";
-        let out = splice_managed_region(old, "* [X](x.md)", false, AdoptMode::Adopt);
+        let out = splice_for_test(old, "* [X](x.md)", false, AdoptMode::Adopt);
         assert!(out.contains("# Curated"), "heading preserved: {out}");
         assert!(
             out.contains("Hand-written intro."),
@@ -1131,8 +1462,8 @@ mod tests {
         // First adopt appends the region; a second pass finds the markers and
         // updates in place (no duplicate region, no re-appended body).
         let old = "# Curated\n\nProse.\n";
-        let first = splice_managed_region(old, "* [X](x.md)", false, AdoptMode::Adopt);
-        let second = splice_managed_region(&first, "* [X](x.md)", false, AdoptMode::Adopt);
+        let first = splice_for_test(old, "* [X](x.md)", false, AdoptMode::Adopt);
+        let second = splice_for_test(&first, "* [X](x.md)", false, AdoptMode::Adopt);
         assert_eq!(first, second, "adopt then update is idempotent");
         assert_eq!(
             second.matches(INDEX_BEGIN).count(),
@@ -1144,7 +1475,7 @@ mod tests {
     #[test]
     fn splice_replace_discards_marker_less_body() {
         let old = "# Curated\n\nHand-written that --replace throws away.\n";
-        let out = splice_managed_region(old, "* [X](x.md)", false, AdoptMode::Replace);
+        let out = splice_for_test(old, "* [X](x.md)", false, AdoptMode::Replace);
         assert!(!out.contains("Hand-written"), "replace drops body: {out}");
         assert!(out.contains("# Index"));
         assert!(out.contains(INDEX_BEGIN));
@@ -1257,5 +1588,142 @@ mod tests {
         assert!(dir_in_scope("tables/sub", Some("tables")));
         assert!(!dir_in_scope("references", Some("tables")));
         assert!(dir_in_scope("anything", None));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 176 — marker classification (BUG-3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_none_and_healthy() {
+        assert_eq!(
+            classify_markers("# Index\n\njust prose\n"),
+            MarkerState::None
+        );
+        let ok = format!("# Index\n\n{INDEX_BEGIN}\n* [x](x.md)\n{INDEX_END}\n");
+        assert!(matches!(classify_markers(&ok), MarkerState::Healthy(..)));
+    }
+
+    #[test]
+    fn classify_dangling_begin() {
+        // Prose + a lone begin marker (the BUG-3 repro).
+        let s = format!("# Index\n\nhand prose\n\n{INDEX_BEGIN}\nsome list\n");
+        assert_eq!(classify_markers(&s), MarkerState::DanglingBegin);
+    }
+
+    #[test]
+    fn classify_dangling_end() {
+        let s = format!("# Index\n\n{INDEX_END}\nhand prose\n");
+        assert_eq!(classify_markers(&s), MarkerState::DanglingEnd);
+    }
+
+    #[test]
+    fn classify_reversed_is_malformed() {
+        // END before BEGIN: one of each, but no ordered pair (the BEGIN has no
+        // END after it). Classified as a dangling begin — malformed either way,
+        // so the file is skipped, never rewritten.
+        let s = format!("{INDEX_END}\n\n{INDEX_BEGIN}\n");
+        assert_eq!(classify_markers(&s), MarkerState::DanglingBegin);
+    }
+
+    #[test]
+    fn classify_duplicate() {
+        let s = format!("{INDEX_BEGIN}\na\n{INDEX_END}\n\n{INDEX_BEGIN}\nb\n{INDEX_END}\n");
+        assert_eq!(classify_markers(&s), MarkerState::Duplicate);
+    }
+
+    #[test]
+    fn dangling_begin_plan_leaves_file_byte_identical() {
+        // The BUG-3 data-loss repro: a file with prose after a dangling begin
+        // marker must be planned as a Skip whose new content equals the old.
+        let tmp = tempfile::tempdir().unwrap();
+        let content = format!("# Index\n\nHAND PROSE\n\n{INDEX_BEGIN}\nstale list\n");
+        std::fs::write(tmp.path().join("index.md"), &content).unwrap();
+        let plan = plan_index(tmp.path(), "", &[], &[], AdoptMode::Adopt, false).unwrap();
+        assert_eq!(plan.action, IndexAction::Skip);
+        assert_eq!(plan.new_content, plan.old_content);
+        assert!(plan.new_content.contains("HAND PROSE"));
+        assert!(!plan.changed(), "malformed-marker file must not be changed");
+    }
+
+    #[test]
+    fn impossible_target_directory_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A *directory* literally named index.md is an impossible write target.
+        std::fs::create_dir_all(tmp.path().join("index.md")).unwrap();
+        let plan = plan_index(tmp.path(), "", &[], &[], AdoptMode::Adopt, false).unwrap();
+        assert_eq!(plan.action, IndexAction::Skip);
+        assert!(!plan.changed());
+        assert!(plan.skip_reason.contains("not a regular file"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 176 — CommonMark-valid links (BUG-10)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn encode_destination_wraps_spaces() {
+        assert_eq!(encode_link_destination("blocks.md"), "blocks.md");
+        assert_eq!(
+            encode_link_destination("blocks table.md"),
+            "<blocks table.md>"
+        );
+        assert_eq!(
+            encode_link_destination("spaced dir/index.md"),
+            "<spaced dir/index.md>"
+        );
+    }
+
+    #[test]
+    fn encode_destination_escapes_angles_and_newlines() {
+        assert_eq!(encode_link_destination("a<b>.md"), "<a\\<b\\>.md>");
+        assert_eq!(encode_link_destination("a\nb.md"), "<a%0Ab.md>");
+    }
+
+    #[test]
+    fn escape_link_text_escapes_brackets() {
+        assert_eq!(escape_link_text("plain"), "plain");
+        assert_eq!(escape_link_text("a [test] b"), "a \\[test\\] b");
+        assert_eq!(escape_link_text("line1\nline2"), "line1 line2");
+    }
+
+    #[test]
+    fn render_entry_line_is_commonmark_valid() {
+        let e = ConceptEntry {
+            concept_type: Some("Table".into()),
+            title: "Blöcke [Übersicht] 🎉".into(),
+            link: "blocks table.md".into(),
+            description: Some("multi\nline\ndesc".into()),
+        };
+        let line = render_entry_line(&e);
+        assert_eq!(
+            line,
+            "* [Blöcke \\[Übersicht\\] 🎉](<blocks table.md>) - multi line desc\n"
+        );
+        // Single line, exactly one `](` link.
+        assert_eq!(line.matches('\n').count(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Iteration 176 — log multiline handling (BUG-14)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn indent_continuation_indents_and_neutralizes_headings() {
+        let msg = "first line\n## fake heading\nmore";
+        let out = indent_continuation(msg);
+        assert_eq!(out, "first line\n  ## fake heading\n  more");
+        // The would-be heading is now indented, so it can't break the list.
+        assert!(!out.contains("\n## "));
+    }
+
+    #[test]
+    fn indent_continuation_single_line_unchanged() {
+        assert_eq!(indent_continuation("just one line"), "just one line");
+    }
+
+    #[test]
+    fn indent_continuation_crlf() {
+        assert_eq!(indent_continuation("a\r\nb"), "a\n  b");
     }
 }

@@ -1894,7 +1894,18 @@ fn format_okf_index_text(map: &serde_json::Map<String, serde_json::Value>) -> St
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
 
-    let verb = if apply { "wrote" } else { "would change" };
+    let skipped_markers = map
+        .get("skipped_markers")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let write_failures = map
+        .get("write_failures")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len) as u64;
+
+    // "written" reads correctly for both singular and plural ("1 file written",
+    // "3 files written"), unlike "1 file wrote".
+    let verb = if apply { "written" } else { "would change" };
     let mut out = String::new();
     let _ = write!(
         out,
@@ -1903,6 +1914,12 @@ fn format_okf_index_text(map: &serde_json::Map<String, serde_json::Value>) -> St
     );
     if skipped > 0 {
         let _ = write!(out, ", {skipped} skipped (malformed frontmatter)");
+    }
+    if skipped_markers > 0 {
+        let _ = write!(out, ", {skipped_markers} skipped (malformed markers)");
+    }
+    if write_failures > 0 {
+        let _ = write!(out, ", {write_failures} write failure(s)");
     }
     append_generator_file_lines(&mut out, map.get("files"));
     out
@@ -1929,7 +1946,14 @@ fn append_generator_file_lines(out: &mut String, files: Option<&serde_json::Valu
             .get("preserved_lines")
             .and_then(serde_json::Value::as_u64)
         {
-            let _ = write!(out, " (preserving {n} existing lines)");
+            let _ = write!(
+                out,
+                " (preserving {n} existing {})",
+                if n == 1 { "line" } else { "lines" }
+            );
+        }
+        if let Some(reason) = obj.get("reason").and_then(serde_json::Value::as_str) {
+            let _ = write!(out, " — {reason}");
         }
     }
 }
@@ -1984,7 +2008,11 @@ fn format_madr_toc_text(map: &serde_json::Map<String, serde_json::Value>) -> Str
         .get("preserved_lines")
         .and_then(serde_json::Value::as_u64)
     {
-        let _ = write!(out, " (preserving {n} existing lines)");
+        let _ = write!(
+            out,
+            " (preserving {n} existing {})",
+            if n == 1 { "line" } else { "lines" }
+        );
     }
     out
 }

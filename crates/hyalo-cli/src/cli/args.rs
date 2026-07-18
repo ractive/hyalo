@@ -1417,17 +1417,27 @@ pub(crate) enum OkfAction {
             The generated list lives inside a stable managed region delimited by\n\
             `<!-- okf:index:begin -->` and `<!-- okf:index:end -->` markers; any prose\n\
             outside those markers is preserved verbatim across runs. The bundle-root\n\
-            `index.md`'s lone `okf_version` frontmatter key is preserved.\n\n\
+            `index.md`'s lone `okf_version` frontmatter key is preserved. Links are\n\
+            CommonMark-valid: spaced destinations are angle-bracket wrapped, `[`/`]` in\n\
+            titles are escaped, and multi-line descriptions are collapsed to one line.\n\n\
             NON-DESTRUCTIVE ADOPT: an existing `index.md` WITHOUT markers is *adopted* —\n\
             its entire hand-written body is preserved and the managed region is appended\n\
             after it (dry-run reports `adopt (preserving N existing lines)`). Pass\n\
             --replace to instead overwrite such a file with a fresh managed index,\n\
             discarding its body. On case-insensitive filesystems an existing `INDEX.md`\n\
             is recognized as the reserved file and adopted by its on-disk casing.\n\n\
+            MALFORMED MARKERS: a file whose markers are dangling (begin with no end, or\n\
+            end with no begin), reversed, or duplicated is left byte-identical and\n\
+            reported as `skip` with a warning — never rewritten (splicing across a broken\n\
+            marker would delete the prose after it). Fix the markers by hand; the\n\
+            `OKF-INDEX-MARKERS` lint rule flags the same condition. An impossible or\n\
+            unwritable target (a directory named `index.md`) is warned-and-skipped and\n\
+            the run continues with the other files (no partial mid-run abort).\n\n\
             SCOPING: files matching a `[okf] ignore` glob in `.hyalo.toml` (e.g.\n\
             `_template/**`) are neither indexed nor generated into. A concept with\n\
-            unparseable frontmatter is skipped with a stderr warning (the run continues\n\
-            and every other index is still generated).\n\n\
+            unparseable frontmatter is skipped with a stderr warning (suppressed by\n\
+            -q/--quiet; the run continues and every other index is still generated). A\n\
+            nonexistent scope directory is rejected (exit 1), not vacuously passed.\n\n\
             Running with --apply twice is a no-op (idempotent). In --dry-run (the default)\n\
             the command exits non-zero when any `index.md` would change — use this in CI.\n\n\
             SIDE EFFECTS: writes `index.md` files only with --apply.\n\n\
@@ -1465,10 +1475,15 @@ pub(crate) enum OkfAction {
             The entry is inserted under today's `YYYY-MM-DD` heading, newest first: if the\n\
             heading already exists the entry becomes its first bullet, otherwise a fresh\n\
             dated section is inserted above older ones. `--action Update` prefixes a bold\n\
-            action word (`- **Update:** ...`), a convention (not required per §7). The file\n\
-            is created (with no frontmatter — it is a reserved file) when absent.\n\n\
+            action word (`- **Update:** ...`), a convention (not required per §7); an\n\
+            empty `--action \"\"` is a user error, like an empty --message. A multi-line\n\
+            --message stays a single valid list item — continuation lines are indented\n\
+            under the bullet so an embedded `## heading` can't break the log structure.\n\
+            The file is created (with no frontmatter — it is a reserved file) when absent.\n\n\
             TARGET is validated to stay inside the vault/bundle; paths that escape are\n\
-            rejected. Defaults to --dry-run; pass --apply to write.\n\n\
+            rejected, and a nonexistent directory target is rejected consistently by both\n\
+            dry-run and apply (create the directory first). Defaults to --dry-run; pass\n\
+            --apply to write.\n\n\
             SIDE EFFECTS: writes/creates one `log.md` only with --apply.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo okf log --message \"Added blocks table\" --apply\n\

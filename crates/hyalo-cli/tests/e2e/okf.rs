@@ -736,3 +736,338 @@ fn okf_log_text_output_is_readable() {
     );
     assert!(!stdout.contains("entry: -"), "no raw key dump: {stdout}");
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 176 — generator hardening (dogfood BUG-3/10/11/12/13/14/15)
+// ---------------------------------------------------------------------------
+
+/// BUG-3 (data loss): an `index.md` with hand prose after a *dangling* begin
+/// marker (no end) must survive two `--apply` runs byte-identical. The old
+/// generator appended a second region on the first apply, then the second apply
+/// spliced from the first begin to the appended end and deleted the prose.
+#[test]
+fn okf_index_dangling_begin_survives_two_applies_byte_identical() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    write_md(
+        dir,
+        "tables/blocks.md",
+        "---\ntype: BigQuery Table\ntitle: Blocks\n---\n# Schema\n",
+    );
+    // A dangling begin marker with hand prose after it.
+    let dangling =
+        "# Tables\n\nHAND PROSE THAT MUST SURVIVE.\n\n<!-- okf:index:begin -->\nstale list\n";
+    write_md(dir, "tables/index.md", dangling);
+
+    let run = || {
+        hyalo_no_hints()
+            .current_dir(dir)
+            .args(["--dir", ".", "okf", "index", "tables", "--apply"])
+            .output()
+            .unwrap()
+    };
+    let out1 = run();
+    assert!(
+        out1.status.success(),
+        "apply must not error on a dangling marker"
+    );
+    let after1 = fs::read_to_string(dir.join("tables/index.md")).unwrap();
+    assert_eq!(
+        after1, dangling,
+        "malformed-marker file left byte-identical"
+    );
+    let stderr1 = String::from_utf8_lossy(&out1.stderr);
+    assert!(
+        stderr1.contains("skipping") && stderr1.contains("tables/index.md"),
+        "warns about the skipped file: {stderr1}"
+    );
+
+    let _ = run();
+    let after2 = fs::read_to_string(dir.join("tables/index.md")).unwrap();
+    assert_eq!(after2, dangling, "second apply is a no-op, prose preserved");
+    assert!(after2.contains("HAND PROSE THAT MUST SURVIVE."));
+}
+
+/// BUG-3: a dry run over a malformed-marker file still exits non-zero (drift)
+/// and reports the skip, so CI surfaces the precondition.
+#[test]
+fn okf_index_dangling_marker_dry_run_reports_and_drifts() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    write_md(
+        dir,
+        "index.md",
+        "# Index\n\nprose\n\n<!-- okf:index:end -->\ntail prose\n",
+    );
+    let out = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "okf", "index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "malformed markers count as drift"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"skipped_markers\": 1"),
+        "payload: {stdout}"
+    );
+    assert!(stdout.contains("\"action\": \"skip\""), "payload: {stdout}");
+    // File untouched.
+    let after = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(after.contains("tail prose"));
+}
+
+/// BUG-10: unicode + spaced filenames, `]` in a title, and a multiline
+/// description all produce CommonMark-valid single-line bullets.
+#[test]
+fn okf_index_generates_commonmark_valid_links() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    write_md(
+        dir,
+        "tables/blocks table.md",
+        "---\ntype: Table\ntitle: \"Blöcke [Übersicht] 🎉\"\ndescription: \"multi\\nline desc\"\n---\n# Schema\n",
+    );
+    hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "okf", "index", "tables", "--apply"])
+        .output()
+        .unwrap();
+    let idx = fs::read_to_string(dir.join("tables/index.md")).unwrap();
+    // Spaced destination is angle-bracket wrapped; `]` in title is escaped;
+    // description is collapsed to one line.
+    assert!(
+        idx.contains("* [Blöcke \\[Übersicht\\] 🎉](<blocks table.md>) - multi line desc"),
+        "commonmark-valid bullet: {idx}"
+    );
+    // The bullet must be a single line (no embedded newline in the item).
+    let bullet_line = idx
+        .lines()
+        .find(|l| l.contains("Blöcke"))
+        .expect("bullet present");
+    assert!(
+        bullet_line.contains("](<blocks table.md>)"),
+        "{bullet_line}"
+    );
+}
+
+/// BUG-10: a subdirectory whose name contains a space is angle-bracket wrapped.
+#[test]
+fn okf_index_spaced_subdir_link_is_wrapped() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    write_md(
+        dir,
+        "spaced dir/concept.md",
+        "---\ntype: Table\ntitle: C\n---\n# Schema\n",
+    );
+    hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "okf", "index", "--apply"])
+        .output()
+        .unwrap();
+    let root = fs::read_to_string(dir.join("index.md")).unwrap();
+    assert!(
+        root.contains("* [spaced dir](<spaced dir/index.md>)"),
+        "spaced subdir link wrapped: {root}"
+    );
+}
+
+/// BUG-11: a directory literally named `index.md` is an impossible write target.
+/// Dry-run must report it as `skip` (not `create`), and apply must warn-and-
+/// continue writing the other targets rather than aborting mid-run.
+#[test]
+fn okf_index_directory_target_warns_and_continues() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    // `aaa/` sorts before `bbb/`; make aaa/index.md an impossible target and
+    // ensure bbb/index.md is still written.
+    write_md(dir, "aaa/x.md", "---\ntype: T\ntitle: X\n---\n# Schema\n");
+    write_md(dir, "bbb/y.md", "---\ntype: T\ntitle: Y\n---\n# Schema\n");
+    fs::create_dir_all(dir.join("aaa/index.md")).unwrap();
+
+    // Dry run: reports skip, not create, and does not claim aaa/index.md create.
+    let dry = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "okf", "index", "--format", "json"])
+        .output()
+        .unwrap();
+    let dry_out = String::from_utf8_lossy(&dry.stdout);
+    assert!(
+        dry_out.contains("\"action\": \"skip\""),
+        "dry-run skip: {dry_out}"
+    );
+
+    // Apply: aaa is skipped-and-warned; bbb/index.md is still written.
+    let out = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "okf", "index", "--apply"])
+        .output()
+        .unwrap();
+    assert!(
+        dir.join("bbb/index.md").is_file(),
+        "later target still written despite earlier impossible target"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("aaa/index.md"),
+        "warned about the target: {stderr}"
+    );
+}
+
+/// BUG-12: `-q` suppresses the malformed-frontmatter skip warning.
+#[test]
+fn okf_index_quiet_suppresses_skip_warning() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    // A concept whose frontmatter is unparseable → skip-and-warn.
+    write_md(
+        dir,
+        "tables/bad.md",
+        "---\ntype: [unterminated\n---\nbody\n",
+    );
+    write_md(
+        dir,
+        "tables/good.md",
+        "---\ntype: T\ntitle: G\n---\n# Schema\n",
+    );
+
+    let noisy = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "okf", "index", "tables"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&noisy.stderr).contains("skipping"),
+        "warning printed without -q"
+    );
+
+    let quiet = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["--dir", ".", "-q", "okf", "index", "tables"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&quiet.stderr).trim().is_empty(),
+        "-q suppresses the skip warning: {:?}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+}
+
+/// BUG-13: a nonexistent scope errors (exit 1) instead of vacuously passing.
+#[test]
+fn okf_index_nonexistent_scope_errors() {
+    let tmp = make_bundle();
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--dir", ".", "okf", "index", "no-such-dir"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "typo'd scope must not pass");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("does not exist"),
+        "clean message: {combined}"
+    );
+}
+
+/// BUG-14: a multiline `--message` keeps the log structure valid — continuation
+/// lines are indented under the bullet so a `## fake heading` in the message
+/// cannot break out into a real heading.
+#[test]
+fn okf_log_multiline_message_stays_valid() {
+    let tmp = make_bundle();
+    let dir = tmp.path();
+    hyalo_no_hints()
+        .current_dir(dir)
+        .args([
+            "--dir",
+            ".",
+            "okf",
+            "log",
+            "--message",
+            "first line\n## fake heading\nmore detail",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+    let log = fs::read_to_string(dir.join("log.md")).unwrap();
+    // The only `## ` heading is the date; the fake heading is indented.
+    assert_eq!(
+        log.lines().filter(|l| l.starts_with("## ")).count(),
+        1,
+        "only the date heading is a real heading: {log}"
+    );
+    assert!(
+        log.contains("\n  ## fake heading"),
+        "fake heading indented: {log}"
+    );
+    assert!(
+        log.contains("\n  more detail"),
+        "continuation indented: {log}"
+    );
+}
+
+/// BUG-15: `okf log <new-dir>` dry-run and apply agree — a nonexistent
+/// directory target is rejected cleanly by both, not `(created)` then crash.
+#[test]
+fn okf_log_nonexistent_dir_rejected_consistently() {
+    let tmp = make_bundle();
+    let dir = tmp.path();
+    let run = |apply: bool| {
+        let mut args = vec!["--dir", ".", "okf", "log", "no-such-dir", "--message", "x"];
+        if apply {
+            args.push("--apply");
+        }
+        hyalo_no_hints()
+            .current_dir(dir)
+            .args(&args)
+            .output()
+            .unwrap()
+    };
+    let dry = run(false);
+    let app = run(true);
+    assert_ne!(dry.status.code(), Some(0), "dry-run rejects missing dir");
+    assert_ne!(app.status.code(), Some(0), "apply rejects missing dir");
+    assert_eq!(
+        dry.status.code(),
+        app.status.code(),
+        "dry-run and apply agree"
+    );
+    assert!(!dir.join("no-such-dir").exists(), "nothing created");
+}
+
+/// `okf log --action ""` errors like `--message ""` (consistency).
+#[test]
+fn okf_log_empty_action_errors() {
+    let tmp = make_bundle();
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "--dir",
+            ".",
+            "okf",
+            "log",
+            "--message",
+            "x",
+            "--action",
+            "",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "empty --action must error");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(combined.contains("action must not be empty"), "{combined}");
+}

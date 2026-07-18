@@ -44,6 +44,7 @@ pub(crate) struct OkfFinding {
 #[cfg(test)]
 pub(crate) const OKF_RULE_IDS: &[&str] = &[
     "OKF-INDEX-STRUCTURE",
+    "OKF-INDEX-MARKERS",
     "OKF-LOG-STRUCTURE",
     "OKF-CITATIONS-PRESENT",
     "OKF-CITATIONS-WELL-FORMED",
@@ -136,6 +137,9 @@ pub(crate) fn run_okf_rules(
     let mut out = Vec::new();
 
     if is_index_file(rel_path, case_insensitive) {
+        if is_enabled("OKF-INDEX-MARKERS") {
+            check_index_markers(content, body_line_offset, &mut out);
+        }
         if is_enabled("OKF-INDEX-STRUCTURE") {
             check_index_structure(content, body, body_line_offset, &mut out);
         }
@@ -212,6 +216,47 @@ fn concept_makes_claims(doc_type: Option<&str>) -> bool {
 // ---------------------------------------------------------------------------
 // Reserved-file structure
 // ---------------------------------------------------------------------------
+
+/// Flag malformed `okf:index` managed-region markers so CI surfaces the
+/// precondition instead of `hyalo okf index --apply` silently skipping the file
+/// (BUG-3). A single well-formed begin→end pair (or none at all) passes; any
+/// dangling begin, dangling end, reversed pair, or duplicate markers warn.
+fn check_index_markers(content: &str, body_line_offset: usize, out: &mut Vec<OkfFinding>) {
+    let begins = content.matches(INDEX_BEGIN).count();
+    let ends = content.matches(INDEX_END).count();
+    // An ordered pair exists when some END follows some BEGIN.
+    let ordered = content
+        .find(INDEX_BEGIN)
+        .is_some_and(|b| content[b + INDEX_BEGIN.len()..].contains(INDEX_END));
+
+    let problem = match (begins, ends) {
+        (0, 0) => None,
+        (1, 1) if ordered => None,
+        (1, 1) => Some(
+            "reversed `okf:index` markers (`end` appears before `begin`) — regeneration will skip this file"
+                .to_owned(),
+        ),
+        (0, _) => Some(
+            "dangling `<!-- okf:index:end -->` with no preceding `<!-- okf:index:begin -->`"
+                .to_owned(),
+        ),
+        (_, 0) => Some(
+            "dangling `<!-- okf:index:begin -->` with no matching `<!-- okf:index:end -->`"
+                .to_owned(),
+        ),
+        (b, e) => Some(format!(
+            "duplicate `okf:index` markers ({b} begin, {e} end) — only a single begin/end pair is managed"
+        )),
+    };
+
+    if let Some(message) = problem {
+        out.push(OkfFinding {
+            rule_id: "OKF-INDEX-MARKERS",
+            line: body_line_offset,
+            message,
+        });
+    }
+}
 
 fn check_index_structure(
     content: &str,
@@ -675,6 +720,59 @@ mod tests {
                 f.rule_id
             );
         }
+    }
+
+    #[test]
+    fn index_markers_healthy_and_absent_pass() {
+        let mut out = Vec::new();
+        check_index_markers("no markers here\n", 1, &mut out);
+        assert!(out.is_empty(), "no markers is fine");
+        let healthy = "\n<!-- okf:index:begin -->\n* [x](x.md)\n<!-- okf:index:end -->\n";
+        let mut out2 = Vec::new();
+        check_index_markers(healthy, 1, &mut out2);
+        assert!(
+            out2.is_empty(),
+            "healthy pair passes: {out2:?}",
+            out2 = out2.iter().map(|f| &f.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn index_markers_dangling_begin_warns() {
+        let mut out = Vec::new();
+        check_index_markers("prose\n<!-- okf:index:begin -->\nlist\n", 1, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].rule_id, "OKF-INDEX-MARKERS");
+        assert!(out[0].message.contains("dangling"));
+    }
+
+    #[test]
+    fn index_markers_dangling_end_warns() {
+        let mut out = Vec::new();
+        check_index_markers("<!-- okf:index:end -->\nprose\n", 1, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("dangling"));
+    }
+
+    #[test]
+    fn index_markers_reversed_warns() {
+        let mut out = Vec::new();
+        check_index_markers(
+            "<!-- okf:index:end -->\n\n<!-- okf:index:begin -->\n",
+            1,
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("reversed"));
+    }
+
+    #[test]
+    fn index_markers_duplicate_warns() {
+        let content = "<!-- okf:index:begin -->\na\n<!-- okf:index:end -->\n<!-- okf:index:begin -->\nb\n<!-- okf:index:end -->\n";
+        let mut out = Vec::new();
+        check_index_markers(content, 1, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.contains("duplicate"));
     }
 
     #[test]
