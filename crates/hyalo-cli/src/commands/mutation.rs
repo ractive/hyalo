@@ -119,7 +119,7 @@ pub fn rename_index_entry(
         if rel == new_rel {
             continue;
         }
-        let _ = idx.refresh_entry(dir, rel);
+        let _ = idx.refresh_entry_and_links(dir, rel);
     }
 
     // 3. Update the link graph: rename target keys and source paths.

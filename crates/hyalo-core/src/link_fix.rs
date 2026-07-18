@@ -28,6 +28,7 @@ use crate::index::VaultIndex;
 use crate::link_graph::{FileLinks, normalize_target};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans, find_frontmatter_wikilinks,
+    rewrite_frontmatter_wikilink_text,
 };
 use crate::links::{LinkKind, extract_link_spans_with_original, parse_wikilink};
 use crate::scanner::{
@@ -790,8 +791,16 @@ impl LinkMatcher {
         // Track the top-two scores to detect ties: if two candidates score within
         // TIE_DELTA of each other the match is ambiguous and we return None rather
         // than silently picking the first.
-        let mut best_score = self.threshold;
-        let mut second_score = 0.0_f64;
+        //
+        // L-9: seed both scores at NEG_INFINITY (NOT `self.threshold`) so the
+        // threshold never acts as a phantom second candidate. Previously,
+        // seeding `best_score = self.threshold` meant a lone real candidate
+        // scoring just inside `(threshold, threshold + TIE_DELTA]` would push
+        // the threshold value into `second_score` and be wrongly rejected as
+        // ambiguous. The threshold is now applied once, as a pure floor, after
+        // the loop.
+        let mut best_score = f64::NEG_INFINITY;
+        let mut second_score = f64::NEG_INFINITY;
         let mut best_idx: Option<usize> = None;
 
         for (i, candidate) in self.files.iter().enumerate() {
@@ -810,14 +819,19 @@ impl LinkMatcher {
             }
         }
 
-        // If the runner-up is within TIE_DELTA of the winner the match is
-        // ambiguous — decline rather than guessing.
+        // Floor check: the best candidate must clear the acceptance threshold.
+        let best_idx = best_idx.filter(|_| best_score >= self.threshold)?;
+
+        // If a real runner-up is within TIE_DELTA of the winner the match is
+        // ambiguous — decline rather than guessing. When there is no second
+        // candidate, `second_score` is still NEG_INFINITY so the gap is
+        // effectively infinite and the unique match is accepted.
         if best_score - second_score <= TIE_DELTA {
             return None;
         }
 
-        best_idx.map(|idx| MatchResult {
-            matched_file: self.files[idx].clone(),
+        Some(MatchResult {
+            matched_file: self.files[best_idx].clone(),
             strategy: FixStrategy::FuzzyMatch,
             confidence: best_score,
         })
@@ -1014,28 +1028,17 @@ fn build_replacements_for_file(
                             continue;
                         };
 
-                        // Preserve alias (`path|Label`) and written form
-                        // (path-form vs bare stem), mirroring `mv`'s
-                        // frontmatter rewriter.
-                        let alias_suffix = occ.target.find('|').map_or("", |i| &occ.target[i..]);
-                        let new_stem = fix
-                            .new_target
-                            .strip_suffix(".md")
-                            .unwrap_or(&fix.new_target);
-                        let new_wikilink_target =
-                            if link.target.contains('/') || link.target.contains('\\') {
-                                new_stem.to_string()
-                            } else {
-                                new_stem.rsplit('/').next().unwrap_or(new_stem).to_string()
-                            };
-
-                        let old_text = line[occ.full_start..occ.full_end].to_string();
-                        let new_text = format!("[[{new_wikilink_target}{alias_suffix}]]");
-                        if old_text != new_text {
+                        // Preserve alias (`path|Label`), the `#fragment`
+                        // anchor (L-7: repairs must keep `[[log#DEC-041]]`'s
+                        // anchor), and written form (path-form vs bare stem)
+                        // via the shared `mv`/`links fix` frontmatter rewriter.
+                        if let Some(new_text) =
+                            rewrite_frontmatter_wikilink_text(occ.target, &fix.new_target)
+                        {
                             replacements.push(Replacement {
                                 line: line_num,
                                 byte_offset: occ.full_start,
-                                old_text,
+                                old_text: line[occ.full_start..occ.full_end].to_string(),
                                 new_text,
                             });
                         }
@@ -1047,17 +1050,20 @@ fn build_replacements_for_file(
             frontmatter_done = true;
         }
 
+        // --- Fenced code block ---
+        // Process code fences BEFORE the `%%` comment toggle so a literal `%%`
+        // inside a fenced code block is treated as code, not a comment
+        // delimiter (L-8; mirrors `auto_link.rs`'s ordering).
+        if fence.process_line(line) {
+            continue;
+        }
+
         // --- Comment fence (Obsidian %% blocks) ---
-        if is_comment_fence(line) {
+        if !fence.in_fence() && is_comment_fence(line) {
             in_comment_fence = !in_comment_fence;
             continue;
         }
         if in_comment_fence {
-            continue;
-        }
-
-        // --- Fenced code block ---
-        if fence.process_line(line) {
             continue;
         }
 
@@ -1252,6 +1258,116 @@ mod tests {
     fn matcher_no_match() {
         let matcher = LinkMatcher::new(make_files(&["completely-unrelated.md"]), 0.95);
         assert!(matcher.find_match("xyz-abc-notexist", "__test__").is_none());
+    }
+
+    #[test]
+    fn matcher_single_candidate_inside_tie_delta_above_threshold_accepted() {
+        // L-9: with exactly ONE candidate whose score sits just inside
+        // (threshold, threshold + TIE_DELTA], the phantom-tie bug used to
+        // reject it as "ambiguous" because the seeded threshold became the
+        // runner-up. A lone valid candidate must now be accepted.
+        // Mirrors the private `TIE_DELTA` in `find_match`.
+        const TIE_DELTA: f64 = 0.01;
+        let target = "authentcation";
+        let stem = "authentication";
+        let score = strsim::jaro_winkler(target, stem);
+        // Threshold half a TIE_DELTA below the real score → score is inside
+        // (threshold, threshold + TIE_DELTA].
+        let threshold = score - TIE_DELTA / 2.0;
+        assert!(
+            score - threshold <= TIE_DELTA && score >= threshold,
+            "test setup: score {score} must be within TIE_DELTA above threshold {threshold}"
+        );
+        let matcher = LinkMatcher::new(make_files(&[&format!("{stem}.md")]), threshold);
+        let result = matcher
+            .find_match(target, "__test__")
+            .expect("lone valid candidate must not be rejected as a phantom tie");
+        assert_eq!(result.matched_file, format!("{stem}.md"));
+        assert!(matches!(result.strategy, FixStrategy::FuzzyMatch));
+    }
+
+    #[test]
+    fn matcher_two_genuine_ties_still_rejected() {
+        // Guard: two real candidates scoring within TIE_DELTA of each other are
+        // still ambiguous and rejected (the fix must not accept genuine ties).
+        let matcher = LinkMatcher::new(make_files(&["report-a.md", "report-b.md"]), 0.7);
+        assert!(
+            matcher.find_match("report-x", "__test__").is_none(),
+            "two near-identical candidates should stay ambiguous"
+        );
+    }
+
+    // --- L-7: frontmatter link repair keeps the `#anchor` ---
+
+    fn fm_fix(old_target: &str, new_target: &str) -> FixPlan {
+        FixPlan {
+            source: "a.md".to_string(),
+            line: 1, // frontmatter fixes always carry line 1
+            old_target: old_target.to_string(),
+            new_target: new_target.to_string(),
+            strategy: FixStrategy::CaseInsensitive,
+            confidence: 1.0,
+        }
+    }
+
+    #[test]
+    fn build_replacements_frontmatter_repair_preserves_anchor() {
+        // L-7: repairing a broken anchored frontmatter wikilink must keep the
+        // `#fragment` — previously it was dropped, turning
+        // `[[decision-log#DEC-041]]` into `[[decision-log-archive]]`.
+        let content = "---\nrelated:\n  - \"[[decision-log#DEC-041]]\"\n---\nBody\n";
+        let fix = fm_fix("decision-log", "decision-log-archive.md");
+        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        assert_eq!(repls.len(), 1, "one frontmatter link repaired: {repls:?}");
+        assert_eq!(repls[0].old_text, "[[decision-log#DEC-041]]");
+        assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041]]");
+    }
+
+    #[test]
+    fn build_replacements_frontmatter_repair_preserves_anchor_and_alias() {
+        let content = "---\nrelated:\n  - \"[[decision-log#DEC-041|Log]]\"\n---\nBody\n";
+        let fix = fm_fix("decision-log", "decision-log-archive.md");
+        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        assert_eq!(repls.len(), 1);
+        assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041|Log]]");
+    }
+
+    // --- L-8: `%%` inside a fenced code block is literal ---
+
+    #[test]
+    fn build_replacements_literal_percent_in_code_fence_does_not_desync() {
+        // L-8: a literal `%%` inside a fenced code block must NOT toggle the
+        // comment-fence state; a real broken link AFTER the block must still
+        // be rewritten (previously the stray `%%` opened a phantom comment and
+        // swallowed everything until the next `%%`).
+        // A bare `%%` line inside a fenced code block. With the buggy ordering
+        // (comment toggle before code-fence processing) this opened a phantom
+        // comment fence that swallowed the link below.
+        let content = "\
+# Title
+
+```text
+%%
+```
+
+See [broken](old-name.md) here.
+";
+        let fix = FixPlan {
+            source: "a.md".to_string(),
+            line: 7,
+            old_target: "old-name.md".to_string(),
+            new_target: "new-name.md".to_string(),
+            strategy: FixStrategy::CaseInsensitive,
+            confidence: 1.0,
+        };
+        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        assert_eq!(
+            repls.len(),
+            1,
+            "link after a code-fenced `%%` must still be rewritten: {repls:?}"
+        );
+        assert_eq!(repls[0].old_text, "[broken](old-name.md)");
+        assert_eq!(repls[0].new_text, "[broken](new-name.md)");
     }
 
     // --- Self-link guard ---

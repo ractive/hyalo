@@ -306,6 +306,57 @@ fn split_target_fragment(target: &str) -> (&str, &str) {
     }
 }
 
+/// Split a raw frontmatter wikilink target into `(path, fragment, alias)`.
+///
+/// `fragment` includes the leading `#` (empty when absent); `alias` includes
+/// the leading `|` (empty when absent). The alias is separated first because
+/// an alias may itself contain a `#` that must not be mistaken for a fragment
+/// (e.g. `path#frag|Some #hashtag label`).
+///
+/// Examples:
+/// - `"decision-log#DEC-041"` → `("decision-log", "#DEC-041", "")`
+/// - `"a#x|Label"` → `("a", "#x", "|Label")`
+/// - `"a|Label"` → `("a", "", "|Label")`
+fn split_frontmatter_target(target: &str) -> (&str, &str, &str) {
+    let (before_alias, alias) = match target.find('|') {
+        Some(idx) => (&target[..idx], &target[idx..]),
+        None => (target, ""),
+    };
+    let (path, fragment) = split_target_fragment(before_alias);
+    (path, fragment, alias)
+}
+
+/// Rebuild a frontmatter wikilink's bracket text when its target moves, given
+/// the already-matched original occurrence and the destination path.
+///
+/// Preserves, from the original occurrence, the trailing `#fragment` (anchors
+/// like `#DEC-041` survive a rename) and the trailing `|alias` label, while
+/// honouring the user's written form: a path-form target (`sub/file`) stays
+/// path-form using `new_rel`'s stem, and a bare target keeps just the basename
+/// stem.
+///
+/// `new_ref` is the destination in `new_rel` form (may or may not carry a
+/// `.md` suffix — it is stripped here). Returns `None` when the rebuild would
+/// be a no-op (the new bracket text is identical to the old), so callers can
+/// skip emitting an empty replacement.
+pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str) -> Option<String> {
+    let (path_part, fragment, alias) = split_frontmatter_target(occ_target);
+
+    let new_stem = new_ref.strip_suffix(".md").unwrap_or(new_ref);
+    let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
+
+    // Preserve the user's written form: path-form → path-form, bare → bare.
+    let new_target = if path_part.contains('/') || path_part.contains('\\') {
+        new_stem
+    } else {
+        new_basename_stem
+    };
+
+    let old_text = format!("[[{occ_target}]]");
+    let new_text = format!("[[{new_target}{fragment}{alias}]]");
+    (old_text != new_text).then_some(new_text)
+}
+
 /// Decide whether a markdown-link target should be considered for rewriting
 /// when a file moves.
 ///
@@ -632,7 +683,7 @@ fn plan_outbound_rewrites(
     old_rel: &str,
     old_stem: &str,
     new_rel: &str,
-    _new_stem: &str,
+    new_stem: &str,
     dir_changed: bool,
     site_prefix: Option<&str>,
     case_index: &CaseInsensitiveIndex,
@@ -658,7 +709,22 @@ fn plan_outbound_rewrites(
                 if line.trim() == "---" {
                     in_frontmatter = false;
                     frontmatter_done = true;
+                    continue;
                 }
+                // L-1: the moved file's OWN frontmatter self-links (e.g.
+                // `related: - "[[old]]"` or `"[[old#anchor]]"`) must be rewritten
+                // to the new path — otherwise a plain rename leaves a dangling
+                // self-reference. Only `plan_inbound_rewrites` did this before.
+                let fm_repls = plan_frontmatter_wikilink_rewrites(
+                    line,
+                    line_num,
+                    old_rel,
+                    old_stem,
+                    new_rel,
+                    new_stem,
+                    Some(case_index),
+                );
+                replacements.extend(fm_repls);
                 continue;
             }
             frontmatter_done = true;
@@ -1166,15 +1232,14 @@ fn plan_frontmatter_wikilink_rewrites(
     _new_stem: &str,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Vec<Replacement> {
-    let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
-    let new_basename_stem = new_stem.rsplit('/').next().unwrap_or(new_stem);
-
     let mut replacements = Vec::new();
 
     for occ in find_frontmatter_wikilinks(line) {
         let target = occ.target;
-        // Strip alias suffix (e.g. `path|alias` → `path`)
-        let target_path = target.split('|').next().unwrap_or(target).trim();
+        // Strip both the alias suffix (`path|alias`) AND any `#fragment` before
+        // comparing against the moved file — an anchored frontmatter target like
+        // `decision-log#DEC-041` must still match `decision-log` (L-2).
+        let (target_path, _, _) = split_frontmatter_target(target);
 
         let matches = if target_path == old_stem || target_path == old_rel {
             true
@@ -1189,28 +1254,13 @@ fn plan_frontmatter_wikilink_rewrites(
             false
         };
 
-        if matches {
-            let old_text = format!("[[{target}]]");
-            // Detect written form of the target path (before alias).
-            // Preserve alias if present (e.g. `path|My Alias` → `new_target|My Alias`).
-            let alias_suffix = target.find('|').map_or("", |i| &target[i..]);
-            // Preserve the user's written form: path-form → path-form, bare → bare.
-            let new_wikilink_target = if target_path.contains('/') || target_path.contains('\\') {
-                // Path-form wikilink: preserve path-form with new stem (BUG-1 fix).
-                new_stem.to_string()
-            } else {
-                // Bare wikilink: preserve bare form (just the basename).
-                new_basename_stem.to_string()
-            };
-            let new_text = format!("[[{new_wikilink_target}{alias_suffix}]]");
-            if old_text != new_text {
-                replacements.push(Replacement {
-                    line: line_num,
-                    byte_offset: occ.full_start,
-                    old_text,
-                    new_text,
-                });
-            }
+        if matches && let Some(new_text) = rewrite_frontmatter_wikilink_text(target, new_rel) {
+            replacements.push(Replacement {
+                line: line_num,
+                byte_offset: occ.full_start,
+                old_text: format!("[[{target}]]"),
+                new_text,
+            });
         }
     }
 
@@ -1247,7 +1297,17 @@ fn plan_outbound_rewrites_batch(
                 if line.trim() == "---" {
                     in_frontmatter = false;
                     frontmatter_done = true;
+                    continue;
                 }
+                // L-1 (batch): rewrite the moved file's OWN frontmatter
+                // self-links so a batch rename doesn't leave a dangling
+                // self-reference in frontmatter.
+                let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
+                let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
+                let fm_repls = plan_frontmatter_wikilink_rewrites(
+                    line, line_num, old_rel, old_stem, new_rel, new_stem, None,
+                );
+                replacements.extend(fm_repls);
                 continue;
             }
             frontmatter_done = true;
@@ -2101,6 +2161,135 @@ mod tests {
         assert_eq!(plan.replacements.len(), 1);
         assert_eq!(plan.replacements[0].old_text, "[intro](self.md#intro)");
         assert_eq!(plan.replacements[0].new_text, "[intro](other.md#intro)");
+    }
+
+    // ---- L-1 / L-2: frontmatter wikilink anchor + self-link matrix ----
+
+    #[test]
+    fn rewrite_frontmatter_wikilink_text_preserves_fragment_and_alias() {
+        // Bare, path-form, fragment, alias, and fragment+alias combinations.
+        assert_eq!(
+            rewrite_frontmatter_wikilink_text("decision-log", "decision-log-archive.md"),
+            Some("[[decision-log-archive]]".to_string())
+        );
+        assert_eq!(
+            rewrite_frontmatter_wikilink_text("decision-log#DEC-041", "decision-log-archive.md"),
+            Some("[[decision-log-archive#DEC-041]]".to_string())
+        );
+        assert_eq!(
+            rewrite_frontmatter_wikilink_text("decision-log|Log", "decision-log-archive.md"),
+            Some("[[decision-log-archive|Log]]".to_string())
+        );
+        assert_eq!(
+            rewrite_frontmatter_wikilink_text(
+                "decision-log#DEC-041|Log",
+                "decision-log-archive.md"
+            ),
+            Some("[[decision-log-archive#DEC-041|Log]]".to_string())
+        );
+        // Path-form stays path-form; bare stays bare.
+        assert_eq!(
+            rewrite_frontmatter_wikilink_text("sub/b#anchor", "archive/b.md"),
+            Some("[[archive/b#anchor]]".to_string())
+        );
+        // An alias that itself contains a `#` must not be mis-split.
+        assert_eq!(
+            rewrite_frontmatter_wikilink_text("a#x|Some #hashtag", "b.md"),
+            Some("[[b#x|Some #hashtag]]".to_string())
+        );
+        // No-op when identical.
+        assert_eq!(rewrite_frontmatter_wikilink_text("b#x", "b.md"), None);
+    }
+
+    #[test]
+    fn plan_mv_inbound_frontmatter_anchor_preserved() {
+        // L-2: an anchored frontmatter wikilink in another file's `related`
+        // list must be rewritten AND keep its `#anchor` when the target moves.
+        let vault = create_vault(&[
+            (
+                "a.md",
+                "---\nrelated:\n  - \"[[decision-log#DEC-041]]\"\n---\nBody\n",
+            ),
+            ("decision-log.md", "content\n"),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "decision-log.md",
+            "decision-log-archive.md",
+            None,
+            false,
+        )
+        .unwrap()
+        .plans;
+        let a_plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a.md")
+            .expect("frontmatter anchor link should be rewritten");
+        assert_eq!(a_plan.replacements.len(), 1);
+        assert_eq!(a_plan.replacements[0].old_text, "[[decision-log#DEC-041]]");
+        assert_eq!(
+            a_plan.replacements[0].new_text,
+            "[[decision-log-archive#DEC-041]]"
+        );
+    }
+
+    #[test]
+    fn plan_mv_self_referencing_frontmatter_link_rewritten() {
+        // L-1: the moved file's OWN frontmatter self-link must be rewritten on
+        // a plain rename (no anchor needed) — previously left dangling.
+        let vault = create_vault(&[(
+            "a.md",
+            "---\nrelated:\n  - \"[[a]]\"\n---\nSelf body [[a]]\n",
+        )]);
+        let plans = plan_mv(vault.path(), "a.md", "a-renamed.md", None, false)
+            .unwrap()
+            .plans;
+        let plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a-renamed.md")
+            .expect("moved file's own plan should exist");
+        let texts: Vec<&str> = plan
+            .replacements
+            .iter()
+            .map(|r| r.new_text.as_str())
+            .collect();
+        assert!(
+            texts.iter().all(|t| *t == "[[a-renamed]]"),
+            "both self-links should be rewritten: {plan:?}"
+        );
+        assert_eq!(plan.replacements.len(), 2, "frontmatter + body: {plan:?}");
+    }
+
+    #[test]
+    fn plan_mv_self_referencing_frontmatter_anchor_link_rewritten() {
+        // L-1 + anchor: self-referencing frontmatter link WITH a fragment.
+        let vault = create_vault(&[("a.md", "---\nrelated:\n  - \"[[a#intro]]\"\n---\nBody\n")]);
+        let plans = plan_mv(vault.path(), "a.md", "a-renamed.md", None, false)
+            .unwrap()
+            .plans;
+        let plan = plans
+            .iter()
+            .find(|p| p.rel_path == "a-renamed.md")
+            .expect("moved file's own plan should exist");
+        assert_eq!(plan.replacements.len(), 1);
+        assert_eq!(plan.replacements[0].old_text, "[[a#intro]]");
+        assert_eq!(plan.replacements[0].new_text, "[[a-renamed#intro]]");
+    }
+
+    #[test]
+    fn plan_mv_batch_self_referencing_frontmatter_link_rewritten() {
+        // L-1 (batch): batch mode must also rewrite the moved file's own
+        // frontmatter self-link.
+        let repls = plan_outbound_rewrites_batch(
+            "---\nrelated:\n  - \"[[a#intro]]\"\n---\nBody\n",
+            "a.md",
+            "a-renamed.md",
+            &HashMap::new(),
+            false,
+        );
+        assert_eq!(repls.len(), 1);
+        assert_eq!(repls[0].old_text, "[[a#intro]]");
+        assert_eq!(repls[0].new_text, "[[a-renamed#intro]]");
     }
 
     #[test]
