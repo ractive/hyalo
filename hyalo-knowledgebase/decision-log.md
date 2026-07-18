@@ -836,3 +836,26 @@ data-safety scope. The OKF advisory rules are warn-only (never fail CI), so a
 not a gate. Users who want template files fully silent can add them to
 `[lint] ignore` / `[schema] exempt`. Tracked for a future lint-scoping
 iteration. See [[iterations/iteration-176-okf-generator-hardening]].
+
+## DEC-054: No lint rule for extra frontmatter on reserved OKF files (2026-07-18)
+
+**Decision:** hyalo does **not** add an `OKF-*` lint rule that flags extra
+frontmatter keys on the bundle-root `index.md` (SPEC allows a lone `okf_version`
+key "and nothing else") or *any* frontmatter on nested reserved `index.md` /
+`log.md` files. The generator stays permissive: `okf index` preserves the
+bundle-root `okf_version` key and never *adds* frontmatter to reserved files,
+but it does not reject a reserved file an author hand-decorated with extra keys.
+The README and the bundled `okf` skill describe these as SPEC requirements
+("MAY carry … and nothing else", "frontmatter-free by design") rather than as
+hyalo-enforced guarantees, so their wording already matches the permissive
+implementation — no doc change was needed beyond confirming this.
+
+**Why:** Reserved files are already `[schema] exempt`, so they are outside the
+schema/undeclared-property machinery a new rule would have to re-plumb. OKF
+advisory rules are warn-only (never fail CI), so the incremental value of
+flagging a decorative extra key on a reserved file is low, while the cost —
+threading a reserved-file frontmatter check into the lint pipeline — is a
+cross-cutting change out of scope for a docs-truth iteration. Authors who want
+strictness can hand-declare a schema binding for those paths. Revisit if a real
+OKF consumer starts rejecting bundles over reserved-file frontmatter drift. See
+[[iterations/iteration-177-okf-docs-truth]].

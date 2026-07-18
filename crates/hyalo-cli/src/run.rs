@@ -1358,6 +1358,18 @@ fn run_inner() -> Result<(), AppError> {
                 HintSource::New { file: file.clone() },
                 &common,
             )),
+            Commands::Okf { action } => {
+                use crate::cli::args::OkfAction;
+                let source = match action {
+                    OkfAction::Index { .. } => HintSource::OkfIndex,
+                    OkfAction::Log { .. } => HintSource::OkfLog,
+                };
+                let mut ctx = HintContext::from_common(source, &common);
+                // The validate hint drops the redundant `--profile okf` flag when
+                // the profile is already active via `[lint] profiles`.
+                ctx.okf_profile_active = config.lint_profiles.iter().any(|p| p == "okf");
+                Some(ctx)
+            }
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }
@@ -1365,7 +1377,6 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Completion { .. }
             | Commands::Config
             | Commands::Views { .. }
-            | Commands::Okf { .. }
             | Commands::Madr { .. }
             | Commands::Changelog { .. }
             | Commands::LintRules { .. } => None,

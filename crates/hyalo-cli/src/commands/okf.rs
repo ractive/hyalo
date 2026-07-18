@@ -224,7 +224,6 @@ pub fn run_index(
     replace: bool,
     ignore: &[String],
     case_insensitive: bool,
-    active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     // Resolve the optional scope directory to a vault-relative prefix.
@@ -410,7 +409,6 @@ pub fn run_index(
         "skipped_markers": skipped_markers.len(),
         "write_failures": write_failures,
         "files": results,
-        "hint": crate::commands::profile_lint_hint("okf", active_profiles, "validate bundle conformance"),
     });
 
     // Exit code:
@@ -926,7 +924,6 @@ pub fn run_log(
     message: &str,
     action: Option<&str>,
     apply: bool,
-    active_profiles: &[String],
     format: Format,
 ) -> Result<CommandOutcome> {
     if message.trim().is_empty() {
@@ -1008,7 +1005,6 @@ pub fn run_log(
         "date": today,
         "entry": entry_line,
         "created": old_content.is_empty(),
-        "hint": crate::commands::profile_lint_hint("okf", active_profiles, "validate bundle conformance"),
     });
     Ok(CommandOutcome::success(payload.to_string()))
 }

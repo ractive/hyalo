@@ -905,12 +905,30 @@ fn validate_type_name(name: &str) -> Result<(), String> {
                 .to_owned(),
         );
     }
+    // A dot would make toml_edit create *nested* tables
+    // (`[schema.types.type.v2]`), which no longer round-trips to the original
+    // type name, so it stays rejected. Spaces are allowed: a quoted TOML key
+    // (`[schema.types."Data Table"]`) round-trips cleanly and is a safe
+    // frontmatter `type:` value, and hand-declared spaced types already work
+    // end to end — the CLI restriction was the odd one out (BUG-4).
+    if name.contains('.') {
+        return Err(format!(
+            "invalid type name '{name}': dots are not allowed (they create nested TOML tables that don't round-trip to the original name)"
+        ));
+    }
+    // Leading/trailing whitespace and interior control characters are rejected:
+    // they either don't round-trip predictably or make confusing frontmatter.
+    if name.trim() != name {
+        return Err(format!(
+            "invalid type name '{name}': leading or trailing whitespace is not allowed"
+        ));
+    }
     if !name
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ')
     {
         return Err(format!(
-            "invalid type name '{name}': must contain only alphanumeric characters, hyphens, or underscores"
+            "invalid type name '{name}': must contain only alphanumeric characters, hyphens, underscores, or spaces"
         ));
     }
     Ok(())
@@ -1064,6 +1082,10 @@ mod tests {
         assert!(validate_type_name("iteration").is_ok());
         assert!(validate_type_name("my-type").is_ok());
         assert!(validate_type_name("my_type").is_ok());
+        // Spaced type names are valid (BUG-4): they round-trip as quoted TOML
+        // keys and are safe frontmatter `type:` values.
+        assert!(validate_type_name("Data Table").is_ok());
+        assert!(validate_type_name("BigQuery Table").is_ok());
     }
 
     #[test]
@@ -1111,8 +1133,12 @@ mod tests {
     #[test]
     fn validate_type_name_invalid() {
         assert!(validate_type_name("").is_err());
-        assert!(validate_type_name("type with spaces").is_err());
+        // Interior spaces are now allowed, but leading/trailing whitespace and
+        // other punctuation are not.
+        assert!(validate_type_name(" leading").is_err());
+        assert!(validate_type_name("trailing ").is_err());
         assert!(validate_type_name("type/slash").is_err());
+        assert!(validate_type_name("type$bad").is_err());
         // Dots are rejected: would create nested TOML tables that don't
         // round-trip to the original type name.
         assert!(validate_type_name("type.v2").is_err());

@@ -153,7 +153,7 @@ pub(crate) fn build_version_string() -> &'static str {
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
-        Override with --site-prefix <PREFIX>, or --site-prefix \"\" to disable. Also settable in .hyalo.toml. \
+        Override with --site-prefix <PREFIX>, or --site-prefix \"\" to resolve absolute links from the vault/bundle root (strip only the leading `/`). Also settable in .hyalo.toml. \
         For bundle-root resolution (e.g. OKF bundles where `/x/y.md` is relative to the bundle root), set `site_prefix = \"\"` so only the leading `/` is stripped — this also avoids mis-stripping when a bundle subdir shares its name with the vault dir.\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
         \u{00a0} dir = \"vault/\"        # default --dir\n\
@@ -214,7 +214,8 @@ pub(crate) struct Cli {
     ///   --dir .                    →  prefix = name of the current directory
     ///
     /// Use --site-prefix to override when the directory name doesn't match the URL prefix,
-    /// or pass --site-prefix "" to disable absolute-link resolution entirely.
+    /// or pass --site-prefix "" to resolve absolute links from the vault/bundle root:
+    /// only the leading `/` is stripped, so `/guides/setup.md` → `guides/setup.md`.
     ///
     /// Also settable via `site_prefix = "docs"` in .hyalo.toml.
     /// Precedence: --site-prefix flag > .hyalo.toml > auto-derived from --dir.
@@ -1439,7 +1440,10 @@ pub(crate) enum OkfAction {
             -q/--quiet; the run continues and every other index is still generated). A\n\
             nonexistent scope directory is rejected (exit 1), not vacuously passed.\n\n\
             Running with --apply twice is a no-op (idempotent). In --dry-run (the default)\n\
-            the command exits non-zero when any `index.md` would change — use this in CI.\n\n\
+            the command exits non-zero when any `index.md` would change — use this in CI.\n\
+            EXIT CODES (dry-run): 0 = clean (no index.md would change), 1 = drift (at least\n\
+            one index.md is stale — the CI failure signal), 2 = error (e.g. an unreadable\n\
+            file or an invalid scope). --apply exits 0 on success, 2 on error.\n\n\
             SIDE EFFECTS: writes `index.md` files only with --apply.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo okf index --dry-run\n\
