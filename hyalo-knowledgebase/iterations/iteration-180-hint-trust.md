@@ -24,7 +24,7 @@ and misleading variants
 
 ## Tasks
 
-### 1. Hints carry the vault context (BUG-7, MEDIUM)
+### 1. Hints carry the vault context (BUG-7, MEDIUM) [3/3]
 
 - [x] `create-index` perf hint includes `--dir <path>` when the command
   ran with an explicit `--dir` (currently the one hint family that drops
@@ -34,7 +34,7 @@ and misleading variants
 - [x] Audit all hint templates for other dropped global flags
   (`--index-file` and `--first-only` were the 2026-07-10 instances)
 
-### 2. Hints preserve active filters (BUG-8, MEDIUM)
+### 2. Hints preserve active filters (BUG-8, MEDIUM) [2/2]
 
 - [x] Derived hints keep every active filter: `find --orphan` "show all"
   hint includes `--orphan`; "narrow by tag" hints compose with the
@@ -42,8 +42,13 @@ and misleading variants
   said 79/27, commands returned 338/146)
 - [x] Generalize: hint generation takes the full active filter set as
   input rather than reconstructing a minimal command
+- Review fixup (PR #212): `ctx.sort`/`ctx.reverse` were captured but never
+  read by the show-all / narrow-by-tag / filter-by-status hint builders —
+  the same drop-a-filter failure mode as BUG-8, just for `--sort`/`--reverse`.
+  Added `push_find_sort` and wired it into both builders, with regression
+  coverage (`find_show_all_and_narrow_hints_preserve_active_sort`).
 
-### 3. Summary counters honest (BUG-9, MEDIUM)
+### 3. Summary counters honest (BUG-9, MEDIUM) [2/2]
 
 - [x] `summary`'s schema counters either apply `[lint] ignore` globs (so
   the "Lint: N errors" hint matches `hyalo lint`) or the label changes to
@@ -55,19 +60,19 @@ and misleading variants
 - [x] Post-`lint --fix` output drops the stale pre-fix "Show all N files
   with issues" hint (recompute or suppress after apply)
 
-### 4. Did-you-mean false positives (LOW)
+### 4. Did-you-mean false positives (LOW) [1/1]
 
 - [x] Property-value similarity suggestions skip values differing only in
   a numeric suffix (`hero-6` vs `hero-4` are distinct assets, not typos);
   reconsider whether read-only `summary` should emit them at all
 
-### 5. Site-URL vault heuristic (enhancement, from MDN testing)
+### 5. Site-URL vault heuristic (enhancement, from MDN testing) [1/1]
 
 - [x] When ~all links are unresolvable and look like absolute site URLs
   (MDN: 49,933/49,935 "broken"), emit a diagnostic hint suggesting
   `--site-prefix` instead of offering `links fix` on 50k links
 
-### 6. Retrospective
+### 6. Retrospective [1/1]
 
 - [x] Update remaining planned iterations with anything learned
 - Note (iter-179 carryover): lint body diagnostics now report file-absolute
