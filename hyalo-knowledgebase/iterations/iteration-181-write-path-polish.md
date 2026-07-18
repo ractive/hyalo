@@ -58,6 +58,16 @@ alone, together they make the tool feel predictable for agents.
 
 - [ ] Update remaining planned iterations with anything learned; keep
   help texts and README in sync with every flag change in this PR
+- Note (iter-180 carryover): `ac-fidelity-check.sh`'s checkbox parser only
+  reads the *first physical line* of each `- [x]` item — a multi-line AC
+  citing test names split across wrapped lines is invisible to it even
+  though the tests exist. Keep AC evidence citations (backtick-quoted test
+  fn names) on the same line as the checkbox, not wrapped onto continuation
+  lines. Also: `cargo run -p xtask -- check-ac-fidelity` with no `--since`
+  scans the *entire historic plan corpus* and can fail on unrelated,
+  pre-existing plans (e.g. iteration-15) purely because of the current
+  branch's diff scope — always pass `--since origin/main` to match how CI
+  invokes it (`.github/workflows/quality-gates.yml`).
 
 ## Acceptance Criteria
 
