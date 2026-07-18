@@ -1107,8 +1107,13 @@ fn run_inner() -> Result<(), AppError> {
                         file,
                         fields,
                         sort,
+                        reverse,
                         limit,
                         sections,
+                        broken_links,
+                        orphan,
+                        dead_end,
+                        title,
                         ..
                     },
                 ..
@@ -1123,6 +1128,7 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.glob.clone_from(glob);
                 ctx.fields.clone_from(fields);
                 ctx.sort.clone_from(sort);
+                ctx.reverse = *reverse;
                 ctx.has_limit = limit.is_some();
                 ctx.has_body_search = pattern.is_some();
                 ctx.body_pattern.clone_from(pattern);
@@ -1132,6 +1138,13 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.task_filter.clone_from(task);
                 ctx.file_targets.clone_from(file);
                 ctx.section_filters.clone_from(sections);
+                // Graph + title filters: preserved into derived hints so a
+                // "narrow by tag" / "show all" hint on a `--orphan` /
+                // `--broken-links` query keeps that scope (BUG-8).
+                ctx.broken_links_filter = *broken_links;
+                ctx.orphan_filter = *orphan;
+                ctx.dead_end_filter = *dead_end;
+                ctx.title_filter.clone_from(title);
                 ctx.view_name.clone_from(view);
                 Some(ctx)
             }
@@ -1399,6 +1412,20 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(ref mut ctx) = hint_ctx {
         ctx.quiet = cli.quiet;
         ctx.has_index = index_path_buf.is_some();
+        // Preserve the active index into derived `find` hints so they query the
+        // same snapshot rather than silently rescanning the vault (BUG-7
+        // audit). A path equal to the default `<vault>/.hyalo-index` re-emits
+        // as bare `--index`; any other path re-emits as `--index-file <path>`.
+        if matches!(ctx.source, HintSource::Find)
+            && let Some(ref p) = index_path_buf
+        {
+            let default_path = dir.join(".hyalo-index");
+            ctx.find_index = if *p == default_path {
+                HintContext::default_find_index()
+            } else {
+                HintContext::file_find_index(p.to_string_lossy().into_owned())
+            };
+        }
     }
 
     let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {

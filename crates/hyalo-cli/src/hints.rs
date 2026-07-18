@@ -23,6 +23,16 @@ pub(crate) const LARGE_VAULT_FILE_COUNT: u64 = 500;
 /// `commands::lint` and the hint generator to avoid brittle string coupling.
 pub(crate) const PARSE_ERROR_PREFIX: &str = "could not parse frontmatter";
 
+/// Minimum broken-link count before the "these look like site URLs" diagnostic
+/// can fire. Below this the vault is small enough that broken links are more
+/// likely genuine typos worth a `links fix` suggestion.
+const SITE_URL_MIN_BROKEN: u64 = 500;
+
+/// Percentage of links that must be broken for the site-URL diagnostic to fire.
+/// At ~100% broken on a link-heavy vault the links are almost certainly
+/// unresolved absolute site URLs, not fixable file references.
+const SITE_URL_BROKEN_PERCENT: u64 = 95;
+
 /// A single drill-down hint: a concrete command plus a short human-readable description.
 #[derive(Debug, Clone)]
 pub struct Hint {
@@ -81,6 +91,18 @@ pub enum HintSource {
     OkfLog,
 }
 
+/// Which snapshot index a `find` query used, for re-emission in derived hints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum FindIndexHint {
+    /// No index was active — hints scan the vault (the common case).
+    #[default]
+    None,
+    /// Bare `--index`: the default vault `.hyalo-index`.
+    Default,
+    /// Explicit `--index-file <path>` at a non-default location.
+    File(String),
+}
+
 /// Global flags to propagate into generated hint commands.
 ///
 /// Each `Option` field is `Some` only when the user passed the flag explicitly
@@ -116,6 +138,22 @@ pub struct HintContext {
     pub task_filter: Option<String>,
     pub file_targets: Vec<String>,
     pub section_filters: Vec<String>,
+    /// `--broken-links` graph filter was active.
+    pub broken_links_filter: bool,
+    /// `--orphan` graph filter was active.
+    pub orphan_filter: bool,
+    /// `--dead-end` graph filter was active.
+    pub dead_end_filter: bool,
+    /// `--reverse` / `--desc` was active (paired with `sort` when preserved).
+    pub reverse: bool,
+    /// `--title` substring/regex filter value, when active.
+    pub title_filter: Option<String>,
+    /// Active snapshot index for a `find` query, preserved into derived `find`
+    /// hints so they query the same index rather than silently rescanning the
+    /// vault (BUG-7 audit: `--index-file` was a dropped flag). `Default` means
+    /// bare `--index` (vault `.hyalo-index`); `File(path)` means an explicit
+    /// `--index-file <path>`; `None` means no index was active.
+    pub find_index: FindIndexHint,
     /// Set when the query was produced by `--view <name>`; suppresses the
     /// "save as view" hint to avoid suggesting the user save a view they
     /// already have.
@@ -181,6 +219,12 @@ impl HintContext {
             task_filter: None,
             file_targets: vec![],
             section_filters: vec![],
+            broken_links_filter: false,
+            orphan_filter: false,
+            dead_end_filter: false,
+            reverse: false,
+            title_filter: None,
+            find_index: FindIndexHint::None,
             view_name: None,
             task_selector: None,
             dry_run: false,
@@ -207,6 +251,20 @@ impl HintContext {
         ctx.format.clone_from(&common.format);
         ctx.hints = common.hints;
         ctx
+    }
+
+    /// The `find_index` value for a query that ran against the default vault
+    /// `.hyalo-index` (re-emitted as bare `--index`).
+    #[must_use]
+    pub fn default_find_index() -> FindIndexHint {
+        FindIndexHint::Default
+    }
+
+    /// The `find_index` value for a query that ran against an explicit
+    /// `--index-file <path>` (re-emitted verbatim).
+    #[must_use]
+    pub fn file_find_index(path: String) -> FindIndexHint {
+        FindIndexHint::File(path)
     }
 }
 
@@ -324,9 +382,13 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     if elapsed <= SLOW_QUERY_THRESHOLD_MS {
         return None;
     }
+    // Route through the command builder so the hint carries the same `--dir`
+    // (and other explicit global flags) the slow command ran with. A bare
+    // `hyalo create-index` string would index the *default* vault, not the
+    // `--dir` one the user is actually querying (BUG-7).
     Some(Hint::new(
-        format!("Command took {elapsed} ms. Create an index for faster queries:"),
-        "hyalo create-index".to_owned(),
+        format!("Command took {elapsed} ms — create an index for faster queries"),
+        build_command_no_glob(ctx, &["create-index"]),
     ))
 }
 
@@ -383,6 +445,28 @@ fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     }
     if ctx.hints {
         parts.push("--hints".to_owned());
+    }
+}
+
+/// Push the graph/title filters that scope a `find` query (`--broken-links`,
+/// `--orphan`, `--dead-end`, `--title`) so derived hints reproduce the same
+/// filtered set. Kept separate from `push_global_flags` because these are
+/// `find`-specific, not global, flags. `--reverse` is intentionally *not*
+/// pushed here: it only makes sense paired with a `--sort`, which the caller
+/// appends explicitly.
+fn push_find_graph_filters(parts: &mut Vec<String>, ctx: &HintContext) {
+    if ctx.broken_links_filter {
+        parts.push("--broken-links".to_owned());
+    }
+    if ctx.orphan_filter {
+        parts.push("--orphan".to_owned());
+    }
+    if ctx.dead_end_filter {
+        parts.push("--dead-end".to_owned());
+    }
+    if let Some(title) = &ctx.title_filter {
+        parts.push("--title".to_owned());
+        parts.push(shell_quote(title));
     }
 }
 
@@ -472,9 +556,64 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
         parts.push("--file".to_owned());
         parts.push(shell_quote(ft));
     }
+    push_find_graph_filters(&mut parts, ctx);
     for arg in extra_args {
         parts.push(shell_quote(arg));
     }
+    push_find_index_file(&mut parts, ctx);
+    push_global_flags(&mut parts, ctx);
+    for glob in &ctx.glob {
+        parts.push("--glob".to_owned());
+        parts.push(shell_quote(glob));
+    }
+    parts.join(" ")
+}
+
+/// Push `--index-file <path>` when the query ran against an explicit non-default
+/// snapshot index. Derived `find` hints must query the same index or they would
+/// silently rescan the vault (BUG-7 audit: `--index-file` was a dropped flag).
+fn push_find_index_file(parts: &mut Vec<String>, ctx: &HintContext) {
+    match &ctx.find_index {
+        FindIndexHint::None => {}
+        FindIndexHint::Default => parts.push("--index".to_owned()),
+        FindIndexHint::File(path) => {
+            parts.push("--index-file".to_owned());
+            parts.push(shell_quote(path));
+        }
+    }
+}
+
+/// Build a `find` command that preserves every active filter (property, tag,
+/// task, file, graph, title, glob, index-file) *and* appends the caller's
+/// existing body-search pattern as the leading positional argument. Used by
+/// derived hints (narrow-by-tag / filter-by-status) that must compose with the
+/// current query rather than replace it.
+fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str]) -> String {
+    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
+    if let Some(pat) = &ctx.body_pattern {
+        parts.push(shell_quote(pat));
+    }
+    for pf in &ctx.property_filters {
+        parts.push("--property".to_owned());
+        parts.push(shell_quote(pf));
+    }
+    for tf in &ctx.tag_filters {
+        parts.push("--tag".to_owned());
+        parts.push(shell_quote(tf));
+    }
+    if let Some(task) = &ctx.task_filter {
+        parts.push("--task".to_owned());
+        parts.push(shell_quote(task));
+    }
+    for ft in &ctx.file_targets {
+        parts.push("--file".to_owned());
+        parts.push(shell_quote(ft));
+    }
+    push_find_graph_filters(&mut parts, ctx);
+    for arg in extra_args {
+        parts.push(shell_quote(arg));
+    }
+    push_find_index_file(&mut parts, ctx);
     push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
@@ -605,8 +744,8 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             .unwrap_or(0);
         if files_total > LARGE_VAULT_FILE_COUNT {
             Some(Hint::new(
-                format!("Vault has {files_total} files — create an index for faster queries:"),
-                "hyalo create-index".to_owned(),
+                format!("Vault has {files_total} files — create an index for faster queries"),
+                build_command_no_glob(ctx, &["create-index"]),
             ))
         } else {
             None
@@ -640,9 +779,16 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         if (errors > 0 || warnings > 0) && hints.len() < MAX_HINTS {
             let errors_label = if errors == 1 { "error" } else { "errors" };
             let warns_label = if warnings == 1 { "warning" } else { "warnings" };
+            // The summary counter measures SCHEMA (frontmatter) violations only
+            // — it does not include MD body rules that plain `hyalo lint` runs.
+            // Label it "Schema" and point at `hyalo lint --rule SCHEMA` so the
+            // hinted command reproduces these exact counts. Bare `hyalo lint`
+            // reported wildly different totals (BUG-9: 5 errors / 12 warnings in
+            // the summary vs 0 / 660 from `hyalo lint`); the counter now also
+            // applies `[lint] ignore` globs, matching what `--rule SCHEMA` sees.
             hints.push(Hint::new(
-                format!("Lint: {errors} {errors_label}, {warnings} {warns_label}"),
-                build_command_with_glob(ctx, &["lint"]),
+                format!("Schema: {errors} {errors_label}, {warnings} {warns_label}"),
+                build_command_with_glob(ctx, &["lint", "--rule", "SCHEMA"]),
             ));
         }
     }
@@ -695,12 +841,36 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
         .and_then(|l| l.get("broken"))
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    let total_links = data
+        .get("links")
+        .and_then(|l| l.get("total"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    // Site-URL heuristic: when nearly every link is "broken" on a link-heavy
+    // vault, the links are almost certainly absolute site URLs the vault has no
+    // `--site-prefix` configured to resolve (MDN: 49,933/49,935 "broken"), not
+    // fixable file typos. Offering `links fix` on 50k links is actively
+    // misleading, so emit a diagnostic and skip the fix suggestion.
+    // Integer form of `broken/total >= SITE_URL_BROKEN_PERCENT/100` — avoids a
+    // lossy u64→f64 cast. `saturating_mul` guards the (implausible) overflow at
+    // >1.8e17 links.
+    let looks_like_site_urls = broken_links >= SITE_URL_MIN_BROKEN
+        && total_links > 0
+        && broken_links.saturating_mul(100) >= total_links.saturating_mul(SITE_URL_BROKEN_PERCENT);
     if broken_links > 0 && hints.len() < MAX_HINTS {
         hints.push(Hint::new(
             format!("{broken_links} broken links"),
             build_command_with_glob(ctx, &["find", "--broken-links"]),
         ));
-        if hints.len() < MAX_HINTS {
+        if looks_like_site_urls {
+            if hints.len() < MAX_HINTS {
+                hints.push(Hint::without_cmd(format!(
+                    "{broken_links} of {total_links} links are unresolvable — they look like \
+                     absolute site URLs; set `--site-prefix` (or `[site] prefix` in .hyalo.toml) \
+                     to resolve them rather than running `links fix`"
+                )));
+            }
+        } else if hints.len() < MAX_HINTS {
             hints.push(Hint::new(
                 "Auto-fix broken links (dry run)",
                 build_command_with_glob(ctx, &["links", "fix"]),
@@ -1086,6 +1256,15 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value, total: Option<u64
             }
         }
 
+        // Whether the shown results are only a page of a larger set. When they
+        // are, the per-tag / per-status frequencies below were computed on the
+        // truncated page, so they undercount the true filtered totals — we must
+        // not present them as the count the composed command would return
+        // (BUG-8: hint said 27, the command returned 37). In that case the
+        // parenthetical count is dropped and the hint carries the composing
+        // command only.
+        let is_truncated = total.is_some_and(|t| (result_count as u64) < t);
+
         // Pick the most common tag (if any results have tags).
         // Break ties alphabetically for deterministic output.
         if let Some((top_tag, count)) = tag_counts
@@ -1094,9 +1273,17 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value, total: Option<u64
         {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
+                // Compose with the active filters (BUG-8): a "narrow by tag"
+                // hint on a `--orphan` query must keep `--orphan`, else pasting
+                // it widens the set.
+                let description = if is_truncated {
+                    format!("Narrow by tag: {top_tag}")
+                } else {
+                    format!("Narrow by tag: {top_tag} ({count} files)")
+                };
                 hints.push(Hint::new(
-                    format!("Narrow by tag: {top_tag} ({count} files)"),
-                    build_command_with_glob(ctx, &["find", "--tag", top_tag]),
+                    description,
+                    build_find_command_composing(ctx, &["--tag", top_tag]),
                 ));
             }
         }
@@ -1112,12 +1299,15 @@ fn hints_for_find(ctx: &HintContext, data: &serde_json::Value, total: Option<u64
         if let Some((top_status, count, _)) = status_vec.first() {
             let remaining = MAX_HINTS.saturating_sub(hints.len());
             if remaining > 0 {
+                let status_filter = format!("status={top_status}");
+                let description = if is_truncated {
+                    format!("Filter by status: {top_status}")
+                } else {
+                    format!("Filter by status: {top_status} ({count} files)")
+                };
                 hints.push(Hint::new(
-                    format!("Filter by status: {top_status} ({count} files)"),
-                    build_command_with_glob(
-                        ctx,
-                        &["find", "--property", &format!("status={top_status}")],
-                    ),
+                    description,
+                    build_find_command_composing(ctx, &["--property", &status_filter]),
                 ));
             }
         }
@@ -1776,12 +1966,18 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
     // -----------------------------------------------------------------------
     // Show-all hint when output is truncated.
     // -----------------------------------------------------------------------
+    // Suppressed after `--fix` apply: the `files_with_issues` count reflects
+    // the pre-fix state, but the hinted `hyalo lint --limit 0` drops `--fix`
+    // and re-lints the now-fixed vault, so the count no longer matches (BUG-9
+    // carryover / "Post-`lint --fix` output drops the stale hint"). Read-only
+    // and dry-run modes keep it because their counts are still accurate.
+    let is_apply = is_fix_mode && !is_dry_run;
     let is_limited = data
         .get("files_truncated")
         .or_else(|| data.get("limited"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    if !ctx.has_limit && is_limited {
+    if !ctx.has_limit && is_limited && !is_apply {
         let total_violations = data
             .get("files_with_violations")
             .or_else(|| data.get("files_with_issues"))
@@ -2779,18 +2975,21 @@ mod tests {
             .collect();
         let data = json!(items);
         let hints = generate_hints(&c, &data, None);
-        // Should NOT suggest narrowing by --tag rust (already filtered).
-        // Sort/limit hints may legitimately include --tag rust as a preserved filter,
-        // so only check narrowing hints (those whose description starts with "Narrow").
+        // Should NOT suggest narrowing *by* the already-filtered `rust` tag.
+        // Narrow hints now compose with the active filter (BUG-8), so the
+        // preserved `--tag rust` legitimately appears in the command; the
+        // *narrow target* is what must differ. Assert the narrow hint's
+        // description names `cli`, not `rust`.
         assert!(
-            !hints
-                .iter()
-                .any(|h| h.description.starts_with("Narrow") && h.cmd.contains("--tag rust")),
+            !hints.iter().any(|h| h.description == "Narrow by tag: rust"
+                || h.description.starts_with("Narrow by tag: rust ")),
             "should not suggest narrowing by already-filtered tag: {hints:?}"
         );
         assert!(
-            hints.iter().any(|h| h.cmd.contains("--tag cli")),
-            "should suggest non-filtered tag: {hints:?}"
+            hints
+                .iter()
+                .any(|h| h.description.starts_with("Narrow by tag: cli")),
+            "should suggest narrowing by non-filtered tag: {hints:?}"
         );
     }
 
@@ -3616,5 +3815,226 @@ mod tests {
         c.okf_profile_active = true;
         let hints = generate_hints(&c, &json!({}), None);
         assert_eq!(hints[0].cmd, "hyalo lint");
+    }
+
+    // --- iter-180: hint trust ---
+
+    #[test]
+    fn slow_query_create_index_hint_carries_dir() {
+        // BUG-7: the slow-query create-index hint dropped an explicit --dir.
+        let mut c = ctx_with_dir(HintSource::Find, "/my/vault");
+        c.elapsed_ms = Some(1062);
+        let items = vec![make_find_item("a.md", None, &[])];
+        let hints = generate_hints(&c, &json!(items), None);
+        let ci = hints
+            .iter()
+            .find(|h| h.cmd.starts_with("hyalo create-index"))
+            .expect("slow-query create-index hint expected");
+        assert_eq!(ci.cmd, "hyalo create-index --dir /my/vault");
+        // BUG-7: no dangling colon on the description.
+        assert!(
+            !ci.description.ends_with(':'),
+            "description should not end with a colon: {:?}",
+            ci.description
+        );
+    }
+
+    #[test]
+    fn summary_large_vault_create_index_hint_carries_dir() {
+        let c = ctx_with_dir(HintSource::Summary, "/vault");
+        let data = json!({
+            "files": {"total": 501, "by_directory": []},
+            "properties": [], "tags": {"tags": [], "total": 0},
+            "status": [], "tasks": {"total": 0, "done": 0}, "recent_files": []
+        });
+        let hints = generate_hints(&c, &data, None);
+        let ci = hints
+            .iter()
+            .find(|h| h.cmd.starts_with("hyalo create-index"))
+            .expect("large-vault create-index hint expected");
+        assert_eq!(ci.cmd, "hyalo create-index --dir /vault");
+        assert!(!ci.description.ends_with(':'));
+    }
+
+    #[test]
+    fn find_orphan_show_all_preserves_orphan_filter() {
+        // BUG-8: "Show all N results" on a --orphan query must keep --orphan.
+        let mut c = ctx(HintSource::Find);
+        c.orphan_filter = true;
+        let items: Vec<serde_json::Value> = (0..50)
+            .map(|i| make_find_item(&format!("{i}.md"), None, &[]))
+            .collect();
+        // total (79) > shown (50) → truncated, so the show-all hint fires.
+        let hints = generate_hints(&c, &json!(items), Some(79));
+        let show_all = hints
+            .iter()
+            .find(|h| h.description.starts_with("Show all"))
+            .expect("show-all hint expected");
+        assert!(
+            show_all.cmd.contains("--orphan"),
+            "show-all hint must preserve --orphan: {}",
+            show_all.cmd
+        );
+        assert!(show_all.cmd.contains("--limit 0"));
+    }
+
+    #[test]
+    fn find_orphan_narrow_by_tag_composes_and_drops_stale_count() {
+        // BUG-8: the narrow-by-tag hint on a --orphan query must keep --orphan
+        // and, when the result set was truncated, drop the (misleading) count.
+        let mut c = ctx(HintSource::Find);
+        c.orphan_filter = true;
+        let items: Vec<serde_json::Value> = (0..50)
+            .map(|i| make_find_item(&format!("{i}.md"), None, &["iteration"]))
+            .collect();
+        let hints = generate_hints(&c, &json!(items), Some(79));
+        let narrow = hints
+            .iter()
+            .find(|h| h.description.starts_with("Narrow by tag"))
+            .expect("narrow-by-tag hint expected");
+        assert!(
+            narrow.cmd.contains("--orphan") && narrow.cmd.contains("--tag iteration"),
+            "narrow hint must compose --orphan with the new tag: {}",
+            narrow.cmd
+        );
+        // Truncated set → no parenthetical count in the description.
+        assert!(
+            !narrow.description.contains('('),
+            "count must be dropped when truncated: {:?}",
+            narrow.description
+        );
+    }
+
+    #[test]
+    fn find_narrow_by_tag_keeps_count_when_not_truncated() {
+        let c = ctx(HintSource::Find);
+        let items: Vec<serde_json::Value> = (0..6)
+            .map(|i| make_find_item(&format!("{i}.md"), None, &["iteration"]))
+            .collect();
+        // total == shown → not truncated → count is accurate and shown.
+        let hints = generate_hints(&c, &json!(items), Some(6));
+        let narrow = hints
+            .iter()
+            .find(|h| h.description.starts_with("Narrow by tag"))
+            .expect("narrow-by-tag hint expected");
+        assert!(
+            narrow.description.contains("(6 files)"),
+            "count should be shown when not truncated: {:?}",
+            narrow.description
+        );
+    }
+
+    #[test]
+    fn find_index_file_preserved_in_derived_hints() {
+        // BUG-7 audit: --index-file was a dropped flag.
+        let mut c = ctx(HintSource::Find);
+        c.find_index = FindIndexHint::File("sub/.hyalo-index".to_owned());
+        let items: Vec<serde_json::Value> = (0..50)
+            .map(|i| make_find_item(&format!("{i}.md"), None, &[]))
+            .collect();
+        let hints = generate_hints(&c, &json!(items), Some(200));
+        let show_all = hints
+            .iter()
+            .find(|h| h.description.starts_with("Show all"))
+            .expect("show-all hint expected");
+        assert!(
+            show_all.cmd.contains("--index-file sub/.hyalo-index"),
+            "derived hint must preserve --index-file: {}",
+            show_all.cmd
+        );
+    }
+
+    #[test]
+    fn summary_schema_hint_relabeled_and_targets_schema_rule() {
+        // BUG-9: relabel "Lint" → "Schema" and target `lint --rule SCHEMA`.
+        let c = ctx(HintSource::Summary);
+        let data = json!({
+            "files": {"total": 10, "by_directory": []},
+            "properties": [], "tags": {"tags": [], "total": 0},
+            "status": [], "tasks": {"total": 0, "done": 0}, "recent_files": [],
+            "schema": {"errors": 5, "warnings": 12, "files_with_issues": 8}
+        });
+        let hints = generate_hints(&c, &data, None);
+        let schema_hint = hints
+            .iter()
+            .find(|h| h.description.starts_with("Schema:"))
+            .expect("schema hint expected");
+        assert_eq!(schema_hint.description, "Schema: 5 errors, 12 warnings");
+        assert_eq!(schema_hint.cmd, "hyalo lint --rule SCHEMA");
+        assert!(
+            !hints.iter().any(|h| h.description.starts_with("Lint:")),
+            "should not use the old \"Lint:\" label: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_fix_apply_suppresses_stale_show_all_hint() {
+        let mut c = ctx(HintSource::Lint);
+        c.lint_is_fix = true; // apply (not dry-run)
+        let data = json!({
+            "files_truncated": true,
+            "files_with_issues": 42,
+            "files": []
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints.iter().any(|h| h.description.contains("Show all")),
+            "post-apply output must not carry the stale show-all hint: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn lint_readonly_keeps_show_all_hint() {
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files_truncated": true,
+            "files_with_issues": 42,
+            "files": []
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints.iter().any(|h| h.description.contains("Show all")),
+            "read-only lint should keep the show-all hint: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn summary_site_url_heuristic_replaces_links_fix() {
+        let c = ctx(HintSource::Summary);
+        let data = json!({
+            "files": {"total": 14000, "by_directory": []},
+            "properties": [], "tags": {"tags": [], "total": 0},
+            "status": [], "tasks": {"total": 0, "done": 0}, "recent_files": [],
+            "orphans": 0, "dead_ends": 0,
+            "links": {"total": 49935, "broken": 49933}
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.is_empty() && h.description.contains("--site-prefix")),
+            "site-URL diagnostic expected: {hints:?}"
+        );
+        assert!(
+            !hints.iter().any(|h| h.cmd.contains("links fix")),
+            "links fix should be suppressed when links look like site URLs: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn summary_normal_broken_links_still_offers_links_fix() {
+        let c = ctx(HintSource::Summary);
+        let data = json!({
+            "files": {"total": 100, "by_directory": []},
+            "properties": [], "tags": {"tags": [], "total": 0},
+            "status": [], "tasks": {"total": 0, "done": 0}, "recent_files": [],
+            "orphans": 0, "dead_ends": 0,
+            "links": {"total": 400, "broken": 12}
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints.iter().any(|h| h.cmd.contains("links fix")),
+            "a handful of broken links should still offer links fix: {hints:?}"
+        );
     }
 }

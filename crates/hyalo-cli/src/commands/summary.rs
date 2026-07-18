@@ -57,7 +57,11 @@ fn warn_rare_values(
             .find(|(v, c)| *c >= dominant_min && *v != *rare_val)
         {
             let dist = levenshtein(rare_val, dominant_val);
-            if dist <= max_distance {
+            // Skip pairs that differ only in a trailing numeric suffix
+            // (`hero-6` vs `hero-4`, `v2` vs `v3`): these are distinct
+            // enumerated values (asset indices, versions), not typos of one
+            // another (BUG: `hero-6`/`hero-4` false-positive did-you-mean).
+            if dist <= max_distance && !differ_only_in_numeric_suffix(rare_val, dominant_val) {
                 let file_word = if *rare_count == 1 { "file" } else { "files" };
                 crate::warn::warn(format!(
                     "property \"{prop_name}\" value \"{rare_val}\" appears in {rare_count} {file_word} — did you mean \"{dominant_val}\" ({dominant_count} files)?"
@@ -65,6 +69,21 @@ fn warn_rare_values(
             }
         }
     }
+}
+
+/// True when `a` and `b` are identical once their trailing ASCII-digit runs are
+/// stripped, *and* at least one of them actually ended in a digit. This treats
+/// enumerated values like `hero-6`/`hero-4` or `v2`/`v3` as distinct rather than
+/// as typos of one another. Values with no trailing digits (e.g. `draft` vs
+/// `drafft`) are unaffected and still flagged by the caller.
+fn differ_only_in_numeric_suffix(a: &str, b: &str) -> bool {
+    let strip = |s: &str| -> (String, bool) {
+        let trimmed = s.trim_end_matches(|c: char| c.is_ascii_digit());
+        (trimmed.to_owned(), trimmed.len() != s.len())
+    };
+    let (a_stem, a_had) = strip(a);
+    let (b_stem, b_had) = strip(b);
+    (a_had || b_had) && a_stem == b_stem
 }
 
 /// Emit rare-value inconsistency warnings for all string-valued properties
@@ -108,6 +127,7 @@ pub fn summary(
     site_prefix: Option<&str>,
     format: Format,
     schema: &SchemaConfig,
+    lint_ignore: &[String],
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
@@ -328,10 +348,19 @@ pub fn summary(
     let lint_summary: Option<LintSummary> = if schema.is_empty() {
         None
     } else {
+        // Apply `[lint] ignore` globs so the schema counter matches what
+        // `hyalo lint --rule SCHEMA` reports — the counter previously ignored
+        // these globs, so files excluded from `hyalo lint` still inflated the
+        // summary's schema count (BUG-9). Building the set once here mirrors
+        // the exclusion the lint command performs on its file list.
+        let ignore_set = crate::commands::lint::build_lint_ignore_globset(lint_ignore);
         // IndexEntry::tags is derived from the same `properties` map by
         // extract_tags, so passing properties alone is sufficient for the
         // lint pass — there is no `tags` data unreachable through properties.
-        let lint_entries = entries.iter().map(|e| (e.rel_path.as_str(), &e.properties));
+        let lint_entries = entries
+            .iter()
+            .filter(|e| !crate::commands::lint::is_lint_ignored(ignore_set.as_ref(), &e.rel_path))
+            .map(|e| (e.rel_path.as_str(), &e.properties));
         // Mirror the vault's resolved `[links] case_insensitive` mode so
         // `[schema] exempt` globs (e.g. `**/index.md`) fold case the same way
         // `hyalo okf index` does on case-insensitive filesystems. `case_index`
@@ -436,6 +465,7 @@ mod tests {
             site_prefix,
             format,
             &schema,
+            &[],  // lint_ignore
             None, // case_index
         )
     }
@@ -512,6 +542,22 @@ No tasks here.
         let val =
             unwrap_success(run_summary(tmp.path(), &[], 10, None, None, Format::Json).unwrap());
         assert_eq!(val["files"]["total"], 3);
+    }
+
+    #[test]
+    fn numeric_suffix_values_are_not_typos() {
+        // BUG: `hero-6` vs `hero-4` flagged as a possible typo. Enumerated
+        // numeric-suffix values must be treated as distinct.
+        assert!(differ_only_in_numeric_suffix("hero-6", "hero-4"));
+        assert!(differ_only_in_numeric_suffix("v2", "v3"));
+        assert!(differ_only_in_numeric_suffix("step10", "step9"));
+        // Genuine typos with no numeric suffix must still be eligible to flag.
+        assert!(!differ_only_in_numeric_suffix("draft", "drafft"));
+        assert!(!differ_only_in_numeric_suffix("planned", "planed"));
+        // Same stem but neither ended in a digit → not a numeric-suffix pair.
+        assert!(!differ_only_in_numeric_suffix("hero", "hero"));
+        // Differ in the stem, not just the suffix → not covered.
+        assert!(!differ_only_in_numeric_suffix("hero-6", "zero-6"));
     }
 
     #[test]
@@ -887,6 +933,7 @@ Body.
                 prefix,
                 Format::Json,
                 &schema,
+                &[],
                 None,
             )
             .unwrap(),
@@ -989,6 +1036,7 @@ Body.
                 None,
                 Format::Json,
                 &schema,
+                &[],
                 None,
             )
             .unwrap(),

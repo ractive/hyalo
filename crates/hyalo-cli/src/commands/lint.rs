@@ -466,6 +466,47 @@ pub fn lint_counts_only(
 ///
 /// Used by `hyalo summary` to avoid re-reading files from disk.
 /// The `index_entries` iterator yields `(rel_path, properties)` tuples.
+/// Build a [`globset::GlobSet`] from `[lint] ignore` patterns for path-based
+/// exclusion. Returns `None` when `patterns` is empty or every pattern failed
+/// to compile (callers treat `None` as "exclude nothing"). Invalid patterns are
+/// reported via [`crate::warn::warn`] so the behaviour matches `hyalo lint`,
+/// which uses the same matching rules (`literal_separator(true)`,
+/// `backslash_escape(true)`). Paths are matched against their vault-relative
+/// form with `/` separators.
+pub(crate) fn build_lint_ignore_globset(patterns: &[String]) -> Option<globset::GlobSet> {
+    use globset::{GlobBuilder, GlobSetBuilder};
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = GlobSetBuilder::new();
+    let mut any_ok = false;
+    for pat in patterns {
+        match GlobBuilder::new(pat)
+            .literal_separator(true)
+            .backslash_escape(true)
+            .build()
+        {
+            Ok(g) => {
+                builder.add(g);
+                any_ok = true;
+            }
+            Err(e) => {
+                crate::warn::warn(format!("invalid [lint] ignore pattern {pat:?}: {e}"));
+            }
+        }
+    }
+    if !any_ok {
+        return None;
+    }
+    builder.build().ok()
+}
+
+/// True when `rel_path` (vault-relative, any separator) is excluded by the
+/// `[lint] ignore` glob set. `None` set means "exclude nothing".
+pub(crate) fn is_lint_ignored(set: Option<&globset::GlobSet>, rel_path: &str) -> bool {
+    set.is_some_and(|s| s.is_match(rel_path.replace('\\', "/")))
+}
+
 pub(crate) fn lint_counts_from_properties<'a>(
     entries: impl Iterator<Item = (&'a str, &'a IndexMap<String, Value>)>,
     schema: &SchemaConfig,

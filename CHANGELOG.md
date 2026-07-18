@@ -17,6 +17,32 @@ and this project adheres to
 
 ### Fixed
 
+- **Hints preserve the vault context and active filters** (iter-180,
+  BUG-7/BUG-8): the `create-index` hint after a slow or large-vault command now
+  carries the explicit `--dir` (running it verbatim indexes the right vault, not
+  the default one) and drops the dangling `…queries:` colon. Derived `find`
+  hints now compose with the active graph/title filters — a "Show all N" or
+  "Narrow by tag" hint on a `--orphan` / `--broken-links` / `--dead-end` query
+  keeps that filter (and any `--index-file`), so the suggested command
+  reproduces the same scoped set instead of widening to the whole vault. When
+  the shown results were a truncated page, the misleading per-tag/per-status
+  count is dropped rather than presenting a page-local number the command would
+  not return.
+- **`summary` schema counter is honest** (iter-180, BUG-9): the schema
+  error/warning tally now applies `[lint] ignore` globs and the hint is
+  relabelled `Schema: N errors, M warnings` pointing at `hyalo lint --rule
+  SCHEMA` — the exact command that reproduces those counts (plain `hyalo lint`
+  also runs MD body rules, so its totals never matched the schema-only counter).
+  The stale "Show all N files with issues" hint is suppressed after a `lint
+  --fix` apply, where the pre-fix count no longer holds.
+- **Fewer false-positive did-you-mean suggestions** (iter-180): `summary` no
+  longer flags enumerated numeric-suffix values (`hero-6` vs `hero-4`, `v2` vs
+  `v3`) as possible typos of one another.
+- **Site-URL diagnostic for absolute-link vaults** (iter-180): when nearly every
+  link in a link-heavy vault is unresolvable (e.g. an MDN-style copy where
+  49,933/49,935 links are absolute site URLs), `summary` now suggests setting
+  `--site-prefix` instead of offering `links fix` on tens of thousands of
+  unfixable links.
 - **Lint respects fenced code and inline code spans** (iter-179, BUG-5):
   HYALO001 (bare-checkbox) and HYALO002 (completed-tasks) no longer fire on a
   `[]` or literal `- [ ]` that appears inside a ``` / ~~~ fenced code block or a
