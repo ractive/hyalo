@@ -94,7 +94,7 @@ because it documents the generator behavior that iteration finalizes.
 
 ## Acceptance Criteria
 
-- [x] Grep-audit: no remaining doc claim contradicted by observed behavior
-  from the dogfood report's "Documentation Mismatches" section
-- [x] Bundled okf skill passes a command-by-command execution check
+- [x] Grep-audit: no remaining doc claim contradicted by observed behavior from the dogfood report — see `validate_type_name` in `crates/hyalo-cli/src/commands/types.rs`
+  and the `--site-prefix` / `okf index --help` wording in `args.rs`, the README `warning: conflict:` line, the `Subdirectories`-omission note, and `DEC-054`
+- [x] Bundled okf skill passes a command-by-command execution check — manually re-ran "Adding domain types" end to end (`hyalo types set`, `hyalo new --type`, `hyalo okf index --apply`, `hyalo lint --profile okf`); see also `crates/hyalo-cli/tests/e2e/types.rs`
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
