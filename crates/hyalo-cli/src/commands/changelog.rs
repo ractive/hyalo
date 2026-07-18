@@ -498,6 +498,24 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
         // lines never continue a bullet and are never themselves treated as
         // the insertion point.
         let mut insert_at = cat_idx + 1;
+        // Empty category: `### Heading` with no bullets before the next
+        // heading/section end. Insert *after* the blank line that follows the
+        // heading so the result is `### Heading` / <blank> / `- entry`, matching
+        // the layout the section-creation branch below produces. Without this,
+        // the entry lands directly under the heading with no blank separator
+        // (df-v0180 changelog blank-line glitch).
+        let has_bullet = cl.lines[cat_idx + 1..section_end]
+            .iter()
+            .take_while(|l| !l.starts_with("### ") && !l.starts_with("## "))
+            .any(|l| l.trim_start().starts_with("- "));
+        if !has_bullet
+            && cl
+                .lines
+                .get(cat_idx + 1)
+                .is_some_and(|l| l.trim().is_empty())
+        {
+            insert_at = cat_idx + 2;
+        }
         let mut i = cat_idx + 1;
         while i < section_end {
             let l = &cl.lines[i];
@@ -685,6 +703,47 @@ mod tests {
         let seg = &out[unrel..v1];
         assert!(seg.contains("### Fixed"));
         assert!(seg.contains("- A bug."));
+    }
+
+    /// An *existing but empty* `### Category` (heading + blank, no bullets)
+    /// must get a blank line between the heading and the first entry, matching
+    /// the section-creation layout (df-v0180 changelog blank-line glitch).
+    const EMPTY_CATEGORY: &str = "\
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+### Fixed
+
+- Existing fix.
+
+## [1.0.0] - 2020-01-01
+
+### Added
+
+- Initial.
+
+[Unreleased]: https://x/compare/v1.0.0...HEAD
+[1.0.0]: https://x/tag/v1.0.0
+";
+
+    #[test]
+    fn add_into_empty_category_keeps_blank_after_heading() {
+        let mut cl = Changelog::parse(EMPTY_CATEGORY);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Added", "First feature.");
+        let out = cl.render();
+        assert!(
+            out.contains("### Added\n\n- First feature."),
+            "empty category must keep a blank line after the heading:\n{out}"
+        );
+        // The bullet must not be jammed directly under the heading.
+        assert!(
+            !out.contains("### Added\n- First feature."),
+            "no blank separator was inserted:\n{out}"
+        );
     }
 
     /// RB-4: a conformant KaC file whose `[Unreleased]` is the last `## `

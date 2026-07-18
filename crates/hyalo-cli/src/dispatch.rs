@@ -245,12 +245,23 @@ fn adapt_view_result_to_ext(
         .map(|v| lint_commands::BodyViolation {
             line: 0,
             column: 0,
+            severity: match v.severity {
+                lint_commands::Severity::Error => "error".to_owned(),
+                lint_commands::Severity::Warn => "warn".to_owned(),
+            },
             message: v.message.clone(),
             fix: None,
         })
         .collect();
 
     let total = violations.len();
+    // Group severity is the max across members so a folded SCHEMA group that
+    // contains any error reads as `error` (BUG-17 parity with the main path).
+    let group_severity = if violations.iter().any(|v| v.severity == "error") {
+        "error".to_string()
+    } else {
+        "warn".to_string()
+    };
     let rule_groups = if total == 0 {
         vec![]
     } else {
@@ -259,7 +270,7 @@ fn adapt_view_result_to_ext(
             count: total,
             shown: total,
             truncated: false,
-            severity: "warn".to_string(),
+            severity: group_severity,
             autofixable: false,
             violations,
         }]
@@ -1678,11 +1689,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 None
             };
 
-            // Build the file list. Positional arg is treated as a single --file.
-            let mut files_arg: Vec<String> = file;
-            if let Some(pos) = file_positional {
-                files_arg.insert(0, pos);
-            }
+            // Build the file list. Positional args are treated as --file
+            // targets (repeatable), preserving their command-line order ahead
+            // of any --file values.
+            let mut files_arg: Vec<String> = file_positional;
+            files_arg.extend(file);
             // --type expands to a glob that overrides file/glob args.
             let effective_glob: Vec<String> = if let Some(g) = type_glob {
                 vec![g]

@@ -1062,15 +1062,14 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
                         .get("rule")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("?");
-                    let severity = group
+                    // Group severity is the fallback when a violation does not
+                    // carry its own (older payloads); a folded group such as
+                    // `SCHEMA` mixes severities, so each line is labelled from
+                    // its own `severity` field to agree with the counts (BUG-17).
+                    let group_severity = group
                         .get("severity")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("warn");
-                    let pad = if severity == "error" {
-                        "error"
-                    } else {
-                        "warn "
-                    };
                     let violations = group.get("violations").and_then(|v| v.as_array());
                     let count = group
                         .get("count")
@@ -1090,6 +1089,15 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
                                 .get("message")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or("");
+                            let severity = v
+                                .get("severity")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or(group_severity);
+                            let pad = if severity == "error" {
+                                "error"
+                            } else {
+                                "warn "
+                            };
                             if line > 0 {
                                 let _ = writeln!(s, "  {pad}  {rule}  line {line}  {message}");
                             } else {
@@ -1182,9 +1190,15 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
     if error_count == 0 && warn_count == 0 {
         let _ = write!(s, "{files_checked} {files_label} checked, no issues");
     } else {
+        let errors_label = if error_count == 1 { "error" } else { "errors" };
+        let warns_label = if warn_count == 1 {
+            "warning"
+        } else {
+            "warnings"
+        };
         let _ = write!(
             s,
-            "{files_checked} {files_label} checked, {files_with_issues} with issues ({error_count} errors, {warn_count} warnings)",
+            "{files_checked} {files_label} checked, {files_with_issues} with issues ({error_count} {errors_label}, {warn_count} {warns_label})",
         );
     }
 

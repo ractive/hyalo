@@ -520,7 +520,15 @@ fn lint_file_with_fix(
                     violations: vec![Violation {
                         severity: Severity::Error,
                         kind: None,
-                        message: format!("{}: {e}", crate::hints::PARSE_ERROR_PREFIX),
+                        // `terse_root_cause` strips the redundant
+                        // "failed to parse YAML frontmatter: " prefix so the
+                        // shared PARSE_ERROR_PREFIX is not doubled (HYALO005
+                        // double-prefix).
+                        message: format!(
+                            "{}: {}",
+                            crate::hints::PARSE_ERROR_PREFIX,
+                            terse_root_cause(&e)
+                        ),
                     }],
                 },
                 FileFixResult {
@@ -1415,6 +1423,11 @@ pub struct RuleGroup {
 pub struct BodyViolation {
     pub line: usize,
     pub column: usize,
+    /// Per-violation severity (`"error"` / `"warn"`). Carried alongside the
+    /// group severity because a folded group (notably `SCHEMA`) can mix the
+    /// two, and the text renderer must label each line with its own severity
+    /// so the display agrees with the `errors`/`warnings` counts (BUG-17).
+    pub severity: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<serde_json::Value>,
@@ -1736,6 +1749,7 @@ pub fn lint_files_extended(
                             .map(|v| BodyViolation {
                                 line: v.line,
                                 column: v.column,
+                                severity: v.severity.clone(),
                                 message: v.message.clone(),
                                 fix: v.fix.clone(),
                             })
@@ -1806,6 +1820,7 @@ pub fn lint_files_extended(
                         .map(|v| BodyViolation {
                             line: v.line,
                             column: v.column,
+                            severity: v.severity.clone(),
                             message: v.message.clone(),
                             fix: v.fix.clone(),
                         })
@@ -1852,6 +1867,7 @@ pub fn lint_files_extended(
                     .map(|v| BodyViolation {
                         line: v.line,
                         column: v.column,
+                        severity: v.severity.clone(),
                         message: v.message.clone(),
                         fix: v.fix.clone(),
                     })
@@ -1954,6 +1970,7 @@ pub fn lint_files_extended(
                     .map(|v| BodyViolation {
                         line: v.line,
                         column: v.column,
+                        severity: v.severity.clone(),
                         message: v.message.clone(),
                         fix: v.fix.clone(),
                     })
@@ -2626,6 +2643,15 @@ fn lint_one_file_extended(
         body_modified = true;
     }
 
+    // Body rules lint the post-frontmatter slice, so their diagnostics carry
+    // body-relative line numbers. Translate them to file-absolute lines so a
+    // reported `line N` matches the raw file (BUG-6). `body_line_offset` is the
+    // 1-based file line on which the body begins; body-relative line `L` maps
+    // to `L + offset - 1`. With no frontmatter `offset == 1`, i.e. a no-op.
+    let body_line_offset = find_body_line_offset(&content, body_start);
+    let to_file_line =
+        |body_line: usize| body_line.saturating_add(body_line_offset.saturating_sub(1));
+
     // Group body diagnostics by rule: violations fixed across any pass,
     // followed by whatever remains after the loop above (or the single
     // read-only lint pass, when fix-mode is off).
@@ -2639,7 +2665,7 @@ fn lint_one_file_extended(
             })
         });
         InternalViolation {
-            line: d.line,
+            line: to_file_line(d.line),
             column: d.column,
             message: d.message,
             severity: format!("{}", d.severity),

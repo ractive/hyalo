@@ -1,5 +1,6 @@
 //! HYALO native lint rules.
 
+pub mod code_fence;
 pub mod hyalo001;
 pub mod hyalo002;
 pub mod hyalo003;
