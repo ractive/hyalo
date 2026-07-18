@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -52,7 +55,10 @@ jobs:
   #
   # The binary comes from the published setup-hyalo action (latest release)
   # rather than a source build — this doubles as an end-to-end dogfood of the
-  # release-artifact install path (iter-171).
+  # release-artifact install path (iter-171). Unlike the other actions here,
+  # setup-hyalo is deliberately NOT pinned to a SHA: floating on the
+  # first-party mutable `@v1` tag is the recorded design (DEC-051) and exactly
+  # what consumers run — which is the point of the dogfood.
   lint-kb:
     runs-on: ubuntu-latest
     steps:
