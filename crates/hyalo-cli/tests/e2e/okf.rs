@@ -1,6 +1,6 @@
 //! e2e tests for the `hyalo okf` generators (`index` and `log`).
 
-use super::common::{hyalo_no_hints, write_md};
+use super::common::{hyalo, hyalo_no_hints, write_md};
 use std::fs;
 use tempfile::TempDir;
 
@@ -321,8 +321,10 @@ fn okf_log_dry_run_does_not_write() {
 
 #[test]
 fn okf_index_output_emits_lint_profile_hint() {
+    // iter-177: the validate hint now lives in the standard `hints` envelope
+    // (was a non-standard `results.hint` string), so hints must be enabled.
     let tmp = make_bundle();
-    let output = hyalo_no_hints()
+    let output = hyalo()
         .current_dir(tmp.path())
         .args(["--dir", ".", "--format", "json", "okf", "index"])
         .output()
@@ -337,7 +339,7 @@ fn okf_index_output_emits_lint_profile_hint() {
 #[test]
 fn okf_log_output_emits_lint_profile_hint() {
     let tmp = make_bundle();
-    let output = hyalo_no_hints()
+    let output = hyalo()
         .current_dir(tmp.path())
         .args([
             "--dir",
@@ -1107,4 +1109,116 @@ fn okf_log_empty_action_errors() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(combined.contains("action must not be empty"), "{combined}");
+}
+
+// ---------------------------------------------------------------------------
+// okf hints (iter-177): standard drill-down hints envelope, honoring --no-hints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn okf_index_drift_emits_apply_and_validate_hints_in_envelope() {
+    let tmp = make_bundle();
+    // Dry-run with drift → JSON `hints` array carries the apply + validate hints,
+    // and the results payload no longer carries a non-standard `hint` string.
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["okf", "index", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = json["hints"].as_array().expect("hints envelope array");
+    let cmds: Vec<&str> = hints.iter().filter_map(|h| h["cmd"].as_str()).collect();
+    assert!(
+        cmds.iter().any(|c| c.contains("okf index --apply")),
+        "drift dry-run suggests applying: {cmds:?}"
+    );
+    assert!(
+        cmds.iter().any(|c| c.contains("lint --profile okf")),
+        "always suggests validating conformance: {cmds:?}"
+    );
+    // The old non-standard `results.hint` string is gone.
+    assert!(
+        json["results"]["hint"].is_null(),
+        "results.hint must not be present: {}",
+        json["results"]
+    );
+}
+
+#[test]
+fn okf_index_no_hints_yields_empty_envelope() {
+    let tmp = make_bundle();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["okf", "index", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["hints"].as_array().unwrap().is_empty(),
+        "--no-hints suppresses the envelope hints"
+    );
+}
+
+#[test]
+fn okf_index_clean_omits_apply_hint() {
+    let tmp = make_bundle();
+    // Apply once so a subsequent dry-run is clean (no drift).
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["okf", "index", "--apply"])
+        .output()
+        .unwrap();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args(["okf", "index", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(
+        !cmds.iter().any(|c| c.contains("okf index --apply")),
+        "no drift → no apply hint: {cmds:?}"
+    );
+    assert!(
+        cmds.iter().any(|c| c.contains("lint --profile okf")),
+        "validate hint still present: {cmds:?}"
+    );
+}
+
+#[test]
+fn okf_log_emits_validate_hint() {
+    let tmp = make_bundle();
+    let output = hyalo()
+        .current_dir(tmp.path())
+        .args([
+            "okf",
+            "log",
+            "--message",
+            "Added blocks",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(
+        cmds.iter().any(|c| c.contains("lint --profile okf")),
+        "okf log suggests validating conformance: {cmds:?}"
+    );
+    assert!(
+        json["results"]["hint"].is_null(),
+        "results.hint must not be present: {}",
+        json["results"]
+    );
 }

@@ -2308,7 +2308,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     replace,
                     ctx.okf_ignore,
                     case_insensitive,
-                    &ctx.lint_profiles,
                     effective_format,
                 )?;
                 if let Some(code) = exit_override {
@@ -2328,7 +2327,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 &message,
                 log_action.as_deref(),
                 apply,
-                &ctx.lint_profiles,
                 effective_format,
             ),
         },

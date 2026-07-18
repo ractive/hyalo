@@ -69,8 +69,16 @@ pub enum HintSource {
     CreateIndex,
     DropIndex,
     Lint,
-    Types { subcommand: Option<String> },
-    New { file: String },
+    Types {
+        subcommand: Option<String>,
+    },
+    New {
+        file: String,
+    },
+    /// `hyalo okf index` — suggest validating conformance (and applying on drift).
+    OkfIndex,
+    /// `hyalo okf log` — suggest validating conformance.
+    OkfLog,
 }
 
 /// Global flags to propagate into generated hint commands.
@@ -132,6 +140,10 @@ pub struct HintContext {
     pub lint_rule_prefix: Option<String>,
     /// Rules to fix (`--fix-rule`, repeatable).
     pub lint_fix_rules: Vec<String>,
+    /// Whether the `okf` conformance profile is already active via
+    /// `[lint] profiles` in `.hyalo.toml`. When true the `okf` validate hint
+    /// drops the redundant `--profile okf` flag (plain `hyalo lint` runs it).
+    pub okf_profile_active: bool,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -180,6 +192,7 @@ impl HintContext {
             lint_rule: None,
             lint_rule_prefix: None,
             lint_fix_rules: vec![],
+            okf_profile_active: false,
         }
     }
 
@@ -254,6 +267,8 @@ pub fn generate_hints_with_counters(
         HintSource::Lint => hints_for_lint(ctx, data, total),
         HintSource::Types { .. } => hints_for_types(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
+        HintSource::OkfIndex => hints_for_okf_index(ctx, data),
+        HintSource::OkfLog => hints_for_okf_log(ctx),
     };
     // iter-144: slow-query index-suggestion hint. Appended after per-command
     // hints so domain-specific hints are not displaced; counts toward MAX_HINTS.
@@ -1597,6 +1612,50 @@ fn hints_for_drop_index(ctx: &HintContext, _data: &serde_json::Value) -> Vec<Hin
         "Rebuild the index",
         build_command_no_glob(ctx, &["create-index"]),
     )]
+}
+
+/// Build the profile-aware `hyalo lint` validate hint. When the `okf` profile is
+/// already active via `[lint] profiles`, the `--profile okf` flag is redundant
+/// (plain `hyalo lint` runs it), so it is dropped to avoid noisy advice.
+fn okf_validate_hint(ctx: &HintContext) -> Hint {
+    let cmd = if ctx.okf_profile_active {
+        build_command_no_glob(ctx, &["lint"])
+    } else {
+        build_command_no_glob(ctx, &["lint", "--profile", "okf"])
+    };
+    Hint::new("Validate bundle conformance", cmd)
+}
+
+/// Drill-down hints for `hyalo okf index`.
+///
+/// Always suggests validating conformance. In a dry run that detected drift, it
+/// additionally suggests applying the regenerated index. The `apply` /
+/// `changed` signals are read from the command's own JSON result so the hint
+/// stays in sync with what actually happened.
+fn hints_for_okf_index(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+    let applied = data
+        .get("apply")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let changed = data
+        .get("changed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    // On dry-run drift, applying is the natural next step — surface it first.
+    if !applied && changed > 0 {
+        hints.push(Hint::new(
+            "Apply the regenerated index files",
+            build_command_no_glob(ctx, &["okf", "index", "--apply"]),
+        ));
+    }
+    hints.push(okf_validate_hint(ctx));
+    hints
+}
+
+/// Drill-down hints for `hyalo okf log`: suggest validating conformance.
+fn hints_for_okf_log(ctx: &HintContext) -> Vec<Hint> {
+    vec![okf_validate_hint(ctx)]
 }
 
 /// Ratio threshold for rule dominance (UX-2).
@@ -3507,5 +3566,43 @@ mod tests {
             hints[0].cmd, "hyalo create-index",
             "create-index should be first hint; got: {hints:?}"
         );
+    }
+
+    // --- okf hints (iter-177) ---
+
+    #[test]
+    fn okf_index_dry_run_drift_suggests_apply_then_validate() {
+        let c = ctx(HintSource::OkfIndex);
+        let data = json!({ "apply": false, "changed": 2 });
+        let hints = generate_hints(&c, &data, None);
+        assert_eq!(hints[0].cmd, "hyalo okf index --apply");
+        assert_eq!(hints[1].cmd, "hyalo lint --profile okf");
+    }
+
+    #[test]
+    fn okf_index_clean_dry_run_only_validate() {
+        let c = ctx(HintSource::OkfIndex);
+        let data = json!({ "apply": false, "changed": 0 });
+        let hints = generate_hints(&c, &data, None);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].cmd, "hyalo lint --profile okf");
+    }
+
+    #[test]
+    fn okf_index_apply_omits_apply_hint() {
+        let c = ctx(HintSource::OkfIndex);
+        // Even with changes, an --apply run should not re-suggest applying.
+        let data = json!({ "apply": true, "changed": 3 });
+        let hints = generate_hints(&c, &data, None);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].cmd, "hyalo lint --profile okf");
+    }
+
+    #[test]
+    fn okf_validate_hint_drops_redundant_profile_flag_when_active() {
+        let mut c = ctx(HintSource::OkfLog);
+        c.okf_profile_active = true;
+        let hints = generate_hints(&c, &json!({}), None);
+        assert_eq!(hints[0].cmd, "hyalo lint");
     }
 }

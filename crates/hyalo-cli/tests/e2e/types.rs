@@ -904,3 +904,93 @@ fn types_set_default_is_rejected() {
         );
     }
 }
+
+/// BUG-4: a type name with interior spaces round-trips end to end —
+/// `types set "Data Table"` writes a quoted TOML key, `new --type "Data Table"`
+/// scaffolds a matching file, and `lint` accepts it. The bundled okf skill's
+/// "Adding domain types" walkthrough uses exactly this shape.
+#[test]
+fn types_set_spaced_name_round_trips_through_new_and_lint() {
+    let tmp = setup_empty();
+    // Enable schema validation so lint actually checks the new file's type.
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n\n[schema]\nvalidate_on_write = true\n",
+    )
+    .unwrap();
+
+    // 1) Declare a spaced type from the CLI.
+    let set = hyalo()
+        .current_dir(tmp.path())
+        .args(["types", "set", "Data Table", "--required", "type,title"])
+        .output()
+        .unwrap();
+    assert!(
+        set.status.success(),
+        "types set with a spaced name must succeed: {}",
+        String::from_utf8_lossy(&set.stderr)
+    );
+
+    // The TOML uses a quoted key that round-trips to the original name.
+    let cfg = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
+    assert!(
+        cfg.contains("[schema.types.\"Data Table\"]"),
+        "spaced type is stored as a quoted TOML key: {cfg}"
+    );
+
+    // 2) `types show` reports the exact spaced name.
+    let show = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "Data Table"])
+        .output()
+        .unwrap();
+    assert!(show.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(json["results"]["type"], serde_json::json!("Data Table"));
+
+    // 3) `new --type "Data Table"` scaffolds a file with that frontmatter type.
+    let new = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["new", "--type", "Data Table", "--file", "tables/blocks.md"])
+        .output()
+        .unwrap();
+    assert!(
+        new.status.success(),
+        "new with a spaced type must succeed: {}",
+        String::from_utf8_lossy(&new.stderr)
+    );
+    let body = fs::read_to_string(tmp.path().join("tables/blocks.md")).unwrap();
+    assert!(body.contains("type: Data Table"), "{body}");
+
+    // 4) lint accepts the round-tripped file (no violations for the new file).
+    let lint = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--file", "tables/blocks.md"])
+        .output()
+        .unwrap();
+    assert!(
+        lint.status.success(),
+        "lint must pass for a spaced-type file: stdout={} stderr={}",
+        String::from_utf8_lossy(&lint.stdout),
+        String::from_utf8_lossy(&lint.stderr)
+    );
+}
+
+/// Leading/trailing whitespace and non-space punctuation stay rejected even
+/// though interior spaces are now allowed.
+#[test]
+fn types_set_rejects_padded_and_punctuated_names() {
+    let tmp = setup_empty();
+    for bad in [" leading", "trailing ", "type/slash", "type.v2"] {
+        let out = hyalo()
+            .current_dir(tmp.path())
+            .args(["types", "set", bad, "--required", "title"])
+            .output()
+            .unwrap();
+        assert_ne!(
+            out.status.code(),
+            Some(0),
+            "invalid type name {bad:?} must be rejected"
+        );
+    }
+}
