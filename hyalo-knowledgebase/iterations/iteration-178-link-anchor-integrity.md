@@ -2,7 +2,7 @@
 title: "Iteration 178 — link surgical fixes (Phase A: anchors, self-links, stale graph)"
 type: iteration
 date: 2026-07-18
-status: in-progress
+status: completed
 branch: iter-178/link-anchor-integrity
 tags:
   - iteration
@@ -32,7 +32,7 @@ and 184 where their real fixes belong.
 
 ## Tasks
 
-### 1. Shared frontmatter wikilink rewrite helper (L-1, L-2, L-7)
+### 1. Shared frontmatter wikilink rewrite helper (L-1, L-2, L-7) [5/5]
 
 - [x] Add a fragment- and alias-aware
   `rewrite_frontmatter_wikilink_text(occ, old_ref, new_ref) -> Option<String>`
@@ -52,7 +52,7 @@ and 184 where their real fixes belong.
 - [x] Locking e2e matrix for BOTH mv and links fix: scalar/list/quoted
   frontmatter × plain/`#anchor`/`|alias`/`#anchor|alias` × inbound/self
 
-### 2. One-liners and ordering fixes (L-5, L-8, L-9, L-14)
+### 2. One-liners and ordering fixes (L-5, L-8, L-9, L-14) [4/4]
 
 - [x] L-5: mutation.rs:122 `refresh_entry` → `refresh_entry_and_links`;
   e2e: `mv --index` then `backlinks --index` shows the rewritten source
@@ -67,7 +67,7 @@ and 184 where their real fixes belong.
   same-path check (mv.rs:436-440) so `a.md` → `A.md` works on
   case-insensitive FS
 
-### 3. Retrospective
+### 3. Retrospective [2/2]
 
 - [x] Verify the dogfood repro chain (mv → broken-link check →
   links fix) ends with zero broken links and zero lost anchors
@@ -75,7 +75,7 @@ and 184 where their real fixes belong.
 
 ## Acceptance Criteria
 
-- [x] All Phase A findings (L-1, L-2, L-5, L-7, L-8, L-9, L-14) have
-  locking tests reproducing the review's confirmed failures
-- [x] No behavior change outside the fixed cases (existing e2e green)
+- [x] All Phase A findings (L-1, L-2, L-5, L-7, L-8, L-9, L-14) have locking tests reproducing the review's confirmed failures: L-1/L-2/L-7 via `rewrite_frontmatter_wikilink_text_preserves_fragment_and_alias`, `plan_mv_inbound_frontmatter_anchor_preserved`, `plan_mv_self_referencing_frontmatter_anchor_link_rewritten`, `plan_mv_batch_self_referencing_frontmatter_link_rewritten`, `build_replacements_frontmatter_repair_preserves_anchor_and_alias`; L-5 via `mv_index_refreshes_source_link_graph`; L-8 via `build_replacements_literal_percent_in_code_fence_does_not_desync`; L-9 via `matcher_single_candidate_inside_tie_delta_above_threshold_accepted` and `matcher_two_genuine_ties_still_rejected`; L-14 via `mv_case_only_rename_on_case_insensitive_fs`
+- [x] No behavior change outside the fixed cases: `cargo test --workspace -q`
+  is green (1294+847+53+29 tests pass, 0 failed) on top of the fixes above
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
