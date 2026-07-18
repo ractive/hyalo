@@ -158,8 +158,8 @@ and this project adheres to
     an embedded `## heading` can't corrupt the log; `okf log --action ""` errors
     like `--message ""`; a nonexistent `okf log <dir>` target is rejected
     consistently in dry-run and apply. Grammar: `N file written` and
-    `preserving 1 existing line`. Re-running `init --profile <p>` on an already
-    -merged config now reports `unchanged` instead of `updated`.
+    `preserving 1 existing line`. Re-running `init --profile <p>` on an
+    already-merged config now reports `unchanged` instead of `updated`.
 - **Malformed-file policy** (iter-173): `okf index` now skips a concept with
   unparseable frontmatter with a per-file stderr warning and continues, instead
   of aborting the whole run on the first bad file (exit code 2 is reserved for

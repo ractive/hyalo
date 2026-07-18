@@ -1044,6 +1044,43 @@ fn okf_log_nonexistent_dir_rejected_consistently() {
     assert!(!dir.join("no-such-dir").exists(), "nothing created");
 }
 
+/// Same as above but with an explicit `.../log.md` suffix rather than a bare
+/// directory target — the parent-existence check must apply to both forms.
+#[test]
+fn okf_log_nonexistent_dir_with_explicit_log_md_rejected_consistently() {
+    let tmp = make_bundle();
+    let dir = tmp.path();
+    let run = |apply: bool| {
+        let mut args = vec![
+            "--dir",
+            ".",
+            "okf",
+            "log",
+            "no-such-dir/log.md",
+            "--message",
+            "x",
+        ];
+        if apply {
+            args.push("--apply");
+        }
+        hyalo_no_hints()
+            .current_dir(dir)
+            .args(&args)
+            .output()
+            .unwrap()
+    };
+    let dry = run(false);
+    let app = run(true);
+    assert_ne!(dry.status.code(), Some(0), "dry-run rejects missing parent");
+    assert_ne!(app.status.code(), Some(0), "apply rejects missing parent");
+    assert_eq!(
+        dry.status.code(),
+        app.status.code(),
+        "dry-run and apply agree"
+    );
+    assert!(!dir.join("no-such-dir").exists(), "nothing created");
+}
+
 /// `okf log --action ""` errors like `--message ""` (consistency).
 #[test]
 fn okf_log_empty_action_errors() {

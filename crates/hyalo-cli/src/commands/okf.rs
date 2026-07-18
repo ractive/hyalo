@@ -137,6 +137,11 @@ impl MarkerState {
 ///
 /// - a genuine *second* region — a BEGIN that starts after the first END — is a
 ///   [`MarkerState::Duplicate`];
+/// - a *second* BEGIN nested between the first BEGIN and its paired END is also
+///   a [`MarkerState::Duplicate`] — without this check the splice would
+///   silently discard the extra BEGIN as if it were ordinary managed-region
+///   content, disagreeing with the `OKF-INDEX-MARKERS` lint rule, which counts
+///   any extra begin/end marker as malformed;
 /// - otherwise the pair is [`MarkerState::Healthy`].
 ///
 /// With no ordered pair, a lone BEGIN is [`MarkerState::DanglingBegin`], a lone
@@ -148,7 +153,11 @@ fn classify_markers(content: &str) -> MarkerState {
             // A BEGIN starting after the first END is a second managed region —
             // a real duplicate, not a stray prose mention before the region.
             let after_region = end + INDEX_END.len();
-            if content[after_region..].contains(INDEX_BEGIN) {
+            // A BEGIN nested strictly between the first BEGIN and its paired END
+            // is also a duplicate: the region is ambiguous and must not be
+            // silently spliced (it would delete the extra marker text).
+            let nested_begin = content[begin + INDEX_BEGIN.len()..end].contains(INDEX_BEGIN);
+            if nested_begin || content[after_region..].contains(INDEX_BEGIN) {
                 MarkerState::Duplicate
             } else {
                 MarkerState::Healthy(begin, end)
@@ -1165,6 +1174,19 @@ fn resolve_log_target(dir: &Path, target: Option<&str>) -> std::result::Result<S
         .file_name()
         .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("log.md"));
     if is_log_file {
+        // The parent directory must already exist even for an explicit
+        // `.../log.md` target. Otherwise dry-run and apply disagree: dry-run
+        // happily reports `(created)` (exit 0) while apply fails to create a
+        // temp file in the missing parent (exit 2) — BUG-15 also applies to
+        // the explicit-filename form, not just the bare-directory form.
+        let parent_exists = Path::new(&rel)
+            .parent()
+            .is_none_or(|p| p.as_os_str().is_empty() || dir.join(p).is_dir());
+        if !parent_exists {
+            return Err(format!(
+                "target directory for '{raw}' does not exist; create it first (mkdir), then log into it"
+            ));
+        }
         return Ok(rel);
     }
     let full = dir.join(&rel);
@@ -1571,8 +1593,23 @@ mod tests {
     #[test]
     fn log_target_log_file_used_directly() {
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tables")).unwrap();
         let p = resolve_log_target(tmp.path(), Some("tables/log.md")).unwrap();
         assert_eq!(p, "tables/log.md");
+    }
+
+    #[test]
+    fn log_target_explicit_log_md_with_missing_parent_errors() {
+        // BUG-15 also applies to the explicit `.../log.md` form, not just a
+        // bare directory target: the parent must exist so dry-run and apply
+        // agree instead of dry-run reporting `(created)` and apply failing to
+        // create a temp file in the missing parent.
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_log_target(tmp.path(), Some("no-such-dir/log.md")).unwrap_err();
+        assert!(
+            err.contains("does not exist"),
+            "expected a missing-parent error: {err}"
+        );
     }
 
     #[test]
@@ -1629,6 +1666,17 @@ mod tests {
     #[test]
     fn classify_duplicate() {
         let s = format!("{INDEX_BEGIN}\na\n{INDEX_END}\n\n{INDEX_BEGIN}\nb\n{INDEX_END}\n");
+        assert_eq!(classify_markers(&s), MarkerState::Duplicate);
+    }
+
+    #[test]
+    fn classify_nested_begin_is_duplicate() {
+        // A second BEGIN sandwiched between the first BEGIN and its paired END:
+        // without the nested check this looked Healthy and the splice would
+        // silently delete the extra marker text. It must agree with the
+        // OKF-INDEX-MARKERS lint rule, which counts this as malformed (2 begin,
+        // 1 end).
+        let s = format!("{INDEX_BEGIN}\nfirst\n{INDEX_BEGIN}\nsecond\n{INDEX_END}\n");
         assert_eq!(classify_markers(&s), MarkerState::Duplicate);
     }
 
