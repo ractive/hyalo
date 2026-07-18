@@ -133,6 +133,33 @@ and this project adheres to
 
 ### Fixed
 
+- **OKF generator hardening** (iter-176): closes the data-safety and
+  output-correctness edges the final pre-release dogfood found in `okf index`/
+  `okf log`.
+  - *Marker-edge data loss*: an `index.md` with a **dangling / reversed /
+    duplicate** `okf:index` managed-region marker is now left byte-identical and
+    reported as `skip` (with a stderr warning), never rewritten — the generator
+    no longer splices across a broken marker and deletes the hand prose after it
+    on a second `--apply`. A new advisory `OKF-INDEX-MARKERS` lint rule flags the
+    same condition in CI, and malformed-marker files count as drift in
+    `--dry-run`.
+  - *CommonMark-valid links*: generated bullets are always valid Markdown link
+    items — destinations with spaces are angle-bracket wrapped
+    (`](<blocks table.md>)`), `[`/`]` in titles are backslash-escaped, and
+    multi-line `description` / titles are collapsed to one line.
+  - *Robust apply*: an impossible or unwritable target (e.g. a directory named
+    `index.md`) is warned-and-skipped and the run continues writing the other
+    files instead of aborting mid-run; `--dry-run` reports `skip` for such
+    targets instead of claiming `create`. `okf log` rejects a non-file target
+    the same way.
+  - *Scope & message polish*: a nonexistent `okf index <dir>` scope is rejected
+    (exit 1) instead of vacuously passing; `-q`/`--quiet` now suppresses the
+    skip warnings; `okf log` indents multi-line `--message` continuation lines so
+    an embedded `## heading` can't corrupt the log; `okf log --action ""` errors
+    like `--message ""`; a nonexistent `okf log <dir>` target is rejected
+    consistently in dry-run and apply. Grammar: `N file written` and
+    `preserving 1 existing line`. Re-running `init --profile <p>` on an
+    already-merged config now reports `unchanged` instead of `updated`.
 - **Malformed-file policy** (iter-173): `okf index` now skips a concept with
   unparseable frontmatter with a per-file stderr warning and continues, instead
   of aborting the whole run on the first bad file (exit code 2 is reserved for

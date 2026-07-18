@@ -820,3 +820,19 @@ Supporting calls baked into the plans: `[[schema.bind]]` satisfies the
 `[changelog] path` resolved from the config dir; the OKF profile ships
 vendor-neutral (no BigQuery example types); case handling for reserved files
 reuses the `[links] case_insensitive` auto-detection approach.
+
+## DEC-053: OKF lint rules do not honor `[okf] ignore` globs (2026-07-18)
+
+**Decision:** The `okf` conformance lint rules (`OKF-*`) do **not** exempt files
+matching an `[okf] ignore` generation glob (e.g. `_template/**`). This is
+deferred, not planned for iter-176.
+
+**Why:** `[okf] ignore` is a *generation* filter consumed only by `okf index`;
+it is not threaded into the lint pipeline (`lint_files_extended` → per-file
+loop). Wiring the ignore globset + vault-relative path through the whole lint
+machinery is a cross-cutting change disproportionate to the iter-176
+data-safety scope. The OKF advisory rules are warn-only (never fail CI), so a
+`_template/**` file being both generation-excluded and lint-flagged is cosmetic,
+not a gate. Users who want template files fully silent can add them to
+`[lint] ignore` / `[schema] exempt`. Tracked for a future lint-scoping
+iteration. See [[iterations/iteration-176-okf-generator-hardening]].

@@ -54,6 +54,15 @@ because it documents the generator behavior that iteration finalizes.
   no `index.md` and are omitted from the parent's `Subdirectories` list
 - [ ] Re-verify the "pure Markdown link list" claim against iter-176's
   link escaping (should become true; keep the wording)
+- [ ] No action needed — verified accurate during iter-176's PR review: a
+  BEGIN marker nested between another BEGIN and its paired END is now
+  correctly classified `Duplicate` (previously silently spliced as
+  `Healthy`, deleting the nested marker), and `resolve_log_target`'s
+  parent-must-exist check now covers both the bare-directory *and* the
+  explicit `<dir>/log.md` target forms. The README's "duplicated" /
+  "nonexistent directory target is rejected consistently" wording already
+  covered both cases correctly — implementation caught up to the docs, no
+  doc change required. See the iter-176 PR for the two regression tests.
 
 ### 4. okf_version enforcement gap
 

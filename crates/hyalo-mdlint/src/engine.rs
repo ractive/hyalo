@@ -178,6 +178,11 @@ impl HyaloLintEngine {
                 "Reserved `index.md` should be a Markdown link list (OKF §6)",
             ),
             (
+                "OKF-INDEX-MARKERS",
+                "okf-index-markers",
+                "Reserved `index.md` managed-region markers should be a single well-formed begin/end pair (not dangling/reversed/duplicate)",
+            ),
+            (
                 "OKF-LOG-STRUCTURE",
                 "okf-log-structure",
                 "Reserved `log.md` should be date-grouped, newest first (OKF §7)",

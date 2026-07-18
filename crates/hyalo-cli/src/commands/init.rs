@@ -192,19 +192,34 @@ fn run_init_in(
             profile.toml_fragment,
         )
         .with_context(|| format!("failed to apply profile '{}'", profile.name))?;
-        fs::write(&toml_path, &merged)
-            .with_context(|| format!("failed to write {}", toml_path.display()))?;
+        // Re-running `init --profile <p>` on an already-merged config is a no-op:
+        // report "unchanged" rather than "updated" so the summary doesn't imply
+        // a write that never happened (idempotent-init polish).
+        let profile_unchanged = merged == existing_raw;
+        if !profile_unchanged {
+            fs::write(&toml_path, &merged)
+                .with_context(|| format!("failed to write {}", toml_path.display()))?;
+        }
         // Surface any scalar value the profile overwrote so nothing changes
         // silently. Arrays never shrink (they union), so only scalars conflict.
         for conflict in &conflicts {
             crate::warn::warn(conflict.line(profile.name));
         }
-        writeln!(
-            summary,
-            "updated  .hyalo.toml  (merged '{}' profile)",
-            profile.name
-        )
-        .unwrap();
+        if profile_unchanged {
+            writeln!(
+                summary,
+                "unchanged  .hyalo.toml  ('{}' profile already applied)",
+                profile.name
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                summary,
+                "updated  .hyalo.toml  (merged '{}' profile)",
+                profile.name
+            )
+            .unwrap();
+        }
 
         // Changelog profile: when the vault dir is a subdirectory and the repo
         // root holds the `CHANGELOG.md` (the common layout that hit
@@ -1364,6 +1379,26 @@ mod tests {
         run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
         let second = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
         assert_eq!(first, second, "re-running the profile must be idempotent");
+    }
+
+    #[test]
+    fn run_init_okf_profile_rerun_reports_unchanged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
+        // A second run makes no change → the summary should say "unchanged",
+        // not "updated".
+        let outcome = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
+        let CommandOutcome::RawOutput(out) = outcome else {
+            panic!("expected RawOutput");
+        };
+        assert!(
+            out.contains("unchanged  .hyalo.toml  ('okf' profile already applied)"),
+            "re-run summary should report unchanged: {out}"
+        );
+        assert!(
+            !out.contains("merged 'okf' profile"),
+            "must not claim a merge write happened: {out}"
+        );
     }
 
     #[test]

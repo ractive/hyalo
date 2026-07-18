@@ -174,6 +174,42 @@ fn index_without_link_list_warns() {
 }
 
 #[test]
+fn index_dangling_marker_warns_via_okf_index_markers_rule() {
+    // A dangling begin marker (no end) in a reserved index.md should be flagged
+    // by OKF-INDEX-MARKERS so CI surfaces the precondition the generator would
+    // otherwise skip on (iter-176 BUG-3 companion rule).
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "index.md",
+        "---\nokf_version: \"0.1\"\n---\n* [X](x.md)\n\n<!-- okf:index:begin -->\nlist\n",
+    );
+    let (results, output) = lint_okf(tmp.path(), &["--rule", "OKF-INDEX-MARKERS"]);
+    assert_eq!(results["errors"].as_u64().unwrap(), 0, "warn, not error");
+    assert!(
+        results["warnings"].as_u64().unwrap() >= 1,
+        "dangling marker must warn: {results}"
+    );
+    assert!(output.status.success(), "advisory rule does not fail exit");
+}
+
+#[test]
+fn index_healthy_markers_pass_okf_index_markers_rule() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "index.md",
+        "---\nokf_version: \"0.1\"\n---\n# Index\n\n<!-- okf:index:begin -->\n* [X](x.md)\n<!-- okf:index:end -->\n",
+    );
+    let (results, _) = lint_okf(tmp.path(), &["--rule", "OKF-INDEX-MARKERS"]);
+    assert_eq!(
+        results["warnings"].as_u64().unwrap(),
+        0,
+        "a healthy pair must not warn: {results}"
+    );
+}
+
+#[test]
 fn log_out_of_order_warns() {
     let tmp = TempDir::new().unwrap();
     write_md(
