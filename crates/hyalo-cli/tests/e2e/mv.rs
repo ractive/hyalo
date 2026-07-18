@@ -1569,3 +1569,299 @@ body.
         "alias must be preserved while path is rewritten: {content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-178 Phase A: frontmatter anchor / self-link / stale-graph / case-rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_inbound_frontmatter_anchor_preserved() {
+    // L-2: an anchored frontmatter wikilink in another file's `related` list is
+    // rewritten AND keeps its `#anchor` when the target moves.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related:
+  - "[[decision-log#DEC-041]]"
+---
+Body.
+"#),
+    );
+    write_md(
+        tmp.path(),
+        "decision-log.md",
+        md!(r"
+---
+title: Log
+---
+Content.
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "--file",
+            "decision-log.md",
+            "--to",
+            "decision-log-archive.md",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[decision-log-archive#DEC-041]]"),
+        "frontmatter anchor must be preserved on mv: {content}"
+    );
+    assert!(
+        !content.contains("[[decision-log#DEC-041]]"),
+        "stale anchored frontmatter link must be gone: {content}"
+    );
+}
+
+#[test]
+fn mv_self_referencing_frontmatter_link_rewritten() {
+    // L-1: the moved file's OWN frontmatter self-link survives a plain rename
+    // (previously left dangling at the old path).
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related:
+  - "[[a]]"
+---
+Self body [[a]].
+"#),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "a.md", "--to", "a-renamed.md"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a-renamed.md")).unwrap();
+    assert!(
+        content.contains("related:")
+            && content.contains("[[a-renamed]]")
+            && !content.contains("[[a]]"),
+        "self-referencing frontmatter link must be rewritten: {content}"
+    );
+    // Both frontmatter and body occurrences point at the new name.
+    assert_eq!(
+        content.matches("[[a-renamed]]").count(),
+        2,
+        "frontmatter + body self-links both rewritten: {content}"
+    );
+}
+
+#[test]
+fn mv_then_links_fix_frontmatter_anchor_roundtrip_no_lost_anchor() {
+    // Locking matrix: even if a user renames a file the "wrong" way and then
+    // runs `links fix`, the anchor must never be dropped. Here we simulate a
+    // pre-existing broken anchored frontmatter link and repair it.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r#"
+---
+title: A
+related:
+  - "[[decision-log#DEC-041]]"
+---
+Body.
+"#),
+    );
+    // Only the archive file exists on disk → the frontmatter link is broken and
+    // `links fix` should repair it to the archive stem, keeping the anchor.
+    write_md(
+        tmp.path(),
+        "decision-log-archive.md",
+        md!(r"
+---
+title: Log
+---
+Content.
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["links", "fix", "--apply"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        content.contains("[[decision-log-archive#DEC-041]]"),
+        "links fix must keep the anchor when repairing frontmatter: {content}"
+    );
+}
+
+#[test]
+fn mv_index_refreshes_source_link_graph() {
+    // L-5: after `mv --index`, a fresh `backlinks --index` query must reflect
+    // the rewritten source outbound links (previously refresh_entry left the
+    // persisted graph stale, so this returned zero).
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+See [[sub/b]] for details.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "sub/b.md",
+        md!(r"
+---
+title: B
+---
+Content.
+"),
+    );
+
+    let dir = tmp.path().to_str().unwrap();
+
+    let create = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["--format", "json"])
+        .args(["create-index"])
+        .output()
+        .unwrap();
+    assert!(create.status.success(), "create-index failed: {create:?}");
+
+    let mv = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["--format", "json"])
+        .args([
+            "mv",
+            "--file",
+            "sub/b.md",
+            "--to",
+            "archive/b.md",
+            "--index",
+        ])
+        .output()
+        .unwrap();
+    assert!(mv.status.success(), "mv --index failed: {mv:?}");
+
+    // A fresh process querying backlinks --index must see the rewritten source.
+    let indexed = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["--format", "json"])
+        .args(["backlinks", "archive/b.md", "--index"])
+        .output()
+        .unwrap();
+    assert!(
+        indexed.status.success(),
+        "backlinks --index failed: {indexed:?}"
+    );
+    let indexed_json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&indexed.stdout)).unwrap();
+
+    let live = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["--format", "json"])
+        .args(["backlinks", "archive/b.md"])
+        .output()
+        .unwrap();
+    assert!(live.status.success(), "backlinks (live) failed: {live:?}");
+    let live_json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&live.stdout)).unwrap();
+
+    assert_eq!(
+        indexed_json["total"], live_json["total"],
+        "indexed and live backlinks must agree after mv --index"
+    );
+    assert_eq!(
+        indexed_json["total"], 1,
+        "a.md should back-link to the moved file: {indexed_json}"
+    );
+    assert_eq!(indexed_json["results"]["backlinks"][0]["source"], "a.md");
+}
+
+/// Returns true when the temp dir lives on a case-insensitive filesystem
+/// (macOS APFS default, Windows NTFS). On such filesystems `a.md` and `A.md`
+/// resolve to the same inode.
+fn fs_is_case_insensitive(dir: &std::path::Path) -> bool {
+    let lower = dir.join("__case_probe__.tmp");
+    let upper = dir.join("__CASE_PROBE__.tmp");
+    let _ = fs::write(&lower, b"x");
+    let insensitive = upper.exists();
+    let _ = fs::remove_file(&lower);
+    let _ = fs::remove_file(&upper);
+    insensitive
+}
+
+#[test]
+fn mv_case_only_rename_on_case_insensitive_fs() {
+    // L-14: `a.md` -> `A.md` must succeed on a case-insensitive filesystem
+    // (previously rejected as "target file already exists" because the
+    // destination resolves to the same inode as the source).
+    let tmp = TempDir::new().unwrap();
+    if !fs_is_case_insensitive(tmp.path()) {
+        // On a case-sensitive FS this is just an ordinary rename; the specific
+        // regression can't be reproduced here, so skip.
+        return;
+    }
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+Content.
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--file", "a.md", "--to", "A.md"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "case-only rename must succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The on-disk name should now be the uppercase form.
+    let entries: Vec<String> = fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.eq_ignore_ascii_case("a.md"))
+        .collect();
+    assert_eq!(entries, vec!["A.md".to_string()], "expected A.md on disk");
+}

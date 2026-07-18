@@ -727,14 +727,27 @@ fn validate_target_single(
 
     let target_path = dir.join(&normalized);
     if target_path.exists() {
-        let out = crate::output::format_error(
-            format,
-            "target file already exists",
-            Some(&normalized),
-            None,
-            None,
-        );
-        return Err(CommandOutcome::UserError(out));
+        // L-14: on a case-insensitive filesystem, a pure case rename like
+        // `a.md` → `A.md` reports the destination as "existing" because it
+        // resolves to the same inode as the source. Reuse batch mode's
+        // canonicalize-based same-file check (see `dest_to_sources` handling)
+        // so such renames are allowed rather than rejected as a collision.
+        let src_path = dir.join(src_rel);
+        let same_file = target_path
+            .canonicalize()
+            .ok()
+            .zip(src_path.canonicalize().ok())
+            .is_some_and(|(d, s)| d == s);
+        if !same_file {
+            let out = crate::output::format_error(
+                format,
+                "target file already exists",
+                Some(&normalized),
+                None,
+                None,
+            );
+            return Err(CommandOutcome::UserError(out));
+        }
     }
 
     // H-3: reject destinations that would escape the vault through a

@@ -9,6 +9,32 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Frontmatter wikilink anchors survive `mv` and `links fix`** (iter-178,
+  L-2/L-7): an anchored frontmatter link such as `related: - "[[decision-log#DEC-041]]"`
+  is now rewritten with its `#anchor` preserved when the target moves, and
+  `links fix` repairs keep the anchor instead of dropping it. Both paths route
+  through a single shared `rewrite_frontmatter_wikilink_text` helper so they
+  stay symmetric.
+- **Self-referencing frontmatter links survive a rename** (iter-178, L-1): the
+  moved file's own frontmatter self-links (e.g. `related: - "[[a]]"` when moving
+  `a.md`) are now rewritten to the new path in both single-file and batch `mv`,
+  instead of being left as a dangling reference.
+- **`mv --index` refreshes the source link graph** (iter-178, L-5): after a
+  move with `--index`, a subsequent `backlinks --index` query reflects the
+  rewritten source outbound links (the index now refreshes both the entry and
+  its graph edges, matching the live scan).
+- **`links fix` no longer desyncs on a `%%` inside a code fence** (iter-178,
+  L-8): a literal `%%` line inside a fenced code block is treated as code, not
+  an Obsidian comment delimiter, so links after the block are still repaired.
+- **Fuzzy link matcher accepts a lone valid candidate** (iter-178, L-9): a
+  single fuzzy candidate scoring just above the threshold is no longer wrongly
+  rejected as an ambiguous "tie" against the threshold value itself.
+- **Case-only rename works on case-insensitive filesystems** (iter-178, L-14):
+  `hyalo mv a.md --to A.md` on macOS/Windows no longer fails with "target file
+  already exists" when the source and destination resolve to the same inode.
+
 ## [0.18.0] - 2026-07-18
 
 ### Added
