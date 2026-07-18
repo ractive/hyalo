@@ -1,6 +1,101 @@
 use super::common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
+/// Split a hint's `cmd` string into argv, undoing the single-quote escaping
+/// `hints::shell_quote` applies (`'...'` with embedded `'` escaped as `'\''`).
+///
+/// A plain `str::split_whitespace()` is *not* sufficient here: on Windows a
+/// `--dir` value is a path containing `\`, which forces `shell_quote` to wrap
+/// it in single quotes, and any embedded whitespace inside the quoted token
+/// (e.g. under `...\Local Settings\Temp\...`) must not become a token break.
+/// Since `shell_quote` never emits double quotes or bare unescaped spaces
+/// inside a token, this only needs to understand its own single-quote form.
+fn shell_split(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = cmd.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut token = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                break;
+            }
+            if c == '\'' {
+                chars.next(); // opening quote
+                loop {
+                    match chars.next() {
+                        Some('\'') => {
+                            // Either the closing quote, or the start of an
+                            // escaped-quote sequence: close(') + \' + reopen(').
+                            // That's 4 chars total: `'` `\` `'` `'`; we've
+                            // already consumed the first `'` here.
+                            let mut lookahead = chars.clone();
+                            if lookahead.next() == Some('\\') && lookahead.next() == Some('\'') {
+                                chars.next(); // consume '\\'
+                                chars.next(); // consume the escaped '
+                                if chars.next() == Some('\'') {
+                                    // consumed the reopening quote
+                                    token.push('\'');
+                                    continue;
+                                }
+                                // Malformed input (shell_quote never produces
+                                // this) — treat conservatively as end-of-token.
+                                break;
+                            }
+                            break;
+                        }
+                        Some(inner) => token.push(inner),
+                        None => break,
+                    }
+                }
+            } else {
+                token.push(c);
+                chars.next();
+            }
+        }
+        args.push(token);
+    }
+    args
+}
+
+#[test]
+fn shell_split_handles_bare_and_quoted_tokens() {
+    assert_eq!(
+        shell_split("hyalo find --orphan --limit 0"),
+        vec!["hyalo", "find", "--orphan", "--limit", "0"]
+    );
+}
+
+#[test]
+fn shell_split_undoes_single_quoting_with_windows_path() {
+    // Mirrors what hints::shell_quote emits for a Windows temp path: wrapped
+    // in single quotes because of the embedded `\`.
+    let cmd = r"hyalo --dir 'C:\Users\runner\AppData\Local\Temp\abc123' find --orphan";
+    assert_eq!(
+        shell_split(cmd),
+        vec![
+            "hyalo",
+            "--dir",
+            r"C:\Users\runner\AppData\Local\Temp\abc123",
+            "find",
+            "--orphan",
+        ]
+    );
+}
+
+#[test]
+fn shell_split_undoes_escaped_embedded_quote() {
+    // hints::shell_quote escapes an embedded ' as '\''.
+    let cmd = r"hyalo find --title 'it'\''s here'";
+    assert_eq!(
+        shell_split(cmd),
+        vec!["hyalo", "find", "--title", "it's here"]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
@@ -2041,10 +2136,19 @@ fn find_orphan_show_all_hint_reproduces_orphan_scope() {
     );
 
     // Run the hinted command verbatim (strip the leading `hyalo`) and confirm it
-    // returns the 60 orphans — not the 62 total files.
-    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
-    let rerun = hyalo().args(&args).output().unwrap();
-    assert!(rerun.status.success());
+    // returns the 60 orphans — not the 62 total files. Use shell_split, not
+    // split_whitespace: on Windows the temp `--dir` path contains `\`, which
+    // forces hints::shell_quote to single-quote it, and a naive whitespace
+    // split would pass the literal quote characters through as part of the
+    // path, making the directory unresolvable.
+    let args = shell_split(cmd);
+    let args = &args[1..]; // drop the leading "hyalo" token
+    let rerun = hyalo().args(args).output().unwrap();
+    assert!(
+        rerun.status.success(),
+        "rerun of hinted command failed: {cmd}\nstderr: {}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
     let rerun_out = String::from_utf8(rerun.stdout).unwrap();
     let rerun_json: serde_json::Value = serde_json::from_str(&rerun_out).unwrap();
     let results = rerun_json["results"]
