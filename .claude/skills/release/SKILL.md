@@ -18,6 +18,11 @@ after everything on main is final.
 - Everything lands on `main` before the release is created. The mechanical
   release commits (version bump, changelog rotation) go directly on main —
   a release is a synchronous maintainer act; don't spin up a PR for them.
+- Every `hyalo` invocation below means `target/release/hyalo` (build it
+  first if stale). The bare `hyalo` on PATH is the previously *installed*
+  release — it predates the version being cut and will reject new config
+  keys/flags (v0.18.0 example: it choked on `[changelog]` in `.hyalo.toml`
+  and didn't know `lint --profile`).
 
 ## 1. Preconditions
 
@@ -56,7 +61,7 @@ If a bump is needed: edit the three fields, run `cargo build --release`
 
 ```bash
 target/release/hyalo changelog release X.Y.Z --apply
-hyalo lint --dir . CHANGELOG.md --profile changelog   # root file is outside the vault → needs --dir .
+target/release/hyalo lint --dir . CHANGELOG.md --profile changelog   # root file is outside the vault → needs --dir .
 ```
 
 This moves `[Unreleased]` into a dated `## [X.Y.Z]` section and rewrites the
@@ -95,8 +100,14 @@ show <version>` exists by now, prefer it.)
   Homebrew, winget, SBOMs, provenance, SHA256SUMS).
 - `gh release view vX.Y.Z` — assets present, notes render with the curated
   section on top.
-- Crates publishing runs separately (`publish-crates.yml`); if it fails
-  half-published, it has a manual escape hatch — see that workflow.
+- **Publish crates — manual dispatch required.** `publish-crates.yml` is
+  `workflow_dispatch`-only; nothing triggers it automatically. Once the
+  release pipeline is green:
+  `gh workflow run publish-crates.yml -f ref=vX.Y.Z`, find the run id with
+  `gh run list --workflow publish-crates.yml --limit 1`, then
+  `gh run watch <id> --exit-status`. If it fails half-published, it has a
+  manual escape hatch — see that workflow. The release is not done until
+  this run is green.
 - Pipeline internals live in `ractive/release-workflows`; failures inside
   reusable jobs are usually fixed there, not here.
 
