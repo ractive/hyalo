@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-18
+
 ### Added
 
 - **OKF (Open Knowledge Format) support** (iters 163–166): `datetime-tz`
@@ -138,11 +140,11 @@ and this project adheres to
   `okf log`.
   - *Marker-edge data loss*: an `index.md` with a **dangling / reversed /
     duplicate** `okf:index` managed-region marker is now left byte-identical and
-    reported as `skip` (with a stderr warning), never rewritten — the generator
-    no longer splices across a broken marker and deletes the hand prose after it
-    on a second `--apply`. A new advisory `OKF-INDEX-MARKERS` lint rule flags the
-    same condition in CI, and malformed-marker files count as drift in
-    `--dry-run`.
+    reported as `skip` (with a stderr warning), never rewritten — the
+    generator no longer splices across a broken marker and deletes the hand
+    prose after it on a second `--apply`. A new advisory `OKF-INDEX-MARKERS`
+    lint rule flags the same condition in CI, and malformed-marker files count
+    as drift in `--dry-run`.
   - *CommonMark-valid links*: generated bullets are always valid Markdown link
     items — destinations with spaces are angle-bracket wrapped
     (`](<blocks table.md>)`), `[`/`]` in titles are backslash-escaped, and
@@ -154,10 +156,10 @@ and this project adheres to
     the same way.
   - *Scope & message polish*: a nonexistent `okf index <dir>` scope is rejected
     (exit 1) instead of vacuously passing; `-q`/`--quiet` now suppresses the
-    skip warnings; `okf log` indents multi-line `--message` continuation lines so
-    an embedded `## heading` can't corrupt the log; `okf log --action ""` errors
-    like `--message ""`; a nonexistent `okf log <dir>` target is rejected
-    consistently in dry-run and apply. Grammar: `N file written` and
+    skip warnings; `okf log` indents multi-line `--message` continuation lines
+    so an embedded `## heading` can't corrupt the log; `okf log --action ""`
+    errors like `--message ""`; a nonexistent `okf log <dir>` target is
+    rejected consistently in dry-run and apply. Grammar: `N file written` and
     `preserving 1 existing line`. Re-running `init --profile <p>` on an
     already-merged config now reports `unchanged` instead of `updated`.
 - **Malformed-file policy** (iter-173): `okf index` now skips a concept with
@@ -515,6 +517,7 @@ and this project adheres to
   crafted files.
 
 [Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
+[0.18.0]: TBD
 [0.17.0]: https://github.com/ractive/hyalo/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/ractive/hyalo/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/ractive/hyalo/compare/v0.15.0...v0.16.0
