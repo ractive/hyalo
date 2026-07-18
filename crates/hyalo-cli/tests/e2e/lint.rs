@@ -222,6 +222,30 @@ fn lint_single_file_positional() {
 }
 
 #[test]
+fn lint_multiple_positional_files() {
+    // `hyalo lint a.md b.md` — positional FILE is repeatable and both targets
+    // are linted, matching --files-from semantics (iter-179 scope item 5).
+    let tmp = setup_vault_with_schema();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "clean.md", "bad_status.md"])
+        .output()
+        .unwrap();
+
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+    assert!(
+        stdout.contains("2 files checked"),
+        "expected both positional files to be linted: {stdout}"
+    );
+    let exit = output.status.code().unwrap();
+    assert_eq!(
+        exit, 1,
+        "bad_status.md has an invalid enum value, so exit should be non-zero: {stdout}"
+    );
+}
+
+#[test]
 fn lint_single_file_flag() {
     let tmp = setup_vault_with_schema();
 
