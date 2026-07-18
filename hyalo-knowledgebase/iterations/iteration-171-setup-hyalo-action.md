@@ -7,7 +7,7 @@ tags:
   - ci
   - github-actions
   - distribution
-status: in-progress
+status: completed
 branch: iter-171/setup-hyalo-action
 ---
 
@@ -56,19 +56,19 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
 - [x] Diff-aware variant documented — reuse the exact snippet iter-170 already shipped in the README rather than a fresh one: `git diff --name-only origin/main -- '**/*.md' | hyalo lint --strict --files-from - --format github` (note: **not** `origin/main...HEAD -- '*.md'` — align on the landed syntax so the repo doesn't carry two slightly different diff-aware examples)
 - [x] Agent recipe documented: `claude-code-action` workflow with a preceding `setup-hyalo` step, `allowed_tools: Bash(hyalo:*)`, and the repo carrying the skill from `hyalo init --claude` — so `@claude` mentions can triage/fix lint findings with `hyalo set` / `lint --fix`
 - [x] If the agent recipe demonstrates `hyalo lint --fix` (mutating or `--dry-run`) combined with `--format github`, sanity-check against a file with an unfixable violation (e.g. a missing required property) — iter-170's PR review found the fix-mode output path uses a different JSON shape (`remaining_groups`) than read-only lint (`rule_groups`), which the github-format renderer initially missed entirely; that's fixed on main now, but any *new* lint output consumer should assume both shapes exist and test both, not just the read-only path
-- [ ] Convert hyalo's own `lint-kb` CI job (iter-170) to use the published action — end-to-end dogfood of the release artifact path
+- [x] Convert hyalo's own `lint-kb` CI job (iter-170) to use the published action — end-to-end dogfood of the release artifact path
 
 ### 4. Verification
 
 - [x] Smoke matrix in the action repo green on all three OSes
-- [ ] A real PR in the hyalo repo shows inline lint annotations produced via the action
+- [x] A real PR in the hyalo repo shows inline lint annotations produced via the action
 - [x] Knowledgebase: record the separate-repo + floating-tag decision in the decision log
 
 ## Acceptance criteria
 
-- [ ] `uses: ractive/setup-hyalo@v1` followed by `hyalo lint --strict --format github` is a working two-step PR check on ubuntu, macos, and windows runners
+- [x] `uses: ractive/setup-hyalo@v1` followed by `hyalo lint --strict --format github` is a working two-step PR check on ubuntu, macos, and windows runners
 - [x] Pinned `version:` input installs exactly that release; `latest` tracks the newest
-- [ ] hyalo's own CI uses the action for its KB lint job
+- [x] hyalo's own CI uses the action for its KB lint job
 - [x] README documents both the PR-check and the claude-code-action recipes
 
 ## Status (2026-07-17)
@@ -120,3 +120,27 @@ action, `--format github` two-step check). The release must ship the iter-170
 annotations format first. Sequence after release: re-enable `--format github`
 in the smoke fixture → `workflow_dispatch` smoke with the new tag → flip
 `lint-kb` → tick the last boxes and set this iteration `completed`.
+
+## Update (2026-07-18, post-v0.18.0)
+
+**Completed.** v0.18.0 shipped `lint --format github`, unblocking the
+remaining items:
+
+- setup-hyalo smoke fixture restored to `lint --strict --format github` and
+  the pinned matrix entry bumped v0.17.0 → v0.18.0 (smoke-only change, no
+  retag). Dispatch run 29662413091: **green on all 6 jobs**
+  (ubuntu/macos-14/windows × latest/v0.18.0).
+- hyalo's own `lint-kb` job flipped from build-from-source to
+  `uses: ractive/setup-hyalo@v1` + `hyalo lint --strict --format github`
+  (PR #209). Job runtime dropped from a full release build to ~6s.
+- Annotation evidence (PR #209, check run 88127495392): the action-installed
+  v0.18.0 binary produced 10 registered inline MD013 warning annotations,
+  e.g. `{"path":"hyalo-knowledgebase/decision-log.md","start_line":6,`
+  `"annotation_level":"warning","title":"MD013","message":"Line length is 99
+  characters, expected no more than 80"}`. Note: GitHub caps workflow-command
+  annotations at **10 warnings per step**, so with 668 vault warnings only
+  the first 10 register; the temporary demo file's own warning was emitted
+  (visible in the job log) but fell outside the cap. The demo file was
+  removed in a follow-up commit on the same branch.
+
+Iteration marked `completed`.
