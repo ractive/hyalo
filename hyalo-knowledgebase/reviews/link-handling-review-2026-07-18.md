@@ -258,3 +258,26 @@ Agent-level write-ups with regression-test sketches are in
 `pitfall_fuzzy_match_phantom_tie.md`,
 `project_mv_rewrite_review_2026-07-19.md`,
 `project_link_resolution_review_2026-07-18.md`).
+
+## Addendum 2026-07-18 — post-iter-176 re-verify findings
+
+Targeted re-verification of the v0.18.0 fixes (after PR #207/#208 merged)
+surfaced two parser-side gaps that belong to this review's scope and were
+not covered above. Both should be absorbed into the planned phases (A or B),
+not fixed pre-release:
+
+- **L-A1 — angle-bracket destinations unsupported by the parser.**
+  iter-176's generator now emits CommonMark-valid `[text](<spaced dest.md>)`
+  links, but the link scanner stores the target with literal `<>`:
+  `find --broken-links` false-positives on the generator's own fresh output
+  (every spaced-destination link reported "unresolved"), `backlinks` misses
+  them, and the hint then offers `links fix` on spec-valid links.
+  Generator/parser split-brain.
+- **L-A2 — escaped brackets in link text blind the parser.** A line like
+  `[Contains \[test\] brackets](<dest.md>)` is entirely absent from
+  `--fields links` and `backlinks` output.
+
+Minor related: `okf index --dry-run` exits 1 on marker-skip vaults with
+`changed: 0`, contradicting the documented "non-zero when any index.md
+would change" contract (possibly intentional — surface skips in CI — but
+undocumented).

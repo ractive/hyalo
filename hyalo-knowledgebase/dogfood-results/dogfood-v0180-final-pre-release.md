@@ -334,3 +334,30 @@ class as RB-5), and ideally **BUG-10** (invalid links in generated output).
 BUG-1/BUG-2 (`mv`/`links fix` frontmatter-anchor loss) are serious but
 pre-existing, not 0.18.0 regressions — fine as a fast-follow. Everything
 else can ride a later wave.
+
+## Re-verify Addendum 2026-07-18 (post iter-176/177)
+
+All three pre-release blockers re-verified FIXED against the original
+repros with the release binary built from merged main (PR #207/#208):
+
+- **BUG-3** — dangling/reversed/duplicate/dangling-end markers all
+  skip-and-warn; index.md byte-identical across two applies
+  (`skipped_markers` counted, `changed: 0`). Data-loss path gone.
+- **BUG-4** — `types set "Data Table"` succeeds and round-trips through
+  `new` → `lint` → `find --property 'type=Data Table'` per the bundled
+  skill's flow.
+- **BUG-10** — generated links CommonMark-valid: spaced destinations
+  angle-bracketed, `[]` escaped in text, multiline descriptions collapsed;
+  second apply is a byte-identical no-op. (BUG-9 grammar also confirmed:
+  "2 files written".)
+
+New findings recorded in
+[[reviews/link-handling-review-2026-07-18]] addendum (L-A1 angle-bracket
+destinations unsupported by the link parser, L-A2 escaped-bracket link
+text invisible, dry-run exit-code contract nit) — deferred to the planned
+link chain (iterations 178–185), not release blockers. Minor `new`/lint
+nits also observed (MD047 on own scaffold, OKF-CITATIONS-PRESENT off-by-one
+line cite, post-`new` hint promising placeholder violations that lint
+doesn't emit).
+
+**Verdict: cleared for v0.18.0 release.**
