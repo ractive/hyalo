@@ -11,84 +11,6 @@ and this project adheres to
 
 ### Added
 
-- **`okf index` / `madr toc` non-destructive adopt** (iter-173): a marker-less
-  `index.md`/`README.md` is now *adopted* — its entire hand-written body is
-  preserved and the managed region is appended after it (dry-run reports
-  `adopt (preserving N existing lines)`). The old overwrite behavior is opt-in
-  via a new `--replace` flag. On case-insensitive filesystems an existing
-  `INDEX.md` is recognized as the reserved file and adopted by its on-disk
-  casing.
-- **`[okf] ignore` config**: vault-relative globs (`_template/**`,
-  `test/fixture-vault/**`) the OKF generators skip, independent of
-  `[lint] ignore`.
-- **`HYALO005` / `frontmatter-parse-error` lint rule** (iter-174): a file whose
-  frontmatter cannot be parsed (invalid YAML, duplicate keys, oversized scalar)
-  is now reported as an error-severity lint violation under a stable rule id and
-  still counts toward `files_checked`, so it appears in text/json/github output
-  and fails CI. Listed in `hyalo lint-rules list`; severity configurable via
-  `[lint.rules.HYALO005]` but never silently downgraded by a profile.
-- **Skip-summary in text & github** (iter-174): when `--files-from` drops input
-  paths, `--format text` prints a `note: N input paths missing, M non-markdown
-  skipped` line (stderr) and `--format github` emits the same as a `::notice::`,
-  matching the counters JSON already exposes. An explicitly named `--file`
-  excluded by `[lint] ignore` prints a notice instead of a silent `0 files
-  checked`.
-- **Distinguishable `--fix --dry-run --format github`** (iter-174):
-  would-be-fixed violations render as `::notice` with a `[fixable]` title prefix
-  and the summary becomes `N fixable, M remaining`, so a dry-run preview is no
-  longer byte-identical to a plain lint run.
-
-### Changed
-
-- **BREAKING (CI): unparseable frontmatter now fails lint** (iter-174). Files
-  that previously vanished silently from the scan (leaving a green
-  `0 files checked, no issues`) now surface as `HYALO005` errors and exit 1.
-  Vaults that unknowingly contained corrupt files will start failing CI — this
-  is intentional: a green lint must mean the vault is genuinely clean.
-
-- Generated `index.md`/`log.md`/`README.md` managed regions now emit a blank
-  line after the begin marker and before the end marker, so a freshly generated
-  file passes MD022 — ending the `lint --fix` ↔ `okf index` revert ping-pong.
-- `okf index` / `okf log` / `madr toc` `--format text` output now renders
-  readable per-file lines instead of a mis-nested `files: action: create` key
-  dump.
-
-### Fixed
-
-- **Malformed-file policy** (iter-173): `okf index` now skips a concept with
-  unparseable frontmatter with a per-file stderr warning and continues, instead
-  of aborting the whole run on the first bad file (exit code 2 is reserved for
-  real I/O/config errors; drift stays exit 1). A scoped run (`okf index
-  <subtree>`) no longer dies on a malformed file elsewhere in the vault.
-- `SCHEMA` "missing required property" violations now report
-  `autofixable: false` when no schema `default` exists for the property (so
-  `--fix` cannot synthesize a value), instead of a misleading `true`.
-- **`lint --limit 0` now means unlimited** (iter-174): it previously emptied the
-  `files[]` list *and* zeroed the `errors` counter, so `hyalo lint --limit 0` on
-  a corrupt vault exited 0 with no findings. `--limit 0` now lifts the file cap
-  (matching `--count --limit 0`) and the `errors`/`warnings` counters and exit
-  code are computed over the whole vault, never the truncated display slice — so
-  a `--limit N` cap can no longer hide an error.
-- **`--format github` annotations are no longer truncated by the file cap**: the
-  regression is now covered by a test that lints 60 files past the default
-  50-file cap and asserts all 60 annotations are emitted.
-- `[schema] exempt` globs and the OKF reserved-file checks (`index.md`/`log.md`)
-  now honor the resolved `[links] case_insensitive` mode, so an adopted
-  `INDEX.md` on macOS/Windows is exempted and classified as reserved instead of
-  failing `lint` as a typeless concept doc.
-- Skip-summary pluralization (`1 input path missing`) and YAML parse errors no
-  longer leak library-internal advice (`set DuplicateKeyPolicy in Options if
-  acceptable`) in `HYALO005` messages and generator skip warnings.
-- **`changelog add` no longer splits a wrapped multi-line bullet** (LB-5): when
-  the last bullet under a `### Category` had hanging-indent continuation
-  lines, the new entry was inserted after only the bullet's first line,
-  stranding its continuation lines below the new entry. The insertion anchor
-  now scans past a bullet's full continuation block before inserting.
-
-## [0.18.0] - 2026-07-17
-
-### Added
-
 - **OKF (Open Knowledge Format) support** (iters 163–166): `datetime-tz`
   property type (timezone-aware timestamps, disjoint from naive `datetime`);
   `[schema] exempt` glob list binding reserved files (`index.md`, `log.md`) to
@@ -133,11 +55,120 @@ and this project adheres to
   installs the prebuilt hyalo binary on any runner (checksum-verified against
   the release `SHA256SUMS`, tool-cached); the README documents the two-step
   PR-check recipe and the `claude-code-action` agent recipe.
+- **`[scan] include` config** (iter-175): glob allow-list re-admitting
+  specific hidden subtrees (e.g. `.claude/skills/**`) to the vault walker for
+  every command (`.git` stays hard-excluded). The skills profile ships
+  `include = [".claude/skills/**"]` so `**/SKILL.md` bindings reach the
+  canonical Claude Code skill location.
+- **`[changelog] path` config** (iter-175): point the `changelog` commands at
+  a file outside the vault — e.g. the repo-root `CHANGELOG.md` when `dir` is
+  a docs subdirectory — with a path-escape guard.
+- **xtask `check-bundled-skills` CI gate** (iter-175): every bundled skill
+  template is linted as installed under the skills profile, so a bundled
+  skill can never ship violating its own schema again.
+- **`okf index` / `madr toc` non-destructive adopt** (iter-173): a marker-less
+  `index.md`/`README.md` is now *adopted* — its entire hand-written body is
+  preserved and the managed region is appended after it (dry-run reports
+  `adopt (preserving N existing lines)`). The old overwrite behavior is opt-in
+  via a new `--replace` flag. On case-insensitive filesystems an existing
+  `INDEX.md` is recognized as the reserved file and adopted by its on-disk
+  casing.
+- **`[okf] ignore` config**: vault-relative globs (`_template/**`,
+  `test/fixture-vault/**`) the OKF generators skip, independent of
+  `[lint] ignore`.
+- **`HYALO005` / `frontmatter-parse-error` lint rule** (iter-174): a file whose
+  frontmatter cannot be parsed (invalid YAML, duplicate keys, oversized scalar)
+  is now reported as an error-severity lint violation under a stable rule id and
+  still counts toward `files_checked`, so it appears in text/json/github output
+  and fails CI. Listed in `hyalo lint-rules list`; severity configurable via
+  `[lint.rules.HYALO005]` but never silently downgraded by a profile.
+- **Skip-summary in text & github** (iter-174): when `--files-from` drops input
+  paths, `--format text` prints a `note: N input paths missing, M non-markdown
+  skipped` line (stderr) and `--format github` emits the same as a `::notice::`,
+  matching the counters JSON already exposes. An explicitly named `--file`
+  excluded by `[lint] ignore` prints a notice instead of a silent `0 files
+  checked`.
+- **Distinguishable `--fix --dry-run --format github`** (iter-174):
+  would-be-fixed violations render as `::notice` with a `[fixable]` title prefix
+  and the summary becomes `N fixable, M remaining`, so a dry-run preview is no
+  longer byte-identical to a plain lint run.
 
 ### Changed
 
+- **BREAKING (CI): unparseable frontmatter now fails lint** (iter-174). Files
+  that previously vanished silently from the scan (leaving a green
+  `0 files checked, no issues`) now surface as `HYALO005` errors and exit 1.
+  Vaults that unknowingly contained corrupt files will start failing CI — this
+  is intentional: a green lint must mean the vault is genuinely clean.
+
+- **Profile composition now truly composes** (iter-172): merging a profile
+  into `.hyalo.toml` unions array keys (`[schema] exempt`, `[lint] ignore`,
+  `[schema.default] required`) and dedups `[[schema.bind]]` entries by
+  (glob, type) instead of clobbering the previous profile's values; the
+  merge is comment- and order-preserving (`toml_edit`) and reports
+  `conflict:` lines when a scalar would be overwritten. `[lint] profile`
+  (single scalar) is deprecated in favor of the `profiles` list so every
+  activated profile's rules fire together; the `--profile` CLI overlay
+  composes with file config instead of resetting user additions.
+- **Path-bound files satisfy the required-`type` check** (iter-172): a file
+  typed via `[[schema.bind]]` (e.g. a frontmatter-less `SKILL.md` or ADR) no
+  longer needs an explicit `type:` key to pass `required = ["type"]`,
+  including under `--strict`.
+- The OKF profile is vendor-neutral (iter-175): the BigQuery example types
+  are no longer injected into every vault.
+- `hyalo new --type <t>` honors `[schema.types.<t>.defaults]` (e.g.
+  `status`, `date = "$today"`) and omits the `type:` key when the target
+  path is covered by a `[[schema.bind]]` binding (iter-175).
+- `madr toc` excludes files whose explicit `type:` is not `adr` from the
+  dashboard instead of listing every `.md` in the directory (iter-175).
+- Generated `index.md`/`log.md`/`README.md` managed regions now emit a blank
+  line after the begin marker and before the end marker, so a freshly
+  generated file passes MD022 — ending the `lint --fix` ↔ `okf index` revert
+  ping-pong.
+- `okf index` / `okf log` / `madr toc` `--format text` output now renders
+  readable per-file lines instead of a mis-nested `files: action: create` key
+  dump.
 - This repository's own knowledgebase is linted in CI on every PR
   (`lint-kb` job, `hyalo lint --strict --format github`) (iter-170).
+
+### Fixed
+
+- **Malformed-file policy** (iter-173): `okf index` now skips a concept with
+  unparseable frontmatter with a per-file stderr warning and continues, instead
+  of aborting the whole run on the first bad file (exit code 2 is reserved for
+  real I/O/config errors; drift stays exit 1). A scoped run (`okf index
+  <subtree>`) no longer dies on a malformed file elsewhere in the vault.
+- `SCHEMA` "missing required property" violations now report
+  `autofixable: false` when no schema `default` exists for the property (so
+  `--fix` cannot synthesize a value), instead of a misleading `true`.
+- **`lint --limit 0` now means unlimited** (iter-174): it previously emptied the
+  `files[]` list *and* zeroed the `errors` counter, so `hyalo lint --limit 0` on
+  a corrupt vault exited 0 with no findings. `--limit 0` now lifts the file cap
+  (matching `--count --limit 0`) and the `errors`/`warnings` counters and exit
+  code are computed over the whole vault, never the truncated display slice —
+  so a `--limit N` cap can no longer hide an error.
+- **`--format github` annotations are no longer truncated by the file cap**: the
+  regression is now covered by a test that lints 60 files past the default
+  50-file cap and asserts all 60 annotations are emitted.
+- **`changelog add` inserts inside `[Unreleased]`** (iter-175, RB-4): the new
+  `### Category` is bounded at the footer link-reference block, so entries no
+  longer land after the link refs at EOF (which made every conformant Keep a
+  Changelog file fail its own lint); output stays MD047-clean.
+- `types set default` is rejected with a message pointing at
+  `[schema.default]` instead of silently writing a phantom, unused
+  `[schema.types.default]` table (iter-175).
+- `[schema] exempt` globs and the OKF reserved-file checks (`index.md`/`log.md`)
+  now honor the resolved `[links] case_insensitive` mode, so an adopted
+  `INDEX.md` on macOS/Windows is exempted and classified as reserved instead of
+  failing `lint` as a typeless concept doc.
+- Skip-summary pluralization (`1 input path missing`) and YAML parse errors no
+  longer leak library-internal advice (`set DuplicateKeyPolicy in Options if
+  acceptable`) in `HYALO005` messages and generator skip warnings.
+- **`changelog add` no longer splits a wrapped multi-line bullet** (LB-5): when
+  the last bullet under a `### Category` had hanging-indent continuation
+  lines, the new entry was inserted after only the bullet's first line,
+  stranding its continuation lines below the new entry. The insertion anchor
+  now scans past a bullet's full continuation block before inserting.
 
 ## [0.17.0] - 2026-07-11
 
@@ -456,8 +487,7 @@ and this project adheres to
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.18.0...HEAD
-[0.18.0]: https://github.com/ractive/hyalo/compare/v0.17.0...v0.18.0
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
 [0.17.0]: https://github.com/ractive/hyalo/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/ractive/hyalo/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/ractive/hyalo/compare/v0.15.0...v0.16.0
