@@ -21,13 +21,19 @@ after everything on main is final.
 
 ## 1. Preconditions
 
-- On `main`, clean tree, synced: `git switch main && git pull --ff-only`.
-- Latest merges are green: `gh run list --branch main --limit 5` and/or
-  `gh pr checks <last-PR>` — every quality gate passed.
-- `CHANGELOG.md` has a non-empty `## [Unreleased]` section (that's what
-  ships). If it's empty, stop — nothing to release.
-- Decide the version from the `[Unreleased]` contents (pre-1.0 convention
-  here: minor bump for features/breaking, patch for fix-only).
+Decide the version from the `[Unreleased]` contents (pre-1.0 convention
+here: minor bump for features/breaking, patch for fix-only), then run the
+read-only preflight — it checks branch/clean/sync, the 3-spot version
+match, that the tag doesn't exist, the changelog state (pre- vs
+post-rotation), changelog-profile lint, and gh auth:
+
+```bash
+.claude/skills/release/scripts/release-preflight.sh check X.Y.Z
+```
+
+Fix every FAIL before proceeding. Additionally verify the latest merges are
+green (`gh run list --branch main --limit 5` / `gh pr checks <last-PR>`) —
+the script cannot judge CI health.
 
 ## 2. Verify or bump the workspace version
 
@@ -74,12 +80,13 @@ notes, then create the release. GitHub prepends `--notes-file` to the
 unlabeled PRs land under "Other Changes").
 
 ```bash
-sed -n '/^## \[X.Y.Z\]/,/^## \[/p' CHANGELOG.md | sed '$d' > /tmp/relnotes.md
-test -s /tmp/relnotes.md   # MUST be non-empty — abort if the sed matched nothing
+.claude/skills/release/scripts/release-preflight.sh notes X.Y.Z > /tmp/relnotes.md
 gh release create vX.Y.Z --notes-file /tmp/relnotes.md --generate-notes
 ```
 
-(If `hyalo changelog show <version>` exists by now, use it instead of sed.)
+The `notes` mode fails loudly (exit 1) if the `[X.Y.Z]` section is missing
+or empty — never publish with an empty notes file. (If `hyalo changelog
+show <version>` exists by now, prefer it.)
 
 ## 6. Watch the pipeline and verify
 
