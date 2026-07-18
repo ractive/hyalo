@@ -21,10 +21,16 @@ use crate::{DiagFix, DiagSeverity, Diagnostic};
 /// `Warn` (a safe default). The upstream severity is ignored; we own it.
 static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     // Bugs that break rendering
-    ("MD001", DiagSeverity::Warn),  // heading-increment — structural
-    ("MD009", DiagSeverity::Warn),  // trailing-spaces
-    ("MD010", DiagSeverity::Warn),  // no-hard-tabs
-    ("MD011", DiagSeverity::Error), // no-reversed-links — breaks rendering
+    ("MD001", DiagSeverity::Warn), // heading-increment — structural
+    ("MD009", DiagSeverity::Warn), // trailing-spaces
+    ("MD010", DiagSeverity::Warn), // no-hard-tabs
+    // no-reversed-links — a genuinely reversed link `(text)[url]` breaks
+    // rendering, hence error. Known false-positive class: literal regex or
+    // math prose that writes `)[` (e.g. a character class `[)]` after a group)
+    // can trip the detector. It stays error because the autofix only rewrites a
+    // real reversed-link shape; when it misfires on regex text, disable it for
+    // that file via `[lint.rules] MD011 = false` or fence the sample as code.
+    ("MD011", DiagSeverity::Error),
     ("MD012", DiagSeverity::Warn),  // no-multiple-blanks
     ("MD018", DiagSeverity::Warn),  // no-missing-space-atx
     ("MD019", DiagSeverity::Warn),  // no-multiple-space-atx
@@ -711,6 +717,20 @@ fn convert_fix(v: &mdbook_lint_core::Violation, content: &str, rule_id: &str) ->
         end += 1;
     }
 
+    // MD034 (no-bare-urls) wraps a detected bare URL in `<...>`. Upstream's URL
+    // boundary scan treats Liquid template syntax (`{% ... %}`, `{{ ... }}` —
+    // common in GitHub Docs) as part of the URL, so it swallows a trailing
+    // `{%`/`{{` into the autolink and produces `<https://…{%>` which then
+    // breaks the template. Pull the range (and its replacement) back to just
+    // before the Liquid opener so the autolink stops at the real URL and the
+    // template markup is left untouched.
+    if rule_id == "MD034"
+        && let Some(trimmed) = trim_md034_liquid(&replacement, content, start, end)
+    {
+        end = trimmed.end;
+        replacement = trimmed.replacement;
+    }
+
     // Some upstream rules (MD009, MD023, ...) express "replace this whole
     // line" with an end column of `line_len + 1` and a replacement that
     // re-adds its own trailing '\n', expecting to consume the line's
@@ -749,6 +769,52 @@ fn convert_fix(v: &mdbook_lint_core::Violation, content: &str, rule_id: &str) ->
         start,
         end,
         replacement,
+    })
+}
+
+/// Outcome of trimming a Liquid tag off the tail of an MD034 autolink fix.
+struct Md034Trim {
+    end: usize,
+    replacement: String,
+}
+
+/// If the MD034 `replacement` (`<URL>`) has swallowed a trailing Liquid tag
+/// (`{%` or `{{`), return a shortened `(end, replacement)` that stops the
+/// autolink just before the tag.
+///
+/// `replacement` is expected to be `<...>`; `start..end` is its byte range in
+/// `content`. Returns `None` when there is no Liquid tag to trim (the common
+/// case — most URLs are clean), so the caller keeps upstream's fix untouched.
+fn trim_md034_liquid(
+    replacement: &str,
+    content: &str,
+    start: usize,
+    end: usize,
+) -> Option<Md034Trim> {
+    // Only handle the well-formed `<...>` shape upstream emits.
+    let inner = replacement.strip_prefix('<')?.strip_suffix('>')?;
+    // Earliest Liquid opener inside the wrapped URL.
+    let cut = ["{%", "{{"]
+        .iter()
+        .filter_map(|tag| inner.find(tag))
+        .min()?;
+    if cut == 0 {
+        // The whole "URL" is a Liquid tag — nothing real to autolink.
+        return None;
+    }
+    let trimmed_url = &inner[..cut];
+    // Recompute the byte range: the replacement covered `start..end`; the new
+    // range keeps the same start and drops the tail (`inner.len() - cut` bytes)
+    // that followed the URL, so the Liquid markup stays in the source verbatim.
+    let dropped = inner.len() - cut;
+    let new_end = end.checked_sub(dropped)?;
+    // Guard against a range that no longer lines up with the content.
+    if new_end < start || new_end > content.len() {
+        return None;
+    }
+    Some(Md034Trim {
+        end: new_end,
+        replacement: format!("<{trimmed_url}>"),
     })
 }
 
@@ -981,6 +1047,41 @@ mod tests {
         // The byte-column walk used to eat the space before the URL and
         // leave a stray fragment: "café<http://example.com>m is a site."
         assert_eq!(fixed, "café <http://example.com> is a site.\n");
+    }
+
+    #[test]
+    fn md034_fix_does_not_swallow_trailing_liquid_tag() {
+        // GitHub Docs prose embeds Liquid template syntax right after a URL.
+        // The MD034 autolink must stop at the real URL, leaving `{% ... %}`
+        // outside the `<...>` so the template markup survives.
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "See https://example.com{% ifversion ghes %} for details.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        let Some(d) = diagnostics.iter().find(|d| d.rule_id == "MD034") else {
+            // If upstream stopped flagging this shape at all, there is nothing
+            // to corrupt — the invariant still holds.
+            return;
+        };
+        if let Some(fix) = d.fix.as_ref() {
+            let fixed = apply(body, fix);
+            assert!(
+                !fixed.contains("{% ifversion ghes %}>"),
+                "Liquid tag must not be pulled inside the autolink: {fixed:?}"
+            );
+            assert!(
+                fixed.contains("{% ifversion ghes %}"),
+                "Liquid tag must survive verbatim: {fixed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trim_md034_liquid_leaves_clean_urls_untouched() {
+        // No Liquid tag → no trim, upstream fix is kept as-is.
+        assert!(trim_md034_liquid("<https://example.com>", "x", 0, 0).is_none());
     }
 
     #[test]

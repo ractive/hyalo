@@ -48,7 +48,10 @@ and misleading variants
 - [ ] `summary`'s schema counters either apply `[lint] ignore` globs (so
   the "Lint: N errors" hint matches `hyalo lint`) or the label changes to
   say what is actually counted (e.g. "Schema (incl. lint-ignored)");
-  decide and record
+  decide and record. Note (iter-179): the hint's wording was pluralized
+  correctly (`hints_for_summary` in `hints.rs`, "1 error, 0 warnings") but
+  the underlying count-vs-`ignore`-globs mismatch this AC targets is
+  untouched — don't mistake the wording fix for the counter-honesty fix
 - [ ] Post-`lint --fix` output drops the stale pre-fix "Show all N files
   with issues" hint (recompute or suppress after apply)
 
@@ -67,6 +70,11 @@ and misleading variants
 ### 6. Retrospective
 
 - [ ] Update remaining planned iterations with anything learned
+- Note (iter-179 carryover): lint body diagnostics now report file-absolute
+  line numbers (`to_file_line` / `find_body_line_offset` in `lint.rs`) and
+  each violation carries its own `severity`. If any hint text in this
+  iteration surfaces per-line lint detail, reuse those fields rather than
+  re-deriving line offsets or re-folding severity.
 
 ## Acceptance Criteria
 

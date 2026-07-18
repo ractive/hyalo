@@ -10,6 +10,8 @@ use mdbook_lint_core::{
     violation::Severity,
 };
 
+use crate::rules::code_fence::{CodeFence, fence_open, is_fence_close};
+
 /// HYALO002: `status: completed` → all tasks must be checked.
 pub struct Hyalo002 {
     /// Whether the schema declares `status` with `completed` in its enum.
@@ -65,8 +67,22 @@ impl Rule for Hyalo002 {
         }
 
         // Scan for unchecked task items: lines matching `- [ ]` or `* [ ]`.
+        // A literal `- [ ]` inside a fenced code block documents task syntax
+        // and is not itself an open task, so code-block contents are skipped
+        // (BUG-5 — the same fenced-code blindness fixed in HYALO001).
         let mut open_tasks: Vec<usize> = Vec::new();
+        let mut fence: Option<CodeFence> = None;
         for (idx, line) in document.lines.iter().enumerate() {
+            if let Some(open) = &fence {
+                if is_fence_close(line, open) {
+                    fence = None;
+                }
+                continue;
+            }
+            if let Some(open) = fence_open(line) {
+                fence = Some(open);
+                continue;
+            }
             let trimmed = line.trim_start();
             if is_open_task(trimmed) {
                 open_tasks.push(idx + 1); // 1-based line number
@@ -174,5 +190,17 @@ mod tests {
     fn no_violation_when_no_tasks() {
         let violations = check("# Title\n\nSome body text.\n", true, Some("completed"));
         assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn open_task_inside_fenced_code_is_ignored() {
+        // A literal `- [ ]` inside a code fence documents syntax; a completed
+        // doc must not be flagged just because its prose shows an example.
+        let content = "All done.\n\n```markdown\n- [ ] example open task\n```\n";
+        let violations = check(content, true, Some("completed"));
+        assert!(
+            violations.is_empty(),
+            "fenced-code task example must not fire HYALO002, got {violations:?}"
+        );
     }
 }

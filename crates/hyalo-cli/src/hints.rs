@@ -341,15 +341,25 @@ fn files_from_hints(counters: Option<FilesFromCounterSummary>) -> Vec<Hint> {
     };
 
     if c.files_missing > 0 {
+        let (noun, verb) = if c.files_missing == 1 {
+            ("path", "did")
+        } else {
+            ("paths", "did")
+        };
         out.push(Hint::without_cmd(format!(
-            "{} input path(s) did not exist on disk (likely deletions); \
+            "{} input {noun} {verb} not exist on disk (likely deletions); \
              use `git diff --name-only --diff-filter=AMR` upstream to filter them out",
             c.files_missing
         )));
     }
     if c.files_skipped_outside_vault > 0 {
+        let (noun, verb) = if c.files_skipped_outside_vault == 1 {
+            ("path", "was")
+        } else {
+            ("paths", "were")
+        };
         out.push(Hint::without_cmd(format!(
-            "{} input path(s) were outside the vault; \
+            "{} input {noun} {verb} outside the vault; \
              check your --dir or the upstream filter",
             c.files_skipped_outside_vault
         )));
@@ -628,8 +638,10 @@ fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         if (errors > 0 || warnings > 0) && hints.len() < MAX_HINTS {
+            let errors_label = if errors == 1 { "error" } else { "errors" };
+            let warns_label = if warnings == 1 { "warning" } else { "warnings" };
             hints.push(Hint::new(
-                format!("Lint: {errors} errors, {warnings} warnings"),
+                format!("Lint: {errors} {errors_label}, {warnings} {warns_label}"),
                 build_command_with_glob(ctx, &["lint"]),
             ));
         }

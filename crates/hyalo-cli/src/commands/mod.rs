@@ -75,6 +75,14 @@ pub fn resolve_file_user(
 /// key: type") are left intact.
 const NOISY_ERROR_SUFFIXES: &[&str] = &[", set DuplicateKeyPolicy in Options if acceptable"];
 
+/// Redundant leading prefixes on the deepest error message. Every caller of
+/// [`terse_root_cause`] already frames the message as a frontmatter parse
+/// failure (`HYALO005` prepends "could not parse frontmatter: ", the OKF
+/// skip warning names the file it could not parse), so the internal
+/// "failed to parse YAML frontmatter: " prefix double-states it (BUG /
+/// HYALO005 double-prefix). Stripped so the user sees a single prefix.
+const REDUNDANT_ERROR_PREFIXES: &[&str] = &["failed to parse YAML frontmatter: "];
+
 /// Deepest error message in an `anyhow` chain, condensed to its first line and
 /// stripped of known-noisy upstream advisory suffixes (see
 /// [`NOISY_ERROR_SUFFIXES`]).
@@ -98,6 +106,14 @@ pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
         let mut stripped_any = false;
         for suffix in NOISY_ERROR_SUFFIXES {
             if let Some(stripped) = msg.strip_suffix(suffix) {
+                msg = stripped;
+                stripped_any = true;
+            }
+        }
+        // Drop a redundant leading "failed to parse YAML frontmatter: " so the
+        // caller's own prefix is not doubled (HYALO005 double-prefix).
+        for prefix in REDUNDANT_ERROR_PREFIXES {
+            if let Some(stripped) = msg.strip_prefix(prefix) {
                 msg = stripped;
                 stripped_any = true;
             }
@@ -587,5 +603,19 @@ mod tests {
     fn terse_root_cause_leaves_unrelated_messages_untouched() {
         let err = anyhow::anyhow!("plain error with no noisy suffix");
         assert_eq!(terse_root_cause(&err), "plain error with no noisy suffix");
+    }
+
+    #[test]
+    fn terse_root_cause_strips_redundant_yaml_prefix() {
+        // The internal "failed to parse YAML frontmatter: " prefix is dropped
+        // so a caller's own prefix ("could not parse frontmatter") is not
+        // doubled (HYALO005 double-prefix).
+        let err = anyhow::anyhow!("failed to parse YAML frontmatter: bad indentation");
+        let msg = terse_root_cause(&err);
+        assert_eq!(msg, "bad indentation");
+        // Composed with PARSE_ERROR_PREFIX it reads with a single prefix.
+        let composed = format!("{}: {msg}", crate::hints::PARSE_ERROR_PREFIX);
+        assert_eq!(composed, "could not parse frontmatter: bad indentation");
+        assert!(!composed.contains("failed to parse YAML frontmatter"));
     }
 }

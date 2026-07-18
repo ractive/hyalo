@@ -320,7 +320,7 @@ fn resolve_files_from_for_command(
             let (paths, counters) =
                 resolve_files_from_to_rel_paths(&source, dir, configured_dir, snapshot_index)?;
             *file = paths;
-            *file_positional = None;
+            file_positional.clear();
             glob.clear();
             Ok(Some(counters))
         }
@@ -1334,10 +1334,8 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.lint_rule.clone_from(rule);
                 ctx.lint_rule_prefix.clone_from(rule_prefix);
                 ctx.lint_fix_rules.clone_from(fix_rule);
-                let mut targets: Vec<String> = file.clone();
-                if let Some(pos) = file_positional {
-                    targets.insert(0, pos.clone());
-                }
+                let mut targets: Vec<String> = file_positional.clone();
+                targets.extend(file.clone());
                 ctx.file_targets = targets;
                 Some(ctx)
             }

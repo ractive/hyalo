@@ -12,6 +12,8 @@ use mdbook_lint_core::{
     violation::{Fix, Position, Severity},
 };
 
+use crate::rules::code_fence::{CodeFence, fence_open, in_inline_code, is_fence_close};
+
 /// HYALO001: bare `[]` should be `- [ ]`.
 pub struct Hyalo001;
 
@@ -38,14 +40,34 @@ impl Rule for Hyalo001 {
         _ast: Option<&'a AstNode<'a>>,
     ) -> mdbook_lint_core::error::Result<Vec<Violation>> {
         let mut violations = Vec::new();
+        let mut fence: Option<CodeFence> = None;
         for (line_idx, line) in document.lines.iter().enumerate() {
             let line_no = line_idx + 1;
+
+            // Fenced code blocks (``` / ~~~) never contain task-list items, so
+            // their contents must not fire HYALO001 (BUG-5 — MDN prose that
+            // documents `[]` in a JS/regex code sample was being flagged).
+            // Track the open/close state line by line.
+            if let Some(open) = &fence {
+                if is_fence_close(line, open) {
+                    fence = None;
+                }
+                continue;
+            }
+            if let Some(open) = fence_open(line) {
+                fence = Some(open);
+                continue;
+            }
+
             // Find occurrences of bare `[]` or `[x]` / `[X]` that are NOT already
             // part of a proper task-list format `- [ ]` / `- [x]`.
             // We look for occurrences of `[]` that appear at the start of the line
             // (possibly with leading whitespace) and are NOT preceded by `- `.
             let trimmed = line.trim_start();
-            if !is_bare_checkbox(trimmed) {
+            // A bare `[...]` that lives inside an inline code span (`` `[]` ``)
+            // is code, not a checkbox — skip when the candidate bracket falls
+            // within a backtick-delimited span (BUG-5).
+            if !is_bare_checkbox(trimmed) || in_inline_code(line, line.len() - trimmed.len()) {
                 continue;
             }
 
@@ -66,8 +88,12 @@ impl Rule for Hyalo001 {
                 },
             };
 
+            // The line number is carried by the violation's `line` field and
+            // rendered as `line N` by the CLI — embedding it in the message too
+            // was redundant and, worse, body-relative (BUG-6): it disagreed with
+            // the file-absolute `line` once the CLI offset it past frontmatter.
             violations.push(self.create_violation_with_fix(
-                format!("bare checkbox `[]` on line {line_no} — should be `- [ ]`"),
+                "bare checkbox `[]` — should be `- [ ]`".to_owned(),
                 line_no,
                 col,
                 Severity::Error,
@@ -315,6 +341,68 @@ mod tests {
         let fixed = fix.replacement.as_deref().unwrap_or("");
         let v2 = check(fixed);
         assert!(v2.is_empty(), "- [] fix should be idempotent");
+    }
+
+    // --- Fenced code blocks and inline code spans (BUG-5) ---
+
+    #[test]
+    fn no_violation_inside_fenced_code_block() {
+        // A bare `[]` inside a ``` fence is code, not a checkbox.
+        let content = "# Title\n\n```js\nconst a = [];\n[] not a task\n```\n";
+        let violations = check(content);
+        assert!(
+            violations.is_empty(),
+            "fenced code contents must not trigger HYALO001, got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn no_violation_inside_tilde_fenced_code_block() {
+        let content = "~~~\n[] inside tilde fence\n~~~\n";
+        let violations = check(content);
+        assert!(violations.is_empty(), "tilde fence must be respected");
+    }
+
+    #[test]
+    fn violation_after_fenced_code_block_closes() {
+        // The fence must re-enable detection after it closes.
+        let content = "```\n[] in fence\n```\n[] real bare checkbox\n";
+        let violations = check(content);
+        assert_eq!(
+            violations.len(),
+            1,
+            "only the post-fence bare bracket should fire"
+        );
+        assert_eq!(violations[0].line, 4);
+    }
+
+    #[test]
+    fn no_violation_for_bare_bracket_in_inline_code() {
+        // `[]` inside a backtick span is code.
+        let content = "Use `[]` to make an empty array.\n";
+        let violations = check(content);
+        assert!(
+            violations.is_empty(),
+            "inline-code `[]` must not trigger HYALO001"
+        );
+    }
+
+    #[test]
+    fn mdn_repro_truthy_glossary_reduce_regex() {
+        // Real MDN prose shapes that produced 11 false positives before BUG-5.
+        // Each documents `[]` as a JS/regex value inside code, not a checkbox.
+        let repros = [
+            "In JavaScript, `[]` (an empty array) is truthy.\n",
+            "```js\nconst result = arr.reduce((a, b) => a + b, []);\n```\n",
+            "A character class like `[a-z]` matches one character; `[]` matches nothing.\n",
+        ];
+        for content in repros {
+            let violations = check(content);
+            assert!(
+                violations.is_empty(),
+                "MDN repro should be clean, got {violations:?} for {content:?}"
+            );
+        }
     }
 
     #[test]

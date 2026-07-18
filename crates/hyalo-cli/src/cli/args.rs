@@ -1151,9 +1151,10 @@ Repeatable (AND).\n\
             TIP: Run `hyalo summary` to see a one-line lint count across the whole vault."
     )]
     Lint {
-        /// Target file (relative to --dir) — positional form
+        /// Target file(s) (relative to --dir) — positional form, repeatable.
+        /// `hyalo lint a.md b.md` lints both, matching `--files-from` semantics.
         #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "type", "files_from"])]
-        file_positional: Option<String>,
+        file_positional: Vec<String>,
         /// Target file(s) (repeatable). Mutually exclusive with --glob
         #[arg(short, long, conflicts_with_all = ["glob", "type", "files_from"])]
         file: Vec<String>,

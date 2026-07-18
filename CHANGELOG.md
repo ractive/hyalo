@@ -9,8 +9,35 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`hyalo lint` accepts multiple positional files** (iter-179): `hyalo lint
+  a.md b.md` lints every listed file, matching `--files-from` semantics; the
+  positional `FILE` argument is now repeatable.
+
 ### Fixed
 
+- **Lint respects fenced code and inline code spans** (iter-179, BUG-5):
+  HYALO001 (bare-checkbox) and HYALO002 (completed-tasks) no longer fire on a
+  `[]` or literal `- [ ]` that appears inside a ``` / ~~~ fenced code block or a
+  `` `…` `` inline code span — documenting checkbox/array syntax in prose is no
+  longer flagged. This removed the entire HYALO001 false-positive class on real
+  MDN prose.
+- **Body lint reports file-absolute line numbers** (iter-179, BUG-6): a body
+  rule's `line N` now counts from the top of the file (offset past frontmatter),
+  matching the raw file; the HYALO001 message no longer embeds a redundant,
+  body-relative line number that disagreed with it.
+- **Per-violation severity matches the counts** (iter-179, BUG-17): each lint
+  line is labelled with its own `error`/`warn` severity, so a folded `SCHEMA`
+  group that mixes the two no longer renders `error` lines that the summary
+  tallies as warnings.
+- **Lint message polish** (iter-179): summary and hint counts pluralize
+  correctly (`1 error, 0 warnings`); the `--files-from` missing/outside-vault
+  hints use singular/plural grammar; the HYALO005 frontmatter-parse message no
+  longer double-prefixes (`could not parse frontmatter: failed to parse YAML
+  frontmatter: …` → single prefix); MD034's autolink fix no longer swallows a
+  trailing Liquid tag (`{% … %}` / `{{ … }}`) into `<…>`; and `changelog add`
+  into an existing empty `### Category` keeps a blank line after the heading.
 - **Frontmatter wikilink anchors survive `mv` and `links fix`** (iter-178,
   L-2/L-7): an anchored frontmatter link such as `related: - "[[decision-log#DEC-041]]"`
   is now rewritten with its `#anchor` preserved when the target moves, and
