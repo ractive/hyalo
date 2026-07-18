@@ -43,8 +43,8 @@ itself a dogfooding exercise.
 - [ ] Backtick the illustrative wikilinks (`[[schema.bind]]` ×8,
   `[[fake-login]]` ×2, `[[NEW-1/3/4]]`, `[[old]]`, `[[new]]`,
   `[[target]]`, `[[wikilinks]]`, `[[links]]`) so link health reads clean —
-  single-line code spans only (multi-line spans hit BUG-16 until
-  iter-178 lands)
+  single-line code spans only (multi-line spans hit BUG-16 / review
+  finding L-3 until iter-183 lands)
 
 ### 3. Duplicate iteration files
 
