@@ -451,9 +451,10 @@ fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
 /// Push the graph/title filters that scope a `find` query (`--broken-links`,
 /// `--orphan`, `--dead-end`, `--title`) so derived hints reproduce the same
 /// filtered set. Kept separate from `push_global_flags` because these are
-/// `find`-specific, not global, flags. `--reverse` is intentionally *not*
-/// pushed here: it only makes sense paired with a `--sort`, which the caller
-/// appends explicitly.
+/// `find`-specific, not global, flags. `--sort`/`--reverse` are pushed
+/// separately by [`push_find_sort`] since a couple of derived hints (e.g. the
+/// literal "Sort by most recently modified" suggestion) intentionally
+/// override them rather than preserve the active query's ordering.
 fn push_find_graph_filters(parts: &mut Vec<String>, ctx: &HintContext) {
     if ctx.broken_links_filter {
         parts.push("--broken-links".to_owned());
@@ -467,6 +468,21 @@ fn push_find_graph_filters(parts: &mut Vec<String>, ctx: &HintContext) {
     if let Some(title) = &ctx.title_filter {
         parts.push("--title".to_owned());
         parts.push(shell_quote(title));
+    }
+}
+
+/// Push the active `--sort`/`--reverse` so derived hints (show-all, narrow-by-tag,
+/// filter-by-status) reproduce the same ordering as the query that produced
+/// them — otherwise a truncated, sorted result set's "Show all" hint would
+/// silently revert to default ordering, changing which rows lead the output
+/// even though the *count* still matches (a milder variant of BUG-8).
+fn push_find_sort(parts: &mut Vec<String>, ctx: &HintContext) {
+    if let Some(sort) = &ctx.sort {
+        parts.push("--sort".to_owned());
+        parts.push(shell_quote(sort));
+        if ctx.reverse {
+            parts.push("--reverse".to_owned());
+        }
     }
 }
 
@@ -557,6 +573,7 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
         parts.push(shell_quote(ft));
     }
     push_find_graph_filters(&mut parts, ctx);
+    push_find_sort(&mut parts, ctx);
     for arg in extra_args {
         parts.push(shell_quote(arg));
     }
@@ -610,6 +627,7 @@ fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str]) -> Strin
         parts.push(shell_quote(ft));
     }
     push_find_graph_filters(&mut parts, ctx);
+    push_find_sort(&mut parts, ctx);
     for arg in extra_args {
         parts.push(shell_quote(arg));
     }
@@ -4035,6 +4053,51 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("links fix")),
             "a handful of broken links should still offer links fix: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn find_show_all_and_narrow_hints_preserve_active_sort() {
+        // Milder variant of BUG-8: a truncated, explicitly sorted query's
+        // derived hints (show-all, narrow-by-tag) must keep --sort/--reverse,
+        // else "show all" / "narrow by tag" silently reverts to default
+        // ordering instead of reproducing the query that produced them.
+        let mut c = ctx(HintSource::Find);
+        c.sort = Some("modified".to_owned());
+        c.reverse = true;
+        let items: Vec<serde_json::Value> = (0..50)
+            .map(|i| make_find_item(&format!("{i}.md"), None, &["iteration"]))
+            .collect();
+        let hints = generate_hints(&c, &json!(items), Some(79));
+
+        let show_all = hints
+            .iter()
+            .find(|h| h.description.starts_with("Show all"))
+            .expect("show-all hint expected");
+        assert!(
+            show_all.cmd.contains("--sort modified") && show_all.cmd.contains("--reverse"),
+            "show-all hint must preserve --sort/--reverse: {}",
+            show_all.cmd
+        );
+
+        let narrow = hints
+            .iter()
+            .find(|h| h.description.starts_with("Narrow by tag"))
+            .expect("narrow-by-tag hint expected");
+        assert!(
+            narrow.cmd.contains("--sort modified") && narrow.cmd.contains("--reverse"),
+            "narrow-by-tag hint must preserve --sort/--reverse: {}",
+            narrow.cmd
+        );
+
+        // Because ctx.sort is Some, the literal "Sort by most recently
+        // modified" suggestion must not also fire (it only applies when no
+        // sort is active).
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description == "Sort by most recently modified"),
+            "should not suggest sorting when a sort is already active: {hints:?}"
         );
     }
 }
