@@ -121,8 +121,8 @@ apply mid-run leaving partial state.
 
 ## Acceptance Criteria
 
-- [x] All dogfood repros from BUG-3/10/11/12/13/14/15 pass as e2e tests
+- [x] All dogfood repros from BUG-3/10/11/12/13/14/15 pass as e2e tests: `okf_index_dangling_begin_survives_two_applies_byte_identical` (BUG-3), `okf_index_generates_commonmark_valid_links` / `okf_index_spaced_subdir_link_is_wrapped` (BUG-10), `okf_index_directory_target_warns_and_continues` (BUG-11), `okf_index_quiet_suppresses_skip_warning` (BUG-12), `okf_index_nonexistent_scope_errors` (BUG-13), `okf_log_multiline_message_stays_valid` (BUG-14), `okf_log_nonexistent_dir_rejected_consistently` (BUG-15)
 - [x] `okf index --apply` twice is byte-idempotent on every fixture,
   including malformed-marker ones
-- [x] No hand-written prose is ever deleted by the generator
+- [x] No hand-written prose is ever deleted by the generator — enforced by `okf_index_dangling_begin_survives_two_applies_byte_identical`, which asserts the hand-written body text is byte-identical after two `--apply` runs across a dangling marker
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
