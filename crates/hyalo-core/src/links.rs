@@ -181,6 +181,80 @@ fn is_escaped(bytes: &[u8], pos: usize) -> bool {
     backslashes % 2 == 1
 }
 
+/// Find the byte offset (relative to `s`) of the closing `]` that terminates
+/// a markdown link label, skipping over backslash-escaped `\]`/`\[` (L-A2).
+///
+/// Unlike a plain `s.find(']')`, this does not stop early on labels like
+/// `[Contains \[test\] brackets](dest.md)` — the escaped brackets are part of
+/// the label text, not delimiters. Returns `None` if no unescaped `]` exists.
+fn find_label_close_bracket(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b']' if !is_escaped(bytes, i) => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Result of parsing a markdown link destination starting right after `(`.
+struct ParsedDestination<'a> {
+    /// The raw target text (angle brackets stripped if the destination used
+    /// the `<...>` form; verbatim otherwise).
+    target_raw: &'a str,
+    /// Byte offset (relative to the start of the destination, i.e. right
+    /// after `(`) of the first byte past the destination (and any title),
+    /// up to and including the closing `)`.
+    end: usize,
+}
+
+/// Parse a markdown link destination starting at `rest` (the text right
+/// after the opening `(`).
+///
+/// Handles both bare destinations (`dest.md`, up to the first `)`) and
+/// CommonMark angle-bracket destinations (`<my dest.md>`, which may contain
+/// spaces and literal `)`), per L-A1. For the angle form, the destination is
+/// closed by the first unescaped `>`; anything between it and the closing
+/// `)` (e.g. a `"title"`) is ignored since this file does not otherwise
+/// track link titles. Returns `None` if no closing `)` can be found for the
+/// destination.
+fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
+    let bytes = rest.as_bytes();
+    if bytes.first() == Some(&b'<') {
+        // Angle-bracket destination: scan for the first unescaped `>`.
+        let mut i = 1;
+        let mut close_angle = None;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'>' if !is_escaped(bytes, i) => {
+                    close_angle = Some(i);
+                    break;
+                }
+                _ => i += 1,
+            }
+        }
+        let close_angle = close_angle?;
+        let target_raw = &rest[1..close_angle];
+
+        // Whatever follows `>` up to `)` (whitespace, optional title) is not
+        // part of the target; just locate the closing `)`.
+        let after_angle = &rest[close_angle + 1..];
+        let close_paren = after_angle.find(')')?;
+        let end = close_angle + 1 + close_paren + 1;
+
+        Some(ParsedDestination { target_raw, end })
+    } else {
+        // Bare destination: up to the first `)`.
+        let close_paren = rest.find(')')?;
+        Some(ParsedDestination {
+            target_raw: &rest[..close_paren],
+            end: close_paren + 1,
+        })
+    }
+}
+
 /// Extract all internal links with byte-offset spans from a text segment.
 ///
 /// Works exactly like [`extract_links_from_text`] but returns [`LinkSpan`]
@@ -315,7 +389,9 @@ fn try_parse_markdown_link_span_at(
 ) -> Option<(LinkSpan, usize)> {
     let rest = &text[start..];
 
-    let close_bracket = rest.find(']')?;
+    // L-A2: skip escaped `\]`/`\[` so labels like
+    // `[Contains \[test\] brackets]` don't terminate the scan early.
+    let close_bracket = find_label_close_bracket(rest)?;
     // Read label from `original` so backtick-wrapped content is not lost when
     // `text` has had inline code spans replaced with spaces.
     // Use `.get()` to avoid panic if `original` has a different byte layout.
@@ -326,10 +402,11 @@ fn try_parse_markdown_link_span_at(
         return None;
     }
 
-    let paren_start = after_bracket + 1; // first byte of raw target
+    let paren_start = after_bracket + 1; // first byte after `(`
     let rest_after_paren = &text[paren_start..];
-    let close_paren = rest_after_paren.find(')')?;
-    let target_raw = &rest_after_paren[..close_paren];
+    // L-A1: handle both bare and angle-bracket (`<my dest.md>`) destinations.
+    let dest = parse_destination(rest_after_paren)?;
+    let target_raw = dest.target_raw;
 
     if is_external(target_raw) || target_raw.is_empty() {
         return None;
@@ -337,17 +414,25 @@ fn try_parse_markdown_link_span_at(
 
     let link = parse_markdown_link(label_text, target_raw)?;
 
-    // target_end stops at `#` if a fragment is present, otherwise at `)`.
+    // target_end stops at `#` if a fragment is present, otherwise at the end
+    // of the (unwrapped) target text. `target_start` is offset past the `<`
+    // when the angle form was used, so the writer's splice naturally
+    // preserves the angle brackets around a rewritten target.
+    let target_start = if text.as_bytes().get(paren_start).copied() == Some(b'<') {
+        paren_start + 1
+    } else {
+        paren_start
+    };
     let target_end_in_raw = target_raw.find('#').unwrap_or(target_raw.len());
 
-    let full_end = paren_start + close_paren + 1;
+    let full_end = paren_start + dest.end;
 
     Some((
         LinkSpan {
             link,
             kind: LinkKind::Markdown,
-            target_start: paren_start,
-            target_end: paren_start + target_end_in_raw,
+            target_start,
+            target_end: target_start + target_end_in_raw,
             full_start: start,
             full_end,
         },
@@ -441,8 +526,9 @@ pub(crate) fn strip_wikilink_md_suffix(target: &str) -> &str {
 fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Option<(Link, usize)> {
     let rest = &text[start..];
 
-    // Find the closing ]
-    let close_bracket = rest.find(']')?;
+    // Find the closing ] (L-A2: skip escaped `\]`/`\[` so labels like
+    // `[Contains \[test\] brackets]` don't terminate the scan early).
+    let close_bracket = find_label_close_bracket(rest)?;
     // Read label from `original` so backtick-wrapped content is not lost when
     // `text` has had inline code spans replaced with spaces.
     // Use `.get()` to avoid panic if `original` has a different byte layout.
@@ -454,11 +540,12 @@ fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Optio
         return None;
     }
 
-    // Find closing )
+    // Parse the destination, handling both bare and angle-bracket
+    // (`<my dest.md>`) forms (L-A1).
     let paren_start = after_bracket + 1;
     let rest_after_paren = &text[paren_start..];
-    let close_paren = rest_after_paren.find(')')?;
-    let target_raw = &rest_after_paren[..close_paren];
+    let dest = parse_destination(rest_after_paren)?;
+    let target_raw = dest.target_raw;
 
     // Skip external links
     if is_external(target_raw) {
@@ -471,7 +558,7 @@ fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Optio
     }
 
     let link = parse_markdown_link(label_text, target_raw)?;
-    let end_pos = paren_start + close_paren + 1;
+    let end_pos = paren_start + dest.end;
     Some((link, end_pos))
 }
 
@@ -1087,5 +1174,122 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].label.as_deref(), Some("`mod.rs`"));
         assert_eq!(links[0].target, "src/mod.rs");
+    }
+
+    // --- L-A1: angle-bracket destinations ---
+
+    #[test]
+    fn angle_bracket_destination_with_spaces_strips_brackets() {
+        let text = "[spaced link](<my dest.md>)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "my dest.md");
+        assert_eq!(links[0].label.as_deref(), Some("spaced link"));
+    }
+
+    #[test]
+    fn angle_bracket_destination_without_spaces_still_works() {
+        let text = "[link](<dest.md>)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "dest.md");
+    }
+
+    #[test]
+    fn angle_bracket_destination_empty_does_not_panic() {
+        // `<>` — empty angle destination. Falls through to the standard
+        // empty-target rejection (mirrors bare `()`), so no link is
+        // extracted, but parsing must not panic.
+        let text = "[link](<>)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty(), "empty angle destination yields no link");
+    }
+
+    #[test]
+    fn angle_bracket_destination_unclosed_does_not_panic() {
+        // No matching `>` — not parseable as an angle destination. There is
+        // no closing `)` before end-of-string either (the `)` that follows
+        // `dest.md` is inside the unterminated `<...`), so this also fails to
+        // parse as a link at all, consistent with the rest of this file
+        // treating unparseable link syntax as "no link" rather than a panic
+        // or a partial/garbled match.
+        let text = "[link](<dest.md) trailing";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(
+            links.is_empty(),
+            "unclosed angle destination must not panic and must not parse as a link"
+        );
+    }
+
+    #[test]
+    fn angle_bracket_destination_with_fragment() {
+        let text = "[link](<my dest.md#heading>)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "my dest.md");
+    }
+
+    #[test]
+    fn angle_bracket_destination_span_target_excludes_brackets() {
+        let text = "[spaced link](<my dest.md>)";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        let span = &spans[0];
+        assert_eq!(span.link.target, "my dest.md");
+        // target_start/target_end must point at the unwrapped text so a
+        // writer splice re-emits the angle brackets around a new target.
+        assert_eq!(&text[span.target_start..span.target_end], "my dest.md");
+    }
+
+    // --- L-A2: escaped brackets in link text ---
+
+    #[test]
+    fn escaped_brackets_in_label_are_not_terminators() {
+        let text = r"[Contains \[test\] brackets](dest.md)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "dest.md");
+        assert_eq!(
+            links[0].label.as_deref(),
+            Some(r"Contains \[test\] brackets")
+        );
+    }
+
+    #[test]
+    fn escaped_bracket_at_start_of_label() {
+        let text = r"[\[leading](dest.md)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "dest.md");
+        assert_eq!(links[0].label.as_deref(), Some(r"\[leading"));
+    }
+
+    #[test]
+    fn escaped_bracket_at_end_of_label() {
+        let text = r"[trailing\]](dest.md)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "dest.md");
+        assert_eq!(links[0].label.as_deref(), Some(r"trailing\]"));
+    }
+
+    #[test]
+    fn escaped_brackets_in_label_span_variant() {
+        let text = r"[Contains \[test\] brackets](dest.md)";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "dest.md");
+        assert_eq!(
+            spans[0].link.label.as_deref(),
+            Some(r"Contains \[test\] brackets")
+        );
     }
 }
