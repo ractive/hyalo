@@ -18,7 +18,7 @@ use crate::commands::files_from::{
     FilesFromCounters, load as files_from_load, resolve as files_from_resolve,
     resolve_with_index as files_from_resolve_with_index,
 };
-use crate::commands::{FilesOrOutcome, collect_files, resolve_file_user};
+use crate::commands::{FilesOrOutcome, collect_files, resolve_file_user_ci};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::index::SnapshotIndex;
 
@@ -66,6 +66,12 @@ pub(crate) enum ResolutionPolicy {
 ///
 /// `configured_dir` is the `.hyalo.toml` `dir` value as a string (e.g. `"kb"`
 /// or `"."`) — used for prefix stripping in `--files-from` resolution.
+///
+/// `case_insensitive` only affects the [`ResolutionPolicy::Single`] branch's
+/// literal `--file`/positional lookup: when `true` and the exact-casing lookup
+/// misses, it falls back to a case-insensitive directory scan (mirrors
+/// `[links] case_insensitive`). Pass `false` for commands that don't opt into
+/// case-insensitive CLI-argument resolution.
 pub(crate) fn resolve_inputs(
     selection: &InputSelection,
     dir: &Path,
@@ -73,6 +79,7 @@ pub(crate) fn resolve_inputs(
     snapshot_index: Option<&SnapshotIndex>,
     policy: &ResolutionPolicy,
     format: Format,
+    case_insensitive: bool,
 ) -> Result<ResolvedInputsOrOutcome> {
     // --files-from takes priority: resolve it and apply the policy's cardinality
     // contract so callers don't receive a 0- or many-element result for a Single
@@ -129,7 +136,7 @@ pub(crate) fn resolve_inputs(
             };
 
             // Resolve the single file.
-            match resolve_file_user(dir, &single_file) {
+            match resolve_file_user_ci(dir, &single_file, case_insensitive) {
                 Ok(pair) => Ok(ResolvedInputsOrOutcome::Resolved(ResolvedInputs {
                     files: vec![pair],
                     counters: None,
@@ -312,6 +319,7 @@ mod tests {
             None,
             &ResolutionPolicy::Single { allow_glob: false },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -333,6 +341,7 @@ mod tests {
             None,
             &ResolutionPolicy::Single { allow_glob: false },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -352,6 +361,7 @@ mod tests {
             None,
             &ResolutionPolicy::Single { allow_glob: false },
             Format::Json,
+            false,
         )
         .unwrap();
         assert!(matches!(
@@ -371,6 +381,7 @@ mod tests {
             None,
             &ResolutionPolicy::Single { allow_glob: false },
             Format::Json,
+            false,
         )
         .unwrap();
         assert!(matches!(
@@ -390,6 +401,7 @@ mod tests {
             None,
             &ResolutionPolicy::Single { allow_glob: false },
             Format::Json,
+            false,
         )
         .unwrap();
         assert!(matches!(
@@ -415,6 +427,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -436,6 +449,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -458,6 +472,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -480,6 +495,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         assert!(matches!(
@@ -509,6 +525,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -537,6 +554,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -564,6 +582,7 @@ mod tests {
                 require_nonempty: false,
             },
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -589,6 +608,7 @@ mod tests {
             None,
             &ResolutionPolicy::SingleOrMany,
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
@@ -608,6 +628,7 @@ mod tests {
             None,
             &ResolutionPolicy::SingleOrMany,
             Format::Json,
+            false,
         )
         .unwrap();
         let ResolvedInputsOrOutcome::Resolved(r) = result else {
