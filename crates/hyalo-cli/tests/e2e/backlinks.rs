@@ -188,6 +188,30 @@ fn backlinks_finds_markdown_links() {
     assert_eq!(json["results"]["backlinks"][0]["source"], "index.md");
 }
 
+// L-A2: escaped brackets in link text (`\[`/`\]`) must not terminate the
+// label scan early — the link must still be found.
+#[test]
+fn backlinks_finds_markdown_link_with_escaped_brackets_in_label() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "dest.md", "# Dest\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "See [Contains \\[test\\] brackets](dest.md) for details.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "dest.md"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["total"], 1, "backlinks JSON: {json}");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "source.md");
+}
+
 #[test]
 fn backlinks_empty_result() {
     let tmp = TempDir::new().unwrap();

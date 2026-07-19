@@ -58,6 +58,15 @@ and this project adheres to
 
 ### Fixed
 
+- **Angle-bracket link destinations are parsed correctly** (L-A1): a
+  CommonMark-valid markdown link destination like `[text](<my dest.md>)` —
+  which hyalo's own generator has emitted since iter-176 — is no longer
+  stored with literal `<>` characters. `find --broken-links` no longer
+  false-positives on these links, and `backlinks` now resolves them.
+- **Escaped brackets in link text no longer drop the link** (L-A2): a label
+  containing an escaped bracket, e.g. `[Contains \[test\] brackets](dest.md)`,
+  no longer terminates the label scan early and silently discards the whole
+  link from `--fields links` and `backlinks` output.
 - **Property-regex parse errors surface the engine detail** (iter-181): an
   invalid `--property 'title~=('` filter now reports the regex engine's own
   message (with caret/position) as the error `cause`, the way `find -e` does,

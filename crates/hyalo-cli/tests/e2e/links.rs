@@ -342,6 +342,65 @@ fn find_broken_links_combined_with_glob_filter() {
     );
 }
 
+// L-A1: angle-bracket destinations `[text](<my dest.md>)` must not be
+// flagged as broken, and must resolve correctly for `backlinks`.
+#[test]
+fn find_broken_links_ignores_angle_bracket_destination_with_spaces() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(tmp.path(), "my dest.md", "# My Dest\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "See [spaced link](<my dest.md>) for details.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "find",
+            "--broken-links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find --broken-links should run");
+    assert!(
+        output.status.success(),
+        "find --broken-links exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    let results = json["results"]
+        .as_array()
+        .expect("find output should have a results array");
+    let files: Vec<&str> = results
+        .iter()
+        .map(|r| r["file"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        !files.contains(&"source.md"),
+        "source.md's angle-bracket destination resolves to a real file and \
+         must NOT be reported as broken: {files:?}"
+    );
+
+    // `backlinks` must also resolve the angle-bracket destination.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["backlinks", "--file", "my dest.md"])
+        .output()
+        .expect("hyalo backlinks should run");
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    assert_eq!(json["total"], 1, "backlinks JSON: {json}");
+    assert_eq!(json["results"]["backlinks"][0]["source"], "source.md");
+}
+
 // ---------------------------------------------------------------------------
 // links fix: dry run
 // ---------------------------------------------------------------------------

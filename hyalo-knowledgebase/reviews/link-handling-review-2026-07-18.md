@@ -277,6 +277,13 @@ not fixed pre-release:
   `[Contains \[test\] brackets](<dest.md>)` is entirely absent from
   `--fields links` and `backlinks` output.
 
+**Resolved 2026-07-19** (post-run fix-forward, branch
+`fix/link-parser-angle-escapes`): L-A1 via `parse_destination` (strips
+`<...>` per CommonMark, spaces allowed inside, unclosed `<` is not a link)
+and L-A2 via `find_label_close_bracket` (escape-aware label scan reusing
+the L-16 `is_escaped` helper). Applied to both the byte-offset and
+span-based parse paths; covered by 10 unit + 2 e2e tests.
+
 Minor related: `okf index --dry-run` exits 1 on marker-skip vaults with
 `changed: 0`, contradicting the documented "non-zero when any index.md
 would change" contract (possibly intentional — surface skips in CI — but
