@@ -2,7 +2,7 @@
 title: Iteration 184 — link resolver & writer unification (Phase C)
 type: iteration
 date: 2026-07-18
-status: in-progress
+status: completed
 branch: iter-184/link-resolver-writer-unification
 tags:
   - iteration
@@ -145,4 +145,4 @@ L-25 dry-run/apply single-path parity.
   stem-matching outside `LinkResolver`/`LinkGraph` (deferred to iter-185)
 - [ ] All apply paths emit a complete envelope even on partial failure
   (deferred to iter-185)
-- [ ] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
+- [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
