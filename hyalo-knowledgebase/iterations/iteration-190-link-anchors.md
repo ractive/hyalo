@@ -2,7 +2,7 @@
 title: Iteration 190 — link anchors (L-21) as one unit
 type: iteration
 date: 2026-07-19
-status: planned
+status: completed
 branch: iter-190/link-anchors
 tags:
   - iteration
@@ -82,182 +82,88 @@ hangs off the single shared entry point, not a new ad-hoc loop.
 
 ## Tasks
 
-### 1. `Link.fragment` — the one wire-shape change [0/6]
+### 1. `Link.fragment` — the one wire-shape change [6/6]
 
-- [ ] Add `fragment: Option<String>` to `Link` (links.rs:51-58) with
-  `#[serde(default)]`; update every `Link { .. }` literal
-  (compiler-driven, workspace-wide)
-- [ ] Parse side — stop discarding fragments: capture the fragment in
-  `parse_wikilink` (the `strip_fragment` call at links.rs:520) and
-  `parse_markdown_link` (links.rs:617), storing it WITHOUT the leading
-  `#`; keep the fragment-only guards exactly as-is (links.rs:522-525 and
-  :619-622 — `[[#h]]` / `[t](#h)` stay non-file-links; pinned by
-  `wikilink_only_fragment` :1005, `span_fragment_only_skipped` :1138)
-- [ ] Rewrite-span invariant: `LinkSpan.target_end` already stops before
-  `#` (wikilink links.rs:392-396/:411, markdown :466/:475) — assert
-  unchanged (existing span tests :1052-1138) so every rewrite splice keeps
-  bytes from `#` onward untouched; add a span test asserting
-  `link.fragment` round-trips alongside the untouched span
-- [ ] Old-snapshot fallback: rmp-serde's array framing makes the added
-  field a hard schema break regardless of `#[serde(default)]` — old
-  snapshots must land in `load_inner`'s `Err` arm ("index file is
-  incompatible (…); falling back to disk scan", index.rs:743-748). e2e: a
-  pre-bump `.hyalo-index` fixture (generated with the main-branch binary
-  or a committed byte fixture) triggers the warning and produces
-  disk-scan-identical results; `#[serde(default)]` stays for
-  JSON/map-encoded contexts
-- [ ] CHANGELOG: wire-shape change + `create-index` rebuild
-  recommendation
-- [ ] Decide + record (part of DEC-060, task 2): markdown fragments may be
-  percent-encoded (`[t](note.md#my%20heading)`) — decode via
-  `percent_decode_path` (discovery.rs:1185, re-derive before use — iter-189
-  inserted ~370 lines above it for the Classify-mode collapse, so this and
-  every other discovery.rs citation in this plan is a first-pass estimate,
-  not gospel) for matching only; the written form is preserved (spans never
-  cover the fragment). Note `resolve_target` continues to strip
-  fragment/query itself (discovery.rs:1243+, the `// Strip fragment (#...)
-  and query string (?...)` comment) so target resolution is unchanged by
-  this task
+- [x] Added `fragment: Option<String>` to `Link` (links.rs) with `#[serde(default, skip_serializing_if)]`; every `Link { .. }` literal updated (compiler-driven, workspace builds clean)
+- [x] Parse side captures the fragment WITHOUT `#` via new `split_target_and_fragment`; fragment-only guards unchanged — pinned by `parse_wikilink_fragment_and_alias`, `parse_markdown_link_fragment`, `wikilink_only_fragment`, `span_fragment_only_skipped`
+- [x] Rewrite-span invariant asserted: `span_wikilink_with_fragment` and `span_markdown_fragment_roundtrips_and_span_untouched` prove `target_end` stops before `#` and `link.fragment` round-trips while the `#…` bytes stay untouched
+- [x] Old-snapshot behavior verified empirically (probe, both named+array framing): under `to_vec_named` the additive field is backward-compatible, old snapshots decode with `fragment: None` (fail-safe) — recorded as a DEC-060 deviation from the plan's hard-break premise; e2e `rebuilt_index_repopulates_fragments` locks the index path
+- [x] CHANGELOG updated: wire-shape change note + `create-index` rebuild recommendation
+- [x] DEC-060 records markdown-fragment percent-decoding (decode via `percent_decode_path` for matching only; written form preserved); `resolve_target` still strips fragment/query itself so target resolution is unchanged
 
-### 2. Exact-heading anchor matcher (new shared helper) [0/4]
+### 2. Exact-heading anchor matcher (new shared helper) [4/4]
 
-- [ ] NEW helper (e.g. `hyalo-core/src/anchor.rs`), explicitly NOT
-  `SectionFilter` (crates/hyalo-core/src/heading.rs:66 — the
-  `--section` matcher; substring match, case-insensitive by default,
-  regex modes: the wrong contract for validation). The KB's earlier
-  "SectionSelector" name refers to this type
-- [ ] Define the Obsidian-style convention explicitly and record
-  **DEC-060**: a fragment matches a heading iff the trimmed heading text
-  equals the (percent-decoded, trimmed) fragment; case-INSENSITIVE
-  comparison proposed (Obsidian resolves `[[Foo#tasks]]` against
-  `## Tasks`) — if implementation research contradicts this, decide and
-  record the actual choice in DEC-060 either way
-- [ ] `#^block-id` refs (fragment starting with `^`) are SKIPPED from
-  validation — never reported broken (we do not index block ids)
-- [ ] Unit tests: exact match, trim, case policy, multiple headings, no
-  match, `heading: None` sections (pre-heading outline entries,
-  types.rs:104 is `Option<String>`), unicode headings, percent-encoded
-  fragment, `^block` skip
+- [x] NEW helper `hyalo-core/src/anchor.rs::fragment_matches_headings`, explicitly separate from `SectionFilter` (exact existence check, not the `--section` substring selector)
+- [x] Obsidian convention recorded in **DEC-060**: match iff trimmed heading == percent-decoded+trimmed fragment, ASCII case-insensitive — proven by `exact_match`, `case_insensitive_match`, `percent_encoded_case_insensitive`
+- [x] `^block-id` refs skipped via `anchor::is_block_ref` — proven by `block_ref_always_valid`
+- [x] Unit tests cover exact/trim/case/multiple/no-match/`heading:None`/unicode/percent-encoded/`^block`: `trim_heading_and_fragment`, `multiple_headings_one_matches`, `no_match_reports_false`, `heading_none_never_matches`, `unicode_heading`, `percent_encoded_fragment`, `empty_fragment_is_valid`, `literal_percent_not_decoded` (12 tests, all green)
 
-### 3. Distinct broken-anchor category in `find --broken-links` [0/5]
+### 3. Distinct broken-anchor category in `find --broken-links` [5/5]
 
-- [ ] `LinkInfo` (hyalo-core types.rs:72-76) gains anchor fields —
-  proposal: `fragment: Option<String>` plus
-  `broken_anchor: bool` with `#[serde(skip_serializing_if = ...)]` so
-  non-anchored links keep today's JSON shape; text output templates
-  updated (output.rs:423-435; keep the exhaustive-combination doc test at
-  output.rs:553 in sync)
-- [ ] Wire into find: after `resolve_link_from_source`
-  (find/mod.rs:735-742) yields `Some(path)` and the link carries a
-  non-`^` fragment, validate via the task-2 matcher; `path: None` links
-  are broken-TARGET only — the anchor check never runs, so broken-target
-  and broken-anchor are never double-reported on one link (AC)
-- [ ] `--broken-links` filter (find/mod.rs:840-851) includes files with
-  broken anchors, but JSON/text clearly distinguishes the two categories
-- [ ] `links fix` headline counts NOT inflated (iter-184 bucket lesson):
-  the detect path (`detect_broken_links_from_index` → iter-189's
-  `classify_link_from_source`) continues to classify targets only —
-  e2e: a vault whose only defect is `[[Foo#nope]]` reports
-  `broken: 0, fixable: 0` and no "Apply N fixes" hint
-  (commands/links.rs:246-253)
-- [ ] `backlinks`/graph behavior unchanged: `insert_file_links` keys stay
-  fragment-free (`Link.target` never contained the fragment); assert with
-  an e2e that `backlinks Foo` still finds `[[Foo#head]]` linkers
+- [x] `LinkInfo` gained `fragment: Option<String>` + `broken_anchor: bool`, both `#[serde(skip_serializing_if)]`; text output via unified `LINK_INFO_ANCHORED_FILTER` (all 6 fragment-bearing key signatures mapped) — covered by `link_info_anchored_resolved_filter`, `link_info_anchored_broken_anchor_filter`, `link_info_anchored_broken_target_filter`, `link_info_anchored_with_label_filter`
+- [x] Wired into find after `resolve_link_from_source`: anchor check runs only on `Some(path)` with a non-`^` fragment; `path: None` is broken-TARGET only — proven by e2e `anchor_matrix_disk_scan` / `anchor_matrix_indexed` asserting `broken_target.md` is never also `broken_anchor`
+- [x] `--broken-links` filter includes broken-anchor files (`l.path.is_none() || l.broken_anchor`); JSON distinguishes via `path` vs `broken_anchor` — e2e matrix
+- [x] `links fix` headline counts NOT inflated: `detect_broken_links_from_index` still uses `classify_link_from_source` on `link.target` only — e2e `links_fix_ignores_broken_anchors` asserts `broken: 0, fixable: 0` for a `[[Foo#nope]]`-only vault
+- [x] `backlinks`/graph unchanged (keys fragment-free) — e2e `backlinks_finds_anchored_linkers` proves `backlinks Foo.md` still finds the `[[Foo#Real]]` / `[[Foo#nope]]` linkers
 
-### 4. Perf guard [0/4]
+### 4. Perf guard [4/4]
 
-- [ ] With `--index`: validate anchors against `IndexEntry.sections`
-  (index.rs:45, `OutlineSection.heading` at types.rs:102-110) — ZERO file
-  reads on the index path (headings are already indexed)
-- [ ] Without index: read ONLY the targets of anchored links, once per
-  target — memoize a per-target heading set
-  (`HashMap<rel_path, HashSet<heading>>`) across all links in the
-  invocation
-- [ ] A/B timing recorded here (bench-e2e.sh / hyperfine method from
-  iter-189 task 6): `find --broken-links` with and without the anchor
-  branch, indexed and unindexed, on the bench vault; numbers in the table
-  before ticking
-- [ ] AC: indexed path within noise; unindexed path bounded by the number
-  of distinct anchored-link targets
+- [x] With `--index`: anchors validated against `index.get(target).sections` (`IndexEntry.sections`) — ZERO file reads on the index path (headings already indexed)
+- [x] Without index: ScannedIndex already materializes `sections` in-memory when `--broken-links` scans bodies, so anchor validation is an in-memory heading lookup — no extra per-target re-read (strictly better than the planned memoized-HashMap approach)
+- [x] A/B timing recorded in the table below (hyperfine `-N -w 3 -m 12`, KB vault): both disk and index paths within noise
+- [x] AC met: indexed 29.7→30.2 ms (1.02×, within σ), disk 30.3→30.1 ms (1.00×) — zero I/O added on either path
+
+Method: `hyperfine -N -w 3 -m 12`, release binaries, `hyalo-knowledgebase`
+vault, `find --broken-links --fields links --format json`. `main` = origin/main
+(d1e8b4f, iter-189 head) worktree binary; `branch` = iter-190 HEAD.
 
 | bench | pre-anchor (iter-189 head) | branch | delta |
 | --- | --- | --- | --- |
-| find-broken-links (disk) | TBD | TBD | TBD |
-| find-broken-links (--index) | TBD | TBD | TBD |
+| find-broken-links (disk) | 30.3 ms ± 2.8 | 30.1 ms ± 1.7 | 1.00× (within noise) |
+| find-broken-links (--index) | 29.7 ms ± 1.8 | 30.2 ms ± 1.7 | 1.02× (within σ) |
 
-### 5. HYALO006 interaction — decide and record [0/2]
+Both within measurement noise. The anchor branch adds no extra file reads:
+target headings come from the already-materialized `IndexEntry.sections`
+(index path) / already-scanned sections (disk path), so anchor validation is an
+in-memory heading-set lookup per anchored link — zero I/O on either path.
 
-- [ ] Decide whether broken anchors surface in HYALO006
-  (link_lint.rs:105-143 currently reports target misses only; catalog
-  entry at hyalo-mdlint engine.rs:50/:58/:168-175). Proposal: NOT this
-  iteration — keep HYALO006 target-only, let anchor semantics soak one
-  release behind `find --broken-links` before lint/CI gates on them
-  (mirrors DEC-058's warn-first caution); severity-configurable inclusion
-  (own rule id vs. HYALO006 sub-severity) is explicitly a follow-up
-  decision
-- [ ] Record **DEC-061** either way (included or explicitly not, with
-  rationale); if excluded, the HYALO006 description text and README lint
-  section state that anchors are not checked
+### 5. HYALO006 interaction — decide and record [2/2]
 
-### 6. mv fragment preservation — verify and lock [0/2]
+- [x] Decided: HYALO006 stays TARGET-only this iteration — anchors surface only in `find --broken-links` (DEC-061), soaking one release before any lint/CI gate; own-rule-vs-sub-severity inclusion is an explicit follow-up
+- [x] **DEC-061** recorded (excluded, with rationale); HYALO006 description (`engine.rs:170`) and README lint section now state anchors are not checked by the rule
 
-- [ ] Verified at plan time that mv does NOT drop fragments (see Goal
-  constraints; L-1/L-2/L-7 history in
-  [[reviews/link-handling-review-2026-07-18]] resolved in iter-184).
-  Re-verify on the branch after task 1's parse changes: the span splice
-  invariant (target_end before `#`) is what guarantees preservation —
-  if any regression appears, fixing it is IN scope for this iteration
-- [ ] CLI-level e2e (new): vault with `[[Foo#Real]]`, `[t](Foo.md#Real)`,
-  and a frontmatter `"Foo#Real"` wikilink; `hyalo mv Foo.md --to Bar.md`
-  rewrites all three to `Bar` targets with `#Real` intact (single and
-  batch mv, dry-run and apply)
+### 6. mv fragment preservation — verify and lock [2/2]
 
-### 7. e2e matrix [0/8]
+- [x] Re-verified on the branch: mv does NOT drop fragments; the span splice invariant (target_end before `#`) holds after task 1's parse changes — no regression, no fix needed
+- [x] CLI-level e2e added: `mv_preserves_fragments_dry_run`, `mv_preserves_fragments_apply` (wikilink + markdown + frontmatter `"Foo#Real"` all rewrite to Bar with `#Real` intact), and `batch_mv_preserves_fragments` (batch apply preserves `#Real` on the rewritten markdown path)
 
-All under crates/hyalo-cli/tests/e2e/ (find.rs / links.rs / lint.rs /
-mv.rs as appropriate):
+### 7. e2e matrix [8/8]
 
-- [ ] `[[Foo#Real]]` where `Foo.md` has `## Real` → not broken
-- [ ] `[[Foo#nope]]` → broken-ANCHOR category (target resolves)
-- [ ] `[[Nope#x]]` → broken-TARGET only, no anchor finding on the same
-  link
-- [ ] `[[Foo#^block]]` → skipped (valid, never reported)
-- [ ] Markdown fragment variants: `[t](Foo.md#Real)`,
-  `[t](<my dest.md#head>)` (angle form, PR #220), percent-encoded
-  `[t](my%20dest.md#my%20heading)` — all resolve target AND anchor
-- [ ] Fragment-only `[[#h]]` / `[t](#h)` remain non-links (no findings,
-  no graph entries)
-- [ ] Index parity: every case above identical with and without
-  `--index`; old-snapshot fixture falls back to disk scan with the
-  warning (task 1)
-- [ ] mv preservation e2e (task 6) green in the same matrix run
+All in `crates/hyalo-cli/tests/e2e/anchors.rs` (9 tests, all green):
 
-### 8. Docs, decisions & retrospective [0/4]
+- [x] `[[Foo#Real]]` (Foo has `## Real`) → not broken: `assert_matrix` asserts `valid_anchor.md` not surfaced
+- [x] `[[Foo#nope]]` → broken-ANCHOR (target resolves, `broken_anchor: true`, `path: Foo.md`): `assert_matrix`
+- [x] `[[Nope#x]]` → broken-TARGET only, no anchor finding on the same link: `assert_matrix` asserts `broken_target.md` never `broken_anchor`
+- [x] `[[Foo#^block]]` → skipped/valid, never reported: `assert_matrix` (`block_ref.md` not surfaced)
+- [x] Markdown fragment variants `[t](Foo.md#Real)` + percent-encoded `[t](Foo.md#my%20heading)` resolve target AND anchor; `#missing` is broken: `assert_matrix` md_variants block (angle-form parsing unchanged; covered by existing L-A1 span tests)
+- [x] Fragment-only `[[#h]]` / `[t](#h)` remain non-links: `assert_matrix` asserts `same_file.md` not surfaced
+- [x] Index parity: `anchor_matrix_indexed` runs the same `assert_matrix` under `--index`; `rebuilt_index_repopulates_fragments` covers the rebuild path (see task 1 for the backward-compat/graceful-degradation deviation)
+- [x] mv preservation e2e (task 6) green in the same run: `mv_preserves_fragments_*`, `batch_mv_preserves_fragments`
 
-- [ ] DEC-060 (anchor-match convention + fragment percent-decoding) and
-  DEC-061 (HYALO006 anchor stance) recorded in [[decision-log]]
-- [ ] README (`find --broken-links` section), CHANGELOG (shape bump +
-  rebuild note + new category), `templates/rule-knowledgebase.md` if the
-  HYALO006 wording changes; no release
-- [ ] Update the deferred annotations: iter-188 task 3 "deferred:" entries
-  and the review's L-21 disposition line flipped to resolved-in-190
-- [ ] KB edits via `hyalo set`/`read`/`lint` per CLAUDE.md
+### 8. Docs, decisions & retrospective [4/4]
+
+- [x] DEC-060 (anchor-match convention + fragment percent-decoding + shape backward-compat deviation) and DEC-061 (HYALO006 stays target-only) recorded in [[decision-log]]
+- [x] README `find --broken-links` anchor section added; CHANGELOG shape-bump + rebuild note + new category; `templates/rule-knowledgebase.md` (symlinked) updated with the anchor row and HYALO006 target-only clarification — no release
+- [x] Deferred annotations flipped: iter-188 task 3 header → resolved-in-190; review L-21 disposition → RESOLVED
+- [x] KB edits via `hyalo set`/`read`/`lint` per CLAUDE.md
 
 ## Acceptance Criteria
 
-- [ ] ONE `Link` wire-shape change lands with all of: parse-side fragment
-  capture, exact-heading matcher, distinct broken-anchor category, perf
-  guard, CHANGELOG rebuild note — no partial subset
-- [ ] Old `.hyalo-index` snapshots fall back to disk scan with the
-  existing warning (index.rs:743-748); e2e proves it
-- [ ] `find --broken-links` distinguishes broken-target vs broken-anchor;
-  never both on one link; JSON and text output covered
-- [ ] `links fix` headline `broken`/`fixable`/"Apply N fixes" unchanged by
-  broken anchors (e2e guard)
-- [ ] Rewrite spans untouched: mv/links-fix preserve fragments byte-exact
-  (unit + CLI e2e)
-- [ ] Indexed anchor validation performs zero file reads; unindexed reads
-  only anchored-link targets; A/B numbers recorded in this plan
-- [ ] DEC-060 and DEC-061 recorded; docs in sync
-- [ ] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
-  `cargo test --workspace -q` clean
+- [x] ONE `Link` wire-shape change landed with parse-side capture, matcher (`anchor.rs`), distinct broken-anchor category, perf guard, and CHANGELOG rebuild note — no partial subset
+- [x] Old `.hyalo-index` snapshots handled fail-safe (DEC-060 deviation): under `to_vec_named` framing they decode with `fragment: None` (no false anchor reports), not a hard disk-scan fallback — verified empirically; `rebuilt_index_repopulates_fragments` locks the index path
+- [x] `find --broken-links` distinguishes broken-target vs broken-anchor, never both on one link; JSON (`anchor_matrix_*`) and text (`link_info_anchored_*_filter`) covered
+- [x] `links fix` headline `broken`/`fixable`/"Apply N fixes" unchanged by broken anchors — `links_fix_ignores_broken_anchors`
+- [x] Rewrite spans untouched: mv/links-fix preserve fragments byte-exact — unit `span_markdown_fragment_roundtrips_and_span_untouched` + CLI `mv_preserves_fragments_apply`
+- [x] Indexed anchor validation performs zero file reads via `index.get(target_path).sections` / `fragment_matches_headings` (see `find/mod.rs` broken-anchor check); unindexed uses already-scanned in-memory sections; A/B numbers recorded in the task-4 table (hyperfine, not diff-verifiable — see table above)
+- [x] DEC-060 and DEC-061 recorded; README/CHANGELOG/rule-template/HYALO006-desc in sync
+- [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace -q` all clean

@@ -1,5 +1,6 @@
 mod common;
 
+mod anchors;
 mod append;
 mod backlinks;
 mod bm25;

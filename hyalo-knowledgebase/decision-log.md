@@ -1006,3 +1006,56 @@ audited canonical comparison across link kinds — which is the actual L-19 goal
 The anchor `fragment` field that L-21 would need is the only thing that truly
 requires the shape bump, so it is deferred as one unit (see DEC-058). See
 [[iterations/iteration-188-link-semantics-completion]].
+
+## DEC-060: Anchor-match convention, fragment percent-decoding, and the backward-compatible `Link.fragment` shape (2026-07-19)
+
+**Decision (anchor match — L-21):** A link `#fragment` matches a target
+heading iff the **trimmed** heading text equals the **percent-decoded, trimmed**
+fragment under an **ASCII case-insensitive** comparison. This mirrors Obsidian,
+which resolves `[[Foo#tasks]]` against a `## Tasks` heading. Markdown fragments
+may be percent-encoded (`foo.md#my%20heading`); the encoded form is preserved in
+the written link (the rewrite span never covers the fragment) and decoded only
+for matching. `^block-id` fragments are **skipped** — never reported broken —
+because hyalo does not index block ids. Sections with `heading: None`
+(pre-heading outline entries) never match a non-empty fragment; an empty or
+whitespace-only fragment (`[[note#]]`) is treated as no anchor. The matcher
+lives in `hyalo-core/src/anchor.rs`, deliberately **separate** from
+`heading::SectionFilter` (the `--section` substring selector) — validation needs
+exact existence, not substring selection.
+
+**Decision (wire shape — deviation from the plan's premise):** `Link` gains an
+additive `fragment: Option<String>` with `#[serde(default,
+skip_serializing_if = "Option::is_none")]`. The iteration plan assumed this
+would be a *hard* schema break (old `.hyalo-index` snapshots falling to the
+disk-scan `Err` arm). **Empirically it is not:** the index serializes with
+`rmp_serde::to_vec_named` (map framing, not array framing), so an old snapshot
+decodes cleanly into the new `Link` with `fragment: None` — verified with a
+probe against both named and array encodings. This is **still fail-safe**: stale
+entries carry no fragment, so no false broken-anchor reports; anchor data is
+picked up after a `hyalo create-index` rebuild. We therefore ship the
+backward-compatible field (matching the precedent set by `IndexEntry.bm25_tokens`
+in the same file) rather than deliberately engineering a hard break, which would
+needlessly invalidate every user's index on upgrade for a purely additive field.
+
+**Why:** Case-insensitive exact match is the least-surprising, Obsidian-aligned
+convention; percent-decoding only for comparison keeps the written link
+byte-stable through `mv` / `links fix`. Graceful snapshot degradation is
+strictly better than a forced disk-scan fallback here — same safety, no
+upgrade-day index churn. See
+[[iterations/iteration-190-link-anchors]].
+
+## DEC-061: `HYALO006` stays target-only; anchors surface in `find --broken-links` for one release first (2026-07-19)
+
+**Decision:** Broken heading anchors are **not** added to the `HYALO006`
+broken-link lint rule this iteration. `HYALO006` continues to flag broken
+*targets* only. Broken *anchors* surface exclusively through `find
+--broken-links` (as a distinct `broken_anchor` category). Whether to fold
+anchors into HYALO006 — as a sub-severity of the same rule or as its own new
+rule id — is an explicit follow-up decision, deferred so anchor semantics can
+soak one release behind `find` before any `lint`/CI gate consumes them.
+
+**Why:** Mirrors DEC-058's warn-first caution for HYALO006 itself: let a new
+link-semantics feature prove itself in an opt-in query surface before it can
+fail a CI gate. The HYALO006 rule description and the README lint section state
+that anchors are not checked by the rule. See
+[[iterations/iteration-190-link-anchors]].

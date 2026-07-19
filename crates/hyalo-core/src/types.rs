@@ -73,6 +73,18 @@ pub struct LinkInfo {
     pub target: String,
     pub path: Option<String>,
     pub label: Option<String>,
+    /// The `#fragment` (heading anchor) the link carried, without the leading
+    /// `#`. `None` for links with no fragment. Skipped from JSON when absent so
+    /// non-anchored links keep today's shape (L-21, iter-190).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment: Option<String>,
+    /// `true` when the link's target file resolved (`path` is `Some`) but the
+    /// `#fragment` does not name any heading in that file — a *broken anchor*.
+    /// Distinct from a broken target (`path: None`); the two are never both set
+    /// on one link. Skipped from JSON when `false` so non-anchored / valid
+    /// links keep today's shape.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub broken_anchor: bool,
 }
 
 /// A single backlink: another file that links to this one.

@@ -121,7 +121,16 @@ wire-shape change was needed.
   e2e (`hyalo006_percent_encoded_target_resolves`) proving `[x](my%20dest.md)`
   resolves end-to-end (no broken-link finding against `my dest.md`).
 
-### 3. L-21: anchors carried through resolution [deferred — shape bump]
+### 3. L-21: anchors carried through resolution [resolved in iter-190]
+
+**Resolved in [[iterations/iteration-190-link-anchors]]** (2026-07-19): landed as
+one unit — the `Link.fragment` field, the exact-heading matcher
+(`hyalo-core/src/anchor.rs`), the distinct broken-anchor category in `find
+--broken-links`, the zero-extra-read perf guard, and the anchor e2e corpus. Note
+the shape change proved backward-compatible (not the hard schema break assumed
+here) under `to_vec_named` framing — see DEC-060. The deferral notes below are
+retained for history.
+
 
 Deferred, honestly, as one unit. Anchor carry-through requires adding
 `fragment: Option<String>` to the serialized `Link`, which changes the
