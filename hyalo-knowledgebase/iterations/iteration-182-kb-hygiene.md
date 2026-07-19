@@ -19,6 +19,18 @@ Docs-only cleanup of the real issues the dogfood's own-KB sweep found in
 Use hyalo for every step (`links fix`, `mv`, `set`, `find`) — this is
 itself a dogfooding exercise.
 
+Note (carried from iter-181): a query-ergonomics LOW (`--property 'p>=v'`
+on non-numeric/non-date values should emit a lexicographic-comparison
+note) was ticked in iter-181's plan without ever being implemented and
+was caught + un-ticked in review. It is CLI work, not KB hygiene, so it
+does NOT belong in this iteration's scope — it needs its own future
+iteration slot. Also: when running `hyalo` for this iteration's steps,
+make sure you're invoking the freshly built binary
+(`target/release/hyalo` per the dogfooding convention in CLAUDE.md), not
+a stale `PATH` install — a stale v0.16.1 binary on `PATH` during iter-181
+review spuriously warned about the `[changelog]` config section that a
+current build parses cleanly.
+
 ## Tasks
 
 ### 1. Stale broken links (5 genuinely stale, fix by hand — fuzzy would mislink)
@@ -60,7 +72,9 @@ itself a dogfooding exercise.
 - [ ] Triage the 34 `status: completed` files with open tasks (view
   `completed-with-todos`): tick verified-done tasks, reopen or annotate
   genuinely open ones — at minimum the iterations from the last two
-  fix-waves
+  fix-waves. Iter-181 review caught a task ticked with no matching
+  diff/code evidence (see its retrospective) — verify each tick against
+  the actual PR/commit that did the work, not against memory of intent
 - [ ] `iteration-171-setup-hyalo-action` stays `in-progress` by design
   (blocked on the v0.18.0 release) — add a note referencing the blocker
   instead of leaving it silently open
