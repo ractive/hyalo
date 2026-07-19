@@ -711,6 +711,12 @@ pub(crate) enum Commands {
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            `value` echoes the coerced value actually written (e.g. a JSON list for K=[a,b,c], \
+            a number for K=3), not the raw input string.\n\
+            ADVISORY: an optional \"note\" field is added when the value would violate an \
+            enum/pattern constraint in the effective schema, or when a date-typed property (date, \
+            created, ...) gets a non-date value (it will sort lexicographically). The write still \
+            proceeds — lint (or --validate) remains the enforcement gate.\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
 K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
@@ -1273,7 +1279,10 @@ Repeatable (AND).\n\
             - Frontmatter: `type: <name>` plus all required properties with type-appropriate placeholders\n\
             - Body: required sections from `required-sections` (each with a `TBD` paragraph), if declared\n\n\
             The output is intentionally incomplete — `TBD` placeholders are designed to fail\n\
-            `hyalo lint`, driving the agent fill-in loop.\n\n\
+            `hyalo lint`, driving the agent fill-in loop. A pattern/length-constrained string\n\
+            property whose default (or the generic `TBD`) would itself violate the constraint\n\
+            (e.g. a `branch` property with pattern `^iter-\\d+[a-z]*/`) is OMITTED rather than\n\
+            scaffolded with an invalid value — `hyalo lint` then flags it as missing-required.\n\n\
             CONSTRAINTS:\n\
             - Refuses with an error if the target file already exists\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\

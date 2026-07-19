@@ -46,10 +46,11 @@ alone, together they make the tool feel predictable for agents.
   the type's own `^iter-\d+[a-z]*/` pattern); scaffold placeholders must
   pass the type's schema, or the property is omitted for the user to fill
 
-### 5. Query ergonomics (LOWs from own-KB agent)
+### 5. Query ergonomics (LOWs from own-KB agent) [3/4]
 
-- [x] `--property 'p>=v'` on non-numeric/non-date values emits a note
-  that the comparison is lexicographic
+- [ ] `--property 'p>=v'` on non-numeric/non-date values emits a note
+  that the comparison is lexicographic — not implemented in this PR (no
+  code/test evidence in the diff); carried forward to iteration 182
 - [x] Property-regex parse errors show the engine detail like `find -e`
   does (`title~=(` currently gives no caret/position)
 - [x] `mv A B` positional destination accepted as alias for `--to`
@@ -62,6 +63,12 @@ alone, together they make the tool feel predictable for agents.
 
 - [x] Update remaining planned iterations with anything learned; keep
   help texts and README in sync with every flag change in this PR
+- Note (review pass): the initial implementation left `set`'s and `new`'s
+  `long_about` help text undocumented for the task-1/3/4 behavior changes
+  (advisory `note`, coerced `value`, placeholder omission); the review
+  pass added those help-text updates before merge. Also caught: task 5's
+  `--property 'p>=v'` lexicographic-note item was ticked without ever
+  being implemented — un-ticked and deferred (see task 5).
 - Note (iter-180 carryover): `ac-fidelity-check.sh`'s checkbox parser only
   reads the *first physical line* of each `- [x]` item — a multi-line AC
   citing test names split across wrapped lines is invisible to it even
