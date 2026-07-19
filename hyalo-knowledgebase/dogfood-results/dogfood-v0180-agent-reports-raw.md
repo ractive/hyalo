@@ -26,7 +26,7 @@ Binary 0.18.0 (49c670bc). No bugs. Vaults verified pristine (no content modified
 - docs: find 0.09s idx; summary 0.38/0.35s; BM25 0.11/1.03s
 - lint plain vs --profile okf (docs full vault): 0.70–0.77s vs 0.75–0.76s → OKF overlay FREE
 - lint --format github full docs vault: 1,620 annotations, 254KB, 0.67–0.83s
-- [[schema.bind]] lint full vault: 0.71–0.77s → no bind overhead
+- `[[schema.bind]]` lint full vault: 0.71–0.77s → no bind overhead
 - lint --profile changelog full vault (heading grammar): 0.76s
 - string min/max over all 14K MDN: ~0.15s; create-index rebuild: MDN 3.3s / docs 0.7s
 - Index sizes: MDN 114MB, docs 34MB
@@ -35,7 +35,7 @@ Binary 0.18.0 (49c670bc). No bugs. Vaults verified pristine (no content modified
 
 ## UX
 - UX-1 (MED): skip counters (files_missing/skipped_non_md/outside_vault) are JSON-only — invisible in text AND github formats. Diff-aware CI repro: 43 diff lines (15 .md) → 13 missing + 28 non-md skipped, only 2 linted; github output just says "in 1 file". Silent file-dropping in a CI gate. Recommend one-line skip summary in text/github.
-- UX-2 (MED): [[schema.bind]] shipped syntax (array-of-tables, glob=/type= keys) differs from research/path-bound-schemas.md map form ("glob"="type"). Map form error is opaque: `malformed [schema] in .hyalo.toml: invalid type: map, expected a sequence` — names [schema] not [schema.bind]. Fix doc + error message.
+- UX-2 (MED): `[[schema.bind]]` shipped syntax (array-of-tables, glob=/type= keys) differs from research/path-bound-schemas.md map form ("glob"="type"). Map form error is opaque: `malformed [schema] in .hyalo.toml: invalid type: map, expected a sequence` — names [schema] not [schema.bind]. Fix doc + error message.
 - UX-3 (LOW): config discovery walks up from CWD, silently adopts unrelated .hyalo.toml; --dir does not relocate discovery. Recommend --config <path> and/or "loaded config: <path>" line.
 - UX-4 (LOW): --format auto-detect JSON when piped surprises in ad-hoc `| head` use.
 
@@ -43,7 +43,7 @@ Binary 0.18.0 (49c670bc). No bugs. Vaults verified pristine (no content modified
 - OKF flood navigable: grouped+capped text (3/rule/file, rollups → 525 lines), --max-per-rule, --rule scoping 0.10s, drill-down hints. 3,437 files / 1,324 violations manageable.
 - --format github robust under unicode/emoji/CJK and ::%,= content (rule-templated messages, never echo raw content); longest line 356 bytes; no embedded newlines; correct summary line.
 - Diff-aware --files-from - pipeline correct (repo-root git paths resolve vs dir=content; exit 0; counters in JSON).
-- [[schema.bind]] first-match-wins exact + deterministic on overlapping globs (flip order → flips bound type).
+- `[[schema.bind]]` first-match-wins exact + deterministic on overlapping globs (flip order → flips bound type).
 - Heading-grammar rules fired correctly on malformed changelogs; string min/max produced 549 correct title-length violations on MDN; complex nested/versioned frontmatter (versions:{fpt,ghec,ghes}) parses clean.
 
 ## RECOMMENDATIONS
@@ -61,7 +61,7 @@ End state: okf+madr merged (2 clobbered keys manually repaired); 12 index.md + r
 - B2 (HIGH) init --profile okf clobbered pre-existing schema.default.required ["title","type"]->["type"] silently (help claims upsert w/o clobbering); also strips all hand-written TOML comments + reorders whole file.
 - B3 (HIGH) files with unparseable frontmatter (e.g. duplicate YAML key) are SILENTLY EXCLUDED from lint: "0 files checked, no issues", exit 0. CI gate passes corrupt files. (set warns; lint doesn't.) Expected error-severity parse violation.
 - B4 (MED) lint --fix <-> okf index ping-pong: begin-marker immediately followed by ## heading fires MD022; --fix inserts blank INSIDE managed region; next okf index reverts (drift exit 1). CI never stable. Fix: blank line after begin marker.
-- B5 (MED) [[schema.bind]] can't deliver frontmatter-free MADR: adr.required=[] but merged default schema still requires type -> spec-valid frontmatter-less ADR errors under --profile madr.
+- B5 (MED) `[[schema.bind]]` can't deliver frontmatter-free MADR: adr.required=[] but merged default schema still requires type -> spec-valid frontmatter-less ADR errors under --profile madr.
 - B6 (MED) hyalo new --type adr ignores [schema.types.adr.defaults] (date=$today, status=proposed) — scaffold has only type: adr.
 - B7 (LOW) generated artifacts violate hyalo's own default lint (MD022 every index.md, MD013 long titles/log messages): 665->688 warnings right after generation.
 
@@ -94,7 +94,7 @@ INSTALL MATRIX: all 4 profile skills install to .claude/skills/<name>/SKILL.md; 
 
 ## BUGS
 - BUG-1 (HIGH) bundled `skills` skill fails its own skills profile: description contains `<` (`<name>/SKILL.md`), profile pattern ^[^<]*$ forbids it -> SCHEMA error. Fix: reword desc; add CI linting bundled skills with --profile skills.
-- BUG-2 (HIGH) stacked profiles clobber TOML arrays: merge_value (profiles.rs:138) recurses tables only; arrays replaced. All-4 vault: only changelog's [[schema.bind]] survives; **/SKILL.md and docs/decisions binds GONE; exempt clobbered to ["CHANGELOG.md"]; [lint] profile scalar last-write-wins (changelog). Proven wrong verdicts (broken SKILL.md validated vs okf default schema). == root cause of df-own-kb B1. Fix: array union for schema.bind/exempt; lint.profile semantics for stacks; integration test.
+- BUG-2 (HIGH) stacked profiles clobber TOML arrays: merge_value (profiles.rs:138) recurses tables only; arrays replaced. All-4 vault: only changelog's `[[schema.bind]]` survives; **/SKILL.md and docs/decisions binds GONE; exempt clobbered to ["CHANGELOG.md"]; [lint] profile scalar last-write-wins (changelog). Proven wrong verdicts (broken SKILL.md validated vs okf default schema). == root cause of df-own-kb B1. Fix: array union for schema.bind/exempt; lint.profile semantics for stacks; integration test.
 - BUG-3 (MED) hyalo new ignores [schema.types.<t>.defaults] — madr skill documents status/date that never appear (== df-own-kb B6; also causes empty madr toc Status/Date columns).
 - BUG-4 (LOW) init --help omits changelog profile.
 - BUG-5 (LOW) --claude CLAUDE.md managed section generic; zero profile-specific pointers.
@@ -143,8 +143,8 @@ Deliberately did NOT run okf index --apply on the real vault (would destroy 36KB
 End state: okf+skills+madr composed (with manual exempt union); 20 idempotent index.md + log.md; 2 ADRs from decision-log + toc. Remaining 1821 warnings = "not an OKF vault" signals (iteration frontmatter vs concept schema, 326 missing Citations), not defects.
 
 ## BUGS
-- B1 (HIGH) [schema] exempt CLOBBERED per init --profile (3rd confirmation). NOTE DISCREPANCY: ffrdp says [[schema.bind]] arrays DO compose correctly, df-skills-audit says binds were clobbered in all-4 stack — reconcile during fix (order/profile-dependent?).
-- B2 (HIGH) [schema.default] required=["type"] leaks onto [[schema.bind]]-typed files: okf+skills composed -> every real SKILL.md errors missing-type; skills profile in isolation = 0 errors. == df-own-kb B5 (2nd confirmation). Fix: default.required must not apply to bind-typed files.
+- B1 (HIGH) [schema] exempt CLOBBERED per init --profile (3rd confirmation). NOTE DISCREPANCY: ffrdp says `[[schema.bind]]` arrays DO compose correctly, df-skills-audit says binds were clobbered in all-4 stack — reconcile during fix (order/profile-dependent?).
+- B2 (HIGH) [schema.default] required=["type"] leaks onto `[[schema.bind]]`-typed files: okf+skills composed -> every real SKILL.md errors missing-type; skills profile in isolation = 0 errors. == df-own-kb B5 (2nd confirmation). Fix: default.required must not apply to bind-typed files.
 - B3 (MED) okf index/log hard-abort exit 2 on FIRST unparseable file anywhere in vault, even with subtree scope (okf index rdp dies on iterations/iter-84); find/summary/lint skip-and-warn on the same file. Generators should skip-warn + honor scope in pre-scan.
 - B4 (MED) generated index.md fails hyalo's own MD022 (heading after begin-marker, line 4); exempt covers SCHEMA pass but not markdown-body pass. == own-kb B4/B7 (3rd confirmation).
 - B5 (MED) `--limit 0` (documented unlimited) returns ZERO file results on lint JSON; --count --limit 0 correctly 330.
@@ -215,5 +215,5 @@ Repo B end state: 9 warns 0 errors; root CHANGELOG.md converted to KaC 1.1.0 (al
 - MADR approach comparison: bind-in-place (glob adr-*.md) natural for lone ADR but breaks toc (A2); mv to docs/decisions better for full adoption — mv --dry-run planned ALL inbound link rewrites (md links + wikilinks) + fixed the file's own outbound depth — excellent.
 - changelog release rotation correct in scratch incl. idempotency refusal; --profile bogus lists all 4 profiles; adr required_sections order enforcement good.
 
-## FALLBACKS (feature gaps): all .hyalo.toml restructuring by hand (no hyalo command for [[schema.bind]] / [schema.default.properties]); `set` rejects string-list values (append only; no way to set full list); body/heading edits; trailing-newline trim after changelog add.
+## FALLBACKS (feature gaps): all .hyalo.toml restructuring by hand (no hyalo command for `[[schema.bind]]` / [schema.default.properties]); `set` rejects string-list values (append only; no way to set full list); body/heading edits; trailing-newline trim after changelog add.
 

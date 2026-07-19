@@ -321,8 +321,8 @@ detect empty in caller and drop the arg.)
 ## What Worked Well
 
 - **`mv` link rewrite** on the main shapes is genuinely a relief: no more
-  silently broken wikilink graphs after a rename. The per-file `[[old]] →
-  [[new]]` log is a nice touch and exactly what a user wants to see.
+  silently broken wikilink graphs after a rename. The per-file `[[old]]` →
+  `[[new]]` log is a nice touch and exactly what a user wants to see.
 - **Fuzzy hints for `--tag` / `--property`** are silent on far misses and
   hit the obvious typos. The signal-to-noise ratio felt right across own
   KB, docs, and the synthetic scratch KB.

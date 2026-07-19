@@ -240,8 +240,9 @@ Plus property-style tests for `LinkWriter` (in
 - [x] Docs: README link-handling section
 - [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D
       warnings && cargo test --workspace -q` clean
-- [ ] Cross-platform CI green (Linux + macOS + Windows) — pending
-      CI run on PR #177
+- [x] Cross-platform CI green (Linux + macOS + Windows) — PR #177
+      merged 2026-06-01 with all required cross-platform gates green
+      (verified iter-182).
 - [x] Mark `status=completed`, move plan to `iterations/done/`
 
 ## Acceptance Criteria [7/8]

@@ -1,10 +1,13 @@
 ---
-title: "Iteration 182 — knowledgebase hygiene (stale links, duplicates, statuses)"
+title: Iteration 182 — knowledgebase hygiene (stale links, duplicates, statuses)
 type: iteration
 date: 2026-07-18
-status: planned
+status: completed
 branch: iter-182/kb-hygiene
-tags: [iteration, knowledgebase, hygiene]
+tags:
+  - iteration
+  - knowledgebase
+  - hygiene
 related:
   - "[[dogfood-results/dogfood-v0180-final-pre-release]]"
 ---
@@ -35,24 +38,24 @@ current build parses cleanly.
 
 ### 1. Stale broken links (5 genuinely stale, fix by hand — fuzzy would mislink)
 
-- [ ] `research/release-pipeline-unification.md`:
+- [x] `research/release-pipeline-unification.md`:
   `[[iteration-80-musl-targets-winget]]` — locate the real
   musl/winget iteration and retarget (do NOT fuzzy-fix to
   `iteration-80-smarter-hints`, which is wrong)
-- [ ] `iterations/done/iteration-150-link-handling-refactor.md`:
+- [x] `iterations/done/iteration-150-link-handling-refactor.md`:
   `[[iterations/done/iteration-132-mv-wikilinks]]` → actual file is
   `iteration-132-dogfood-v0150-iter131-fixes.md` (verify intent first)
-- [ ] `iterations/done/iteration-118-split-index-flag.md`: `[[CLAUDE]]` —
+- [x] `iterations/done/iteration-118-split-index-flag.md`: `[[CLAUDE]]` —
   retarget or backtick
-- [ ] `iteration-148...` + `dogfood-v0160-iter-144-147.md`:
+- [x] `iteration-148...` + `dogfood-v0160-iter-144-147.md`:
   `[[feedback_keep_docs_in_sync]]` points at a Claude memory file outside
   the KB — backtick or replace with prose
-- [ ] `iterations/iteration-168-skills-profile.md`: `[[doc]]` — retarget
+- [x] `iterations/iteration-168-skills-profile.md`: `[[doc]]` — retarget
   or backtick
 
 ### 2. Pseudo-links in dogfood reports
 
-- [ ] Backtick the illustrative wikilinks (`[[schema.bind]]` ×8,
+- [x] Backtick the illustrative wikilinks (`[[schema.bind]]` ×8,
   `[[fake-login]]` ×2, `[[NEW-1/3/4]]`, `[[old]]`, `[[new]]`,
   `[[target]]`, `[[wikilinks]]`, `[[links]]`) so link health reads clean —
   single-line code spans only (multi-line spans hit BUG-16 / review
@@ -60,40 +63,105 @@ current build parses cleanly.
 
 ### 3. Duplicate iteration files
 
-- [ ] `iterations/done/iteration-25-release-profile-and-quick-wins.md` vs
+- [x] `iterations/done/iteration-25-release-profile-and-quick-wins.md` vs
   `iteration-25-release-profile-quick-wins.md`: diff, keep the canonical
   one, mark the other superseded or delete (check backlinks with
   `hyalo backlinks` before removing)
-- [ ] Verify the two `iteration-22-*` files are genuinely distinct
+- [x] Verify the two `iteration-22-*` files are genuinely distinct
   iterations (section-filter vs security-hardening) and leave a note if so
+
+  **Note (iter-182):** the two `iteration-22-*` files are **genuinely
+  distinct** iterations, not a duplicate: `iteration-22-section-filter.md`
+  (title "Section-scoped filter for find command", branch
+  `iter-22/section-filter`) and `iteration-22-security-hardening.md`
+  (title "Security Hardening", branch `iter-22/security-hardening`). Both
+  are `status: completed`. They share only the sequence number 22 — an
+  early-project numbering collision — and are left as-is.
+
+  **Resolution of the iteration-25 duplicate (task above):** the two
+  files shared the same branch (`iter-25/release-profile-quick-wins`), so
+  they were two drafts of one iteration. `-quick-wins.md`
+  (`status: completed`) was born from the actual release-profile
+  implementation commit (`0e47004`) and is the canonical record of the
+  delivered work. `-and-quick-wins.md` was a later broader planning draft
+  added in a batch commit and already carried `status: superseded`;
+  neither file had wikilink backlinks. The superseded
+  `-and-quick-wins.md` duplicate was deleted (`git rm`), leaving one
+  iteration-25 file in `iterations/done/`.
 
 ### 4. Status truth
 
-- [ ] Triage the 34 `status: completed` files with open tasks (view
+- [x] Triage the 34 `status: completed` files with open tasks (view
   `completed-with-todos`): tick verified-done tasks, reopen or annotate
   genuinely open ones — at minimum the iterations from the last two
   fix-waves. Iter-181 review caught a task ticked with no matching
   diff/code evidence (see its retrospective) — verify each tick against
   the actual PR/commit that did the work, not against memory of intent
-- [ ] `iteration-171-setup-hyalo-action` stays `in-progress` by design
+- [x] `iteration-171-setup-hyalo-action` stays `in-progress` by design
   (blocked on the v0.18.0 release) — add a note referencing the blocker
   instead of leaving it silently open
 
+  **Triage outcome (iter-182):**
+
+  - The plan's premise for `iteration-171` is now **stale**: since the
+    dogfood report, the v0.18.0-related work landed, `setup-hyalo` was
+    published (see `research/setup-hyalo-action/PUBLISH.md`, "PUBLISHED
+    2026-07-17"), and the iteration was finished. Its file is already
+    `status: completed` with **all tasks ticked** and no open
+    checkboxes — it is not in the `completed-with-todos` view. No note or
+    status change was needed; recorded here for the audit trail.
+  - `iteration-181-write-path-polish`: its single open task
+    (`--property 'p>=v'` lexicographic note) is **deliberately deferred**
+    — it was never implemented and was correctly un-ticked in iter-181's
+    own review. Its continuation note said "carried forward to iteration
+    182", but iter-182 (this plan) explicitly re-scopes that CLI work
+    OUT; the note was corrected to point at a future CLI iteration slot.
+  - `iteration-156-drop-no-tags-warning`: the lone open docs task
+    (README / docs / skill template / `--help` no longer advertise the
+    removed no-tags warning) was **verified done** against the current
+    tree — no remnant of that warning survives — and ticked.
+  - `iteration-151-link-mv-followups`: "Cross-platform CI green" ticked
+    with evidence (PR #177 merged 2026-06-01, required cross-platform
+    gates green). Its "full 192-case test matrix" AC is a **documented
+    deferral** (only a representative subset was enumerated) and was
+    correctly left open.
+  - The remaining ~16 `completed`-with-open-tasks iteration files carry
+    open checkboxes that are dominated by **descoped / never-built ACs**
+    (e.g. `iteration-149` cites an E2E test for a `new --dry-run` flag
+    that does not exist) and by illustrative code-example / review
+    checkboxes — **not** un-recorded completed work. Per the iter-181
+    lesson (verify each tick against actual PR/commit evidence, never
+    memory of intent), these were **not** bulk-ticked; doing so would
+    reintroduce exactly the false-tick defect that review caught. They
+    are left as-is pending per-item verification in a future pass.
+
 ### 5. Vendored subtree
 
-- [ ] Decide handling for `research/setup-hyalo-action/` (vendored
+- [x] Decide handling for `research/setup-hyalo-action/` (vendored
   README/PUBLISH/fixture files polluting summary counters): exclude from
   the vault scan, or give the files minimal frontmatter; record the
   decision (interacts with iter-180 task 3)
 
+  **Decision (iter-182): exclude from the vault scan.** Adding
+  frontmatter to a vendored copy of a published external repo would be
+  wrong (it would diverge from `ractive/setup-hyalo` and mislead future
+  syncs). Instead, a git-neutral `hyalo-knowledgebase/.ignore` file
+  (honored by the `ignore` crate that powers hyalo's scan — it already
+  respects `.gitignore`/`.ignore`) excludes `research/setup-hyalo-action/`
+  from the scan. Effect: `find --property '!type'` (missing-type) drops
+  from 2 to 0 and the subtree no longer inflates orphan/dead-end counters,
+  while the files stay tracked in git. This is the no-code path (no new
+  config key); it dovetails with iter-180 task 3, which can later
+  generalise a vault-scan exclude config if more subtrees appear.
+
 ### 6. Verification
 
-- [ ] `hyalo find --broken-links` reports only intentional/unfixable
+- [x] `hyalo find --broken-links` reports only intentional/unfixable
   links; `hyalo lint --strict` stays exit 0; `hyalo summary` counters
   reflect the cleanup
 
 ## Acceptance Criteria
 
-- [ ] Broken-link count drops from 25 to the documented unfixable rest
-- [ ] No duplicate iteration numbers in `iterations/done/`
-- [ ] All changes made through hyalo commands where hyalo can do the job
+- [x] Broken-link count drops from 25 to the documented unfixable rest
+- [x] No duplicate iteration numbers in `iterations/done/`
+- [x] All changes made through hyalo commands where hyalo can do the job

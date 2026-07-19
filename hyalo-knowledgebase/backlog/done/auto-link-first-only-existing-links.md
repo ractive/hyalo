@@ -26,7 +26,7 @@ and gets linked.
 Observed by an external user: a sentence already containing `[[fake-login]]`
 gained a second link on the adjacent plain mention, producing
 
-> the [[fake-login]] envVars block from [[fake-login]]
+> the `[[fake-login]]` envVars block from `[[fake-login]]`
 
 in one sentence — with `--first-only` active. The user reverted the edit.
 

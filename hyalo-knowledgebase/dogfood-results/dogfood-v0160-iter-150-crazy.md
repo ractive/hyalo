@@ -55,8 +55,8 @@ ambiguity at all — it just retargets `bulk/moved-1 → bulk/super-moved`.
 
 ### Ambiguity surfaces correctly via `links`
 
-In a vault with `a/target.md` and `b/target.md` plus `linker.md →
-[[target]]`, `hyalo links` reports the link as `ambiguous` with the
+In a vault with `a/target.md` and `b/target.md` plus `linker.md` →
+`[[target]]`, `hyalo links` reports the link as `ambiguous` with the
 source file and line. `hyalo find --file linker.md` shows
 `"target" (unresolved)`. No silent stem-collision retargeting.
 

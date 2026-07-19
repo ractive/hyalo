@@ -75,7 +75,7 @@ Re-ran repros from `dogfood-v0140-iter126-markdown-linter` and earlier:
 
 ### BUG-A: `hyalo mv` does not rewrite `[[wikilinks]]` to the moved file (HIGH)
 
-`hyalo mv` advertises in `--help`: *"Rewrites all [[wikilinks]] and [markdown](links) in other files
+`hyalo mv` advertises in `--help`: *"Rewrites all `[[wikilinks]]` and `[markdown](links)` in other files
 that pointed to the old path."* In practice only the markdown-link form is rewritten — wikilinks
 become broken silently.
 
