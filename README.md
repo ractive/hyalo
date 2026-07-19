@@ -226,132 +226,36 @@ Each profile's full behaviour — schemas, generator edge cases, individual rule
 
 ## Lint your vault in CI (GitHub Actions)
 
-Gate every change on a clean vault. The [`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the prebuilt release binary in seconds — no compilation — so a full-vault gate is two steps:
+Gate every change on a clean vault — the [`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the prebuilt binary in seconds, so a full-vault gate is two steps:
 
 ```yaml
 # .github/workflows/lint-kb.yml
 name: Lint knowledgebase
-on:
-  push:
-    branches: [main]
+on: [push, pull_request]
 jobs:
-  lint-kb-full:
+  lint-kb:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ractive/setup-hyalo@v1          # installs hyalo, adds it to PATH
+      - uses: ractive/setup-hyalo@v1   # installs hyalo, adds it to PATH
       - run: hyalo lint --strict --format github
 ```
 
-Pin the binary with `with: { version: v0.20.0 }` (the default `latest` tracks the newest release). Run the job from the repo root: `.hyalo.toml` supplies the vault `dir`, and annotation paths are emitted relative to the repository root so they land on the right file and line.
-
-On a **pull request**, use the diff-aware variant instead: pipe `git diff` into `--files-from -` to lint only the files the PR touches (non-markdown paths are skipped and vault-dir prefixes are stripped automatically — no pre-filtering needed). Check out with `fetch-depth: 0` so the merge-base is available:
-
-```yaml
-jobs:
-  lint-kb:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0                      # full history for the three-dot merge-base
-      - uses: ractive/setup-hyalo@v1
-      - run: |
-          git fetch --quiet origin "${{ github.base_ref }}"
-          git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" \
-            | hyalo lint --strict --format github --files-from -
-```
-
-Three-dot `origin/<base>...HEAD` diffs against the *merge-base* of the PR base and HEAD, so a stale branch stays scoped to the files it changed — not to base-tip drift it never touched. The diff-aware shape matters because GitHub registers at most **10 error + 10 warning inline annotations per step**: scoping to the PR's own files spends that budget on findings the author can act on, while the full-vault job (on `push` to main, where the cap is irrelevant) catches the cross-file regressions a diff can't see — a deleted note others link to, a schema change.
-
-`--format github` emits one [GitHub Actions workflow command](https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions) per violation — `::error` / `::warning` lines that render as inline annotations on the PR diff — in deterministic `(path, line, rule)` order, appending a `::notice::` with the true totals whenever the counts exceed GitHub's inline cap. `--strict` promotes warnings to errors — including `HYALO006` broken links — so the job fails on a broken link; unparseable frontmatter is always an error (`HYALO005`), so a green lint means the vault is genuinely clean.
-
-For **OKF** vaults, add a reserved-file drift check — `hyalo okf index` is dry-run by default and exits non-zero when any `index.md` is stale:
-
-```yaml
-      - run: hyalo okf index   # dry-run; non-zero exit on drift
-```
-
-### `@claude` agent on GitHub (claude-code-action)
-
-Because [`setup-hyalo`](https://github.com/ractive/setup-hyalo) puts the binary on
-`PATH` before the agent runs, a [`claude-code-action`](https://github.com/anthropics/claude-code-action)
-workflow can hand `@claude` the full hyalo toolbox — so an `@claude` mention on a
-PR or issue can triage and *fix* lint findings (`hyalo lint --fix`, `hyalo set`,
-`hyalo mv`) rather than just report them. Commit the hyalo skill first with
-`hyalo init --claude` (add `--profile okf` for an OKF bundle) so the agent knows
-to prefer the CLI over raw file edits.
-
-```yaml
-# .github/workflows/claude.yml
-name: claude
-on:
-  issue_comment:
-    types: [created]
-jobs:
-  claude:
-    if: contains(github.event.comment.body, '@claude')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ractive/setup-hyalo@v1          # hyalo on PATH before the agent starts
-      - uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Let the agent run any hyalo subcommand (lint/find/set/mv/task/...).
-          allowed_tools: Bash(hyalo:*)
-```
-
-The committed skill routes the agent to commands like
-`hyalo lint --strict --format github` (see findings), `hyalo lint --fix`
-(auto-fix the fixable rules), and `hyalo set <file> --property status=done`
-(targeted frontmatter edits).
-
-hyalo's own `lint-kb`/`lint-kb-full` jobs in [.github/workflows/ci.yml](.github/workflows/ci.yml) are the living reference.
+Findings render as inline annotations on the PR diff, and `--strict` makes broken links fail the job. The diff-aware pull-request variant, the OKF drift check, and an `@claude` review setup (claude-code-action with the full hyalo toolbox) are covered in [docs/ci.md](docs/ci.md).
 
 ## Configuration
 
-`hyalo init` creates a `.hyalo.toml` in your project root. All fields are optional — CLI flags always take precedence.
+`hyalo init` creates a `.hyalo.toml` in your project root. All fields are optional — CLI flags always take precedence:
 
 ```toml
 dir = "./my-vault"        # vault directory (default: ".")
-format = "text"           # output format: "json" or "text" (default: TTY-aware — text on terminals, json when piped)
-hints = false             # drill-down command hints (default: true)
-default_limit = 100       # max results for list commands (default: 50; 0 = unlimited)
-
-[links]
-frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
-case_insensitive = "auto"                             # "auto", "true", or "false"
-
-[schema.default]
-required = ["title"]
 
 [schema.types.iteration]
 required = ["title", "date", "status", "tags"]
 filename-template = "iterations/iteration-{n}-{slug}.md"
-
-[schema.types.iteration.properties.status]
-type = "enum"
-values = ["planned", "in-progress", "completed", "superseded"]
 ```
 
-Schemas support typed properties (`string`, `date`, `datetime`, `datetime-tz`, `number`, `boolean`, `list`, `enum`, `string-list` — with regex patterns, enum values, and length bounds), per-type filename templates, path-bound types (`[[schema.bind]]`) that apply a schema to a subtree without explicit `type:` frontmatter, and reserved-file exemptions (`[schema] exempt`). Manage schemas from the CLI with `hyalo types list|show|set`, validate with `hyalo lint`, and inspect the resolved configuration with `hyalo config`.
-
-### Snapshot index
-
-For workflows that run many queries in a short window (CI, automation, LLM tool loops):
-
-```sh
-hyalo create-index          # one scan → .hyalo-index
-hyalo find --index ...      # instant queries, no disk scan
-hyalo drop-index            # clean up
-```
-
-Mutations with `--index` patch the index in-place, keeping it current for subsequent queries — and hyalo suggests creating an index automatically once a vault grows past ~500 files.
+Schemas can type and require frontmatter properties, bind types to path patterns, and drive `hyalo new` scaffolding and `hyalo lint` validation. The full reference — config keys, saved views, CWD-aware behaviour, the snapshot index — lives in [docs/configuration.md](docs/configuration.md).
 
 ## Building from source
 
@@ -359,29 +263,7 @@ Mutations with `--index` patch the index in-place, keeping it current for subseq
 cargo build --release
 ```
 
-## Releasing
-
-1. Bump the workspace version in `Cargo.toml`
-2. Rotate the changelog with hyalo itself: `hyalo changelog release X.Y.Z --apply` (then replace the `TBD` footer link with the real compare URL)
-3. Cut the release: `gh release create vX.Y.Z --generate-notes`
-
-Publishing the release triggers [`release.yml`](.github/workflows/release.yml), a thin caller for the shared reusable pipeline in [ractive/release-workflows](https://github.com/ractive/release-workflows). From a single tag, it:
-
-- builds and tests seven targets (Linux x86_64/ARM64 in both glibc and musl, macOS Apple Silicon, Windows x86_64/ARM64);
-- packages versioned archives, plus `.deb`/`.rpm` packages, and publishes them to the hosted apt/yum repos at Cloudsmith;
-- publishes the crates to crates.io (with retry) and updates the Homebrew tap, Scoop bucket, and winget manifest;
-- emits CycloneDX SBOMs and GitHub build-provenance attestations for the native builds.
-
-Rehearse the whole thing without publishing anything via `gh workflow run release.yml` — a `workflow_dispatch` run builds and packages every target as a full dry run. If a downstream step needs to be re-run after a release, [`publish-crates.yml`](.github/workflows/publish-crates.yml) re-publishes to crates.io and [`cloudsmith-republish.yml`](.github/workflows/cloudsmith-republish.yml) backfills the Cloudsmith repos.
-
-## Package repository hosting
-
-[![OSS hosting by Cloudsmith](https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith&style=flat-square)](https://cloudsmith.com)
-
-Package repository hosting is graciously provided by [Cloudsmith](https://cloudsmith.com).
-Cloudsmith is the only fully hosted, cloud-native, universal package management solution, that
-enables your organization to create, store and share packages in any format, to any place, with total
-confidence.
+Maintainer docs — the release process and package-repository hosting — live in [docs/releasing.md](docs/releasing.md).
 
 ## License
 
