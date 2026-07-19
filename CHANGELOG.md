@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-19
+
 ### Added
 
 - **`hyalo lint` accepts multiple positional files** (iter-179): `hyalo lint
@@ -650,6 +652,7 @@ and this project adheres to
   crafted files.
 
 [Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
+[0.19.0]: TBD
 [0.18.0]: TBD
 [0.17.0]: https://github.com/ractive/hyalo/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/ractive/hyalo/compare/v0.16.0...v0.16.1
