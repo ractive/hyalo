@@ -30,6 +30,41 @@ the find/mod, `link_fix`, `backlinks`, and `summary` call sites onto
 per-file partial-failure envelope (applied/failed/skipped) + batch-mv
 rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 
+**Lessons from iter-184 PR review (apply to this iteration too):**
+
+- **`LinkGraph.lower_index` must stay incrementally maintained, not
+  rebuilt.** iter-184's first cut had `rename_path`/`remove_source`/
+  `insert_links` each call a full O(vault) `rebuild_lower_index()` per
+  invocation; since batch-mv calls these once per file, this regressed
+  batch-mv throughput ~38-44% vs main (measured on a synthetic 2000-file
+  vault) before being fixed in review to update only the changed
+  `lower_index` buckets. Any new `LinkGraph` key-set mutation added by
+  the `resolve_link` unification (item (a) above) or by L-11's
+  partial-failure envelope work must follow the same incremental
+  pattern — do not reintroduce a bulk rebuild inside a per-file loop.
+  See `lower_index_stays_consistent_across_incremental_mutations` in
+  `link_graph.rs` for the regression-test pattern (compares incremental
+  state against a from-scratch rebuild) — extend it if new mutation
+  methods are added.
+- **"Reported separately, excluded from apply" buckets must exclude
+  their own count from the general bucket, not just add a new field.**
+  iter-184's fuzzy-match tier (L-10) initially left `fixable`/`fixes`
+  counting fuzzy matches *in addition to* the new `fuzzy`/`fuzzy_fixes`
+  bucket, so the dry-run "Apply N fixes" hint promised fixes that plain
+  `--apply` didn't write. When L-22's broken-anchor category (or any
+  other new low-confidence/opt-in bucket) is added, make sure the
+  headline counts (`broken`, `fixable`, hint text) reflect only what the
+  *default* action set actually touches, and add an e2e assertion that
+  running the suggested hint command produces the promised result.
+- **Perf claims need an actual measurement, not an assumption.**
+  iter-184's plan had a ticked "perf on MDN unchanged" sub-claim that
+  turned out to be unverified (no MDN corpus was benchmarked in that
+  PR). Item 1's "Perf guard: ... MDN-scale timing within budget" task
+  below should be backed by a real before/after timing run (MDN corpus,
+  or — if unavailable — a synthetic vault at comparable scale with
+  numbers recorded in the plan) before being ticked, not marked done on
+  the strength of an untested assumption.
+
 ## Tasks
 
 ### 1. Anchor validation (L-21)
