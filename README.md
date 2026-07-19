@@ -361,6 +361,23 @@ sudo dnf install hyalo    # or: yum install hyalo / zypper install hyalo
 
 Registers the Cloudsmith-hosted rpm repository. Shell completions are installed system-wide automatically.
 
+### AUR (Arch Linux)
+
+```sh
+yay -S hyalo-bin    # or: paru -S hyalo-bin
+```
+
+Installs the prebuilt release binary (x86_64 and ARM64). Without an AUR
+helper:
+
+```sh
+git clone https://aur.archlinux.org/hyalo-bin.git
+cd hyalo-bin && makepkg -si
+```
+
+The [hyalo-bin](https://aur.archlinux.org/packages/hyalo-bin) package is
+updated automatically on every release.
+
 ### Scoop (Windows)
 
 ```powershell
