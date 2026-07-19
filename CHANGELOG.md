@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-19
+
 ### Added
 
 - **Broken-anchor detection in `find --broken-links`** (iter-190, L-21): links
@@ -790,6 +792,7 @@ and this project adheres to
   crafted files.
 
 [Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
+[0.20.0]: TBD
 [0.19.0]: TBD
 [0.18.0]: TBD
 [0.17.0]: https://github.com/ractive/hyalo/compare/v0.16.1...v0.17.0
