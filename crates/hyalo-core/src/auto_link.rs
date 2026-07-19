@@ -16,9 +16,7 @@ use crate::discovery::{canonicalize_vault_dir, ensure_within_vault, match_globs}
 use crate::fs_util::atomic_write;
 use crate::index::{IndexEntry, VaultIndex};
 use crate::links::{extract_link_spans_with_original, strip_wikilink_md_suffix};
-use crate::scanner::{
-    FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
-};
+use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -499,48 +497,18 @@ fn resolve_existing_link_targets(
 ) -> HashSet<String> {
     let mut targets = HashSet::new();
 
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
+    // Shared, cross-line-aware line classifier (iter-183 Phase B). Frontmatter
+    // lines are ignored here; only body links count toward "already linked"
+    // targets.
+    let mut scanner = LineScanner::new();
 
-    for line in content.split('\n') {
-        line_num += 1;
-
-        // ---- Frontmatter handling ----
-        if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                }
-                continue;
-            }
-            frontmatter_done = true;
-        }
-
-        // ---- Fenced code block ----
-        if fence.process_line(line) {
+    for (line, rest) in lines_with_rest(content) {
+        let LineClass::Body(body) = scanner.classify(line, rest) else {
             continue;
-        }
+        };
 
-        // ---- Comment fence (Obsidian %% blocks) ----
-        if !fence.in_fence() && is_comment_fence(line) {
-            in_comment_fence = !in_comment_fence;
-            continue;
-        }
-        if in_comment_fence {
-            continue;
-        }
-
-        // ---- Strip inline code and inline comments ----
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        // ---- Strip inline code, inline/HTML comments (cross-line aware) ----
+        let cleaned = body.cleaned(line, rest);
         let cleaned_str: &str = cleaned.as_ref();
 
         for span in extract_link_spans_with_original(cleaned_str, line) {
@@ -579,56 +547,22 @@ fn scan_file_for_matches(
 ) -> Vec<AutoLinkMatch> {
     let mut results = Vec::new();
 
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
+    // Shared, cross-line-aware line classifier (iter-183 Phase B).
+    let mut scanner = LineScanner::new();
 
-    for line in content.split('\n') {
-        line_num += 1;
-
-        // ---- Frontmatter handling ----
-        if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                }
-                continue;
-            }
-            // No frontmatter block; mark done.
-            frontmatter_done = true;
-        }
-
-        // ---- Fenced code block ----
-        if fence.process_line(line) {
+    for (line, rest) in lines_with_rest(content) {
+        let LineClass::Body(body) = scanner.classify(line, rest) else {
             continue;
-        }
-
-        // ---- Comment fence (Obsidian %% blocks) ----
-        // Must come after code-fence check: a `%%` inside a fenced code block
-        // is literal text, not an Obsidian comment delimiter.
-        if !fence.in_fence() && is_comment_fence(line) {
-            in_comment_fence = !in_comment_fence;
-            continue;
-        }
-        if in_comment_fence {
-            continue;
-        }
+        };
+        let line_num = scanner.line_num();
 
         // ---- Skip heading lines ----
         if line.trim_start().starts_with('#') {
             continue;
         }
 
-        // ---- Strip inline code and inline comments ----
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        // ---- Strip inline code, inline/HTML comments (cross-line aware) ----
+        let cleaned = body.cleaned(line, rest);
         let cleaned_str: &str = cleaned.as_ref();
 
         // ---- Extract existing link spans to avoid overlapping them ----

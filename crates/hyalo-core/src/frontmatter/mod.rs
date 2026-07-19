@@ -5,11 +5,11 @@ mod types;
 
 use anyhow::Context as _;
 
-pub(crate) use parse::is_opening_delimiter;
 pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
     read_frontmatter, skip_frontmatter, write_frontmatter,
 };
+pub(crate) use parse::{is_closing_delimiter, is_opening_delimiter};
 pub use types::{infer_type, parse_value};
 
 /// Maximum number of content lines in a YAML frontmatter block.

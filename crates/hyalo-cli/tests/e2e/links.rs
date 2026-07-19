@@ -3019,3 +3019,139 @@ Body also links [[wrong/real-target]].
     let after = fs::read_to_string(tmp.path().join("a.md")).expect("a.md should be readable");
     assert_eq!(before, after, "dry-run must not modify the file");
 }
+
+// ---------------------------------------------------------------------------
+// iter-183 Phase B: cross-line suppression regressions (L-3, L-15)
+//
+// These exercise the shared `LineScanner` end-to-end through `find
+// --broken-links`: a broken `[[link]]` hidden inside a MULTI-LINE inline code
+// span or a MULTI-LINE HTML comment must NOT be reported, because the scanner
+// now carries the open code-span / comment across lines. Before Phase B each
+// body-scan loop stripped only per-line, so the interior link leaked out.
+// ---------------------------------------------------------------------------
+
+/// Run `find --broken-links --format json` against `dir` and return the set of
+/// files reported as having broken links.
+fn broken_link_files(dir: &std::path::Path) -> Vec<String> {
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().expect("temp path should be valid UTF-8"),
+            "find",
+            "--broken-links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find --broken-links should run");
+    assert!(
+        output.status.success(),
+        "find --broken-links exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    json["results"]
+        .as_array()
+        .map(|rs| {
+            rs.iter()
+                .filter_map(|r| r["file"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn find_broken_links_ignores_multiline_code_span() {
+    // L-3: a `[[gone]]` sitting inside a code span opened two lines earlier
+    // (```` ``code ... code`` ````) must be treated as literal, not a link.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "span.md",
+        md!(r"
+---
+title: Span
+---
+Intro ``open code
+this [[gone]] is inside the span
+still code`` and here is [[alsomissing]] outside.
+"),
+    );
+    let files = broken_link_files(tmp.path());
+    // The file DOES have a genuinely broken link outside the span, so it still
+    // appears — but the assertion that matters is the interior link is not the
+    // reason. Verify by removing the outside link too.
+    assert!(
+        files.contains(&"span.md".to_owned()),
+        "span.md has a real broken link outside the span: {files:?}"
+    );
+
+    // Now a file whose ONLY `[[...]]` is inside the multi-line span must have
+    // NO broken links reported at all.
+    let tmp2 = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp2.path(),
+        "only.md",
+        md!(r"
+---
+title: Only
+---
+Intro ``open code
+this [[gone]] is inside the span
+still code`` done.
+"),
+    );
+    let files2 = broken_link_files(tmp2.path());
+    assert!(
+        !files2.contains(&"only.md".to_owned()),
+        "only.md's sole link is inside a multi-line code span and must not be reported broken: {files2:?}"
+    );
+}
+
+#[test]
+fn find_broken_links_ignores_multiline_html_comment() {
+    // L-15: a `[[gone]]` inside a multi-line HTML comment must be suppressed.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "html.md",
+        md!(r"
+---
+title: Html
+---
+Before <!-- start comment
+this [[gone]] is commented out
+end comment --> done.
+"),
+    );
+    let files = broken_link_files(tmp.path());
+    assert!(
+        !files.contains(&"html.md".to_owned()),
+        "the only link is inside a multi-line HTML comment and must not be reported broken: {files:?}"
+    );
+}
+
+#[test]
+fn find_broken_links_still_reports_after_multiline_span_closes() {
+    // Guard against over-suppression: a real broken link AFTER a multi-line
+    // code span closes must still be reported.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "after.md",
+        md!(r"
+---
+title: After
+---
+Intro ``open
+inside [[ignored]]
+close`` then a real broken [[reallymissing]].
+"),
+    );
+    let files = broken_link_files(tmp.path());
+    assert!(
+        files.contains(&"after.md".to_owned()),
+        "the broken link after the span closes must still be reported: {files:?}"
+    );
+}
