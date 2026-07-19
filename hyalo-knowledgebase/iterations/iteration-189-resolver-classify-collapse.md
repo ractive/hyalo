@@ -2,7 +2,7 @@
 title: Iteration 189 — link resolver classify collapse (refactor only)
 type: iteration
 date: 2026-07-19
-status: in-progress
+status: completed
 branch: iter-189/resolver-classify-collapse
 tags:
   - iteration
@@ -65,7 +65,7 @@ after the iter-188 short-form work).
 
 ## Tasks
 
-### 1. Behavior locks captured BEFORE each migration [0/4]
+### 1. Behavior locks captured BEFORE each migration [4/4]
 
 - [x] Inventory the existing locks and run them green on the branch point:
   `links fix` dry-run/apply e2e (tests/e2e/links.rs:405-541+,
@@ -89,7 +89,7 @@ after the iter-188 short-form work).
 - [x] Commit the locks separately, before any refactor commit, so the diff
   history proves before/after parity
 
-### 2. Classify-side collapse onto the shared entry point [0/5]
+### 2. Classify-side collapse onto the shared entry point [5/5]
 
 `resolve_and_classify_link` (link_fix.rs:325-408) duplicates the
 kind-dependent normalization that `discovery::resolve_link_from_source`
@@ -123,7 +123,7 @@ function, Classify mode**, in discovery:
 - [x] Behavior-lock e2e from task 1 green after the migration; no output
   diff in `links fix` dry-run JSON on the lock vault
 
-### 3. summary.rs orphan/dead-end L-6 tail [0/4]
+### 3. summary.rs orphan/dead-end L-6 tail [4/4]
 
 `summary` still counts orphans/dead-ends with case-SENSITIVE membership:
 summary.rs:303-326 builds `graph.all_targets()` / `graph.all_sources()`
@@ -158,7 +158,7 @@ tail — that annotation is ahead of the code; this task makes it true.
   divergence undocumented — `find --orphan` and `summary` orphan counts
   should not silently disagree
 
-### 4. detect_broken_links merge (delete the test-only twin) [0/3]
+### 4. detect_broken_links merge (delete the test-only twin) [3/3]
 
 - [x] Delete `detect_broken_links` (link_fix.rs:427-525) — it is
   `#[allow(dead_code)]`, test-only, and byte-for-byte parallel to
@@ -176,7 +176,7 @@ tail — that annotation is ahead of the code; this task makes it true.
 - [x] `FileLinks`-based plumbing that only served the deleted function is
   removed; clippy dead-code clean without new `#[allow]`s
 
-### 5. Grep-audit: no independent resolution loops in commands/ [0/2]
+### 5. Grep-audit: no independent resolution loops in commands/ [2/2]
 
 - [x] Run and record in the PR description:
   `grep -rn "resolve_target\|classify_link\|resolve_and_classify" crates/hyalo-cli/src/commands/`
@@ -192,7 +192,7 @@ tail — that annotation is ahead of the code; this task makes it true.
   Exists/Classify entry points — one sentence in each module header so
   the next reader doesn't count it as a rogue loop
 
-### 6. Perf A/B [0/4]
+### 6. Perf A/B [4/4]
 
 `bench-e2e.sh` exists (hyperfine; A/B via a second-binary argument;
 vault from `HYALO_BENCH_VAULT`, default `../obsidian-hub`) but currently
@@ -224,7 +224,7 @@ expected.
 | find-broken-links | 466.4 ms ± 10.8 | 478.2 ms ± 17.7 | +2.5 % (noise, σ overlap) |
 | mv-batch-apply | 17.786 s ± 0.935 | 18.004 s ± 2.096 | +1.2 % (noise, σ overlap) |
 
-### 7. Retrospective [0/3]
+### 7. Retrospective [3/3]
 
 - [x] Update the "carried:" annotations in
   [[iterations/iteration-188-link-semantics-completion]] task 0 to
