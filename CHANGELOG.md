@@ -64,6 +64,12 @@ and this project adheres to
 
 ### Fixed
 
+- **`find --orphan` / `--dead-end` / `--fields backlinks` count
+  case-insensitive inbound links** (L-6 tail): `[[foo]]` pointing at `Foo.md`
+  now counts as inbound in `find`, matching the `backlinks` command and
+  `summary` (all three route through the same case-insensitive graph lookup).
+  Previously `find --orphan` could list a file that `summary` and `backlinks`
+  agreed had inbound links.
 - **Percent-encoded markdown link destinations now resolve** (iter-188, L-23):
   `[x](my%20dest.md)` previously never resolved (the `%20` was compared
   literally against the on-disk filename `my dest.md`), so `find --broken-links`
