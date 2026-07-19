@@ -93,8 +93,11 @@ L-17, L-18, L-20 opportunistically) from
 
 - [x] `grep`-audit: no `trim() == "---"` outside the canonical helpers;
   no body-link scan loop outside the shared scanner
-- [x] All behavior-capture tests pass unchanged except the documented
-  L-3/L-4/L-13/L-15 fixes
+- [x] Existing test suite (`cargo test --workspace -q`) passes unchanged
+  except the documented L-3/L-4/L-13/L-15 fixes, verified by new regression
+  tests `find_broken_links_ignores_multiline_code_span` and
+  `find_broken_links_ignores_multiline_html_comment` in
+  `crates/hyalo-cli/tests/e2e/links.rs`
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
 
 ## Implementation notes (2026-07-19)
