@@ -129,3 +129,17 @@ what GitHub will register.
   which 10 warnings to surface), job-summary markdown reports
   (`$GITHUB_STEP_SUMMARY`) — candidate follow-up if the notice proves
   insufficient.
+- 2026-07-19, from iter-185 (PR #218): confirmed still independent — iter-185
+  shipped only `links.rs` escape handling and a `discovery::resolve_file_ci`
+  CLI-argument fallback, neither touches `hyalo-mdlint` or `--format github`.
+  One relevant lesson carries over though: iter-184's e2e regression
+  (`backlinks_case_insensitive_agrees_across_casings` passed locally on
+  macOS/APFS case-insensitive-by-default, then failed on `ubuntu-latest`)
+  is the same class of gotcha this iteration's CI changes are exposed to —
+  any new fixture or assertion added to `lint-kb`/`lint-kb-full` (task 1)
+  that depends on filesystem casing or path-separator behavior must be
+  verified against Linux CI, not just eyeballed locally, before being
+  trusted. iter-185 also flagged that the plan's originally-proposed
+  `HYALO004` id is already taken (datetime-format); irrelevant to this
+  iteration's scope (no new lint rule here) but worth remembering if task 2's
+  work ever grows a rule ID.

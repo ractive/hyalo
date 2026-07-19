@@ -27,13 +27,13 @@ struct BacklinkItem {
 /// linking file that wrote `[[foo]]` still counts as a backlink of `Foo.md`
 /// even though the wikilink casing doesn't match the target's on-disk name.
 ///
-/// NOTE: this only makes the *link-target lookup* case-insensitive.
-/// `file_arg` itself is still resolved via `discovery::resolve_file`, a
-/// literal filesystem check — on a case-sensitive filesystem (Linux),
-/// `backlinks --file foo.md` still fails with "file not found" unless
-/// `foo.md` is the real on-disk casing. Pass the file's actual casing (e.g.
-/// `Foo.md`) as `file_arg`; only the *matching* is case-insensitive, not the
-/// CLI argument resolution.
+/// When `case_insensitive` is true this ALSO makes the `file_arg` resolution
+/// case-insensitive: `resolve_file_user_ci` falls back to a case-insensitive
+/// directory scan when the literal-casing lookup misses, so
+/// `backlinks --file foo.md` resolves against an on-disk `Foo.md` even on a
+/// case-sensitive filesystem (Linux). Previously only the *link-target lookup*
+/// (`LinkGraph::backlinks_ci`) honored the setting; Task 4 (iter-185) closed
+/// the CLI-argument gap.
 pub fn backlinks(
     index: &dyn VaultIndex,
     file_arg: &str,
@@ -42,13 +42,17 @@ pub fn backlinks(
     limit: Option<usize>,
     case_insensitive: bool,
 ) -> Result<CommandOutcome> {
-    // Resolve the file argument to a relative path (same as in `backlinks`)
-    let (_full_path, rel) = match crate::commands::resolve_file_user(dir, file_arg) {
-        Ok(r) => r,
-        Err(e) => {
-            return Ok(crate::commands::resolve_error_to_outcome(e, format));
-        }
-    };
+    // Resolve the file argument to a relative path. When case-insensitive mode
+    // is on, `resolve_file_user_ci` falls back to a case-insensitive directory
+    // scan so `backlinks --file foo.md` resolves against an on-disk `Foo.md`
+    // even on a case-sensitive filesystem (Task 4 / iter-184 CI fix).
+    let (_full_path, rel) =
+        match crate::commands::resolve_file_user_ci(dir, file_arg, case_insensitive) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(crate::commands::resolve_error_to_outcome(e, format));
+            }
+        };
 
     let graph = index.link_graph();
 

@@ -112,6 +112,61 @@ fn backlinks_case_insensitive_agrees_across_casings() {
 }
 
 #[test]
+fn backlinks_ci_resolves_lowercase_file_arg_against_capitalized_file() {
+    // Task 4 (iter-185): closes the CLI-argument-resolution gap documented in
+    // `backlinks_case_insensitive_agrees_across_casings` above. With
+    // `[links] case_insensitive = "true"`, passing a lowercase `--file foo.md`
+    // must resolve against the on-disk `Foo.md` even on a case-sensitive
+    // filesystem (Linux CI), via `discovery::resolve_file_ci`'s fallback scan.
+    use std::fs;
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"true\"\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "Foo.md", "# Foo\n");
+    write_md(tmp.path(), "a.md", "See [[Foo]]\n");
+    write_md(tmp.path(), "b.md", "See [[foo]]\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        // Lowercase arg — real on-disk file is `Foo.md`.
+        .args(["backlinks", "--file", "foo.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "backlinks --file foo.md (lowercase) must resolve Foo.md on a \
+         case-insensitive vault: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Resolves regardless of host filesystem case-sensitivity: on a
+    // case-sensitive FS (Linux CI) the fallback substitutes the real casing
+    // (`Foo.md`); on a case-insensitive host (macOS/Windows) the literal lookup
+    // succeeds and keeps the arg casing (`foo.md`). Either is acceptable — the
+    // load-bearing check is that resolution succeeds (status above) and both
+    // backlinks are found (below).
+    let resolved_file = json["results"]["file"].as_str().unwrap();
+    assert!(
+        resolved_file.eq_ignore_ascii_case("foo.md"),
+        "resolved file should be foo.md in some casing, got {resolved_file:?}"
+    );
+    let sources: std::collections::BTreeSet<String> = json["results"]["backlinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["source"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        sources,
+        ["a.md", "b.md"].iter().map(|s| (*s).to_owned()).collect(),
+        "both linkers must be found after case-insensitive --file resolution"
+    );
+}
+
+#[test]
 fn backlinks_finds_markdown_links() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "notes/target.md", "# Target\n");

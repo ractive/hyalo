@@ -123,10 +123,14 @@ pub(crate) fn extract_links_from_text_with_original(
 
     while i < len {
         // Check for wikilink: ![[...]] or [[...]]
+        //
+        // L-16: a backslash-escaped opener (`\[[…]]`, `\![[…]]`) is literal text
+        // per CommonMark / Obsidian and must NOT be extracted.
         if bytes[i] == b'!'
             && i + 3 < len
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
+            && !is_escaped(bytes, i)
             && let Some((link, end)) = try_parse_wikilink_at(cleaned, i + 1)
         {
             out.push(link);
@@ -136,6 +140,7 @@ pub(crate) fn extract_links_from_text_with_original(
         if bytes[i] == b'['
             && i + 1 < len
             && bytes[i + 1] == b'['
+            && !is_escaped(bytes, i)
             && let Some((link, end)) = try_parse_wikilink_at(cleaned, i)
         {
             out.push(link);
@@ -145,8 +150,10 @@ pub(crate) fn extract_links_from_text_with_original(
 
         // Check for markdown link: [text](target)
         // Skip if preceded by `!` — that's image syntax: ![alt](img.png)
+        // L-16: skip when the `[` is backslash-escaped.
         if bytes[i] == b'['
             && (i == 0 || bytes[i - 1] != b'!')
+            && !is_escaped(bytes, i)
             && let Some((link, end)) = try_parse_markdown_link_at(cleaned, original, i)
         {
             out.push(link);
@@ -156,6 +163,22 @@ pub(crate) fn extract_links_from_text_with_original(
 
         i += 1;
     }
+}
+
+/// Whether the byte at `pos` is backslash-escaped, i.e. preceded by an odd
+/// number of consecutive `\` bytes (CommonMark / Obsidian escaping).
+///
+/// `\[[foo]]` → the `[` is escaped (one backslash), so the link is literal.
+/// `\\[[foo]]` → two backslashes render as one literal `\`, the `[` is *not*
+/// escaped, so the link is real. Used by both extraction paths (L-16).
+fn is_escaped(bytes: &[u8], pos: usize) -> bool {
+    let mut backslashes = 0usize;
+    let mut j = pos;
+    while j > 0 && bytes[j - 1] == b'\\' {
+        backslashes += 1;
+        j -= 1;
+    }
+    backslashes % 2 == 1
 }
 
 /// Extract all internal links with byte-offset spans from a text segment.
@@ -192,10 +215,12 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
 
     while i < len {
         // ![[embed]] — full_start is at the `!`
+        // L-16: skip a backslash-escaped opener.
         if bytes[i] == b'!'
             && i + 3 < len
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
+            && !is_escaped(bytes, i)
             && let Some((mut span, end)) = try_parse_wikilink_span_at(cleaned, i + 1)
         {
             // Extend full_start back to the `!`
@@ -209,6 +234,7 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
         if bytes[i] == b'['
             && i + 1 < len
             && bytes[i + 1] == b'['
+            && !is_escaped(bytes, i)
             && let Some((span, end)) = try_parse_wikilink_span_at(cleaned, i)
         {
             out.push(span);
@@ -217,8 +243,10 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
         }
 
         // [text](target) — skip if preceded by `!` (image)
+        // L-16: skip when the `[` is backslash-escaped.
         if bytes[i] == b'['
             && (i == 0 || bytes[i - 1] != b'!')
+            && !is_escaped(bytes, i)
             && let Some((span, end)) = try_parse_markdown_link_span_at(cleaned, original, i)
         {
             out.push(span);
@@ -583,6 +611,87 @@ mod tests {
         assert_eq!(links[1].target, "bar");
         assert_eq!(links[2].target, "baz");
         assert_eq!(links[2].label.as_deref(), Some("title"));
+    }
+
+    // --- L-16: backslash escape suppresses extraction ---
+
+    #[test]
+    fn escaped_wikilink_not_extracted() {
+        let text = r"prefix \[[not-a-link]] suffix";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty(), "escaped [[…]] must not be extracted");
+    }
+
+    #[test]
+    fn escaped_embed_wikilink_not_extracted() {
+        // Backslash before the `[[` of an embed suppresses the whole link.
+        let text = r"!\[[embed]]";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty(), "escaped [[…]] must not be extracted");
+    }
+
+    #[test]
+    fn escaping_only_the_bang_still_yields_a_link() {
+        // `\![[embed]]` escapes only the `!`; the `[[embed]]` after it is a
+        // normal (non-embed) wikilink and is still extracted.
+        let text = r"\![[embed]]";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "embed");
+    }
+
+    #[test]
+    fn escaped_markdown_link_not_extracted() {
+        let text = r"see \[label](note.md) here";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty(), "escaped [text](…) must not be extracted");
+    }
+
+    #[test]
+    fn double_backslash_before_wikilink_is_real() {
+        // `\\` renders as a literal backslash, so the `[` is NOT escaped and the
+        // link is genuine.
+        let text = r"x \\[[real]] y";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "real");
+    }
+
+    #[test]
+    fn triple_backslash_before_wikilink_is_escaped() {
+        // `\\\` = literal backslash + escape, so the `[` IS escaped.
+        let text = r"x \\\[[nope]] y";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn escaped_link_leaves_later_real_link_intact() {
+        let text = r"\[[escaped]] but [[real]] here";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "real");
+    }
+
+    #[test]
+    fn escaped_wikilink_span_not_extracted() {
+        let text = r"a \[[nope]] b";
+        let spans = extract_link_spans(text);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn escaped_markdown_link_span_not_extracted() {
+        let text = r"a \[t](x.md) b";
+        let spans = extract_link_spans(text);
+        assert!(spans.is_empty());
     }
 
     #[test]

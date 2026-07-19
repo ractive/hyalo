@@ -56,14 +56,29 @@ pub fn resolve_file_user(
     dir: &std::path::Path,
     path_arg: &str,
 ) -> std::result::Result<(std::path::PathBuf, String), FileResolveError> {
+    resolve_file_user_ci(dir, path_arg, false)
+}
+
+/// Like [`resolve_file_user`] but honors case-insensitive `--file` resolution.
+///
+/// When `case_insensitive` is true and the literal-casing lookup misses,
+/// `discovery::resolve_file_ci` falls back to a case-insensitive directory
+/// scan (Task 4 / iter-184 CI fix), so `backlinks --file foo.md` resolves
+/// against an on-disk `Foo.md` on a case-sensitive filesystem when
+/// `[links] case_insensitive` is enabled.
+pub fn resolve_file_user_ci(
+    dir: &std::path::Path,
+    path_arg: &str,
+    case_insensitive: bool,
+) -> std::result::Result<(std::path::PathBuf, String), FileResolveError> {
     if let Some(rewritten) = discovery::strip_absolute_vault_prefix(dir, path_arg) {
-        let result = discovery::resolve_file(dir, &rewritten);
+        let result = discovery::resolve_file_ci(dir, &rewritten, case_insensitive);
         if result.is_ok() {
             crate::warn::warn_llm_misuse(dir);
         }
         return result;
     }
-    discovery::resolve_file(dir, path_arg)
+    discovery::resolve_file_ci(dir, path_arg, case_insensitive)
 }
 
 /// Known noisy suffixes that upstream YAML parser errors (`serde-saphyr`)

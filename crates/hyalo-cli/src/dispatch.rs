@@ -732,6 +732,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 snapshot_index.as_ref(),
                 &ResolutionPolicy::Single { allow_glob: false },
                 effective_format,
+                false,
             )? {
                 ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                 ResolvedInputsOrOutcome::Resolved(r) => {
@@ -938,6 +939,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         snapshot_index.as_ref(),
                         &ResolutionPolicy::Single { allow_glob: false },
                         effective_format,
+                        false,
                     )? {
                         ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                         ResolvedInputsOrOutcome::Resolved(r) => {
@@ -988,6 +990,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         snapshot_index.as_ref(),
                         &ResolutionPolicy::SingleOrMany,
                         effective_format,
+                        false,
                     )? {
                         ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                         ResolvedInputsOrOutcome::Resolved(r) => {
@@ -1095,6 +1098,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         snapshot_index.as_ref(),
                         &ResolutionPolicy::SingleOrMany,
                         effective_format,
+                        false,
                     )? {
                         ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                         ResolvedInputsOrOutcome::Resolved(r) => {
@@ -1344,6 +1348,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 snapshot_index.as_ref(),
                 &ResolutionPolicy::Single { allow_glob: false },
                 effective_format,
+                mode_enabled(ctx.case_insensitive_mode, dir),
             )? {
                 ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
                 ResolvedInputsOrOutcome::Resolved(r) => {
