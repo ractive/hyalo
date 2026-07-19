@@ -118,8 +118,6 @@ and this project adheres to
   The "Apply N fixes" hint count now discounts would-be-stale fixes so it
   matches what `--apply` actually writes.
 
-### Internal
-
 - **Classify-side link resolution collapsed onto the shared resolver** (iter-189,
   refactor only): the `links fix` verdict logic (`resolve_and_classify_link`,
   `classify_link`, `classify_short_form_wikilink`, plus the `LinkResolution` /
