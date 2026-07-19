@@ -198,9 +198,7 @@ correctly non-file-links today. DEC-058 records the deferral rationale.
   encoding preserved on rewrite.
 - [x] `.md` normalization centralized (construction + `resolve_target`); no
   per-consumer re-stripping introduced (DEC-059).
-- [x] Every L-1..L-26 + L-A1/L-A2 finding dispositioned in the review doc;
-  `hyalo lint --rule HYALO002` clean for iterations 183/184/185.
-- [x] e2e coverage for the shipped tasks (L-19/L-22/L-23); anchor perf deferred
-  with task 3.
+- [x] Every L-1..L-26 + L-A1/L-A2 finding dispositioned in the review doc (`Disposition 2026-07-19` section); `hyalo lint --rule HYALO002` clean for iterations 183/184/185.
+- [x] e2e coverage for the shipped tasks (L-19/L-22/L-23) via `hyalo006_flags_broken_wikilink`, `hyalo006_percent_encoded_target_resolves`, `hyalo006_files_from_scoped_link_to_unscoped_file` and siblings in `crates/hyalo-cli/tests/e2e/lint.rs`; anchor perf deferred with task 3.
 - [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
   `cargo test --workspace -q` clean.
