@@ -2,7 +2,7 @@
 title: Iteration 181 — write-path polish (set advisories, exit codes, scaffolds)
 type: iteration
 date: 2026-07-18
-status: in-progress
+status: completed
 branch: iter-181/write-path-polish
 tags:
   - iteration
