@@ -14,9 +14,41 @@ and this project adheres to
 - **`hyalo lint` accepts multiple positional files** (iter-179): `hyalo lint
   a.md b.md` lints every listed file, matching `--files-from` semantics; the
   positional `FILE` argument is now repeatable.
+- **`hyalo mv` accepts a positional destination** (iter-181): `hyalo mv old.md
+  new.md` is now an alias for `hyalo mv old.md --to new.md`, matching the
+  positional-file ergonomics of the other mutation commands. The positional
+  `DEST` requires the positional source and is mutually exclusive with `--to`.
+- **`hyalo changelog add --wrap <cols>`** (iter-181): word-wrap a long entry
+  message on word boundaries into a hanging-indented bullet (2-space
+  continuation indent), for 80-column changelogs.
+- **`hyalo set` emits an advisory note for enum/pattern violations** (iter-181):
+  setting a value the type's schema would reject (an out-of-enum value or one
+  failing a `pattern`) now surfaces the same kind of non-blocking `note:` that
+  date violations already get. The write still proceeds — `hyalo lint` (or
+  `set --validate`) remains the enforcement gate.
+
+### Changed
+
+- **Exit-code contract: flag-conflict user errors exit 1, not 2** (iter-181):
+  combining `--jq` with `--format text`, `--count` with `--jq`, `--count` on a
+  non-list command, and `--format github` on a non-lint command now exit `1`
+  (user error) instead of `2` (which the help reserves for internal errors).
+- **`hyalo set` JSON response echoes the coerced value** (iter-181): the
+  `value` field now reflects the parsed YAML value written to frontmatter (e.g.
+  a list for `--property 'x=[a, b]'`, a number for `x=3`) rather than the raw
+  input string.
+- **`hyalo new` omits schema-violating placeholders** (iter-181): when a
+  required pattern/length-constrained string has no valid default, the scaffold
+  no longer emits an invalid `TBD` value (e.g. `branch: TBD` against
+  `^iter-\d+[a-z]*/`); the key is omitted for the user to fill, and a later
+  `hyalo lint` flags it as missing-required.
 
 ### Fixed
 
+- **Property-regex parse errors surface the engine detail** (iter-181): an
+  invalid `--property 'title~=('` filter now reports the regex engine's own
+  message (with caret/position) as the error `cause`, the way `find -e` does,
+  instead of dropping it.
 - **Hints preserve the vault context and active filters** (iter-180,
   BUG-7/BUG-8): the `create-index` hint after a slow or large-vault command now
   carries the explicit `--dir` (running it verbatim indexes the right vault, not

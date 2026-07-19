@@ -63,6 +63,7 @@ hyalo set --property status=reviewed --where-tag research
 
 # Move a single file — all inbound/outbound links and self-links are updated
 hyalo mv --file old/path.md --to archive/path.md
+hyalo mv old.md new.md   # positional DEST is an alias for --to
 
 # Batch move: preview files that would move (dry-run by default)
 hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/
@@ -294,11 +295,12 @@ A release generator maintains the file deterministically:
 
 ```sh
 hyalo changelog add --category Added --message "New export format" --apply   # append under Unreleased
+hyalo changelog add --category Added --message "A long entry..." --wrap 80    # word-wrap to 80 columns
 hyalo changelog release 1.2.0 --dry-run                                      # CI: preview the rotation
 hyalo changelog release 1.2.0 --apply                                        # rotate [Unreleased] → [1.2.0]
 ```
 
-**`hyalo changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section (date defaults to today, override with `--date`), recreates an empty `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference (replace `TBD` with the real compare/tag URL). It **refuses** to release a version that already exists. **`hyalo changelog add`** appends `- <message>` under the `### <category>` subsection of `[Unreleased]` — always **inside** the section, before the footer link-reference block, with a single trailing newline — creating the subsection if needed. Both default to `--dry-run` and exit non-zero on drift, so they double as CI checks.
+**`hyalo changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section (date defaults to today, override with `--date`), recreates an empty `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference (replace `TBD` with the real compare/tag URL). It **refuses** to release a version that already exists. **`hyalo changelog add`** appends `- <message>` under the `### <category>` subsection of `[Unreleased]` — always **inside** the section, before the footer link-reference block, with a single trailing newline — creating the subsection if needed. Pass `--wrap <cols>` to word-wrap a long message into a hanging-indented bullet for 80-column changelogs. Both default to `--dry-run` and exit non-zero on drift, so they double as CI checks.
 
 **Repo-root `CHANGELOG.md` with a docs-subdir vault.** When your vault dir is a subdirectory (`dir = "docs"`) but `CHANGELOG.md` lives at the repo root, point the changelog commands at it with `[changelog] path` — resolved relative to the config file's directory (it may sit outside the vault dir, but never above the repo root):
 

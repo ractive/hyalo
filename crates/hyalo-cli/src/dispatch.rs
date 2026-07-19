@@ -422,6 +422,31 @@ fn patch_index_for_modified_files(
     crate::commands::mutation::save_index_if_dirty(snapshot_index, index_path, dirty)
 }
 
+/// Render a `parse_property_filter` error as a `UserError`, surfacing the
+/// underlying engine detail (regex compile error with caret/position) the same
+/// way `find -e` does. `parse_property_filter` wraps the regex error as a
+/// `.source()` cause under a top-level `"invalid regex in property filter: ..."`
+/// context; passing that cause into `format_error` puts the caret detail in the
+/// `cause` field (iter-181 task 5) instead of dropping it.
+fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOutcome {
+    // Use the *root* cause (last link in the chain) so the regex engine's own
+    // message — the one carrying the caret/position — reaches the user, not the
+    // intermediate `"invalid regex pattern: ..."` wrapper. The chain's first link
+    // is the top-level error itself; a chain of length 1 has no wrapped cause.
+    let cause = if e.chain().count() > 1 {
+        e.chain().last().map(std::string::ToString::to_string)
+    } else {
+        None
+    };
+    CommandOutcome::UserError(crate::output::format_error(
+        format,
+        &e.to_string(),
+        None,
+        None,
+        cause.as_deref(),
+    ))
+}
+
 /// Parse `--where-property` filters and validate `--where-tag` names.
 /// Returns an error string on invalid input.
 fn parse_where_filters(
@@ -506,13 +531,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
+                    return Ok(property_filter_error_outcome(&e, effective_format));
                 }
             };
             // Parse task filter
@@ -1221,7 +1240,11 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 index_path,
                 dry_run,
                 do_validate,
-                if do_validate { Some(ctx.schema) } else { None },
+                // Always pass the schema: `do_validate` still gates the blocking
+                // pre-validation pass, but the (non-blocking) enum/pattern
+                // advisory note needs the schema even without --validate
+                // (iter-181 task 1).
+                Some(ctx.schema),
                 ctx.case_insensitive_mode,
             )
         }
@@ -1364,6 +1387,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Mv {
             file_positional,
             file,
+            to_positional,
             to,
             glob,
             files_from: _, // resolved in run.rs before dispatch
@@ -1376,6 +1400,19 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             allow_ambiguous,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
+            // Resolve the destination from either the positional DEST alias or
+            // the --to flag (iter-181 task 5). clap enforces they are mutually
+            // exclusive and that DEST requires the positional source; a missing
+            // destination (neither form given) is reported here.
+            let Some(to) = to.or(to_positional) else {
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    "no destination provided: pass DEST positionally (e.g. `hyalo mv old.md new.md`) or --to <path>",
+                    None,
+                    None,
+                    None,
+                )));
+            };
             // Parse property filters for batch mode
             let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties
                 .iter()
@@ -1384,13 +1421,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             {
                 Ok(f) => f,
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
+                    return Ok(property_filter_error_outcome(&e, effective_format));
                 }
             };
             // Build type filters as additional property filters (type=<value>)
@@ -2392,6 +2423,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             ChangelogAction::Add {
                 category,
                 message,
+                wrap,
                 apply,
                 dry_run: _,
             } => {
@@ -2404,6 +2436,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     &changelog_file,
                     &category,
                     &message,
+                    wrap,
                     apply,
                     &ctx.lint_profiles,
                     effective_format,

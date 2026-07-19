@@ -293,7 +293,17 @@ fn new_then_lint_flags_placeholders() {
         String::from_utf8_lossy(&new_out.stderr)
     );
 
-    // Lint it — should fail because `name: TBD` doesn't match the pattern.
+    // iter-181 task 4: a pattern-constrained string with no valid placeholder is
+    // OMITTED (not scaffolded as an invalid `name: TBD`), so the scaffold never
+    // ships a value that violates the type's own schema.
+    let content = fs::read_to_string(tmp.path().join("branches").join("b.md")).unwrap();
+    assert!(
+        !content.contains("name:"),
+        "expected `name` to be omitted (no invalid TBD placeholder), got:\n{content}"
+    );
+
+    // Lint it — should still fail, now because required `name` is missing (the
+    // user must fill it in), not because a bogus placeholder violates the pattern.
     let lint_out = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["lint", "--file", "branches/b.md"])
@@ -302,7 +312,7 @@ fn new_then_lint_flags_placeholders() {
     // Lint should exit non-zero (errors found).
     assert!(
         !lint_out.status.success(),
-        "expected lint to fail on TBD placeholder"
+        "expected lint to fail on the missing required `name`"
     );
     let combined = format!(
         "{}{}",
@@ -310,8 +320,113 @@ fn new_then_lint_flags_placeholders() {
         String::from_utf8_lossy(&lint_out.stderr)
     );
     assert!(
-        combined.contains("TBD"),
-        "expected 'TBD' mentioned in lint output, got:\n{combined}"
+        combined.contains("name"),
+        "expected missing-required `name` mentioned in lint output, got:\n{combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// new omits placeholder that would violate the type's schema (iter-181 task 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_omits_pattern_violating_placeholder() {
+    // A type whose required string carries a regex the generic `TBD` fails.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "placeholder.md",
+        "---\ntitle: Placeholder\n---\n",
+    );
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.types.iteration]
+required = ["title", "branch"]
+
+[schema.types.iteration.properties.title]
+type = "string"
+
+[schema.types.iteration.properties.branch]
+type = "string"
+pattern = "^iter-\\d+[a-z]*/"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("iterations")).unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["new", "--type", "iteration", "--file", "iterations/i.md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("iterations").join("i.md")).unwrap();
+    // `branch` would be `TBD`, which violates `^iter-\d+[a-z]*/` — so it is
+    // omitted entirely rather than scaffolded with an invalid value.
+    assert!(
+        !content.contains("branch: TBD"),
+        "expected no invalid `branch: TBD` placeholder, got:\n{content}"
+    );
+    assert!(
+        !content.contains("branch:"),
+        "expected `branch` key omitted, got:\n{content}"
+    );
+    // The unconstrained `title` still gets the normal TBD placeholder.
+    assert!(
+        content.contains("title: TBD"),
+        "expected unconstrained title to keep its TBD placeholder, got:\n{content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// new keeps a placeholder that satisfies a lax pattern (iter-181 task 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_keeps_placeholder_that_matches_pattern() {
+    // A pattern the generic `TBD` DOES satisfy must not trigger omission.
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "placeholder.md",
+        "---\ntitle: Placeholder\n---\n",
+    );
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.types.note]
+required = ["slug"]
+
+[schema.types.note.properties.slug]
+type = "string"
+pattern = "^[A-Za-z]+$"
+"#,
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["new", "--type", "note", "--file", "n.md"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let content = fs::read_to_string(tmp.path().join("n.md")).unwrap();
+    assert!(
+        content.contains("slug: TBD"),
+        "expected `slug: TBD` kept (TBD matches ^[A-Za-z]+$), got:\n{content}"
     );
 }
 

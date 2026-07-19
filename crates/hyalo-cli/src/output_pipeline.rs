@@ -138,7 +138,8 @@ impl OutputPipeline<'_> {
                             None,
                         )
                     );
-                    return 2;
+                    // User error (unsupported flag) → exit 1, not 2 (iter-181 task 2).
+                    return 1;
                 }
 
                 // Commands always produce JSON internally.
@@ -255,7 +256,8 @@ impl OutputPipeline<'_> {
                             None,
                         )
                     );
-                    return 2;
+                    // User error (unsupported flag) → exit 1, not 2 (iter-181 task 2).
+                    return 1;
                 }
                 // Raw output bypasses the JSON pipeline — print directly to stdout.
                 // Used by the `read` command for text-format content output.

@@ -1443,3 +1443,138 @@ fn set_refuses_oversized_file_and_leaves_it_untouched() {
         .unwrap();
     assert_eq!(prefix, original, "file content must be untouched");
 }
+
+// ---------------------------------------------------------------------------
+// iter-181 task 3: JSON `value` reflects the coerced value, not raw input
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_json_value_echoes_coerced_list() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "tags=[a, b, c]", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    // The response echoes the parsed YAML list, not the literal "[a, b, c]".
+    assert!(
+        json["value"].is_array(),
+        "expected coerced list value, got: {}",
+        json["value"]
+    );
+    let arr = json["value"].as_array().unwrap();
+    assert_eq!(arr.len(), 3, "value: {}", json["value"]);
+    assert_eq!(arr[0], "a");
+    assert_eq!(arr[2], "c");
+}
+
+#[test]
+fn set_json_value_echoes_coerced_number() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n");
+
+    let (status, json, stderr) = set_json(&tmp, &["--property", "priority=3", "--file", "note.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    // Coerced to a JSON number, not the string "3".
+    assert_eq!(
+        json["value"],
+        serde_json::json!(3),
+        "value: {}",
+        json["value"]
+    );
+    assert!(json["value"].is_number());
+}
+
+// ---------------------------------------------------------------------------
+// iter-181 task 1: enum/pattern violations emit an advisory note; write proceeds
+// ---------------------------------------------------------------------------
+
+/// Write a vault with an `iteration` type whose `status` is an enum and whose
+/// `branch` carries a regex pattern.
+fn setup_iteration_schema() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.types.iteration]
+required = ["title"]
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed"]
+
+[schema.types.iteration.properties.branch]
+type = "string"
+pattern = "^iter-\\d+[a-z]*/"
+"#,
+    )
+    .unwrap();
+    tmp
+}
+
+#[test]
+fn set_enum_violation_emits_advisory_note_and_writes() {
+    let tmp = setup_iteration_schema();
+    write_md(
+        tmp.path(),
+        "it.md",
+        "---\ntitle: It\ntype: iteration\n---\n",
+    );
+
+    let (status, json, stderr) = set_json(&tmp, &["--property", "status=bogus", "--file", "it.md"]);
+    // Write still proceeds (success), but carries an advisory note.
+    assert!(status.success(), "stderr: {stderr}");
+    let note = json["note"].as_str().unwrap_or_default();
+    assert!(
+        !note.is_empty() && note.contains("lint"),
+        "expected an advisory note mentioning lint, got: {:?}",
+        json["note"]
+    );
+
+    // The value was actually written despite the advisory.
+    let content = fs::read_to_string(tmp.path().join("it.md")).unwrap();
+    assert!(content.contains("status: bogus"), "content:\n{content}");
+}
+
+#[test]
+fn set_pattern_violation_emits_advisory_note_and_writes() {
+    let tmp = setup_iteration_schema();
+    write_md(
+        tmp.path(),
+        "it.md",
+        "---\ntitle: It\ntype: iteration\n---\n",
+    );
+
+    let (status, json, stderr) = set_json(&tmp, &["--property", "branch=TBD", "--file", "it.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let note = json["note"].as_str().unwrap_or_default();
+    assert!(
+        !note.is_empty(),
+        "expected an advisory note for the pattern violation, got: {:?}",
+        json["note"]
+    );
+
+    let content = fs::read_to_string(tmp.path().join("it.md")).unwrap();
+    assert!(content.contains("branch: TBD"), "content:\n{content}");
+}
+
+#[test]
+fn set_valid_enum_value_has_no_advisory_note() {
+    let tmp = setup_iteration_schema();
+    write_md(
+        tmp.path(),
+        "it.md",
+        "---\ntitle: It\ntype: iteration\n---\n",
+    );
+
+    let (status, json, stderr) =
+        set_json(&tmp, &["--property", "status=planned", "--file", "it.md"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(
+        json["note"].is_null(),
+        "expected no advisory note for a valid enum value, got: {:?}",
+        json["note"]
+    );
+}

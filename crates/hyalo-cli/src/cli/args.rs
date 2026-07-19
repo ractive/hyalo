@@ -177,7 +177,8 @@ pub(crate) struct Cli {
 
     /// Apply a jq filter expression to the JSON output of any command.
     /// Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
-    /// The filtered result is printed as plain text. Incompatible with --format text.
+    /// The filtered result is printed as plain text. Incompatible with --format text
+    /// (combining them is a user error and exits 1).
     /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
     /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
@@ -619,14 +620,17 @@ pub(crate) enum Commands {
             included in the 'skipped_ambiguous' JSON field). Pass --allow-ambiguous to rewrite it anyway\n\
             based on stem matching.\n\n\
             SINGLE-FILE MODE:\n\
-            Provide a positional FILE or --file. --to accepts a .md path or an existing directory\n\
-            (basename of source is appended). Applied immediately unless --dry-run is passed.\n\n\
+            Provide a positional FILE or --file. The destination is a .md path or an existing\n\
+            directory (basename of source is appended), given either as --to <dest> or as a second\n\
+            positional DEST (`hyalo mv old.md new.md`, requires the positional source). Applied\n\
+            immediately unless --dry-run is passed.\n\n\
             BATCH MODE (when --glob, --property, --tag, or --type is given):\n\
             Resolves a set of source files via the given selectors (intersection). --to must be a\n\
             directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
             to commit changes. A single link-graph build covers all files.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo mv old.md --to new.md\n\
+            \u{00a0} hyalo mv old.md new.md   # positional DEST, alias for --to\n\
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
             \u{00a0} hyalo mv --tag archive --to archive/ --apply\n\n\
@@ -646,9 +650,18 @@ pub(crate) enum Commands {
         /// Source file to move (relative to --dir) — flag form (single-file mode only)
         #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type", "files_from"])]
         file: Option<String>,
+        /// Destination path — positional form (single-file mode only). Alias for --to:
+        /// `hyalo mv old.md new.md` is equivalent to `hyalo mv old.md --to new.md`.
+        /// Requires the positional source FILE (not --file); mutually exclusive with --to.
+        #[arg(
+            value_name = "DEST",
+            requires = "file_positional",
+            conflicts_with = "to"
+        )]
+        to_positional: Option<String>,
         /// Destination path: a .md path or an existing directory (basename appended) in single-file mode; a directory path in batch mode
         #[arg(long)]
-        to: String,
+        to: Option<String>,
         /// Glob pattern(s) to select source files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, value_name = "GLOB", conflicts_with = "files_from")]
         glob: Vec<String>,
@@ -698,6 +711,12 @@ pub(crate) enum Commands {
             OUTPUT: A single result object if one mutation was requested; an array if multiple.\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
+            `value` echoes the coerced value actually written (e.g. a JSON list for K=[a,b,c], \
+            a number for K=3), not the raw input string.\n\
+            ADVISORY: an optional \"note\" field is added when the value would violate an \
+            enum/pattern constraint in the effective schema, or when a date-typed property (date, \
+            created, ...) gets a non-date value (it will sort lexicographically). The write still \
+            proceeds — lint (or --validate) remains the enforcement gate.\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
 K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
@@ -1260,7 +1279,10 @@ Repeatable (AND).\n\
             - Frontmatter: `type: <name>` plus all required properties with type-appropriate placeholders\n\
             - Body: required sections from `required-sections` (each with a `TBD` paragraph), if declared\n\n\
             The output is intentionally incomplete — `TBD` placeholders are designed to fail\n\
-            `hyalo lint`, driving the agent fill-in loop.\n\n\
+            `hyalo lint`, driving the agent fill-in loop. A pattern/length-constrained string\n\
+            property whose default (or the generic `TBD`) would itself violate the constraint\n\
+            (e.g. a `branch` property with pattern `^iter-\\d+[a-z]*/`) is OMITTED rather than\n\
+            scaffolded with an invalid value — `hyalo lint` then flags it as missing-required.\n\n\
             CONSTRAINTS:\n\
             - Refuses with an error if the target file already exists\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\
@@ -1608,6 +1630,11 @@ pub(crate) enum ChangelogAction {
         /// The entry text (required)
         #[arg(long, value_name = "TEXT", required = true)]
         message: String,
+        /// Wrap the entry to COLS columns, breaking on word boundaries and
+        /// hanging-indenting continuation lines under the bullet text (2 spaces).
+        /// Useful for 80-column changelogs. Omit for a single unwrapped bullet.
+        #[arg(long, value_name = "COLS")]
+        wrap: Option<usize>,
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,

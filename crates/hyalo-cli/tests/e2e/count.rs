@@ -223,10 +223,11 @@ fn count_with_jq_errors() {
         .unwrap();
 
     assert!(!output.status.success());
+    // iter-181 task 2: conflicting user flags exit 1 (user error), not 2.
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "expected exit code 2 (usage error)"
+        Some(1),
+        "expected exit code 1 (user error)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -252,10 +253,11 @@ fn count_on_read_command_errors() {
         .unwrap();
 
     assert!(!output.status.success());
+    // iter-181 task 2: unsupported flag for this command exits 1 (user error), not 2.
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "expected exit code 2 (usage error)"
+        Some(1),
+        "expected exit code 1 (user error)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

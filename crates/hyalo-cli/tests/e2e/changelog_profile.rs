@@ -554,3 +554,101 @@ fn reference_lints_clean_via_ephemeral_overlay() {
         "reference lints clean with ephemeral overlay (no config): {json}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-181 task 5: `changelog add --wrap <cols>` wraps long messages
+// ---------------------------------------------------------------------------
+
+#[test]
+fn changelog_add_wrap_breaks_long_message_into_hanging_indent() {
+    let tmp = TempDir::new().unwrap();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n## [Unreleased]\n\n[Unreleased]: https://x/compare/v1.0.0...HEAD\n",
+    );
+    let long = "This is a deliberately long changelog entry that should wrap across \
+                several physical lines when a narrow wrap width is requested by the user";
+    let (_json, output) = run(
+        tmp.path(),
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Added",
+            "--message",
+            long,
+            "--wrap",
+            "50",
+            "--apply",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "add --wrap failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+
+    // Every entry line stays within the 50-column budget.
+    for line in content.lines() {
+        if line.starts_with("- ") || line.starts_with("  ") {
+            assert!(
+                line.chars().count() <= 50,
+                "line exceeds wrap width ({} cols): {line:?}",
+                line.chars().count()
+            );
+        }
+    }
+    // The bullet line carries the leading text; a continuation line is hanging
+    // indented by two spaces.
+    assert!(
+        content.contains("\n- This is"),
+        "expected a bullet line, got:\n{content}"
+    );
+    assert!(
+        content
+            .lines()
+            .any(|l| l.starts_with("  ") && !l.trim().is_empty()),
+        "expected a hanging-indent continuation line, got:\n{content}"
+    );
+    // Round-trips: reassembling the entry text recovers the original message.
+    let joined: String = content
+        .lines()
+        .filter(|l| l.starts_with("- ") || l.starts_with("  "))
+        .map(str::trim)
+        .map(|l| l.strip_prefix("- ").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        joined, long,
+        "wrapped entry must recover the original message"
+    );
+}
+
+#[test]
+fn changelog_add_wrap_too_narrow_is_user_error() {
+    let tmp = TempDir::new().unwrap();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n## [Unreleased]\n\n[Unreleased]: https://x/compare/v1.0.0...HEAD\n",
+    );
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "--dir",
+            ".",
+            "changelog",
+            "add",
+            "--category",
+            "Added",
+            "--message",
+            "x",
+            "--wrap",
+            "1",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
+}
