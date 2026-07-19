@@ -1,6 +1,101 @@
 use super::common::{hyalo, md, write_md};
 use tempfile::TempDir;
 
+/// Split a hint's `cmd` string into argv, undoing the single-quote escaping
+/// `hints::shell_quote` applies (`'...'` with embedded `'` escaped as `'\''`).
+///
+/// A plain `str::split_whitespace()` is *not* sufficient here: on Windows a
+/// `--dir` value is a path containing `\`, which forces `shell_quote` to wrap
+/// it in single quotes, and any embedded whitespace inside the quoted token
+/// (e.g. under `...\Local Settings\Temp\...`) must not become a token break.
+/// Since `shell_quote` never emits double quotes or bare unescaped spaces
+/// inside a token, this only needs to understand its own single-quote form.
+fn shell_split(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut chars = cmd.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        let mut token = String::new();
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+                break;
+            }
+            if c == '\'' {
+                chars.next(); // opening quote
+                loop {
+                    match chars.next() {
+                        Some('\'') => {
+                            // Either the closing quote, or the start of an
+                            // escaped-quote sequence: close(') + \' + reopen(').
+                            // That's 4 chars total: `'` `\` `'` `'`; we've
+                            // already consumed the first `'` here.
+                            let mut lookahead = chars.clone();
+                            if lookahead.next() == Some('\\') && lookahead.next() == Some('\'') {
+                                chars.next(); // consume '\\'
+                                chars.next(); // consume the escaped '
+                                if chars.next() == Some('\'') {
+                                    // consumed the reopening quote
+                                    token.push('\'');
+                                    continue;
+                                }
+                                // Malformed input (shell_quote never produces
+                                // this) — treat conservatively as end-of-token.
+                                break;
+                            }
+                            break;
+                        }
+                        Some(inner) => token.push(inner),
+                        None => break,
+                    }
+                }
+            } else {
+                token.push(c);
+                chars.next();
+            }
+        }
+        args.push(token);
+    }
+    args
+}
+
+#[test]
+fn shell_split_handles_bare_and_quoted_tokens() {
+    assert_eq!(
+        shell_split("hyalo find --orphan --limit 0"),
+        vec!["hyalo", "find", "--orphan", "--limit", "0"]
+    );
+}
+
+#[test]
+fn shell_split_undoes_single_quoting_with_windows_path() {
+    // Mirrors what hints::shell_quote emits for a Windows temp path: wrapped
+    // in single quotes because of the embedded `\`.
+    let cmd = r"hyalo --dir 'C:\Users\runner\AppData\Local\Temp\abc123' find --orphan";
+    assert_eq!(
+        shell_split(cmd),
+        vec![
+            "hyalo",
+            "--dir",
+            r"C:\Users\runner\AppData\Local\Temp\abc123",
+            "find",
+            "--orphan",
+        ]
+    );
+}
+
+#[test]
+fn shell_split_undoes_escaped_embedded_quote() {
+    // hints::shell_quote escapes an embedded ' as '\''.
+    let cmd = r"hyalo find --title 'it'\''s here'";
+    assert_eq!(
+        shell_split(cmd),
+        vec!["hyalo", "find", "--title", "it's here"]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
@@ -1940,8 +2035,13 @@ fn summary_large_vault_hint_fires_for_large_vault() {
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
 
     let hints = parsed["hints"].as_array().expect("hints should be array");
+    // The hint now carries the explicit `--dir` the command ran with (BUG-7),
+    // so match on the `create-index` command prefix plus the propagated flag
+    // rather than an exact bare string.
     let has_index_hint = hints.iter().any(|h| {
-        h["cmd"].as_str().unwrap_or("") == "hyalo create-index"
+        let cmd = h["cmd"].as_str().unwrap_or("");
+        cmd.starts_with("hyalo create-index")
+            && cmd.contains("--dir ")
             && h["description"].as_str().unwrap_or("").contains("files")
     });
     assert!(
@@ -1968,11 +2068,97 @@ fn summary_large_vault_hint_absent_for_small_vault() {
 
     let hints = parsed["hints"].as_array().expect("hints should be array");
     let has_large_vault_hint = hints.iter().any(|h| {
-        h["cmd"].as_str().unwrap_or("") == "hyalo create-index"
+        h["cmd"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("hyalo create-index")
             && h["description"].as_str().unwrap_or("").contains("files")
     });
     assert!(
         !has_large_vault_hint,
         "unexpected large-vault hint for small vault: {hints:#?}"
+    );
+}
+
+/// iter-180 BUG-8: a `find --orphan` "Show all" hint must preserve `--orphan`
+/// so that running it verbatim reproduces the same (orphan-scoped) result set
+/// rather than widening to the whole vault. Seeds 60 orphan files (> the
+/// default 50 limit) so the show-all hint fires, then re-runs the hinted
+/// command and confirms it returns exactly the orphan count, not every file.
+#[test]
+fn find_orphan_show_all_hint_reproduces_orphan_scope() {
+    let tmp = TempDir::new().unwrap();
+    // 60 orphans: no links in or out.
+    for i in 0..60u32 {
+        write_md(
+            tmp.path(),
+            &format!("orphan{i:03}.md"),
+            &format!("---\ntitle: Orphan {i}\n---\n# Body {i}\n"),
+        );
+    }
+    // 2 linked files (not orphans): hub links to leaf.
+    write_md(
+        tmp.path(),
+        "hub.md",
+        "---\ntitle: Hub\n---\n# Hub\n\n[[leaf]]\n",
+    );
+    write_md(
+        tmp.path(),
+        "leaf.md",
+        "---\ntitle: Leaf\n---\n# Leaf\n\n[[hub]]\n",
+    );
+
+    let dir = tmp.path().to_str().unwrap();
+    let output = hyalo()
+        .args(["--dir", dir])
+        .args(["find", "--orphan", "--hints", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
+
+    let hints = parsed["hints"].as_array().expect("hints array");
+    let show_all = hints
+        .iter()
+        .find(|h| {
+            h["description"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("Show all")
+        })
+        .unwrap_or_else(|| panic!("expected a show-all hint: {hints:#?}"));
+    let cmd = show_all["cmd"].as_str().unwrap();
+    assert!(
+        cmd.contains("--orphan"),
+        "show-all hint must preserve --orphan: {cmd}"
+    );
+
+    // Run the hinted command verbatim (strip the leading `hyalo`) and confirm it
+    // returns the 60 orphans — not the 62 total files. Use shell_split, not
+    // split_whitespace: on Windows the temp `--dir` path contains `\`, which
+    // forces hints::shell_quote to single-quote it, and a naive whitespace
+    // split would pass the literal quote characters through as part of the
+    // path, making the directory unresolvable.
+    let args = shell_split(cmd);
+    let args = &args[1..]; // drop the leading "hyalo" token
+    let rerun = hyalo().args(args).output().unwrap();
+    assert!(
+        rerun.status.success(),
+        "rerun of hinted command failed: {cmd}\nstderr: {}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    let rerun_out = String::from_utf8(rerun.stdout).unwrap();
+    let rerun_json: serde_json::Value = serde_json::from_str(&rerun_out).unwrap();
+    let results = rerun_json["results"]
+        .as_array()
+        .or_else(|| rerun_json.as_array())
+        .expect("results array");
+    assert_eq!(
+        results.len(),
+        60,
+        "hinted command must reproduce the orphan-scoped set, got {} results",
+        results.len()
     );
 }

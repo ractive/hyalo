@@ -1173,6 +1173,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     site_prefix,
                     effective_format,
                     ctx.schema,
+                    ctx.lint_ignore,
                     ci.as_ref(),
                 )
             }
