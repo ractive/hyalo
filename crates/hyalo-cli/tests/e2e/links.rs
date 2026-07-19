@@ -493,6 +493,107 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
     );
 }
 
+/// Classify-verdict lock (iter-189 task 1): pin the `broken` / `case_mismatches`
+/// / `ambiguous` buckets for a single vault that exercises every
+/// `LinkResolution` variant at once, so the collapse of the Classify-side
+/// resolution onto the shared `discovery::classify_link_from_source` entry point
+/// cannot silently reshuffle verdicts across buckets. `case_insensitive = "true"`
+/// forces the case-insensitive fallback regardless of the host filesystem so the
+/// case-mismatch bucket is populated deterministically on every OS.
+#[test]
+fn links_fix_classify_verdict_buckets_lock() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dir = tmp.path();
+
+    // Vault files:
+    //   Notes/Alpha.md   — target of a valid short-form + a case-mismatch link
+    //   dup-a/Twin.md    } two files sharing stem "Twin" → short-form ambiguous
+    //   dup-b/Twin.md    }
+    fs::create_dir_all(dir.join("Notes")).unwrap();
+    fs::create_dir_all(dir.join("dup-a")).unwrap();
+    fs::create_dir_all(dir.join("dup-b")).unwrap();
+    write_md(dir, "Notes/Alpha.md", md!("---\ntitle: Alpha\n---\n"));
+    write_md(dir, "dup-a/Twin.md", md!("---\ntitle: Twin A\n---\n"));
+    write_md(dir, "dup-b/Twin.md", md!("---\ntitle: Twin B\n---\n"));
+
+    // Force the case-insensitive fallback so the case-mismatch bucket is
+    // deterministic on both case-sensitive (Linux) and case-insensitive (macOS)
+    // filesystems.
+    fs::write(
+        dir.join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"true\"\n",
+    )
+    .expect("write .hyalo.toml");
+
+    // source.md exercises each variant exactly once:
+    //   [[Notes/Alpha]]  — resolved (path-form, correct case)      → no bucket
+    //   [[notes/alpha]]  — case-mismatch (path-form, wrong case)   → case_mismatches
+    //   [[Alpha]]        — short-form valid (unique stem)          → no bucket
+    //   [[Twin]]         — short-form ambiguous (≥2 stems)         → ambiguous
+    //   [[DoesNotExist]] — broken                                  → broken
+    write_md(
+        dir,
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+[[Notes/Alpha]]
+[[notes/alpha]]
+[[Alpha]]
+[[Twin]]
+[[DoesNotExist]]
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix should run");
+    assert!(
+        output.status.success(),
+        "links fix exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    let r = &json["results"];
+
+    // Exactly one broken ([[DoesNotExist]]).
+    assert_eq!(
+        r["broken"].as_u64().unwrap(),
+        1,
+        "expected exactly one broken link: {json}"
+    );
+
+    // Exactly one ambiguous ([[Twin]]).
+    assert_eq!(
+        r["ambiguous"].as_u64().unwrap(),
+        1,
+        "expected exactly one ambiguous short-form link: {json}"
+    );
+
+    // Exactly one case-mismatch ([[notes/alpha]]); the correctly-cased and the
+    // valid short-form links contribute nothing.
+    assert_eq!(
+        r["case_mismatches"].as_u64().unwrap(),
+        1,
+        "expected exactly one case-mismatch: {json}"
+    );
+    assert_eq!(
+        r["case_mismatch_fixes"][0]["old_target"].as_str().unwrap(),
+        "notes/alpha",
+        "case-mismatch must preserve the written casing: {json}"
+    );
+}
+
 #[test]
 fn links_fix_dry_run_detects_fuzzy_match() {
     let tmp = setup_vault();

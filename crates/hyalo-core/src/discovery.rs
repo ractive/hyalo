@@ -795,14 +795,67 @@ impl std::fmt::Display for FileResolveError {
 
 impl std::error::Error for FileResolveError {}
 
+/// Normalize a link's *target string* to the vault-relative form used for
+/// resolution, applying the kind-dependent branching shared by the read-side
+/// entry points (`resolve_link_from_source` / `classify_link_from_source`).
+///
+/// This is the single owner of the wikilink/markdown/site-absolute/path-
+/// qualified/bare-basename branching so the Exists and Classify modes can
+/// never drift apart again (iter-189 task 2).
+///
+/// - Wikilinks are vault-relative by definition, returned as-written.
+/// - Markdown site-absolute (`/site/...`) targets are returned as-written.
+/// - Markdown path-qualified targets are normalized against the source dir.
+/// - Markdown bare basenames try source-relative first, falling back to the
+///   raw target. The two modes differ only in *how* they decide whether the
+///   source-relative candidate "resolves", so that decision is abstracted
+///   behind `src_rel_resolves` — the sole intentional behavioral seam between
+///   Exists and Classify (locked by tests in iter-189 task 1):
+///   - Exists mode passes `|c| resolve_target(...).is_some()`.
+///   - Classify mode passes `|c| !matches!(classify_link(...), Broken)`.
+fn normalize_link_target<'a>(
+    kind: crate::links::LinkKind,
+    source_rel: &str,
+    target: &'a str,
+    src_rel_resolves: impl FnOnce(&str) -> bool,
+) -> std::borrow::Cow<'a, str> {
+    use crate::link_graph::normalize_target;
+    use crate::links::LinkKind;
+
+    match kind {
+        LinkKind::Wikilink => std::borrow::Cow::Borrowed(target),
+        LinkKind::Markdown => {
+            if target.starts_with('/') {
+                std::borrow::Cow::Borrowed(target)
+            } else if target.contains('/') || target.contains('\\') {
+                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), target))
+            } else {
+                // Bare basename: try source-relative first so same-folder links
+                // resolve correctly, then fall back to the raw target.
+                let src_rel = normalize_target(Path::new(source_rel), target);
+                if src_rel_resolves(&src_rel) {
+                    std::borrow::Cow::Owned(src_rel)
+                } else {
+                    std::borrow::Cow::Borrowed(target)
+                }
+            }
+        }
+    }
+}
+
 /// Resolve a single parsed link (from `source_rel`) to a vault-relative path,
 /// or `None` when it does not resolve to a known vault file.
 ///
-/// This is the shared "does this link exist?" entry point (iter-188 task 0,
-/// `ResolveMode::Exists`): it centralizes the kind-dependent normalization that
-/// `find --broken-links` and the HYALO006 lint rule both need, so neither has
-/// to reimplement the wikilink/markdown/site-absolute branching or call
-/// `resolve_target` directly.
+/// This is the shared **Exists**-mode entry point (iter-188 task 0,
+/// `ResolveMode::Exists`): "does this link resolve to a vault file?" It
+/// centralizes the kind-dependent normalization — via the shared
+/// [`normalize_link_target`] helper — that `find --broken-links` and the
+/// HYALO006 lint rule both need, so neither has to reimplement the
+/// wikilink/markdown/site-absolute branching or call `resolve_target` directly.
+///
+/// Its Classify-mode sibling is [`classify_link_from_source`], which returns
+/// the full fix-policy verdict (case/short-form buckets) instead of a plain
+/// resolve/not-resolve answer; both route through the same normalization helper.
 ///
 /// - Wikilinks are vault-relative by definition, resolved as-written.
 /// - Markdown site-absolute (`/site/...`) targets are resolved as-written.
@@ -818,29 +871,303 @@ pub fn resolve_link_from_source(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
-    use crate::link_graph::normalize_target;
-    use crate::links::LinkKind;
+    let resolved = normalize_link_target(kind, source_rel, target, |src_rel| {
+        resolve_target(canonical_dir, src_rel, site_prefix, case_index).is_some()
+    });
+    resolve_target(canonical_dir, resolved.as_ref(), site_prefix, case_index)
+}
 
-    let resolved = match kind {
-        LinkKind::Wikilink => std::borrow::Cow::Borrowed(target),
-        LinkKind::Markdown => {
-            if target.starts_with('/') {
-                std::borrow::Cow::Borrowed(target)
-            } else if target.contains('/') || target.contains('\\') {
-                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), target))
+// ---------------------------------------------------------------------------
+// Classify mode — full fix-policy verdict (iter-189 task 2)
+// ---------------------------------------------------------------------------
+//
+// The Classify-mode entry point [`classify_link_from_source`] is the sibling of
+// the Exists-mode [`resolve_link_from_source`]. Both route through the shared
+// [`normalize_link_target`] helper so the kind-dependent normalization can never
+// drift between the two modes. Classify additionally distinguishes the buckets
+// the `links fix` command needs (case-mismatch, short-form valid/mismatch/
+// ambiguous, broken); Exists only answers resolve/not-resolve.
+//
+// Both are *read-side* resolvers. The *rewrite-side* resolver that plans how to
+// rewrite links when files move / titles are auto-linked lives separately in
+// `crate::link_resolve::LinkResolver`; it is not a duplicate of these two.
+
+/// The Classify-mode verdict for a single link's resolution against the
+/// filesystem and an optional case-insensitive index.
+///
+/// Returns:
+/// - `Resolved(None)` — link resolves exactly and its on-disk casing matches
+///   the canonical form (or no index was supplied).
+/// - `Resolved(Some(canonical))` — link resolves exactly but the on-disk
+///   casing differs from the canonical form (case-insensitive filesystem
+///   papered over a mismatch); caller should record as a case-mismatch.
+/// - `CaseMismatch(canonical)` — exact resolution failed but the case index
+///   found a unique canonical path; caller should record as a case-mismatch.
+/// - `ShortFormValid` — a short-form wikilink whose stem resolves to exactly
+///   one file in the vault with matching casing; nothing to fix.
+/// - `ShortFormStemMismatch(correct_stem)` — a short-form wikilink whose stem
+///   resolves to exactly one file, but the written casing of the stem differs
+///   from the on-disk filename stem; `new_target` is the corrected stem
+///   (never a path — never expanded).
+/// - `ShortFormAmbiguous` — a short-form wikilink whose stem matches ≥2 files.
+/// - `Broken` — nothing resolves.
+#[derive(PartialEq)]
+pub(crate) enum LinkResolution {
+    Resolved(Option<String>),
+    CaseMismatch(String),
+    ShortFormValid,
+    ShortFormStemMismatch(String),
+    ShortFormAmbiguous,
+    Broken,
+}
+
+/// Precomputed case-insensitive stem → candidate paths map used to resolve
+/// short-form wikilinks when no [`CaseInsensitiveIndex`] is available.
+/// Built once per `detect_broken_links*` call so each lookup is O(1).
+pub(crate) struct StemIndex {
+    map: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl StemIndex {
+    pub(crate) fn build(vault_files: &[String]) -> Self {
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for path in vault_files {
+            let fname = path.rsplit('/').next().unwrap_or(path.as_str());
+            let stem = fname.strip_suffix(".md").unwrap_or(fname);
+            map.entry(stem.to_ascii_lowercase())
+                .or_default()
+                .push(path.clone());
+        }
+        Self { map }
+    }
+
+    fn lookup(&self, stem: &str) -> Vec<&str> {
+        self.map
+            .get(&stem.to_ascii_lowercase())
+            .map(|v| v.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Classify a short-form wikilink target (no `/`) against the vault's stem
+/// index.  Returns a `LinkResolution` that covers valid, stem-case-mismatch,
+/// ambiguous, and broken cases without ever producing a full path.
+///
+/// When `expand_short_form` is `true`, the caller has opted into path
+/// expansion — skip the short-form special handling and let the caller fall
+/// through to regular path-based classification.
+fn classify_short_form_wikilink(
+    target: &str,
+    stem_index: &StemIndex,
+    case_index: Option<&CaseInsensitiveIndex>,
+    expand_short_form: bool,
+) -> Option<LinkResolution> {
+    if expand_short_form {
+        return None; // caller should use regular path-based classification
+    }
+
+    // Only apply to bare stems (no directory separator). Wikilinks with an
+    // explicit `.md` extension (e.g. `[[Note.md]]`) are path-like targets;
+    // let the caller handle them via regular path-based classification rather
+    // than mismatching them as stem lookups against `"Note.md"`.
+    if target.contains('/') || target.contains('\\') {
+        return None;
+    }
+    // Skip wikilinks with an explicit `.md` extension (case-insensitive),
+    // which are path-like targets and should go through path-based handling.
+    if Path::new(target)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    {
+        return None;
+    }
+
+    // Look up the stem case-insensitively. Prefer the case_index when
+    // available (O(1) hash lookup); otherwise use the precomputed
+    // per-invocation stem index built from `vault_files`.
+    let matches: Vec<&str> = if let Some(idx) = case_index {
+        idx.lookup_stem_all(target)
+            .iter()
+            .map(String::as_str)
+            .collect()
+    } else {
+        stem_index.lookup(target)
+    };
+
+    match matches.len() {
+        0 => Some(LinkResolution::Broken),
+        1 => {
+            // Exactly one match — the link is valid. Check if the stem casing differs.
+            let canonical_path = matches[0];
+            let canonical_fname = canonical_path.rsplit('/').next().unwrap_or(canonical_path);
+            let canonical_stem = canonical_fname
+                .strip_suffix(".md")
+                .unwrap_or(canonical_fname);
+
+            if target == canonical_stem {
+                Some(LinkResolution::ShortFormValid)
             } else {
-                // Bare basename: try source-relative first so same-folder links
-                // resolve correctly, then fall back to the raw target.
-                let src_rel = normalize_target(Path::new(source_rel), target);
-                if resolve_target(canonical_dir, &src_rel, site_prefix, case_index).is_some() {
-                    std::borrow::Cow::Owned(src_rel)
-                } else {
-                    std::borrow::Cow::Borrowed(target)
-                }
+                // Stem casing differs — propose the canonical stem (not a full path).
+                Some(LinkResolution::ShortFormStemMismatch(
+                    canonical_stem.to_string(),
+                ))
             }
         }
-    };
-    resolve_target(canonical_dir, resolved.as_ref(), site_prefix, case_index)
+        _ => Some(LinkResolution::ShortFormAmbiguous),
+    }
+}
+
+/// Classify an already-normalized (vault-relative) target against the
+/// filesystem and an optional case-insensitive index.
+fn classify_link(
+    canonical_dir: &Path,
+    resolved_target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> LinkResolution {
+    let exact = resolve_target(canonical_dir, resolved_target, site_prefix, None);
+
+    if let Some(exact_str) = exact {
+        // Link resolves exactly. If we have a case index, also check whether the
+        // resolved path has incorrect casing compared to the canonical on-disk
+        // path. On case-insensitive filesystems, `exact` may contain the
+        // user-written casing rather than the canonical casing.
+        if let Some(idx) = case_index
+            && let Some(canonical_path) =
+                resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
+        {
+            let canonical_fwd = canonical_path.replace('\\', "/");
+            let exact_fwd = exact_str.replace('\\', "/");
+            if exact_fwd != canonical_fwd {
+                return LinkResolution::Resolved(Some(canonical_fwd));
+            }
+        }
+        return LinkResolution::Resolved(None);
+    }
+
+    // Exact resolution failed. If we have a case index, try the
+    // case-insensitive fallback. `resolve_target` already handles the `.md`
+    // extension fallback internally, so any successful indexed resolution
+    // here means the link is a case-mismatch (possibly combined with a
+    // stem/full extension style difference).
+    if let Some(idx) = case_index
+        && let Some(canonical_path) =
+            resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
+    {
+        return LinkResolution::CaseMismatch(canonical_path.replace('\\', "/"));
+    }
+
+    LinkResolution::Broken
+}
+
+/// Resolve a link's target to a vault-relative path and classify it — the
+/// **Classify**-mode entry point (iter-189 task 2), sibling of
+/// [`resolve_link_from_source`].
+///
+/// Where Exists mode answers only "does this link resolve to a vault file?",
+/// Classify mode returns the full fix-policy verdict: the case-mismatch and
+/// short-form (valid / stem-mismatch / ambiguous) buckets that the `links fix`
+/// command needs. Both modes route the kind-dependent normalization through the
+/// shared [`normalize_link_target`] helper so they can never drift apart.
+///
+/// `stem_index` is the flat stem lookup used for short-form wikilink resolution
+/// when `case_index` is `None`.
+///
+/// `expand_short_form` — when `true`, skip Obsidian short-form handling and
+/// fall through to regular path-based classification (opt-in via
+/// `--expand-short-form`).
+pub(crate) fn classify_link_from_source(
+    canonical_dir: &Path,
+    source_rel: &str,
+    link: &crate::links::Link,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+    stem_index: &StemIndex,
+    expand_short_form: bool,
+) -> (String, LinkResolution) {
+    use crate::links::LinkKind;
+
+    match link.kind {
+        LinkKind::Wikilink => {
+            // For short-form wikilinks (no `/`), apply Obsidian stem resolution first.
+            // This prevents `resolve_target`'s internal stem lookup (inside classify_link)
+            // from misidentifying a valid short-form link as a CaseMismatch.
+            //
+            // Strategy (when !expand_short_form):
+            // 1. Try strict path-only check (no case_index) to catch vault-root exact files.
+            // 2. If path-only resolves → check for case mismatch via the full classify_link.
+            // 3. If path-only fails → use stem classification to determine the correct verdict.
+            //
+            // When expand_short_form=true: bypass stem classification entirely and use the
+            // regular classify_link path, which may expand short-form via stem resolution.
+            if !link.target.contains('/') && !link.target.contains('\\') {
+                if expand_short_form {
+                    // `--expand-short-form` opted into old path-expansion behavior.
+                    // Check path-only (no index) so that the internal stem lookup in
+                    // `resolve_target` cannot silently turn `[[Corina]]` into
+                    // `CaseMismatch("sub/Corina.md")` — we want it to be `Broken`
+                    // when `Corina.md` doesn't exist at the vault root, so that
+                    // `plan_fixes` can then suggest the full path `[[sub/Corina]]`.
+                    let res = classify_link(canonical_dir, &link.target, site_prefix, None);
+                    return (link.target.clone(), res);
+                }
+                // Strategy (when !expand_short_form):
+                // 1. Try strict path-only check (no case_index) to catch vault-root exact files.
+                // 2. If path-only resolves → check for case mismatch via the full classify_link.
+                // 3. If path-only fails → use stem classification to determine the correct verdict.
+                let path_only = classify_link(canonical_dir, &link.target, site_prefix, None);
+                if let LinkResolution::Resolved(_) = path_only {
+                    // File exists at the vault root (exact path). Re-run with full
+                    // case_index to detect root-file casing mismatches (e.g. [[corina]]
+                    // for vault-root Corina.md) and keep the short form.
+                    let full_res =
+                        classify_link(canonical_dir, &link.target, site_prefix, case_index);
+                    return (link.target.clone(), full_res);
+                }
+                // Path-only failed → use stem classification.
+                if let Some(stem_res) = classify_short_form_wikilink(
+                    &link.target,
+                    stem_index,
+                    case_index,
+                    false, // expand_short_form already checked above
+                ) {
+                    return (link.target.clone(), stem_res);
+                }
+            }
+            // Path-form link or classify_short_form_wikilink returned None (shouldn't
+            // happen; it always returns Some when called with expand_short_form=false).
+            // Fall through to the regular path-based classification.
+            let res = classify_link(canonical_dir, &link.target, site_prefix, case_index);
+            (link.target.clone(), res)
+        }
+        LinkKind::Markdown => {
+            // Markdown normalization shares the Exists-mode branching via
+            // `normalize_link_target`. The only Classify-specific seam is the
+            // bare-basename fallback predicate: a source-relative candidate that
+            // merely case-mismatches still counts as "resolved" and is preferred
+            // over the raw target. To avoid classifying the source-relative
+            // candidate twice (once in the predicate, once for the verdict), the
+            // predicate caches its verdict in `probe_res`; when the helper picks
+            // that candidate we reuse the cached verdict instead of re-running.
+            let mut probe: Option<(String, LinkResolution)> = None;
+            let resolved = normalize_link_target(link.kind, source_rel, &link.target, |src_rel| {
+                let res = classify_link(canonical_dir, src_rel, site_prefix, case_index);
+                let resolved = res != LinkResolution::Broken;
+                probe = Some((src_rel.to_string(), res));
+                resolved
+            });
+            // Reuse the cached verdict when the helper selected the exact
+            // source-relative candidate the predicate classified.
+            if let Some((probed_rel, probed_res)) = probe
+                && resolved.as_ref() == probed_rel
+            {
+                return (resolved.into_owned(), probed_res);
+            }
+            let res = classify_link(canonical_dir, resolved.as_ref(), site_prefix, case_index);
+            (resolved.into_owned(), res)
+        }
+    }
 }
 
 /// Percent-decode a URL path component (`%20` → space, `%2F` → `/`, …).

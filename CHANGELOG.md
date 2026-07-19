@@ -62,6 +62,18 @@ and this project adheres to
   the `failed`/`failed_fixes` envelope and the remaining files in the batch
   still get their fixes applied, instead of propagating the error and losing
   all progress.
+- **`hyalo summary` orphan/dead-end counts are now case-insensitive** (iter-189,
+  L-6): inbound-link membership for orphan/dead-end classification went through
+  a case-*sensitive* target-set check, so on a case-insensitively-written vault a
+  file `Foo.md` linked only as `[[foo]]` was miscounted as an orphan even though
+  `hyalo backlinks Foo.md` found the linker. Inbound membership now uses the
+  `lower_index`-backed `backlinks_ci` lookup (the same one `backlinks` uses), so
+  such a file is correctly reported as a dead-end and orphan counts agree with
+  the backlink view. Outbound membership is unchanged (on-disk paths compared
+  against on-disk paths — no case divergence). Note: `find --orphan` /
+  `find --dead-end` still compute inbound via the case-sensitive `backlinks`
+  path; aligning them is a documented follow-up (see iter-189) so this release
+  ships exactly one observable orphan/dead-end change.
 
 ### Changed
 
@@ -74,6 +86,18 @@ and this project adheres to
 
 ### Internal
 
+- **Classify-side link resolution collapsed onto the shared resolver** (iter-189,
+  refactor only): the `links fix` verdict logic (`resolve_and_classify_link`,
+  `classify_link`, `classify_short_form_wikilink`, plus the `LinkResolution` /
+  `StemIndex` types) moved out of `link_fix.rs` into `discovery.rs` as
+  `classify_link_from_source` — the Classify-mode sibling of the Exists-mode
+  `resolve_link_from_source`. Both now route their kind-dependent normalization
+  through one private `normalize_link_target` helper, so Exists ("does this link
+  resolve?") and Classify ("full fix-policy verdict") can no longer drift on the
+  wikilink/markdown/site-absolute/bare-basename branching. The test-only
+  `detect_broken_links(&[FileLinks])` twin was deleted and its five unit tests
+  ported onto `detect_broken_links_from_index`. No user-visible behavior change
+  (locked by e2e capturing the `broken`/`case_mismatches`/`ambiguous` buckets).
 - **Shared link-existence resolver entry point** (iter-188, task 0): the
   "does this link exist?" resolution that `find --broken-links` /
   `find --orphan` / `find --dead-end` and the new HYALO006 rule both need is now

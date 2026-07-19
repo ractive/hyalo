@@ -304,7 +304,6 @@ pub fn summary(
     // The link graph is vault-wide so links from outside the scoped set still count.
     let (orphans, dead_ends) = {
         let graph = index.link_graph();
-        let targets = graph.all_targets();
         let sources = graph.all_sources();
 
         let mut orphan_count: usize = 0;
@@ -312,8 +311,21 @@ pub fn summary(
 
         for entry in &entries {
             let rel_str: &str = &entry.rel_path;
-            let without_md = rel_str.strip_suffix(".md").unwrap_or(rel_str);
-            let has_inbound = targets.contains(rel_str) || targets.contains(without_md);
+            // Inbound membership goes through the case-insensitive, `lower_index`-
+            // aware lookup (iter-189 L-6 fix): on a case-insensitively-written
+            // vault, `[[foo]]` pointing at `Foo.md` must count `Foo.md` as having
+            // inbound so it is not miscounted as an orphan while `backlinks foo`
+            // finds the linker. `backlinks_ci` already matches both the `.md` and
+            // stem forms, so the old hand-rolled `without_md` dance is gone.
+            // Self-link inclusion semantics are preserved: `backlinks_ci`, like the
+            // previous `all_targets().contains()` check, does not exclude
+            // self-links — no new filtering here (parity).
+            let has_inbound = !graph.backlinks_ci(rel_str).is_empty();
+            // Outbound membership stays on the `all_sources` set: sources are the
+            // actual on-disk rel paths of files with outbound links, compared
+            // against the same actual on-disk rel paths, so there is no case
+            // divergence to correct (unlike inbound, whose graph keys are the
+            // *written* link targets).
             let has_outbound = sources.contains(rel_str);
             if !has_inbound && !has_outbound {
                 orphan_count += 1;
