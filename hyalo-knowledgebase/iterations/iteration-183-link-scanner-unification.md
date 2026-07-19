@@ -29,7 +29,7 @@ L-17, L-18, L-20 opportunistically) from
 
 ## Tasks
 
-### 1. Cross-line code-span state (L-3, HIGH)
+### 1. Cross-line code-span state (L-3, HIGH) [4/4]
 
 - [x] Add `code_span: Option<usize>` (open backtick-run length) to the
   scanner state alongside `fence`/`in_comment`
@@ -45,7 +45,7 @@ L-17, L-18, L-20 opportunistically) from
   (`Normal` / `InlineCode{delim_len}` / `FencedBlock` / `HtmlComment`),
   multi-line aware (L-15)
 
-### 2. One frontmatter delimiter policy (L-4, HIGH)
+### 2. One frontmatter delimiter policy (L-4, HIGH) [3/3]
 
 - [x] New canonical `is_closing_delimiter` in frontmatter/parse.rs;
   replace the three lenient `trim() == "---"` sites (:537, :582, :622)
@@ -57,15 +57,18 @@ L-17, L-18, L-20 opportunistically) from
   (link_rewrite.rs :459,:464,:653,:658,:1242,:1247; auto_link.rs
   :513,:518,:593,:598) with `is_opening_delimiter`; BOM-file mv e2e
 
-### 3. Migrate the six loops onto the shared scanner
+### 3. Migrate the six loops onto the shared scanner [2/5]
 
 - [ ] Extend `FileVisitor` (scanner/visitor.rs:53-107) with
   `on_frontmatter_line(raw, line_num)` and expose line byte-offsets
   (already tracked at mod.rs:115-129) so `Replacement.byte_offset`
-  stops being computed ad hoc
+  stops being computed ad hoc — not done; `Replacement.byte_offset` is
+  still computed ad hoc at each call site
 - [ ] Behavior-capture regression tests for each loop BEFORE migrating
   (lock current output on a fixture corpus incl. fences, `%%`, BOM,
-  CRLF, unicode)
+  CRLF, unicode) — not captured as a separate pre-migration baseline;
+  the existing test suite plus 3 new e2e regressions served as the
+  safety net instead
 - [x] Migrate in risk order: link_fix.rs `build_replacements_for_file`
   (:948-1072) → auto_link.rs `resolve_existing_link_targets` (:495-570)
   and `scan_file_for_matches` (:574+) → link_rewrite.rs's three loops
@@ -75,19 +78,28 @@ L-17, L-18, L-20 opportunistically) from
   becomes a thin wrapper or is deleted
 - [ ] L-18: frontmatter occurrences get real line numbers at the
   producer (track YAML source spans) — retire the `line: 1` sentinel
-  and its consumer workarounds
+  and its consumer workarounds — deliberately scoped out, see
+  "Scoped out" notes below
 
-### 4. Small extraction cleanups while in the area
+### 4. Small extraction cleanups while in the area [2/2]
 
 - [x] L-17: delete `strip_md` (link_fix.rs:709-715), use
   `strip_wikilink_md_suffix` (links.rs:392-406)
 - [x] L-20: `is_external` (links.rs:481-484) drops the per-candidate
   lowercase allocation (`eq_ignore_ascii_case` prefix checks)
 
-### 5. Retrospective
+### 5. Retrospective [1/2]
 
-- [ ] Perf check vs baseline on MDN (14K files): scan-path within noise
-- [ ] Update iterations 184/185 with anything learned
+- [ ] Perf check vs baseline on MDN (14K files): scan-path within noise —
+  not run this iteration; `LineScanner::classify` + `BodyLine::cleaned`
+  double-computes the per-line strip pass (see implementation notes) —
+  worth confirming this is within noise before iter-186+ touches the
+  scan path again
+- [x] Update iterations 184/185 with anything learned — line-number
+  drift note and shared-scanner-reuse pointer added to
+  [[iterations/iteration-184-link-resolver-writer-unification]]; iteration
+  185 not touched (no dependency found — Phase C/D are resolver/writer and
+  semantics layers, orthogonal to Phase B's scan-loop mechanics)
 
 ## Acceptance Criteria
 
