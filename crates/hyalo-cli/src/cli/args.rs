@@ -10,8 +10,8 @@ use crate::output::Format;
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
 /// Keeping it in one place prevents future help-text drift across `find`,
 /// `set`, `remove`, and `append`.
-const FILE_FLAG_DOC: &str =
-    "Target file(s) (repeatable). Mutually exclusive with --glob and --files-from";
+const FILE_FLAG_DOC: &str = "Target file(s) (repeatable; falls back to case-insensitive matching \
+     per `[links] case_insensitive`, default auto). Mutually exclusive with --glob and --files-from";
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
 pub(crate) fn is_false(v: &bool) -> bool {
