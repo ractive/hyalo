@@ -164,6 +164,6 @@ All in `crates/hyalo-cli/tests/e2e/anchors.rs` (9 tests, all green):
 - [x] `find --broken-links` distinguishes broken-target vs broken-anchor, never both on one link; JSON (`anchor_matrix_*`) and text (`link_info_anchored_*_filter`) covered
 - [x] `links fix` headline `broken`/`fixable`/"Apply N fixes" unchanged by broken anchors — `links_fix_ignores_broken_anchors`
 - [x] Rewrite spans untouched: mv/links-fix preserve fragments byte-exact — unit `span_markdown_fragment_roundtrips_and_span_untouched` + CLI `mv_preserves_fragments_apply`
-- [x] Indexed anchor validation performs zero file reads; unindexed uses already-scanned in-memory sections; A/B numbers recorded in the task-4 table
+- [x] Indexed anchor validation performs zero file reads via `index.get(target_path).sections` / `fragment_matches_headings` (see `find/mod.rs` broken-anchor check); unindexed uses already-scanned in-memory sections; A/B numbers recorded in the task-4 table (hyperfine, not diff-verifiable — see table above)
 - [x] DEC-060 and DEC-061 recorded; README/CHANGELOG/rule-template/HYALO006-desc in sync
 - [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace -q` all clean
