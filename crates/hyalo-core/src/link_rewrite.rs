@@ -60,6 +60,20 @@ pub struct RewritePlan {
     /// file's outbound plan (which is written to a new path after `fs::rename`
     /// and needs no check).
     pub mtime: Option<(std::time::SystemTime, u64)>,
+    /// The file's content *before* this plan's replacements were applied.
+    ///
+    /// Only populated by [`plan_batch_mv`] for "self-rewrite" plans — plans
+    /// whose `path` coincides with one of the batch's own rename
+    /// destinations (i.e. the plan rewrites content belonging to a file that
+    /// is itself being moved). Callers that roll back renames on a
+    /// mid-batch failure (DEC-056) need this to restore the file to its
+    /// exact pre-batch state (old path *and* old content) rather than
+    /// leaving stale content — that references the post-rename layout —
+    /// stranded at the rolled-back old path. `None` for plans on files that
+    /// are not themselves being renamed, and for all plans built by
+    /// [`plan_mv`] (the single-file path applies all-or-nothing via
+    /// [`execute_plans`] and never rolls back).
+    pub original_content: Option<String>,
 }
 
 /// A link that was skipped because it resolved to multiple candidates
@@ -203,6 +217,7 @@ pub fn plan_mv(
                     replacements,
                     rewritten_content,
                     mtime: file_mtime,
+                    original_content: None,
                 },
             );
         }
@@ -281,6 +296,9 @@ pub fn plan_mv(
                     // Preserve mtime — fs::rename keeps mtime, so execute_plans
                     // can detect concurrent edits before writing.
                     mtime: Some(old_file_mtime),
+                    // Single-file mv applies all-or-nothing via `execute_plans`
+                    // and never rolls back — no restore content needed.
+                    original_content: None,
                 },
             );
         }
@@ -1106,7 +1124,11 @@ pub fn plan_batch_mv(
         let rewritten_content = apply_replacements(&content, &all_replacements);
 
         // Determine the plan key: if this source file is itself being moved,
-        // its rewritten content goes to the new path.
+        // its rewritten content goes to the new path. Such a plan is a
+        // "self-rewrite" — its `path` coincides with a rename destination —
+        // so it carries `original_content` for DEC-056 rollback (see
+        // `RewritePlan::original_content` doc).
+        let is_self_rewrite = rename_map.contains_key(source_rel.as_str());
         let plan_key = if let Some(new_source) = rename_map.get(source_rel.as_str()) {
             dir.join(new_source)
         } else {
@@ -1126,6 +1148,7 @@ pub fn plan_batch_mv(
                 replacements: all_replacements,
                 rewritten_content,
                 mtime: Some(file_mtime),
+                original_content: is_self_rewrite.then(|| content.clone()),
             },
         );
     }
@@ -1181,6 +1204,9 @@ pub fn plan_batch_mv(
                 existing.path = new_abs;
                 existing.rel_path.clone_from(new_rel);
                 existing.mtime = Some(old_file_mtime);
+                // This plan's path is the moved file's own new location — a
+                // self-rewrite (DEC-056 rollback needs the pre-batch text).
+                existing.original_content = Some(existing_content);
             }
             std::collections::hash_map::Entry::Vacant(e) => {
                 let rewritten_content = apply_replacements(&content, &outbound_repls);
@@ -1190,6 +1216,9 @@ pub fn plan_batch_mv(
                     replacements: outbound_repls,
                     rewritten_content,
                     mtime: Some(old_file_mtime),
+                    // Self-rewrite (keyed by the moved file's new_abs) — carry
+                    // the pre-batch content for DEC-056 rollback.
+                    original_content: Some(content.clone()),
                 });
             }
         }
@@ -2343,6 +2372,7 @@ mod tests {
             replacements: vec![],
             rewritten_content: "malicious\n".to_string(),
             mtime: None,
+            original_content: None,
         };
 
         let result = execute_plans(vault.path(), &[bad_plan]);
@@ -2364,6 +2394,7 @@ mod tests {
             replacements: vec![],
             rewritten_content: new_content.to_string(),
             mtime: None,
+            original_content: None,
         }
     }
 

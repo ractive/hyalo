@@ -906,3 +906,30 @@ need all-or-nothing semantics still have `execute_plans`. Revisit if a user
 reports a half-rewritten vault after a batch mv failure is materially harder to
 recover than a clear report of which files changed. See
 [[iterations/iteration-187-link-writer-unification]].
+
+**Amendment (2026-07-19, PR #221 review):** The "keep and report" rationale
+above only holds when a kept plan's `path` is untouched by the rename set —
+i.e. a genuinely external linker file. It does not hold for "self-rewrite"
+plans, whose `path` **is** one of the batch's own rename destinations (the
+moved file's own inbound and/or outbound link rewrites, built by
+`plan_batch_mv`). For those, content and location are coupled: rolling back
+the rename while keeping the rewritten content strands the file at its old
+path with content written for the new (post-rename) layout — a dangling link
+that is strictly worse than doing nothing, and the original error message
+compounded this by claiming such a file was "durably rewritten... and NOT
+rolled back" while it was in fact physically back at its old path.
+
+`RewritePlan` now carries an `original_content: Option<String>` field,
+populated only for self-rewrite plans (`plan.path` equals a rename
+destination). `execute_batch_mv` builds a map of rename destination → source
+path from the batch's own `renames` list; on a mid-batch failure, after
+`rollback_renames`, every successfully-applied plan whose `path` is a key in
+that map has `original_content` written back (via `atomic_write`) to the
+file's now-restored old path — undoing both the rename and the content
+change together. Plans on files outside the rename set are still kept and
+reported per the original decision. The error message now reports three
+distinct buckets: failed writes, self-rewrites restored (rolled back with
+their rename), and external files kept. See
+[[iterations/iteration-187-link-writer-unification]] and
+`.claude/agent-memory/rust-developer/pitfall_batch_mv_rename_rollback_dangling_link.md`
+for the confirmed repro that motivated this amendment.

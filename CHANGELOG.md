@@ -22,6 +22,26 @@ and this project adheres to
   failure yields a non-zero exit code. Files written before the failure are
   reported as applied, never silently kept and unreported.
 
+### Fixed
+
+- **Batch `mv --apply` no longer leaves dangling links after a rolled-back
+  rename** (PR #221 review): when a mid-batch write failure rolled back file
+  renames, a "self-rewrite" plan — one whose rewritten content was written to
+  a file's own new (renamed) location, e.g. a moved file's outbound link
+  rewrite — was previously left in place even though its rename was undone,
+  stranding the file at its old path with content referencing the (now
+  reverted) new layout. Such plans are now identified by `path` coinciding
+  with one of the batch's own rename destinations, and their pre-batch
+  content is restored alongside the rename rollback. Plans on files outside
+  the rename set (pure external linker files) still keep the original
+  DEC-056 behavior of being kept and honestly reported.
+- **`hyalo links fix --apply` no longer aborts the whole batch on a per-file
+  I/O error** (PR #221 review): a `stat`/read failure for one source file
+  (e.g. deleted between detection and apply) now lands that file's fixes in
+  the `failed`/`failed_fixes` envelope and the remaining files in the batch
+  still get their fixes applied, instead of propagating the error and losing
+  all progress.
+
 ### Changed
 
 - **`hyalo links fix` dry-run validates plans against on-disk text** (iter-187):
@@ -38,8 +58,9 @@ and this project adheres to
   machinery instead of a hand-rolled line splitter (removed
   `split_lines_preserving_endings`), keeping its stronger full-content TOCTOU
   guard. Batch `mv` reports which link rewrites were durably applied before a
-  mid-batch abort (DEC-187: completed content writes are not rolled back; the
-  renames are).
+  mid-batch abort (DEC-056: completed content writes on untouched linker files
+  are not rolled back; the renames are, along with the content of any
+  self-rewrite plan whose path coincided with a rename destination).
 
 ## [0.19.0] - 2026-07-19
 

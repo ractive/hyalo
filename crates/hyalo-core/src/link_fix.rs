@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 
 use crate::case_index::CaseInsensitiveIndex;
@@ -912,32 +912,43 @@ pub fn apply_fixes(
 
     let mut plans: Vec<RewritePlan> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
+    // I/O failures (stat/read) encountered while building plans, keyed by the
+    // fixes they belong to — reported as `failed`, not `unapplied`, since
+    // these are genuine errors rather than stale-text mismatches. Fixes for a
+    // file whose read fails do not abort the batch; the remaining source
+    // files still get their plans built and applied.
+    let mut io_failed: Vec<FailedFix> = Vec::new();
     // Map each plan's rel_path → the fixes it carries, so a mid-batch write
     // failure can be reported against the specific fixes that did not land.
     let mut fixes_by_plan: HashMap<String, Vec<FixPlan>> = HashMap::new();
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
-        let meta = std::fs::metadata(&abs_path)
-            .with_context(|| format!("failed to stat {}", abs_path.display()))?;
-        let file_size = meta.len();
-        if file_size > MAX_FILE_SIZE {
-            eprintln!(
-                "warning: skipping {} ({} MiB exceeds {} MiB limit)",
-                abs_path.display(),
-                file_size / (1024 * 1024),
-                MAX_FILE_SIZE / (1024 * 1024)
-            );
-            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
-            continue;
-        }
-        let file_mtime = meta
-            .modified()
-            .with_context(|| format!("failed to read mtime for {}", abs_path.display()))
-            .map(|t| (t, file_size))
-            .ok();
-        let content = std::fs::read_to_string(&abs_path)
-            .with_context(|| format!("reading {}", abs_path.display()))?;
+        let (content, file_mtime) = match read_source_file(&abs_path) {
+            SourceRead::Ok { content, mtime } => (content, mtime),
+            SourceRead::TooLarge { size } => {
+                eprintln!(
+                    "warning: skipping {} ({} MiB exceeds {} MiB limit)",
+                    abs_path.display(),
+                    size / (1024 * 1024),
+                    MAX_FILE_SIZE / (1024 * 1024)
+                );
+                unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
+                continue;
+            }
+            SourceRead::Failed(error) => {
+                // L-11: a per-file stat/read failure (e.g. the file was
+                // deleted between detection and apply) must not abort the
+                // whole batch — record it as failed and keep processing the
+                // remaining source files.
+                eprintln!("warning: failed to read {}: {error}", abs_path.display());
+                io_failed.extend(file_fixes.iter().map(|f| FailedFix {
+                    fix: (*f).clone(),
+                    error: error.clone(),
+                }));
+                continue;
+            }
+        };
 
         let (replacements, satisfied) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
@@ -960,6 +971,7 @@ pub fn apply_fixes(
                 replacements,
                 rewritten_content,
                 mtime: file_mtime,
+                original_content: None,
             });
         }
     }
@@ -968,7 +980,7 @@ pub fn apply_fixes(
     // gets an honest applied/failed split even on a mid-batch failure (L-11).
     let report = execute_plans_partial(dir, &plans)?;
 
-    let mut failed: Vec<FailedFix> = Vec::new();
+    let mut failed: Vec<FailedFix> = io_failed;
     let mut applied_plans: Vec<RewritePlan> = Vec::new();
     let mut outcome_by_rel: HashMap<&str, (bool, Option<String>)> = HashMap::new();
     for o in &report.outcomes {
@@ -993,6 +1005,48 @@ pub fn apply_fixes(
     }
 
     Ok((applied_plans, unapplied, failed))
+}
+
+/// Outcome of reading a source file's on-disk content for fix planning.
+///
+/// Shared by [`apply_fixes`] and [`plan_fixes_dry_run`] so both run the
+/// identical per-file I/O prelude (stat, size-limit check, read) — the two
+/// functions differ only in how they react to each outcome (`apply_fixes`
+/// routes a [`SourceRead::Failed`] into the `failed` bucket, while
+/// `plan_fixes_dry_run` treats it the same as a stale/vanished file and adds
+/// it to `unapplied`).
+enum SourceRead {
+    /// File was read successfully. `mtime` is `None` if the modified time
+    /// could not be determined (still usable — callers just skip the
+    /// mtime-based concurrent-edit check for this plan).
+    Ok {
+        content: String,
+        mtime: Option<(std::time::SystemTime, u64)>,
+    },
+    /// File exceeds [`MAX_FILE_SIZE`]; skipped as a matter of policy, not an
+    /// I/O error.
+    TooLarge { size: u64 },
+    /// `stat` or `read_to_string` failed (e.g. the file was deleted or
+    /// became unreadable between detection and this call). Carries a
+    /// human-readable error string.
+    Failed(String),
+}
+
+/// Stat and read `abs_path`, classifying the outcome for fix planning.
+fn read_source_file(abs_path: &Path) -> SourceRead {
+    let meta = match std::fs::metadata(abs_path) {
+        Ok(m) => m,
+        Err(e) => return SourceRead::Failed(format!("failed to stat {}: {e}", abs_path.display())),
+    };
+    let file_size = meta.len();
+    if file_size > MAX_FILE_SIZE {
+        return SourceRead::TooLarge { size: file_size };
+    }
+    let mtime = meta.modified().ok().map(|t| (t, file_size));
+    match std::fs::read_to_string(abs_path) {
+        Ok(content) => SourceRead::Ok { content, mtime },
+        Err(e) => SourceRead::Failed(format!("reading {}: {e}", abs_path.display())),
+    }
 }
 
 /// Dry-run counterpart of [`apply_fixes`]: build the same [`RewritePlan`]s
@@ -1022,18 +1076,18 @@ pub fn plan_fixes_dry_run(
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
-        // File vanished since detection — every fix for it is stale.
-        let Ok(meta) = std::fs::metadata(&abs_path) else {
-            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
-            continue;
-        };
-        if meta.len() > MAX_FILE_SIZE {
-            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&abs_path) else {
-            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
-            continue;
+        // File vanished/unreadable since detection, or exceeds the size
+        // limit — every fix for it is stale/unapplied. Dry-run treats a
+        // genuine I/O failure the same as a stale file (unlike `apply_fixes`,
+        // which distinguishes them into `failed`): nothing was written
+        // either way, so from a preview's point of view both are simply
+        // "this fix will not land."
+        let content = match read_source_file(&abs_path) {
+            SourceRead::Ok { content, .. } => content,
+            SourceRead::TooLarge { .. } | SourceRead::Failed(_) => {
+                unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
+                continue;
+            }
         };
 
         let (replacements, satisfied) =
@@ -2537,5 +2591,130 @@ See [broken](old-name.md) here.
         assert!(failed.is_empty());
         assert_eq!(unapplied_apply.len(), unapplied_dry.len());
         assert_eq!(unapplied_apply[0].old_target, unapplied_dry[0].old_target);
+    }
+
+    // --- Finding 2 (PR #221 review): apply_fixes records-and-continues on
+    // per-file I/O failure instead of aborting the whole batch ---
+
+    #[test]
+    fn apply_fixes_continues_past_deleted_source_file() {
+        // A source file deleted between detection and apply must not abort
+        // the whole batch: its fixes land in `failed`, and fixes for other
+        // files in the same batch are still applied.
+        let tmp = vault_with_files(&[
+            ("gone.md", "See [[wrongname]] here.\n"),
+            ("still-here.md", "See [[wrongname]] here too.\n"),
+            ("correct-name.md", ""),
+        ]);
+
+        // Delete the file after "detection" (which would have scanned it)
+        // but before apply runs.
+        fs::remove_file(tmp.path().join("gone.md")).unwrap();
+
+        let fixes = vec![
+            FixPlan {
+                source: "gone.md".to_string(),
+                line: 1,
+                old_target: "wrongname".to_string(),
+                new_target: "correct-name.md".to_string(),
+                strategy: FixStrategy::FuzzyMatch,
+                confidence: 0.9,
+            },
+            FixPlan {
+                source: "still-here.md".to_string(),
+                line: 1,
+                old_target: "wrongname".to_string(),
+                new_target: "correct-name.md".to_string(),
+                strategy: FixStrategy::FuzzyMatch,
+                confidence: 0.9,
+            },
+        ];
+
+        let (plans, unapplied, failed) = apply_fixes(tmp.path(), &fixes, None)
+            .expect("apply_fixes must not abort on a per-file I/O error");
+
+        assert_eq!(
+            failed.len(),
+            1,
+            "the deleted file's fix must land in `failed`, not abort the batch: {failed:?}"
+        );
+        assert_eq!(failed[0].fix.source, "gone.md");
+        assert!(
+            unapplied.is_empty(),
+            "the deleted file's fix belongs in `failed`, not `unapplied`: {unapplied:?}"
+        );
+
+        assert_eq!(
+            plans.len(),
+            1,
+            "the still-existing file's fix must still be applied: {plans:?}"
+        );
+        assert_eq!(plans[0].rel_path, "still-here.md");
+        let written = fs::read_to_string(tmp.path().join("still-here.md")).unwrap();
+        assert!(
+            written.contains("[[correct-name]]") || written.contains("correct-name.md"),
+            "still-here.md must have been rewritten despite gone.md's failure: {written}"
+        );
+    }
+
+    // --- Finding 4c (PR #221 review): dry-run's vanished/oversized branches,
+    // exercised directly rather than only via apply's equivalents ---
+
+    #[test]
+    fn plan_fixes_dry_run_reports_unapplied_for_vanished_file() {
+        let tmp = vault_with_files(&[
+            ("index.md", "See [[wrongname]] for details.\n"),
+            ("correct-name.md", ""),
+        ]);
+        fs::remove_file(tmp.path().join("index.md")).unwrap();
+
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrongname".to_string(),
+            new_target: "correct-name.md".to_string(),
+            strategy: FixStrategy::FuzzyMatch,
+            confidence: 0.9,
+        }];
+
+        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        assert!(
+            would_modify.is_empty(),
+            "a vanished file must modify nothing"
+        );
+        assert_eq!(unapplied.len(), 1, "the fix must be reported unapplied");
+        assert_eq!(unapplied[0].old_target, "wrongname");
+    }
+
+    #[test]
+    fn plan_fixes_dry_run_reports_unapplied_for_oversized_file() {
+        let tmp = vault_with_files(&[("correct-name.md", "")]);
+        // Write a file that exceeds MAX_FILE_SIZE so dry-run's size-limit
+        // branch fires directly (previously only covered via apply_fixes).
+        let big_path = tmp.path().join("big.md");
+        let mut f = fs::File::create(&big_path).unwrap();
+        let chunk = vec![b'a'; 1024 * 1024];
+        let mut written = 0u64;
+        while written <= MAX_FILE_SIZE {
+            std::io::Write::write_all(&mut f, &chunk).unwrap();
+            written += chunk.len() as u64;
+        }
+
+        let fixes = vec![FixPlan {
+            source: "big.md".to_string(),
+            line: 1,
+            old_target: "wrongname".to_string(),
+            new_target: "correct-name.md".to_string(),
+            strategy: FixStrategy::FuzzyMatch,
+            confidence: 0.9,
+        }];
+
+        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        assert!(
+            would_modify.is_empty(),
+            "an oversized file must modify nothing"
+        );
+        assert_eq!(unapplied.len(), 1, "the fix must be reported unapplied");
+        assert_eq!(unapplied[0].old_target, "wrongname");
     }
 }
