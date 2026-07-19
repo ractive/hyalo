@@ -473,7 +473,9 @@ fn links_fix_dry_run_detects_fuzzy_match() {
 fn links_fix_apply_reduces_broken_links() {
     let tmp = setup_vault();
 
-    // Apply fixes
+    // Apply fixes. The only fixable link in this fixture is the fuzzy match
+    // [[Authnticaton]] → authentication.md, so we must opt into fuzzy fixes
+    // with --apply-fuzzy (plain --apply excludes fuzzy fixes by default, L-10).
     let apply_output = hyalo_no_hints()
         .args([
             "--dir",
@@ -483,6 +485,7 @@ fn links_fix_apply_reduces_broken_links() {
             "links",
             "fix",
             "--apply",
+            "--apply-fuzzy",
             "--format",
             "json",
         ])
@@ -701,6 +704,115 @@ fn links_fix_default_threshold_finds_fuzzy_match() {
     assert!(
         fixable >= high_fixable,
         "default threshold should yield >= fixes than threshold=0.99: default={fixable}, high={high_fixable}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// links fix: fuzzy confidence tiers (L-10)
+// ---------------------------------------------------------------------------
+
+/// Read the on-disk `d.md` and report whether its broken `[[Authnticaton]]`
+/// link was rewritten to the authentication target.
+fn d_md_was_fuzzy_fixed(tmp: &TempDir) -> bool {
+    let body = fs::read_to_string(tmp.path().join("d.md")).expect("d.md should exist");
+    !body.contains("Authnticaton") && body.to_lowercase().contains("authentication")
+}
+
+#[test]
+fn links_fix_apply_excludes_fuzzy_by_default() {
+    let tmp = setup_vault();
+    // Plain --apply must NOT write the low-confidence fuzzy fix.
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    // The fuzzy candidate is reported in its own bucket, not applied.
+    assert!(
+        json["results"]["fuzzy"].as_u64().unwrap_or(0) >= 1,
+        "fuzzy bucket should contain the [[Authnticaton]] candidate: {json}"
+    );
+    assert_eq!(
+        json["results"]["fuzzy_applied"].as_bool(),
+        Some(false),
+        "fuzzy_applied should be false without --apply-fuzzy"
+    );
+    // applied_fixes must not contain the fuzzy fix.
+    let applied = json["results"]["applied_fixes"].as_array().unwrap();
+    assert!(
+        applied.is_empty(),
+        "no fixes should be applied (only fuzzy was available): {applied:?}"
+    );
+    assert!(
+        !d_md_was_fuzzy_fixed(&tmp),
+        "d.md must be untouched when fuzzy is excluded"
+    );
+}
+
+#[test]
+fn links_fix_apply_fuzzy_opts_in() {
+    let tmp = setup_vault();
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--apply-fuzzy",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --apply --apply-fuzzy should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"]["fuzzy_applied"].as_bool(), Some(true));
+    assert!(
+        d_md_was_fuzzy_fixed(&tmp),
+        "d.md should be fixed once fuzzy is opted in"
+    );
+}
+
+#[test]
+fn links_fix_min_confidence_gates_fuzzy() {
+    let tmp = setup_vault();
+    // A confidence bar of 1.0 excludes the imperfect fuzzy match, so nothing
+    // is applied even though --min-confidence implies --apply-fuzzy.
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--min-confidence",
+            "1.0",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("links fix --min-confidence 1.0 should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["fuzzy_applied"].as_bool(),
+        Some(true),
+        "min-confidence implies fuzzy is enabled"
+    );
+    assert!(
+        !d_md_was_fuzzy_fixed(&tmp),
+        "a <1.0 fuzzy match must be gated out by --min-confidence 1.0"
     );
 }
 

@@ -138,7 +138,7 @@ pub fn plan_mv(
     // `web/javascript/….md`) are included in the source set.  The
     // `plan_inbound_rewrites` function then re-checks the match using the
     // case index, so only genuinely matching links produce replacements.
-    let backlinks = graph.backlinks_case_insensitive(old_rel);
+    let backlinks = graph.backlinks_ci(old_rel);
     let old_rel_norm = old_rel.replace('\\', "/");
     let mut by_source: HashMap<PathBuf, Vec<_>> = HashMap::new();
     for entry in backlinks {
@@ -925,7 +925,7 @@ pub fn plan_batch_mv(
         HashMap::new();
 
     for (old_rel, old_stem, new_rel, new_stem, _, _) in &rename_info {
-        let backlinks = graph.backlinks_case_insensitive(old_rel);
+        let backlinks = graph.backlinks_ci(old_rel);
         let old_rel_norm = old_rel.replace('\\', "/");
         for entry in backlinks {
             let source_norm = entry.source.to_string_lossy().replace('\\', "/");

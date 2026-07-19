@@ -21,12 +21,18 @@ struct BacklinkItem {
 /// `dir` is still needed to resolve the `file_arg` to a vault-relative path via
 /// `discovery::resolve_file`. Link lookup is done against `index.link_graph()`.
 /// `limit` caps how many backlink entries are returned (`None` = no cap).
+///
+/// When `case_insensitive` is true, links that differ from the resolved path
+/// only in ASCII case are also returned (via `LinkGraph::backlinks_ci`), so
+/// that `backlinks Foo.md` and `backlinks foo.md` agree on a case-insensitive
+/// vault — matching how `mv` and `find --broken-links` resolve targets.
 pub fn backlinks(
     index: &dyn VaultIndex,
     file_arg: &str,
     dir: &Path,
     format: Format,
     limit: Option<usize>,
+    case_insensitive: bool,
 ) -> Result<CommandOutcome> {
     // Resolve the file argument to a relative path (same as in `backlinks`)
     let (_full_path, rel) = match crate::commands::resolve_file_user(dir, file_arg) {
@@ -38,11 +44,12 @@ pub fn backlinks(
 
     let graph = index.link_graph();
 
-    let entries: Vec<_> = graph
-        .backlinks(&rel)
-        .into_iter()
-        .filter(|e| !is_self_link(e, &rel))
-        .collect();
+    let raw = if case_insensitive {
+        graph.backlinks_ci(&rel)
+    } else {
+        graph.backlinks(&rel)
+    };
+    let entries: Vec<_> = raw.into_iter().filter(|e| !is_self_link(e, &rel)).collect();
 
     let total = entries.len() as u64;
     let take_n = limit.filter(|n| *n > 0).unwrap_or(usize::MAX);

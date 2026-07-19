@@ -105,6 +105,11 @@ fn build_title_inventory(
             builder.add(
                 GlobBuilder::new(pat)
                     .literal_separator(true)
+                    // Match case-insensitively to mirror `--exclude-title`,
+                    // which lowercases both sides before comparing. Without
+                    // this, `--exclude-target-glob 'Templates/*'` would fail to
+                    // exclude `templates/foo.md` — a surprising asymmetry.
+                    .case_insensitive(true)
                     .build()
                     .context("invalid --exclude-target-glob pattern")?,
             );
@@ -268,28 +273,28 @@ fn stem_from_rel(rel: &str) -> &str {
 // Word boundary helpers
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if the byte at position `idx` in `s` is NOT an
-/// alphanumeric ASCII character or underscore.
+/// Returns `true` if `c` is a "word" character for boundary purposes:
+/// any Unicode alphanumeric character or an underscore.
 ///
-/// If `idx` is out of bounds (i.e. at the start/end of the string), that
-/// boundary is considered to be a word boundary (returns `true`).
-fn is_word_boundary_byte(s: &str, idx: usize) -> bool {
-    match s.as_bytes().get(idx) {
-        None => true,
-        Some(&b) => !b.is_ascii_alphanumeric() && b != b'_',
-    }
+/// This is Unicode-aware (not per-byte ASCII) so that a title abutting a CJK
+/// ideograph, an accented letter, or a non-ASCII digit is correctly treated as
+/// *not* on a word boundary. Punctuation-class connectors such as U+2011
+/// (non-breaking hyphen) are non-alphanumeric and therefore *are* boundaries.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
-/// Verify that a match at `[start, end)` in `line` sits on word boundaries.
+/// Verify that a match at byte range `[start, end)` in `line` sits on word
+/// boundaries, inspecting the full Unicode scalar values immediately before
+/// `start` and at/after `end` rather than raw bytes.
 fn has_word_boundaries(line: &str, start: usize, end: usize) -> bool {
-    // The byte before `start` (if any).
-    let before_ok = if start == 0 {
-        true
-    } else {
-        is_word_boundary_byte(line, start - 1)
-    };
-    // The byte at `end` (first byte after the match).
-    let after_ok = is_word_boundary_byte(line, end);
+    // The character immediately preceding `start` (if any).
+    let before_ok = line[..start]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !is_word_char(c));
+    // The character starting at `end` (first char after the match), if any.
+    let after_ok = line[end..].chars().next().is_none_or(|c| !is_word_char(c));
     before_ok && after_ok
 }
 
@@ -899,6 +904,75 @@ mod tests {
         // "Sprint" as standalone word SHOULD match
         assert_eq!(matches.len(), 1, "only standalone 'Sprint' should match");
         assert_eq!(matches[0].matched_text, "Sprint");
+    }
+
+    #[test]
+    fn word_boundary_unicode_cjk_adjacency() {
+        // L-12: a title abutting a CJK ideograph must NOT be treated as sitting
+        // on a word boundary. Byte-level ASCII checks would (wrongly) see the
+        // multi-byte lead byte as a non-word byte and accept the match.
+        let line = "私はSprintが好き"; // "Sprint" flanked by CJK, no ASCII boundary
+        let start = line.find("Sprint").unwrap();
+        let end = start + "Sprint".len();
+        assert!(
+            !has_word_boundaries(line, start, end),
+            "CJK-adjacent match must not count as a word boundary"
+        );
+
+        // A CJK char is alphanumeric, so a title made of CJK sitting between
+        // ASCII letters is likewise not on a boundary.
+        let line2 = "x東京y";
+        let s2 = line2.find('東').unwrap();
+        let e2 = s2 + "東京".len();
+        assert!(!has_word_boundaries(line2, s2, e2));
+    }
+
+    #[test]
+    fn word_boundary_non_breaking_hyphen_is_boundary() {
+        // L-12: U+2011 (non-breaking hyphen) is punctuation, not a word char,
+        // so a match flanked by it IS on a word boundary and should match.
+        let line = "foo\u{2011}Sprint\u{2011}bar";
+        let start = line.find("Sprint").unwrap();
+        let end = start + "Sprint".len();
+        assert!(
+            has_word_boundaries(line, start, end),
+            "U+2011 flanks must count as word boundaries"
+        );
+    }
+
+    #[test]
+    fn word_boundary_accented_letter_adjacency() {
+        // An accented Unicode letter is a word char; a match glued to it is not
+        // on a boundary.
+        let line = "café Sprint"; // space before Sprint → boundary OK here
+        let start = line.find("Sprint").unwrap();
+        let end = start + "Sprint".len();
+        assert!(has_word_boundaries(line, start, end));
+
+        let glued = "caféSprint";
+        let gs = glued.find("Sprint").unwrap();
+        let ge = gs + "Sprint".len();
+        assert!(
+            !has_word_boundaries(glued, gs, ge),
+            "match glued to an accented letter is not on a boundary"
+        );
+    }
+
+    #[test]
+    fn exclude_target_glob_is_case_insensitive() {
+        // L-24: --exclude-target-glob must match case-insensitively, mirroring
+        // --exclude-title. `Templates/*` should exclude `templates/note.md`.
+        let entries = vec![
+            make_entry("templates/note.md", vec![]),
+            make_entry("real.md", vec![]),
+        ];
+        let (map, _) =
+            build_title_inventory(&entries, 2, &[], &["Templates/*".to_owned()]).unwrap();
+        assert!(
+            !map.contains_key("note"),
+            "case-insensitive glob should exclude templates/note.md"
+        );
+        assert!(map.contains_key("real"), "unrelated file still included");
     }
 
     #[test]

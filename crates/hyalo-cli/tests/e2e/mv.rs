@@ -1705,9 +1705,11 @@ Content.
 "),
     );
 
+    // decision-log → decision-log-archive is a fuzzy (Jaro-Winkler) match, so
+    // opt into fuzzy fixes with --apply-fuzzy (plain --apply excludes them, L-10).
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["links", "fix", "--apply"])
+        .args(["links", "fix", "--apply", "--apply-fuzzy"])
         .output()
         .unwrap();
     assert!(

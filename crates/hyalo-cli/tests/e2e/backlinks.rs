@@ -61,6 +61,54 @@ Also links to [[target|the target page]].
 }
 
 #[test]
+fn backlinks_case_insensitive_agrees_across_casings() {
+    // L-6: on a case-insensitive vault, `backlinks Foo.md` and `backlinks
+    // foo.md` must return the same set — links written with any casing count.
+    use std::fs;
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"true\"\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "Foo.md", "# Foo\n");
+    write_md(tmp.path(), "a.md", "See [[Foo]]\n");
+    write_md(tmp.path(), "b.md", "See [[foo]]\n");
+
+    let run = |arg: &str| -> std::collections::BTreeSet<String> {
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(["backlinks", "--file", arg, "--format", "json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "backlinks {arg} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        json["results"]["backlinks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["source"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let upper = run("Foo.md");
+    let lower = run("foo.md");
+    assert_eq!(
+        upper, lower,
+        "case-insensitive vault: Foo.md and foo.md must have the same linker set"
+    );
+    assert_eq!(
+        upper,
+        ["a.md", "b.md"].iter().map(|s| (*s).to_owned()).collect(),
+        "both a.md ([[Foo]]) and b.md ([[foo]]) link to Foo regardless of casing"
+    );
+}
+
+#[test]
 fn backlinks_finds_markdown_links() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "notes/target.md", "# Target\n");

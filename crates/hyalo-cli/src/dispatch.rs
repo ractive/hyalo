@@ -1378,6 +1378,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 ctx.config_default_limit,
                                 ctx.programmatic_output,
                             ),
+                            mode_enabled(ctx.case_insensitive_mode, dir),
                         ),
                         IndexResolution::Outcome(outcome) => Ok(outcome),
                     }
@@ -1545,6 +1546,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             dry_run: true,
             apply: false,
             threshold: 0.8,
+            apply_fuzzy: false,
+            min_confidence: None,
             glob: vec![],
             ignore_target: vec![],
             expand_short_form: false,
@@ -1554,6 +1557,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 dry_run: _,
                 apply,
                 threshold,
+                apply_fuzzy,
+                min_confidence,
                 glob,
                 ignore_target,
                 expand_short_form,
@@ -1595,6 +1600,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             effective_format,
                             ci.as_ref(),
                             expand_short_form,
+                            links_commands::FuzzyApply {
+                                apply_fuzzy,
+                                min_confidence,
+                            },
                         )?
                     }
                     IndexResolution::Outcome(outcome) => (outcome, Vec::new()),

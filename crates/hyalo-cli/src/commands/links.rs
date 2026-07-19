@@ -28,6 +28,32 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 /// Returns `(CommandOutcome, modified_files)` where `modified_files` contains
 /// vault-relative paths of files that were rewritten on disk.  The caller is
 /// responsible for patching the snapshot index with these paths.
+/// Opt-in policy for applying low-confidence fuzzy-match fixes.
+///
+/// Fuzzy (Jaro-Winkler) fixes are guesses: a broken `[[foo]]` can "match" an
+/// unrelated `bar.md`. They are always *reported* in their own bucket but are
+/// only written to disk under `--apply` when the user opts in here.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FuzzyApply {
+    /// `--apply-fuzzy`: include fuzzy-match fixes in `--apply`.
+    pub apply_fuzzy: bool,
+    /// `--min-confidence <f>`: only apply fuzzy fixes at or above this
+    /// confidence. Setting it implies `apply_fuzzy`.
+    pub min_confidence: Option<f64>,
+}
+
+impl FuzzyApply {
+    /// Whether fuzzy fixes should be applied at all (either flag opts in).
+    fn enabled(&self) -> bool {
+        self.apply_fuzzy || self.min_confidence.is_some()
+    }
+
+    /// Whether a fuzzy fix with the given confidence should be applied.
+    fn accepts(&self, confidence: f64) -> bool {
+        self.enabled() && self.min_confidence.is_none_or(|min| confidence >= min)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -40,6 +66,7 @@ pub fn links_fix(
     format: Format,
     case_index: Option<&CaseInsensitiveIndex>,
     expand_short_form: bool,
+    fuzzy: FuzzyApply,
 ) -> Result<(CommandOutcome, Vec<String>)> {
     let report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
@@ -93,6 +120,23 @@ pub fn links_fix(
     let matcher = LinkMatcher::from_index(index, threshold);
     let fix_report = plan_fixes(&broken, &matcher);
 
+    // Split fuzzy-match fixes into their own bucket. Fuzzy matches are
+    // low-confidence guesses (a broken `[[foo]]` can match an unrelated
+    // `bar.md`), so they are reported separately and excluded from `--apply`
+    // unless the user opts in via `--apply-fuzzy` / `--min-confidence`. The
+    // non-fuzzy `certain_fixes` are the ones plain `--apply` writes.
+    let (fuzzy_fixes, certain_fixes): (Vec<_>, Vec<_>) = fix_report
+        .fixes
+        .iter()
+        .cloned()
+        .partition(|f| matches!(f.strategy, hyalo_core::link_fix::FixStrategy::FuzzyMatch));
+    // Fuzzy fixes the policy accepts (opted-in and above --min-confidence).
+    let applicable_fuzzy: Vec<_> = fuzzy_fixes
+        .iter()
+        .filter(|f| fuzzy.accepts(f.confidence))
+        .cloned()
+        .collect();
+
     // Collect all fixes: broken-link fixes + case-mismatch fixes.
     // Case-mismatch fixes come from the detection phase (not from plan_fixes).
     let case_mismatches: Vec<_> = report
@@ -121,7 +165,8 @@ pub fn links_fix(
         // so `apply_fixes` reads and rewrites each source file once — two
         // separate passes over the same file would see the first pass's
         // rewrites and could misbehave on overlapping edits.
-        let mut all_fixes = fix_report.fixes.clone();
+        let mut all_fixes = certain_fixes.clone();
+        all_fixes.extend(applicable_fuzzy.iter().cloned());
         all_fixes.extend(case_mismatches.iter().cloned());
         if !all_fixes.is_empty() {
             let (plans, unapplied) = apply_fixes(dir, &all_fixes, site_prefix)?;
@@ -153,9 +198,9 @@ pub fn links_fix(
                 )
             })
             .collect();
-        fix_report
-            .fixes
+        certain_fixes
             .iter()
+            .chain(applicable_fuzzy.iter())
             .chain(case_mismatches.iter())
             .filter(|f| {
                 !unapplied_keys.contains(&(
@@ -184,6 +229,13 @@ pub fn links_fix(
         "case_mismatch_fixes": case_mismatches,
         "ambiguous": ambiguous_count,
         "ambiguous_links": ambiguous,
+        // Fuzzy-match fixes are reported in their own bucket. They are excluded
+        // from --apply unless --apply-fuzzy / --min-confidence opts in; the
+        // `fuzzy_applied` flag tells the caller whether they were written.
+        "fuzzy": fuzzy_fixes.len(),
+        "fuzzy_fixes": fuzzy_fixes,
+        "fuzzy_applied": fuzzy.enabled(),
+        "fuzzy_min_confidence": fuzzy.min_confidence,
     });
 
     let _ = format;

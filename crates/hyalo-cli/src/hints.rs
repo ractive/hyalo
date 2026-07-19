@@ -1742,6 +1742,23 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         ));
     }
 
+    // Fuzzy-match fixes are excluded from --apply by default. Surface the
+    // opt-in when a dry-run turned up fuzzy candidates that were not applied.
+    let fuzzy = data
+        .get("fuzzy")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let fuzzy_applied = data
+        .get("fuzzy_applied")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if fuzzy > 0 && !fuzzy_applied {
+        hints.push(Hint::new(
+            format!("Review then apply {fuzzy} lower-confidence fuzzy fixes"),
+            build_command_with_glob(ctx, &["links", "fix", "--apply", "--apply-fuzzy"]),
+        ));
+    }
+
     if unfixable > 0 {
         hints.push(Hint::new(
             "List files with remaining broken links",

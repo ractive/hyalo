@@ -39,6 +39,15 @@ pub struct LinkGraphBuild {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LinkGraph {
     index: HashMap<String, Vec<BacklinkEntry>>,
+    /// Companion map: lowercased target key → the real (original-casing) keys
+    /// present in `index`. Enables O(1) case-insensitive backlink lookups
+    /// ([`LinkGraph::backlinks_ci`]) without the O(vault) scan that the older
+    /// `backlinks_case_insensitive` helper performed on every call.
+    ///
+    /// Not serialized: it is a pure derivative of `index` and is rebuilt via
+    /// [`LinkGraph::rebuild_lower_index`] after a snapshot is deserialized.
+    #[serde(skip)]
+    lower_index: HashMap<String, Vec<String>>,
 }
 
 impl LinkGraph {
@@ -136,7 +145,7 @@ impl LinkGraph {
         }
 
         Ok(LinkGraphBuild {
-            graph: Self { index },
+            graph: Self::from_index(index),
             warnings,
             case_index,
         })
@@ -166,9 +175,37 @@ impl LinkGraph {
             insert_file_links(&mut index, fl, site_prefix, &case_index);
         }
         LinkGraphBuild {
-            graph: Self { index },
+            graph: Self::from_index(index),
             warnings: Vec::new(),
             case_index,
+        }
+    }
+
+    /// Construct a graph from a fully-populated index, deriving the
+    /// lowercased companion map used for case-insensitive lookups.
+    fn from_index(index: HashMap<String, Vec<BacklinkEntry>>) -> Self {
+        let mut graph = Self {
+            index,
+            lower_index: HashMap::new(),
+        };
+        graph.rebuild_lower_index();
+        graph
+    }
+
+    /// Rebuild the lowercased companion map from the current `index` keys.
+    ///
+    /// Must be called after any operation that mutates the set of `index` keys
+    /// outside the normal insert path — in particular after a snapshot is
+    /// deserialized (the `lower_index` field is `#[serde(skip)]`) and after
+    /// [`rename_path`](Self::rename_path) / [`remove_source`](Self::remove_source).
+    pub fn rebuild_lower_index(&mut self) {
+        self.lower_index.clear();
+        self.lower_index.reserve(self.index.len());
+        for key in self.index.keys() {
+            self.lower_index
+                .entry(key.to_ascii_lowercase())
+                .or_default()
+                .push(key.clone());
         }
     }
 
@@ -197,24 +234,36 @@ impl LinkGraph {
     ///
     /// This is the case-insensitive companion to [`LinkGraph::backlinks`].  The
     /// graph stores entries under the **written** key (e.g. `"Web/Foo"`), not
-    /// the canonical on-disk path.  This method iterates all index keys and
-    /// collects any that are ASCII-case-equal to `target` or its `.md`-toggled
-    /// form.
+    /// the canonical on-disk path.  Both the `.md` and stem forms of `target`
+    /// are matched, mirroring [`backlinks`](Self::backlinks).
+    ///
+    /// Resolution is O(1) in the vault size: it consults the lowercased
+    /// companion map ([`lower_index`](Self::rebuild_lower_index)) instead of
+    /// scanning every index key on each call.
     ///
     /// Self-links are **not** filtered here — same contract as `backlinks`.
-    pub(crate) fn backlinks_case_insensitive(&self, target: &str) -> Vec<&BacklinkEntry> {
+    pub fn backlinks_ci(&self, target: &str) -> Vec<&BacklinkEntry> {
         let target_lower = target.to_ascii_lowercase();
-        let alt = if let Some(stem) = target.strip_suffix(".md") {
-            stem.to_ascii_lowercase()
+        let alt = if let Some(stem) = target_lower.strip_suffix(".md") {
+            stem.to_owned()
         } else {
             format!("{target_lower}.md")
         };
 
         let mut results = Vec::new();
-        for (key, entries) in &self.index {
-            let key_lower = key.to_ascii_lowercase();
-            if key_lower == target_lower || key_lower == alt {
-                results.extend(entries);
+        // De-duplicate the two lowercased query forms so a key that happens to
+        // match both (impossible in practice, but cheap to guard) is not
+        // double-counted.
+        for lower_key in [target_lower.as_str(), alt.as_str()] {
+            if let Some(real_keys) = self.lower_index.get(lower_key) {
+                for real_key in real_keys {
+                    if let Some(entries) = self.index.get(real_key) {
+                        results.extend(entries);
+                    }
+                }
+            }
+            if alt == target_lower {
+                break;
             }
         }
         results
@@ -309,6 +358,9 @@ impl LinkGraph {
                 }
             }
         }
+
+        // Key set changed (target keys renamed) — refresh the companion map.
+        self.rebuild_lower_index();
     }
 
     /// Remove every outbound edge whose source is `rel_path`, across all
@@ -330,6 +382,8 @@ impl LinkGraph {
             entries.retain(|e| e.source.to_string_lossy().replace('\\', "/") != rel_path);
             !entries.is_empty()
         });
+        // Emptied target keys may have been dropped — refresh the companion map.
+        self.rebuild_lower_index();
     }
 
     /// Insert one file's freshly-scanned links into the graph.
@@ -346,6 +400,9 @@ impl LinkGraph {
         case_index: &CaseInsensitiveIndex,
     ) {
         insert_file_links(&mut self.index, file_links, site_prefix, case_index);
+        // New target keys may have been added — refresh the companion map so
+        // case-insensitive lookups see them.
+        self.rebuild_lower_index();
     }
 }
 
@@ -680,6 +737,59 @@ mod tests {
             fs::write(&path, content).unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn backlinks_ci_matches_regardless_of_casing() {
+        // A file `Foo.md` is linked from two places using different casings.
+        // backlinks_ci must find both regardless of the query's casing, and
+        // must agree for the `.md` and stem query forms.
+        let vault = create_vault(&[
+            ("Foo.md", "# Foo\n"),
+            ("a.md", "See [[Foo]]\n"),
+            ("b.md", "See [[foo]]\n"),
+            ("c.md", "See [link](FOO.md)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+
+        // Case-sensitive backlinks only finds the exact-casing keys.
+        // Case-insensitive must find all three linkers for any query casing.
+        for query in ["Foo.md", "foo.md", "FOO.md", "Foo", "foo"] {
+            let sources: std::collections::BTreeSet<String> = graph
+                .backlinks_ci(query)
+                .iter()
+                .map(|e| e.source.to_string_lossy().replace('\\', "/"))
+                .collect();
+            assert_eq!(
+                sources,
+                ["a.md", "b.md", "c.md"]
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+                "backlinks_ci({query:?}) should find all three linkers"
+            );
+        }
+    }
+
+    #[test]
+    fn backlinks_ci_survives_snapshot_roundtrip_via_rebuild() {
+        // Simulate the snapshot deserialize path: lower_index is #[serde(skip)],
+        // so a cloned graph with a cleared companion map must still resolve
+        // case-insensitively after rebuild_lower_index().
+        let vault = create_vault(&[("Foo.md", "# Foo\n"), ("a.md", "See [[Foo]]\n")]);
+        let mut graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        // Emulate a fresh deserialize: wipe the derived map.
+        graph.lower_index.clear();
+        assert!(
+            graph.backlinks_ci("foo").is_empty(),
+            "without the companion map, ci lookup finds nothing"
+        );
+        graph.rebuild_lower_index();
+        assert_eq!(
+            graph.backlinks_ci("foo").len(),
+            1,
+            "after rebuild, ci lookup works again"
+        );
     }
 
     #[test]

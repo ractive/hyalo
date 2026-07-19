@@ -77,6 +77,10 @@ hyalo mv --file old.md --to new.md --allow-ambiguous
 
 # Detect and fix broken links
 hyalo links fix --apply
+# Low-confidence fuzzy matches are reported separately and NOT written by
+# plain --apply; opt in explicitly (optionally gating on confidence):
+hyalo links fix --apply --apply-fuzzy
+hyalo links fix --apply --min-confidence 0.95   # implies --apply-fuzzy
 
 # Auto-link: scan body text for unlinked mentions of known page titles
 # and convert them to [[wikilinks]]. Detects titles from filenames,

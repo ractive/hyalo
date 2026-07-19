@@ -1817,6 +1817,10 @@ pub(crate) enum LinksAction {
             3. Unique stem match anywhere in the vault (shortest-path)\n\
             4. Jaro-Winkler fuzzy match above --threshold\n\n\
             Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
+            FUZZY MATCHES ARE LOW-CONFIDENCE: a broken [[foo]] can \"match\" an unrelated bar.md.\n\
+            Strategy-4 fuzzy fixes are reported in their own bucket and are NOT written by plain\n\
+            --apply. Opt in with --apply-fuzzy, optionally gating on --min-confidence <0.0-1.0>\n\
+            (which implies --apply-fuzzy). Strategies 1-3 (case/extension/unique-stem) always apply.\n\n\
             SHORT-FORM WIKILINKS (Obsidian compatibility):\n\
             A bare [[Note]] that resolves to some **/Note.md anywhere in the vault is NOT\n\
             broken and is left untouched. Only a stem-casing mismatch ([[note]] for Note.md)\n\
@@ -1839,6 +1843,20 @@ pub(crate) enum LinksAction {
         /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
         #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
+        /// Apply fuzzy-match fixes too (excluded from --apply by default).
+        ///
+        /// Jaro-Winkler fuzzy matches are low-confidence guesses: a broken
+        /// [[foo]] can "match" an unrelated bar.md at 0.9 similarity. They are
+        /// reported in a separate bucket and are NOT written by plain --apply.
+        /// Pass --apply-fuzzy to opt in, optionally narrowing with
+        /// --min-confidence.
+        #[arg(long)]
+        apply_fuzzy: bool,
+        /// Only apply fuzzy fixes whose confidence is at least this value
+        /// (0.0–1.0). Implies --apply-fuzzy. Fixes below the bar stay in the
+        /// reported-but-not-applied bucket.
+        #[arg(long, value_parser = parse_threshold)]
+        min_confidence: Option<f64>,
         /// Glob pattern(s) to filter which files to check, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,

@@ -19,6 +19,17 @@ add the semantics the review showed are missing — each lands in exactly
 one place now. Findings L-16, L-19, L-21, L-22, L-23 from
 [[reviews/link-handling-review-2026-07-18]].
 
+**Carried over from iter-184 (Phase C):** iter-184 shipped the L-6 root
+fix (an O(1) lowercased companion map in `LinkGraph`, `backlinks_ci`) plus
+L-10/L-12/L-24/L-26, but deferred the two large mechanical refactors so its
+PR stayed reviewable. Fold these into Phase D before/with the semantics
+work: (a) the single `resolve_link(ctx, link, mode)` entry point collapsing
+the find/mod, `link_fix`, `backlinks`, and `summary` call sites onto
+`LinkResolver`/`LinkGraph`; (b) `auto_link::apply_matches` onto
+`execute_plans`/`RewritePlan` with the stronger TOCTOU guard; (c) L-11
+per-file partial-failure envelope (applied/failed/skipped) + batch-mv
+rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
+
 ## Tasks
 
 ### 1. Anchor validation (L-21)
