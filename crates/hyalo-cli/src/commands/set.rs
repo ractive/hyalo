@@ -19,7 +19,11 @@ use hyalo_core::schema::SchemaConfig;
 #[derive(Debug, Serialize)]
 pub(crate) struct SetPropertyResult {
     pub(crate) property: String,
-    pub(crate) value: String,
+    /// The coerced value that was written to the frontmatter, not the raw input
+    /// string. For a list assignment like `x=[a, b]` this echoes the parsed YAML
+    /// list `["a", "b"]` rather than the literal `"[a, b]"` the user typed
+    /// (iter-181 task 3).
+    pub(crate) value: Value,
     pub(crate) modified: Vec<String>,
     pub(crate) skipped: Vec<String>,
     pub(crate) total: usize,
@@ -83,6 +87,66 @@ fn has_date_shape(value: &str) -> bool {
         && b[..4].iter().all(u8::is_ascii_digit)
         && b[5..7].iter().all(u8::is_ascii_digit)
         && b[8..10].iter().all(u8::is_ascii_digit)
+}
+
+// ---------------------------------------------------------------------------
+// Advisory notes (non-blocking; lint remains the enforcement gate)
+// ---------------------------------------------------------------------------
+
+/// Compute an advisory `note` for a `set --property K=V` result, or `None`.
+///
+/// Two independent advisories may fire (date takes precedence when both apply):
+///
+///  1. A date-typed property (`date`, `created`, …) receiving a non-date value —
+///     it will sort lexicographically rather than chronologically (BUG-B).
+///  2. A value that violates the property's enum/pattern constraint in the
+///     effective schema (iter-181 task 1). The write still proceeds — this only
+///     surfaces the same guidance a `--validate` run or a later `lint` would give.
+///
+/// The schema constraint is resolved against the type being written in the same
+/// batch (a `--property type=X` assignment) or the default schema when no type
+/// is set. Per-file `type:` overrides are not probed here — advisories are
+/// best-effort hints, not a substitute for `lint`.
+fn advisory_note(
+    name: &str,
+    raw_value: &str,
+    parsed_value: &Value,
+    schema: Option<&SchemaConfig>,
+    batch_type: Option<&str>,
+) -> Option<String> {
+    // (1) Date-typed lexicographic-sort advisory.
+    if is_date_typed_property(name) && !raw_value.is_empty() && !looks_like_date(raw_value) {
+        return Some(format!(
+            "value {raw_value:?} is not a valid ISO 8601 date (YYYY-MM-DD); \
+             the property will sort lexicographically rather than chronologically"
+        ));
+    }
+
+    // (2) Enum/pattern schema-constraint advisory. Resolve the effective schema
+    // for the type being written (an explicit `type=X` in the batch, or the
+    // file's own declared type threaded in as `batch_type`), falling back to the
+    // default schema. `merged_schema_for_type` returns an owned `TypeSchema`, so
+    // bind it to a local before borrowing the constraint out of it.
+    if let Some(schema) = schema {
+        let owned;
+        let effective = match batch_type {
+            Some(t) => {
+                owned = schema.merged_schema_for_type(t);
+                &owned
+            }
+            None => schema.default_schema(),
+        };
+        if let Some(constraint) = effective.properties.get(name)
+            && let Some(violation) =
+                crate::commands::lint::validate_constraint_simple(name, parsed_value, constraint)
+        {
+            return Some(format!(
+                "{violation}; write proceeds — run `hyalo lint` to enforce, or `set --validate` to reject"
+            ));
+        }
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +444,18 @@ pub fn set(
 
     let mut index_dirty = false;
 
+    // Effective type for schema-constraint advisories (iter-181 task 1). Prefer
+    // an explicit `type=X` set in this batch; otherwise fall back to the `type:`
+    // of the first mutated file (a `set` batch is virtually always homogeneous).
+    let batch_type_from_args: Option<String> = parsed_props.iter().find_map(|(name, _, value)| {
+        if name.eq_ignore_ascii_case("type") {
+            value.as_str().map(str::to_owned)
+        } else {
+            None
+        }
+    });
+    let mut batch_type_from_file: Option<String> = None;
+
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
         let mtime = frontmatter::read_mtime(full_path)?;
@@ -395,6 +471,13 @@ pub fn set(
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
             continue;
+        }
+
+        // Record the first mutated file's declared type for the advisory pass.
+        if batch_type_from_file.is_none()
+            && let Some(Value::String(t)) = props.get("type")
+        {
+            batch_type_from_file = Some(t.clone());
         }
 
         let mut file_changed = false;
@@ -452,22 +535,21 @@ pub fn set(
 
     let mut results: Vec<serde_json::Value> = Vec::new();
 
-    for ((name, raw_value, _), (modified, skipped)) in parsed_props.iter().zip(prop_results) {
+    let batch_type = batch_type_from_args
+        .as_deref()
+        .or(batch_type_from_file.as_deref());
+
+    for ((name, raw_value, parsed_value), (modified, skipped)) in
+        parsed_props.iter().zip(prop_results)
+    {
         let total = modified.len() + skipped.len();
-        // BUG-B: emit a note when a date-typed property receives a non-date value.
-        let note =
-            if is_date_typed_property(name) && !raw_value.is_empty() && !looks_like_date(raw_value)
-            {
-                Some(format!(
-                    "value {raw_value:?} is not a valid ISO 8601 date (YYYY-MM-DD); \
-                 the property will sort lexicographically rather than chronologically"
-                ))
-            } else {
-                None
-            };
+        // Advisory note (write still proceeds; lint remains the enforcement gate):
+        //   1. BUG-B: a date-typed property receiving a non-date value.
+        //   2. iter-181 task 1: an enum/pattern value the schema would reject.
+        let note = advisory_note(name, raw_value, parsed_value, schema, batch_type);
         let result = SetPropertyResult {
             property: (*name).to_owned(),
-            value: (*raw_value).to_owned(),
+            value: parsed_value.clone(),
             modified,
             skipped,
             total,

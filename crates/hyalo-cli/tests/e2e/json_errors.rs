@@ -340,7 +340,7 @@ fn count_with_jq_conflict_is_json_by_default() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1)); // iter-181 task 2: user error
     let json = assert_json_error(&output.stderr);
     assert!(
         json["error"]
@@ -364,7 +364,7 @@ fn jq_with_format_text_conflict_is_json_under_format_json_precedence() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1)); // iter-181 task 2: user error
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--jq cannot be combined with --format text"));
     assert!(serde_json::from_str::<serde_json::Value>(&stderr).is_err());
@@ -382,7 +382,7 @@ fn count_unsupported_command_is_json_under_format_json_success_arm() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1)); // iter-181 task 2: user error
     let json = assert_json_error(&output.stderr);
     assert!(
         json["error"]
@@ -404,7 +404,7 @@ fn count_unsupported_command_is_json_under_format_json_raw_output_arm() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1)); // iter-181 task 2: user error
     assert_json_error(&output.stderr);
 }
 
@@ -420,7 +420,7 @@ fn count_unsupported_command_is_json_under_format_json_pre_dispatch() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1)); // iter-181 task 2: user error
     let json = assert_json_error(&output.stderr);
     assert!(
         json["error"]

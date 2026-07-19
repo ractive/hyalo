@@ -177,7 +177,8 @@ pub(crate) struct Cli {
 
     /// Apply a jq filter expression to the JSON output of any command.
     /// Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
-    /// The filtered result is printed as plain text. Incompatible with --format text.
+    /// The filtered result is printed as plain text. Incompatible with --format text
+    /// (combining them is a user error and exits 1).
     /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
     /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
     #[arg(long, global = true, value_name = "FILTER")]
@@ -619,14 +620,17 @@ pub(crate) enum Commands {
             included in the 'skipped_ambiguous' JSON field). Pass --allow-ambiguous to rewrite it anyway\n\
             based on stem matching.\n\n\
             SINGLE-FILE MODE:\n\
-            Provide a positional FILE or --file. --to accepts a .md path or an existing directory\n\
-            (basename of source is appended). Applied immediately unless --dry-run is passed.\n\n\
+            Provide a positional FILE or --file. The destination is a .md path or an existing\n\
+            directory (basename of source is appended), given either as --to <dest> or as a second\n\
+            positional DEST (`hyalo mv old.md new.md`, requires the positional source). Applied\n\
+            immediately unless --dry-run is passed.\n\n\
             BATCH MODE (when --glob, --property, --tag, or --type is given):\n\
             Resolves a set of source files via the given selectors (intersection). --to must be a\n\
             directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
             to commit changes. A single link-graph build covers all files.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo mv old.md --to new.md\n\
+            \u{00a0} hyalo mv old.md new.md   # positional DEST, alias for --to\n\
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
             \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
             \u{00a0} hyalo mv --tag archive --to archive/ --apply\n\n\
@@ -646,9 +650,18 @@ pub(crate) enum Commands {
         /// Source file to move (relative to --dir) — flag form (single-file mode only)
         #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type", "files_from"])]
         file: Option<String>,
+        /// Destination path — positional form (single-file mode only). Alias for --to:
+        /// `hyalo mv old.md new.md` is equivalent to `hyalo mv old.md --to new.md`.
+        /// Requires the positional source FILE (not --file); mutually exclusive with --to.
+        #[arg(
+            value_name = "DEST",
+            requires = "file_positional",
+            conflicts_with = "to"
+        )]
+        to_positional: Option<String>,
         /// Destination path: a .md path or an existing directory (basename appended) in single-file mode; a directory path in batch mode
         #[arg(long)]
-        to: String,
+        to: Option<String>,
         /// Glob pattern(s) to select source files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, value_name = "GLOB", conflicts_with = "files_from")]
         glob: Vec<String>,
@@ -1608,6 +1621,11 @@ pub(crate) enum ChangelogAction {
         /// The entry text (required)
         #[arg(long, value_name = "TEXT", required = true)]
         message: String,
+        /// Wrap the entry to COLS columns, breaking on word boundaries and
+        /// hanging-indenting continuation lines under the bullet text (2 spaces).
+        /// Useful for 80-column changelogs. Omit for a single unwrapped bullet.
+        #[arg(long, value_name = "COLS")]
+        wrap: Option<usize>,
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,

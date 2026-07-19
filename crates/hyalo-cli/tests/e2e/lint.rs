@@ -2078,10 +2078,12 @@ fn github_format_rejected_for_non_lint() {
         .args(["find", "--format", "github", "note"])
         .output()
         .unwrap();
+    // iter-181 task 2: unsupported --format github for a non-lint command is a
+    // user error → exit 1, not 2.
     assert_eq!(
         output.status.code().unwrap(),
-        2,
-        "non-lint github -> exit 2"
+        1,
+        "non-lint github -> exit 1 (user error)"
     );
     let stderr = std::str::from_utf8(&output.stderr).unwrap();
     assert!(

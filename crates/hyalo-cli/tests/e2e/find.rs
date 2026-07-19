@@ -4083,3 +4083,32 @@ fn find_sees_frontmatter_of_bom_prefixed_file() {
         "BOM file's frontmatter must be visible; leading-space pseudo-frontmatter must not"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-181 task 5: property-regex parse errors surface the engine detail
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_property_regex_parse_error_shows_engine_detail() {
+    let tmp = setup_vault();
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    // Unclosed group — the regex engine reports a caret/position detail.
+    cmd.args(["find", "--property", "title~=("]);
+    let output = cmd.output().unwrap();
+
+    assert!(!output.status.success(), "should fail on invalid regex");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Top-level context is preserved...
+    assert!(
+        stderr.contains("property filter"),
+        "expected the property-filter context, got: {stderr}"
+    );
+    // ...AND the underlying engine detail (regex parse error) is now surfaced
+    // the way `find -e` does, rather than being dropped.
+    assert!(
+        stderr.contains("regex parse error") || stderr.contains("unclosed group"),
+        "expected the regex engine detail (caret/position), got: {stderr}"
+    );
+}

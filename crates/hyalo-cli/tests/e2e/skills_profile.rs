@@ -104,7 +104,15 @@ fn new_skill_scaffolds_and_is_a_skill() {
         !content.contains("type:"),
         "bound SKILL.md omits explicit type: {content}"
     );
-    assert!(content.contains("name:"));
+    // iter-181 task 4: `name` is a slug (`^[a-z0-9]+(-[a-z0-9]+)*$`) the generic
+    // `TBD` placeholder cannot satisfy, so the scaffold OMITS it rather than
+    // shipping an invalid `name: TBD` — the user fills a valid slug (and a later
+    // `lint` flags the missing required field). `description` accepts `TBD`
+    // (pattern `^[^<]*$`, min-length 1), so it keeps its placeholder.
+    assert!(
+        !content.contains("name:"),
+        "name (slug pattern) placeholder must be omitted, not invalid TBD: {content}"
+    );
     assert!(content.contains("description:"));
 }
 

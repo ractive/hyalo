@@ -214,6 +214,22 @@ fn synthesise_content(
         // Check if the schema has a default value.
         let default_val = merged.defaults.get(prop_name).map(|d| expand_default(d));
 
+        // iter-181 task 4: a scaffold placeholder must itself pass the property's
+        // schema constraint. When a pattern/length-constrained string has no
+        // usable default, the generic `"TBD"` placeholder would violate the
+        // type's own regex (e.g. iteration's `branch: ^iter-\d+[a-z]*/`), so we
+        // omit the key entirely and let the user fill a valid value (a later
+        // `lint` flags it as missing-required). We only skip when there is no
+        // default AND the placeholder is invalid — a schema-provided default is
+        // always emitted verbatim.
+        if default_val.is_none()
+            && let Some(constraint @ PropertyConstraint::String { .. }) =
+                merged.properties.get(prop_name.as_str())
+            && placeholder_violates(constraint)
+        {
+            continue;
+        }
+
         let value = match merged.properties.get(prop_name.as_str()) {
             Some(PropertyConstraint::Date) => {
                 PropValue::Str(default_val.unwrap_or_else(today_iso8601))
@@ -252,7 +268,7 @@ fn synthesise_content(
                 }
             }
             Some(PropertyConstraint::String { .. }) | None => {
-                PropValue::Str(default_val.unwrap_or_else(|| "TBD".to_owned()))
+                PropValue::Str(default_val.unwrap_or_else(|| STRING_PLACEHOLDER.to_owned()))
             }
         };
         props.insert(prop_name.clone(), value);
@@ -300,6 +316,38 @@ fn synthesise_content(
     content.push('\n');
 
     content
+}
+
+/// The generic scaffold placeholder used for un-defaulted string properties.
+const STRING_PLACEHOLDER: &str = "TBD";
+
+/// Returns `true` when the generic `"TBD"` placeholder would violate the given
+/// `String` constraint's pattern or length bounds — in which case `new` omits
+/// the property rather than scaffolding an invalid value (iter-181 task 4).
+///
+/// Only `String` constraints are inspected; every other variant already
+/// scaffolds a type-valid placeholder (dates → today, enums → first value,
+/// numbers → 0, lists → `[]`, booleans → false), so this returns `false` for
+/// them and the caller emits the normal placeholder.
+fn placeholder_violates(constraint: &PropertyConstraint) -> bool {
+    let PropertyConstraint::String {
+        pattern,
+        min_length,
+        max_length,
+    } = constraint
+    else {
+        return false;
+    };
+    let len = STRING_PLACEHOLDER.chars().count();
+    if min_length.is_some_and(|min| len < min) || max_length.is_some_and(|max| len > max) {
+        return true;
+    }
+    if let Some(pat) = pattern {
+        // An un-compilable pattern can't reject the placeholder — fall back to
+        // emitting it (the schema itself is malformed; lint surfaces that).
+        return regex::Regex::new(pat).is_ok_and(|re| !re.is_match(STRING_PLACEHOLDER));
+    }
+    false
 }
 
 /// Typed property value for YAML emission in synthesised files.

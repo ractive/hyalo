@@ -386,6 +386,7 @@ pub fn run_add(
     changelog_file: &Path,
     category: &str,
     message: &str,
+    wrap: Option<usize>,
     apply: bool,
     active_profiles: &[String],
     format: Format,
@@ -415,6 +416,22 @@ pub fn run_add(
             None,
         ));
     }
+    // A wrap width narrower than the bullet prefix (`- ` = 2 cols) plus one
+    // content column can't hold any text — reject rather than loop forever.
+    if let Some(cols) = wrap
+        && cols < BULLET_PREFIX.len() + 1
+    {
+        return Ok((
+            CommandOutcome::UserError(format_error(
+                format,
+                &format!("--wrap width must be at least {}", BULLET_PREFIX.len() + 1),
+                None,
+                Some("pick a column width that fits the '- ' bullet prefix and at least one word"),
+                None,
+            )),
+            None,
+        ));
+    }
 
     let full = changelog_file.to_path_buf();
     let old_content = if full.is_file() {
@@ -436,7 +453,8 @@ pub fn run_add(
         insert_at
     };
 
-    insert_entry(&mut cl, unreleased_idx, canonical, message.trim());
+    let entry_lines = render_entry(message.trim(), wrap);
+    insert_entry(&mut cl, unreleased_idx, canonical, &entry_lines);
 
     let new_content = cl.render();
     let changed = new_content != old_content;
@@ -461,9 +479,52 @@ pub fn run_add(
     ))
 }
 
-/// Insert `- message` under `### <category>` within the `[Unreleased]` section
-/// (heading at `unreleased_idx`), creating the subsection if it is missing.
-fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, message: &str) {
+/// Bullet prefix for a changelog entry line (`- `).
+const BULLET_PREFIX: &str = "- ";
+
+/// Render an entry message into one or more physical lines.
+///
+/// Without `wrap`, this is a single `- message` line. With `wrap = cols`, the
+/// message is greedily word-wrapped so no line exceeds `cols` columns: the first
+/// line carries the `- ` bullet and each continuation line is hanging-indented
+/// by two spaces to align under the bullet text (Keep-a-Changelog convention).
+/// A single word longer than the width is placed on its own line unbroken rather
+/// than split mid-word.
+fn render_entry(message: &str, wrap: Option<usize>) -> Vec<String> {
+    // Two spaces aligns continuation lines under the bullet text.
+    const INDENT: &str = "  ";
+    let Some(cols) = wrap else {
+        return vec![format!("{BULLET_PREFIX}{message}")];
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::from(BULLET_PREFIX);
+    let mut current_has_word = false;
+    for word in message.split_whitespace() {
+        // Width if we appended this word (plus a separating space when non-empty).
+        let sep = usize::from(current_has_word);
+        let projected = current.chars().count() + sep + word.chars().count();
+        if current_has_word && projected > cols {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(INDENT);
+            current_has_word = false;
+        }
+        if current_has_word {
+            current.push(' ');
+        }
+        current.push_str(word);
+        current_has_word = true;
+    }
+    if current_has_word || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Insert an entry (`entry_lines`, the first carrying the `- ` bullet and any
+/// remainder being hanging-indent continuations) under `### <category>` within
+/// the `[Unreleased]` section (heading at `unreleased_idx`), creating the
+/// subsection if it is missing.
+fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, entry_lines: &[String]) {
     // Bound of the Unreleased section: the earliest of the next `## ` heading,
     // the footer link-reference block, or EOF. Keep-a-Changelog files end with
     // a block of `[label]: url` link-reference definitions; the `[Unreleased]`
@@ -487,7 +548,6 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
         .position(|l| l.trim() == cat_heading)
         .map(|rel| unreleased_idx + 1 + rel);
 
-    let entry = format!("- {message}");
     if let Some(cat_idx) = cat_idx {
         // Insert after the *complete* last bullet block under this category
         // (before the next heading or a trailing blank line). A bullet block
@@ -548,7 +608,9 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
             }
             i += 1;
         }
-        cl.lines.insert(insert_at, entry);
+        for (offset, line) in entry_lines.iter().enumerate() {
+            cl.lines.insert(insert_at + offset, line.clone());
+        }
     } else {
         // Create the subsection at the end of the Unreleased section.
         let mut block = Vec::new();
@@ -566,7 +628,7 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, messa
         }
         block.push(cat_heading);
         block.push(String::new());
-        block.push(entry);
+        block.extend(entry_lines.iter().cloned());
         block.push(String::new());
         for (offset, line) in block.into_iter().enumerate() {
             cl.lines.insert(section_end + offset, line);
@@ -681,7 +743,7 @@ mod tests {
     fn add_appends_under_existing_category() {
         let mut cl = Changelog::parse(BASE);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Added", "Feature B.");
+        insert_entry(&mut cl, idx, "Added", &render_entry("Feature B.", None));
         let out = cl.render();
         let unrel = out.find("## [Unreleased]").unwrap();
         let v1 = out.find("## [1.0.0]").unwrap();
@@ -696,7 +758,7 @@ mod tests {
     fn add_creates_missing_category() {
         let mut cl = Changelog::parse(BASE);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Fixed", "A bug.");
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("A bug.", None));
         let out = cl.render();
         let unrel = out.find("## [Unreleased]").unwrap();
         let v1 = out.find("## [1.0.0]").unwrap();
@@ -733,7 +795,7 @@ mod tests {
     fn add_into_empty_category_keeps_blank_after_heading() {
         let mut cl = Changelog::parse(EMPTY_CATEGORY);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Added", "First feature.");
+        insert_entry(&mut cl, idx, "Added", &render_entry("First feature.", None));
         let out = cl.render();
         assert!(
             out.contains("### Added\n\n- First feature."),
@@ -766,7 +828,7 @@ mod tests {
     fn add_new_category_lands_before_footer_link_refs() {
         let mut cl = Changelog::parse(UNRELEASED_LAST);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Fixed", "A bug.");
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("A bug.", None));
         let out = cl.render();
         let fixed_pos = out.find("### Fixed").expect("Fixed subsection added");
         let footer_pos = out.find("[Unreleased]:").expect("footer preserved");
@@ -786,7 +848,12 @@ mod tests {
     fn add_existing_category_lands_before_footer_link_refs() {
         let mut cl = Changelog::parse(UNRELEASED_LAST);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Added", "Second feature.");
+        insert_entry(
+            &mut cl,
+            idx,
+            "Added",
+            &render_entry("Second feature.", None),
+        );
         let out = cl.render();
         let entry_pos = out.find("- Second feature.").unwrap();
         let footer_pos = out.find("[Unreleased]:").unwrap();
@@ -845,7 +912,7 @@ mod tests {
     fn add_after_bullet_with_nested_list_lb5() {
         let mut cl = Changelog::parse(NESTED_LIST_LAST_BULLET);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Fixed", "New entry.");
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("New entry.", None));
         let out = cl.render();
 
         let parent_pos = out.find("- **Parent bullet").expect("parent present");
@@ -873,7 +940,7 @@ mod tests {
     fn add_after_wrapped_last_bullet_lb5() {
         let mut cl = Changelog::parse(WRAPPED_LAST_BULLET);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Fixed", "New entry.");
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("New entry.", None));
         let out = cl.render();
 
         // The old wrapped bullet is fully intact: its `- ` line is
@@ -947,7 +1014,7 @@ mod tests {
     fn add_after_multiple_wrapped_bullets_lb5() {
         let mut cl = Changelog::parse(MULTI_WRAPPED_BULLETS);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Fixed", "Third bug.");
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("Third bug.", None));
         let out = cl.render();
 
         let first_pos = out.find("- First bug, single line.").unwrap();
@@ -978,7 +1045,7 @@ mod tests {
         // The rendered file must end with exactly one trailing newline (MD047).
         let mut cl = Changelog::parse(UNRELEASED_LAST);
         let idx = cl.version_heading_index("Unreleased").unwrap();
-        insert_entry(&mut cl, idx, "Fixed", "A bug.");
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("A bug.", None));
         let out = cl.render();
         assert!(out.ends_with('\n'), "file ends with a newline");
         assert!(!out.ends_with("\n\n"), "no trailing blank line (MD047)");

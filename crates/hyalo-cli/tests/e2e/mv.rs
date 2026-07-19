@@ -1865,3 +1865,69 @@ Content.
         .collect();
     assert_eq!(entries, vec!["A.md".to_string()], "expected A.md on disk");
 }
+
+// ---------------------------------------------------------------------------
+// iter-181 task 5: positional destination is an alias for --to
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_positional_destination_moves_file() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "old.md", "---\ntitle: Old\n---\nBody.\n");
+    write_md(tmp.path(), "ref.md", "---\ntitle: Ref\n---\nSee [[old]].\n");
+
+    // `hyalo mv old.md new.md` — DEST positionally, no --to.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "old.md", "new.md"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        !tmp.path().join("old.md").exists(),
+        "old.md should have been moved"
+    );
+    assert!(tmp.path().join("new.md").exists(), "new.md should exist");
+    // Links are rewritten just like the --to form.
+    let refbody = fs::read_to_string(tmp.path().join("ref.md")).unwrap();
+    assert!(
+        refbody.contains("[[new]]"),
+        "link should be rewritten, got:\n{refbody}"
+    );
+}
+
+#[test]
+fn mv_positional_destination_matches_to_flag() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+
+    let positional = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "a.md", "b.md"])
+        .output()
+        .unwrap();
+    assert!(positional.status.success());
+    assert!(tmp.path().join("b.md").exists());
+}
+
+#[test]
+fn mv_positional_and_to_flag_conflict() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+
+    // Providing both the positional DEST and --to is rejected by clap.
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "a.md", "b.md", "--to", "c.md"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "expected conflict between positional DEST and --to"
+    );
+}

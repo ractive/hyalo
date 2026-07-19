@@ -631,7 +631,9 @@ fn run_inner() -> Result<(), AppError> {
             "{}",
             crate::output::format_error(fmt, COUNT_UNSUPPORTED_ERROR, None, None, None)
         );
-        return Err(AppError::Exit(2));
+        // User error (unsupported flag for this command) → exit 1, not 2
+        // (2 is reserved for internal errors — iter-181 task 2).
+        return Err(AppError::Exit(1));
     }
     if let Commands::Init {
         claude,
@@ -891,7 +893,8 @@ fn run_inner() -> Result<(), AppError> {
             eprintln!(
                 "Invalid output format '{fmt_str}' in .hyalo.toml; supported formats are: json, text"
             );
-            return Err(AppError::Exit(2));
+            // Misconfiguration is a user error → exit 1 (iter-181 task 2).
+            return Err(AppError::Exit(1));
         }
     } else {
         // No explicit flag or config — use TTY detection.
@@ -982,7 +985,8 @@ fn run_inner() -> Result<(), AppError> {
                 None,
             )
         );
-        return Err(AppError::Exit(2));
+        // Conflicting user flags → exit 1 (iter-181 task 2).
+        return Err(AppError::Exit(1));
     }
     if jq_filter.is_some() && format != Format::Json {
         eprintln!(
@@ -995,7 +999,8 @@ fn run_inner() -> Result<(), AppError> {
                 None,
             )
         );
-        return Err(AppError::Exit(2));
+        // --jq + --format text is a user error → exit 1, not 2 (iter-181 task 2).
+        return Err(AppError::Exit(1));
     }
     // `--format github` is lint-only: it emits GitHub Actions workflow commands
     // for lint violations. Reject it for every other subcommand with a clear
@@ -1012,7 +1017,8 @@ fn run_inner() -> Result<(), AppError> {
                 None,
             )
         );
-        return Err(AppError::Exit(2));
+        // Unsupported format for this command is a user error → exit 1 (iter-181 task 2).
+        return Err(AppError::Exit(1));
     }
     // `--count` prints a bare integer; it is meaningless alongside the
     // annotation stream `--format github` produces. Reject the combination.
@@ -1027,7 +1033,8 @@ fn run_inner() -> Result<(), AppError> {
                 None,
             )
         );
-        return Err(AppError::Exit(2));
+        // Conflicting user flags → exit 1 (iter-181 task 2).
+        return Err(AppError::Exit(1));
     }
 
     // Compute the annotation path prefix for `--format github`: the vault dir

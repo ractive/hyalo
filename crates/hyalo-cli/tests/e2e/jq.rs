@@ -171,10 +171,11 @@ fn jq_with_format_text_errors() {
         .unwrap();
 
     assert!(!output.status.success());
+    // iter-181 task 2: --jq + --format text is a user error → exit 1, not 2.
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "expected exit code 2 (usage error)"
+        Some(1),
+        "expected exit code 1 (user error)"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -394,4 +395,51 @@ fn jq_multiple_outputs_joined_by_newline() {
     assert!(lines.contains(&"rust"));
     assert!(lines.contains(&"cli"));
     assert!(lines.contains(&"iteration"));
+}
+
+// ---------------------------------------------------------------------------
+// iter-181 task 2: exit-code contract — user errors exit 1, not 2
+// ---------------------------------------------------------------------------
+
+#[test]
+fn jq_with_format_text_exits_one() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".total"])
+        .args(["--format", "text"])
+        .args(["tags", "summary"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    // 1 = user error (help defines 2 = internal error).
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--jq"),
+        "expected a --jq/--format conflict message, got: {stderr}"
+    );
+}
+
+#[test]
+fn count_with_jq_exits_one() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", ".total"])
+        .arg("--count")
+        .args(["tags", "summary"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
 }
