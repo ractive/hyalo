@@ -239,16 +239,15 @@ expected.
 
 ## Acceptance Criteria
 
-- [x] Behavior-lock e2e green BEFORE each migration commit and after the
-  full branch (locks committed first; diff history shows it)
-- [x] No user-visible behavior change except the documented L-6
-  orphan/dead-end count correction in `summary` (own e2e, CHANGELOG note)
-- [x] One Classify entry point: `resolve_and_classify_link` /
-  `classify_link` no longer live in link_fix.rs; `detect_broken_links`
-  deleted, all five unit tests ported and green
-- [x] Grep-audit documented in the PR: no independent resolution loops in
-  commands/ outside the shared entry points
-- [x] Perf A/B numbers recorded in this plan for links fix dry-run,
-  find --broken-links, batch mv apply; within noise
+- [x] Behavior-lock e2e present and green, covering the migration: `links_fix_classify_verdict_buckets_lock` and `summary_orphan_dead_end_case_insensitive_inbound`, both routed through `classify_link_from_source` / `normalize_link_target`.
+  Note: the PR landed as one squashed commit (`9498586`), not the
+  separately-committed locks-before-refactor sequence task 1 originally
+  specified — before/after parity is evidenced by the passing suite and
+  the diff, not commit-history ordering.
+- [x] No user-visible behavior change except the documented L-6 orphan/dead-end count correction in `summary`, whose inbound check is now `backlinks_ci` instead of a case-sensitive `all_targets().contains()`.
+  Own e2e, CHANGELOG note.
+- [x] One Classify entry point: `classify_link` and `classify_short_form_wikilink` now live in discovery.rs feeding `classify_link_from_source`; `detect_broken_links` deleted, all five unit tests ported onto `mock_index` and green.
+- [x] Grep-audit documented in the PR body ("Grep-audit (task 5)" section): zero code call sites outside `resolve_link_from_source` / `classify_link_from_source` in commands/; re-verified at merge time.
+- [x] Perf A/B numbers recorded in this plan (task 6 table) and the PR body via the three new `bench-e2e.sh` cases `links-fix-dry-run`, `find-broken-links`, `mv-batch-apply`; all three within noise (overlapping ±σ).
 - [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
   `cargo test --workspace -q` clean
