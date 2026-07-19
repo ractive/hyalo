@@ -114,5 +114,7 @@ satisfies them.
       for any file in this repo's knowledgebase.
 - [x] `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace -q`
       all pass.
-- [ ] README, schema-and-lint doc, skill template, and `--help` no
-      longer advertise the removed warning.
+- [x] README, schema-and-lint doc, skill template, and `--help` no
+      longer advertise the removed warning. (verified iter-182: no
+      remnant of the no-tags lint warning survives in README, docs,
+      skill templates, or `--help`.)

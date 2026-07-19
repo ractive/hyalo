@@ -1,0 +1,13 @@
+# hyalo / ripgrep-style ignore file (honored by the `ignore` crate that
+# powers hyalo's vault scan; git-neutral — these files stay tracked).
+#
+# The `research/setup-hyalo-action/` subtree is a *vendored* copy of the
+# now-published `ractive/setup-hyalo` GitHub Action repo (README, PUBLISH,
+# action.yml, LICENSE, and a self-contained test fixture-vault). Those files
+# are not knowledgebase notes: they have no frontmatter and legitimately
+# should not, so they polluted `summary`/`find` counters (missing-type,
+# orphans, dead-ends). Excluding the subtree from the scan keeps the vault's
+# hygiene counters honest without deleting the vendored record.
+# Decision recorded in iterations/iteration-182-kb-hygiene.md (task 5) and
+# interacts with iteration-180 task 3.
+research/setup-hyalo-action/

@@ -199,7 +199,7 @@ marked ❌ do not, so `--help` no longer advertises `--index` /
 
 This is a user-facing breaking change, so every place that mentions or
 demonstrates the old flag form must be audited and updated together. Do
-not split across PRs — the rule in [[CLAUDE.md]] is docs and code ship
+not split across PRs — the rule in `CLAUDE.md` is docs and code ship
 together.
 
 ### 1. Rust source (definition, dispatch, help text)

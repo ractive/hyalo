@@ -64,7 +64,7 @@ Inconsistencies:
   conflict sentence. Compare `find --help` and `task toggle --help`
   which say *"Mutually exclusive with --glob and --files-from"*. The
   flag itself works on all three; only the help-text conflict list is
-  stale. See [[NEW-4]] below.
+  stale. See `NEW-4` below.
 - **Single-file error rendering**: `read --files-from -` with a
   multi-entry list emits `Error: ...` plain text on a TTY, while
   `task read` and `backlinks` emit the JSON `{error, hint}` envelope.
@@ -101,7 +101,7 @@ the hint — correct.
 
 Large-vault summary hint **partially WORKING**: it fires on a 600-file
 synthetic vault, but is missing on MDN where it would be most useful.
-See [[NEW-1]] — it gets crowded out by `MAX_HINTS = 5` because the
+See `NEW-1` — it gets crowded out by `MAX_HINTS = 5` because the
 five health hints (`properties`, `tags`, `orphan`, `broken-links`,
 `links fix`) come first.
 
@@ -252,7 +252,7 @@ vs `find`, `task toggle`, etc.:
 The flag itself works (mutual exclusion is enforced — clap errors on
 `set --file a.md --files-from -`), only the help text on `--file` is
 stale on the three `set`/`remove`/`append` subcommands. Per the
-[[feedback_keep_docs_in_sync]] feedback, help texts should track
+`feedback_keep_docs_in_sync` feedback, help texts should track
 behavior.
 
 ### NEW-5: `hyalo summary` `dir` key is duplicated in the envelope — LOW
@@ -278,7 +278,7 @@ Re-verified the seven NEW-* items from
 | Prior bug | Status in v0.16.0 (this build) |
 |---|---|
 | NEW-1 — `item_pattern` reports only first violation | still open |
-| NEW-2 — `--files-from` doesn't strip multi-segment `--dir` | **still open** — see [[NEW-3]] above |
+| NEW-2 — `--files-from` doesn't strip multi-segment `--dir` | **still open** — see `NEW-3` above |
 | NEW-3 — `hyalo new --help` says "parent must exist" | not re-checked (text drift, not behavioral) |
 | NEW-4 — `--files-from` doesn't trim leading whitespace | still open (`printf '  edge.md\n'` → files_missing=1) |
 | NEW-5 — `create-index --index-file` silently ignored | still open |
@@ -323,7 +323,7 @@ Still fixed.
   external KBs like MDN.
 - **MDN summary spam**: 5 hints (orphans 4245, broken-links 49933,
   links fix dry-run) for a docs vault hyalo doesn't author is noise.
-  Combined with [[NEW-1]] the most useful hint (`create-index`) is
+  Combined with `NEW-1` the most useful hint (`create-index`) is
   invisible.
 - **`set/remove/append --files-from` is undocumented in EXAMPLES**:
   none of these three subcommands show a `--files-from` invocation in

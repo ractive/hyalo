@@ -99,7 +99,7 @@ vs `find` / `task toggle`:
 
 The flag itself works (mutual exclusion is enforced at clap parse
 time), only the help text is stale on the three subcommands. Per
-[[feedback_keep_docs_in_sync]] this should be fixed in the same PR
+`feedback_keep_docs_in_sync` this should be fixed in the same PR
 that adds the behavior — slipped through in iter-145. Now: sync the
 three `--file` doc strings.
 

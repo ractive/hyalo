@@ -180,7 +180,7 @@ publish deb/rpm to Cloudsmith (`ractive/hyalo`) and ship packaged
 shell completions; hoppy additionally gained musl static builds (the
 "links OpenSSL" premise was vestigial — see hoppy iter-80) and a winget
 bootstrap submission (microsoft/winget-pkgs#400670). Remaining manual
-steps live in hoppy's [[iteration-80-musl-targets-winget]] plan: Cloudsmith
+steps live in hoppy's `iteration-80-musl-targets-winget` plan: Cloudsmith
 repo visibility → open-source, WINGET_TOKEN + caller identifier after
 moderation, AUR account.
 
