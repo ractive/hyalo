@@ -35,285 +35,6 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 - **Safe mutations.** Dry-run mode on all write operations. Preview before committing changes.
 - **Cross-platform.** Works on macOS, Linux, and Windows. No runtime dependencies.
 
-## Quick start
-
-```sh
-# Initialize: point hyalo at the folder that contains your .md files with the --dir flag.
-# This is typically a subfolder like docs/, wiki/, or knowledgebase/.
-# Omit --dir if the project root itself is the knowledgebase.
-hyalo init --dir docs
-
-# Inspect the effective configuration (effective dir, config path, hints, format, site_prefix)
-hyalo config                             # text by default on a terminal
-hyalo config --format json               # structured output for scripting / LLM agents
-
-# Get a bird's-eye view (output format auto-detected: text on terminals, json when piped)
-# Includes the resolved `kb dir` as the first line.
-hyalo summary
-
-# Full-text search (BM25 ranked, with boolean operators)
-hyalo find "retry backoff"
-hyalo find "retry OR timeout -deprecated"
-
-# Filter by frontmatter
-hyalo find --property status=draft --tag research
-
-# Bulk-update metadata
-hyalo set --property status=reviewed --where-tag research
-
-# Move a single file — all inbound/outbound links and self-links are updated
-hyalo mv --file old/path.md --to archive/path.md
-hyalo mv old.md new.md   # positional DEST is an alias for --to
-
-# Batch move: preview files that would move (dry-run by default)
-hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/
-
-# Batch move: commit changes with --apply (builds link graph once for all files)
-hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply
-
-# Ambiguous bare wikilinks ([[stem]] matching multiple files) are skipped by default;
-# pass --allow-ambiguous to rewrite them anyway based on stem matching
-hyalo mv --file old.md --to new.md --allow-ambiguous
-
-# Detect and fix broken links
-hyalo links fix --apply
-# Low-confidence fuzzy matches are reported separately and NOT written by
-# plain --apply; opt in explicitly (optionally gating on confidence):
-hyalo links fix --apply --apply-fuzzy
-hyalo links fix --apply --min-confidence 0.95   # implies --apply-fuzzy
-
-# Auto-link: scan body text for unlinked mentions of known page titles
-# and convert them to [[wikilinks]]. Detects titles from filenames,
-# frontmatter `title`, and `aliases`. Skips code blocks, existing links,
-# headings, and comment fences.
-hyalo links auto                     # dry-run preview
-hyalo links auto --apply             # write changes
-hyalo links auto --first-only --apply  # only first mention per target
-hyalo links auto --exclude-title API --exclude-target-glob 'templates/*' --apply
-hyalo links auto --file notes/todo.md --apply   # single-file mode
-
-# Lint frontmatter against your schema and markdown body against
-# bundled rules (MD001..MD059 from mdbook-lint plus two HYALO native
-# cross-cutting rules). `--fix` applies autofixes for both passes,
-# writes atomically, and converges in a single run (a second `--fix`
-# changes nothing). HYALO002 fires only when any schema declares
-# `status` as an enum containing "completed" — this includes the
-# default schema as well as any [schema.types.*].
-hyalo lint                              # full vault, summary mode
-hyalo lint --rule MD013 --detailed      # drill into a single rule
-hyalo lint --rule-prefix HYALO          # only HYALO native rules
-hyalo lint --strict                     # promote missing-type and undeclared-property warnings to errors
-hyalo lint --fix --dry-run              # preview autofixes
-hyalo lint --fix                        # apply autofixes
-hyalo lint --fix-rule HYALO001          # only autofix one rule
-
-# Manage which rules are enabled and their severity (writes to .hyalo.toml).
-hyalo lint-rules list
-hyalo lint-rules show MD013
-hyalo lint-rules set MD013 --enabled false
-hyalo lint-rules set HYALO001 --severity error
-hyalo lint-rules remove MD013           # revert to default
-
-# Schema-driven file creation: scaffold a new file from a type schema.
-# Add --index (or --index-file PATH) to also insert the entry into an existing
-# snapshot index so subsequent --index queries see the new file immediately.
-hyalo new --type iteration --file iterations/iter-99-example.md
-```
-
-Every write command supports `--dry-run` to preview changes before applying them.
-
-### Agent loop: new → edit → lint
-
-`hyalo new` creates a skeleton file with `TBD` placeholders that are intentionally
-invalid — they will fail `hyalo lint`. This is by design. The loop is:
-
-1. `hyalo new --type <name> --file <path>` — scaffold the skeleton
-2. Edit the file to fill in the real values
-3. `hyalo lint --file <path>` — see which placeholders still violate the schema
-
-The lint output tells you exactly what to fix, field by field.
-
-Run `hyalo --help` or `hyalo <command> --help` for the full reference.
-
-## Claude Code integration
-
-```sh
-hyalo init --claude
-```
-
-This installs two [skills](https://docs.anthropic.com/en/docs/claude-code/skills) and a [rule](https://docs.anthropic.com/en/docs/claude-code/settings#rules) that teach Claude Code to use hyalo instead of raw `Read`/`Edit`/`Grep`/`Glob` when working with your vault:
-
-**`hyalo` skill** — Auto-triggered whenever Claude touches markdown files in your vault. It uses `hyalo find`, `hyalo set`, `hyalo mv`, etc. for structured access to frontmatter, tags, links, and tasks.
-
-**`hyalo-tidy` skill** (`/hyalo-tidy`) — A five-phase knowledgebase consolidation. Think of it as a librarian doing a periodic shelf-read: it orients with `hyalo summary`, gathers recent signal from git history, detects structural issues (broken links, orphan files, stale statuses, missing metadata), applies conservative fixes, and reports a health dashboard. Run it periodically to keep your vault clean.
-
-**`knowledgebase` rule** — Scoped to `<your-vault>/**`. Reminds Claude to prefer hyalo CLI commands over built-in file tools whenever it touches vault files.
-
-All artifacts are idempotent — re-running `hyalo init --claude` updates to the latest versions. `hyalo deinit` removes everything cleanly.
-
-## OKF (Open Knowledge Format)
-
-[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is a vendor-neutral format for **knowledge bundles**: a directory of Markdown "concept" files with YAML frontmatter, distributed as a git repo or tarball. Every concept has exactly one required field — `type` — plus recommended `title`, `description`, `resource`, `tags`, and an RFC 3339 `timestamp`; reserved `index.md`/`log.md` files are frontmatter-free.
-
-hyalo makes OKF a first-class target:
-
-```sh
-hyalo init --profile okf            # scaffold an OKF-ready .hyalo.toml
-hyalo init --profile okf --claude   # also install the bundled `okf` skill
-```
-
-The `okf` profile merges a declarative config fragment into `.hyalo.toml`:
-
-- `[schema.default] required = ["type"]` — the one OKF-mandated field — plus the recommended props declared with types (`timestamp` as offset-aware `datetime-tz`).
-- `[schema] exempt = ["**/index.md", "**/log.md"]` — reserved files skip the required-`type` check.
-- `site_prefix = ""` — bundle-absolute links (`/tables/x.md`, the spec-recommended form) resolve from the bundle root.
-- `validate_on_write = true` — authoring stays conformant.
-
-The profile is **vendor-neutral** — it ships no example `[schema.types.*]`; declare your own domain types under `[schema.types."<name>"]` (the bundled `okf` skill's "Adding domain types" section walks through it). Profiles are **composable** and **idempotent**: multiple `--profile` runs deep-merge into one `.hyalo.toml`, array config keys union rather than clobber, and when a profile overwrites a differing scalar it prints a `warning: conflict: …` line to stderr — nothing is lost silently.
-
-### Reserved-file generators (`okf index` / `okf log`)
-
-OKF bundles keep two *derived* reserved files that are otherwise hand-maintained: `index.md` (a Markdown link list of the concepts in each directory) and `log.md` (a date-grouped changelog). hyalo regenerates both deterministically — no LLM, no cloud:
-
-```bash
-hyalo okf index --dry-run          # CI: exits non-zero if any index.md is stale
-hyalo okf index --apply            # regenerate every directory's index.md
-hyalo okf index tables --apply     # scope to a subtree
-hyalo okf index --apply --replace  # overwrite a marker-less index.md (destructive)
-
-hyalo okf log --message "Added blocks table" --apply
-hyalo okf log tables --action Update --message "Refreshed schema" --apply
-```
-
-**`okf index`** groups each directory's concepts by frontmatter `type` and emits `* [title](relative-link) - description` lines into a managed region delimited by `<!-- okf:index:begin -->` / `<!-- okf:index:end -->` markers — hand-written prose outside the markers is preserved verbatim, links are always CommonMark-valid (a spaced or unicode filename never renders as literal text), and `--apply` is idempotent. `--dry-run` (the default) exits non-zero on drift, so it doubles as a CI freshness check. A file whose markers are malformed (dangling, reversed, or duplicated) is never rewritten — it is left byte-identical and reported, so the generator can never delete hand prose behind a broken marker.
-
-**`okf log`** prepends a dated entry under today's `YYYY-MM-DD` heading (newest first) to a scope-selectable `log.md`: `TARGET` picks a directory (`TARGET/log.md`), a `log.md` path, or — omitted — the bundle root. The file is created (frontmatter-free) when absent.
-
-Both generators default to `--dry-run` and mutate only with `--apply`, and skip trees listed in an `[okf] ignore = ["_template/**"]` section of `.hyalo.toml`. Finer edge-case semantics (non-destructive adoption of marker-less files, per-file skip behavior on unparseable frontmatter) are documented in the bundled `okf` skill (`hyalo init --profile okf --claude`) and surfaced by the `OKF-*` lint rules (`hyalo lint-rules list`).
-
-### Validate an OKF bundle (`lint --profile okf`)
-
-`hyalo lint --profile okf` checks a bundle against the OKF [SPEC §9](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) conformance rules. It is an **ephemeral overlay** — it merges the same fragment `hyalo init --profile okf` writes, in memory, without touching `.hyalo.toml` — so it works on CI or a freshly cloned third-party bundle with no config at all:
-
-```bash
-hyalo lint --profile okf                 # validate the whole bundle
-git diff --name-only origin/main...HEAD | hyalo lint --profile okf --files-from -   # scope to a diff in CI
-```
-
-The profile honours OKF's **permissive-consumption** model — *warn, don't reject*:
-
-- **Errors only** on the SPEC §9 hard requirements: a non-reserved `.md` with no parseable frontmatter block, or one whose block lacks a non-empty `type`.
-- **Warns, never rejects,** on broken cross-links, reserved-file structure drift, missing or malformed `# Citations`, and augmentation regressions.
-- **Always accepts** unknown `type` values and extra frontmatter keys.
-
-Advisory `OKF-CITATIONS-*` rules make the `# Citations` convention first-class (a claim-bearing concept should cite; entries are links; bundle-relative links resolve on disk); each OKF rule is toggleable via `hyalo lint-rules set OKF-… --enabled false`. A vault created with `hyalo init --profile okf` records `[lint] profiles = ["okf"]`, so the same rules run under a plain `hyalo lint` — `--profile okf` there is a no-op.
-
-## MADR profile — Architecture Decision Records
-
-[MADR](https://adr.github.io/madr/) (Markdown Architecture Decision Records, 4.0.0) is a lightweight convention for capturing architecture decisions as Markdown files. Each decision is one file under `docs/decisions/`, named `NNNN-slug.md`, with a `status` lifecycle (`proposed` → `accepted` / `rejected`, later `deprecated`, or `superseded by ADR-NNNN`).
-
-```sh
-hyalo init --profile madr            # scaffold an ADR-ready .hyalo.toml
-hyalo init --profile madr --claude   # also install the bundled `madr` skill
-```
-
-The `madr` profile is **pure data over the same machinery as `okf`**, plus two generic mechanisms it is the first consumer of:
-
-- **Path-bound schemas (`[[schema.bind]]`)** — the `adr` type is bound to `docs/decisions/**/*.md`, so the schema applies to *that subtree only*, inside any larger vault. Files there need no explicit `type: adr` frontmatter; the binding supplies it (explicit frontmatter always wins, and a `type:` that disagrees with the binding warns). **Bind = typing:** a bound file satisfies a `required = ["type"]` gate through its binding, so a spec-valid frontmatter-less `SKILL.md`, MADR ADR, or `CHANGELOG.md` lints clean without a hand-written `type:` key (its type-specific required properties are still enforced). Bindings are ordered and first-match-wins.
-- **Zero-padded filename tokens (`{n:04}`)** — the `adr` `filename-template` is `docs/decisions/{n:04}-{slug}.md`, producing `0007-use-postgres.md`. The pad width is a rendering minimum, so `1-x.md` and `0002-x.md` are both still recognized as ADRs.
-
-The `adr` type keeps MADR's light frontmatter (`status`, `date`, `decision-makers`/`consulted`/`informed` — the 3.x `deciders` spelling is accepted as an alias) optional-but-typed, and requires the MADR-4 short-template sections `## Context and Problem Statement`, `## Considered Options`, `## Decision Outcome`.
-
-```sh
-hyalo new --type adr --file docs/decisions/0007-use-postgres.md   # scaffold an ADR
-hyalo lint                                                        # validate (profile recorded in config)
-hyalo madr toc --apply                                            # regenerate docs/decisions/README.md
-```
-
-**`hyalo madr toc`** regenerates an ADR table of contents / status dashboard (number, title, status, date) into `docs/decisions/README.md`, inside a `<!-- madr:toc:begin -->` / `<!-- madr:toc:end -->` managed region (prose outside is preserved). A marker-less `README.md` is adopted non-destructively (its body is kept and the region appended; `--replace` overwrites). Like `okf index`, it defaults to `--dry-run` and exits non-zero on drift, so it doubles as a CI check.
-
-Two advisory (warn-level) lint rules layer on top of the schema pass under `hyalo lint --profile madr`: **`MADR-SUPERSEDE-RESOLVE`** (a `status: superseded by ADR-0123` that points at a non-existent `0123-*.md` warns) and **`MADR-DUPLICATE-NUMBER`** (two ADRs sharing an `NNNN` prefix warn). Both are toggleable via `hyalo lint-rules set MADR-… --enabled false` and appear in `hyalo lint-rules list`.
-
-## Agent Skills profile — SKILL.md validator
-
-The [Agent Skills](https://agentskills.io/specification) spec packages an agent capability as a directory `<skill-name>/SKILL.md` whose frontmatter is unusually strict — which makes hyalo a CI-friendly Rust validator for a whole skill collection.
-
-```sh
-hyalo init --profile skills            # scaffold a skills-ready .hyalo.toml
-hyalo init --profile skills --claude   # also install the bundled `skills` skill
-```
-
-The `skills` profile is **pure data over the same machinery as `okf`/`madr`**, and is the first consumer of a new generic constraint — **string length bounds (`min-length` / `max-length`)** on any `string` property. The `skill` type is path-bound to `**/SKILL.md` (any depth) and requires exactly two fields, both hard-validated by the schema pass:
-
-- **`name`** — a lowercase slug (`^[a-z0-9]+(-[a-z0-9]+)*$`, no leading/trailing/consecutive hyphens), 1–64 characters (`min-length`/`max-length`).
-- **`description`** — 1–1024 characters, with no `<…>` tags (it is injected verbatim into a system prompt).
-
-Optional-but-typed fields: `license`, `compatibility` (≤500 chars), `allowed-tools` (a list), and the Claude Code extension `user_invocable` (boolean). The free-form `metadata` map is intentionally left untyped (hyalo treats nested objects as opaque). Companion directories (`scripts/`, `references/`, `assets/`) are a convention you create, not scaffolded.
-
-```sh
-hyalo new --type skill --file my-skill/SKILL.md   # scaffold a compliant SKILL.md
-hyalo lint --profile skills                        # validate a directory of skills
-```
-
-Three advisory rules layer on top of the schema pass under `hyalo lint --profile skills`: **`SKILL-RESERVED-NAME`** (**error** — `name` is a reserved word `anthropic`/`claude`, which the slug pattern cannot express without look-around), **`SKILL-NAME-DIRNAME`** (warn — `name` must equal its parent directory), and **`SKILL-LINE-BUDGET`** (warn — the body should stay under 500 lines). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set SKILL-… --enabled false`.
-
-**Reaching `.claude/skills/`.** The vault walker skips hidden dot-directories by default, so the canonical Claude Code skill location would be invisible. The `skills` profile therefore ships `[scan] include = [".claude/skills/**"]`, a general walker escape hatch that re-admits specific hidden subtrees (never `.git`, which is always excluded). With it, `hyalo find`/`lint` reach `.claude/skills/**/SKILL.md` in place — no relocation:
-
-```toml
-[scan]
-include = [".claude/skills/**"]   # honored by every command that scans the vault
-```
-
-## Changelog profile — Keep a Changelog
-
-[Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) is a convention for a human-readable `CHANGELOG.md`: a `# Changelog` title, `## [Unreleased]` pinned above dated `## [X.Y.Z] - YYYY-MM-DD` version sections (newest first), `###` subsections limited to six change categories, and a footer of `[x.y.z]: <url>` link references. Unlike the other profiles, `CHANGELOG.md` is **frontmatter-free** — the whole grammar lives in the body.
-
-```sh
-hyalo init --profile changelog            # scaffold a changelog-ready .hyalo.toml
-hyalo init --profile changelog --claude   # also install the bundled `changelog` skill
-```
-
-The `changelog` profile binds a frontmatter-less `changelog` type to the literal `CHANGELOG.md` (via `[[schema.bind]]`) and exempts it from the frontmatter rules; the grammar is enforced by the `CHANGELOG-*` body rules. It is the first consumer of a new generic **heading-grammar** capability (a declarative *sequence / level / text-pattern* engine, lifted from OKF's hand-rolled reserved-file checks), so later profiles (Nygard ADRs, Standard Readme) can declare a grammar rather than re-implement a scanner.
-
-```sh
-hyalo lint --profile changelog                          # validate CHANGELOG.md
-git diff --name-only origin/main...HEAD | hyalo lint --profile changelog --files-from -   # CI on a diff
-```
-
-The grammar is **stricter than the other profiles** (a malformed changelog is a real defect), so most rules default to **error**: `CHANGELOG-TITLE`, `CHANGELOG-VERSION-HEADING`, `CHANGELOG-CATEGORY`, `CHANGELOG-VERSION-ORDER` (versions strictly descending), `CHANGELOG-DATE-ORDER` (dates non-increasing), and `CHANGELOG-UNRELEASED-POSITION`. Two soft rules warn: `CHANGELOG-EMPTY-SECTION` and `CHANGELOG-LINK-REF` (every version heading needs a matching footer link ref and vice versa). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set CHANGELOG-… --enabled false`.
-
-A release generator maintains the file deterministically:
-
-```sh
-hyalo changelog add --category Added --message "New export format" --apply   # append under Unreleased
-hyalo changelog add --category Added --message "A long entry..." --wrap 80    # word-wrap to 80 columns
-hyalo changelog release 1.2.0 --dry-run                                      # CI: preview the rotation
-hyalo changelog release 1.2.0 --apply                                        # rotate [Unreleased] → [1.2.0]
-```
-
-**`hyalo changelog release <X.Y.Z>`** rotates the accumulated `## [Unreleased]` content into a dated `## [X.Y.Z] - <date>` section (date defaults to today, override with `--date`), recreates an empty `[Unreleased]` above it, and appends a placeholder `[X.Y.Z]: TBD` footer link reference (replace `TBD` with the real compare/tag URL). It **refuses** to release a version that already exists. **`hyalo changelog add`** appends `- <message>` under the `### <category>` subsection of `[Unreleased]` — always **inside** the section, before the footer link-reference block, with a single trailing newline — creating the subsection if needed. Pass `--wrap <cols>` to word-wrap a long message into a hanging-indented bullet for 80-column changelogs. Both default to `--dry-run` and exit non-zero on drift, so they double as CI checks.
-
-**Repo-root `CHANGELOG.md` with a docs-subdir vault.** When your vault dir is a subdirectory (`dir = "docs"`) but `CHANGELOG.md` lives at the repo root, point the changelog commands at it with `[changelog] path` — resolved relative to the config file's directory (it may sit outside the vault dir, but never above the repo root):
-
-```toml
-dir = "docs"
-[changelog]
-path = "CHANGELOG.md"   # the repo-root file, beside .hyalo.toml
-```
-
-`hyalo init --profile changelog --dir docs` writes this key automatically when a root `CHANGELOG.md` already exists. With it, `hyalo changelog add`/`release` and `hyalo lint --profile changelog` all operate on the root file with no `--dir .` gymnastics.
-
-### Profiles at a glance
-
-| Profile | Scope | Binds | Key rules |
-| --- | --- | --- | --- |
-| `okf` | Whole bundle | `type`-required concepts; `index.md`/`log.md` reserved | Permissive (warn-only): citations, reserved-file structure, augmentation guard |
-| `madr` | `docs/decisions/**` | `adr` schema, status lifecycle, `NNNN-slug.md` | `MADR-SUPERSEDE-RESOLVE`, `MADR-DUPLICATE-NUMBER` (warn) |
-| `skills` | `**/SKILL.md` | `skill` schema (`name`/`description` bounds) | `SKILL-RESERVED-NAME` (error), name↔dir + line-budget (warn) |
-| `changelog` | `CHANGELOG.md` | frontmatter-less `changelog` type | `CHANGELOG-*` grammar (mostly error), empty-section + link-ref (warn) |
-
-Profiles are **composable** and **idempotent**: multiple `--profile` runs deep-merge into one `.hyalo.toml` without clobbering each other, `hyalo lint --profile <name>` is an ephemeral overlay that needs no committed config, and a vault initialised with a profile runs its rules under plain `hyalo lint`.
-
 ## Installation
 
 ### Homebrew (macOS & Linux)
@@ -393,7 +114,7 @@ Every [GitHub Release](https://github.com/ractive/hyalo/releases) publishes:
 - **CycloneDX SBOMs** (`*.cdx.json`) and GitHub build-provenance attestations for the native builds. Verify an artifact with:
 
   ```sh
-  gh attestation verify hyalo-v0.17.0-aarch64-apple-darwin.tar.gz --owner ractive
+  gh attestation verify hyalo-v0.20.0-aarch64-apple-darwin.tar.gz --owner ractive
   ```
 
 A `SHA256SUMS` file with checksums for every asset is attached to each release.
@@ -410,7 +131,98 @@ hyalo completions zsh  > ~/.local/share/zsh/site-functions/_hyalo
 hyalo completions fish > ~/.config/fish/completions/hyalo.fish
 ```
 
-`hyalo completions --help` lists every supported shell (also elvish and powershell). `hyalo completion` (singular) remains as a backward-compatible alias.
+`hyalo completions --help` lists every supported shell (also elvish and powershell).
+
+## Quick start
+
+```sh
+# Point hyalo at the folder that contains your .md files
+# (omit --dir if the project root itself is the knowledgebase)
+hyalo init --dir docs
+
+# Bird's-eye view: file count, tags, properties, link health
+hyalo summary
+
+# Full-text search (BM25 ranked, boolean operators) and frontmatter filters
+hyalo find "retry OR timeout -deprecated"
+hyalo find --property status=draft --tag research
+
+# Bulk-update metadata
+hyalo set --property status=reviewed --where-tag research
+
+# Move or rename — every [[wikilink]] and [markdown](link) across the vault is rewritten
+hyalo mv old/path.md archive/path.md
+
+# Detect and repair broken links
+hyalo links fix --apply
+
+# Convert unlinked mentions of known page titles into [[wikilinks]]
+hyalo links auto --apply
+
+# Validate frontmatter against your schema and the markdown body against bundled lint rules
+hyalo lint
+hyalo lint --fix     # apply autofixes
+
+# Scaffold a new file from a type schema
+hyalo new --type iteration --file iterations/iter-99-example.md
+```
+
+Every write command supports `--dry-run` to preview changes before applying them, and every command documents its flags: `hyalo <cmd> --help`.
+
+### Agent loop: new → edit → lint
+
+`hyalo new` creates a skeleton file with `TBD` placeholders that are intentionally
+invalid — they will fail `hyalo lint`. This is by design. The loop is:
+
+1. `hyalo new --type <name> --file <path>` — scaffold the skeleton
+2. Edit the file to fill in the real values
+3. `hyalo lint --file <path>` — see which placeholders still violate the schema
+
+The lint output tells you exactly what to fix, field by field.
+
+## Claude Code integration
+
+```sh
+hyalo init --claude
+```
+
+This installs two [skills](https://docs.anthropic.com/en/docs/claude-code/skills) and a [rule](https://docs.anthropic.com/en/docs/claude-code/settings#rules) that teach Claude Code to use hyalo instead of raw `Read`/`Edit`/`Grep`/`Glob` when working with your vault:
+
+**`hyalo` skill** — Auto-triggered whenever Claude touches markdown files in your vault. It uses `hyalo find`, `hyalo set`, `hyalo mv`, etc. for structured access to frontmatter, tags, links, and tasks.
+
+**`hyalo-tidy` skill** (`/hyalo-tidy`) — A five-phase knowledgebase consolidation. Think of it as a librarian doing a periodic shelf-read: it orients with `hyalo summary`, gathers recent signal from git history, detects structural issues (broken links, orphan files, stale statuses, missing metadata), applies conservative fixes, and reports a health dashboard. Run it periodically to keep your vault clean.
+
+**`knowledgebase` rule** — Scoped to `<your-vault>/**`. Reminds Claude to prefer hyalo CLI commands over built-in file tools whenever it touches vault files.
+
+All artifacts are idempotent — re-running `hyalo init --claude` updates to the latest versions. `hyalo deinit` removes everything cleanly.
+
+## Profiles
+
+Profiles are pre-packaged schema and lint configurations for popular markdown conventions. `hyalo init --profile <name>` merges a declarative fragment into `.hyalo.toml`; add `--claude` to also install a bundled Claude Code skill for the convention. Profiles are **composable** and **idempotent**: multiple `--profile` runs deep-merge without clobbering each other or your hand-written config, and `hyalo lint --profile <name>` works as an ephemeral overlay on any checkout (CI, a freshly cloned third-party bundle) with no config file at all.
+
+```sh
+hyalo init --profile okf         # Open Knowledge Format bundles
+hyalo init --profile madr        # MADR architecture decision records
+hyalo init --profile skills      # Agent Skills SKILL.md validation
+hyalo init --profile changelog   # Keep a Changelog
+```
+
+| Profile | Scope | Binds | Key rules |
+| --- | --- | --- | --- |
+| `okf` | Whole bundle | `type`-required concepts; `index.md`/`log.md` reserved | Permissive (warn-only): citations, reserved-file structure, augmentation guard |
+| `madr` | `docs/decisions/**` | `adr` schema, status lifecycle, `NNNN-slug.md` | `MADR-SUPERSEDE-RESOLVE`, `MADR-DUPLICATE-NUMBER` (warn) |
+| `skills` | `**/SKILL.md` | `skill` schema (`name`/`description` bounds) | `SKILL-RESERVED-NAME` (error), name↔dir + line-budget (warn) |
+| `changelog` | `CHANGELOG.md` | frontmatter-less `changelog` type | `CHANGELOG-*` grammar (mostly error), empty-section + link-ref (warn) |
+
+**`okf` — [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).** Vendor-neutral "knowledge bundles": a directory of Markdown concept files whose frontmatter requires exactly one field (`type`), with reserved frontmatter-free `index.md`/`log.md` files. The profile sets up the schema, reserved-file exemptions, and bundle-absolute links; `hyalo lint --profile okf` validates a bundle in the spec's permissive-consumption spirit — errors only where the spec demands them, warnings for everything else (broken cross-links, reserved-file drift, citations). The `hyalo okf index` and `hyalo okf log` generators maintain the reserved files deterministically: they rebuild each directory's `index.md` link list and prepend dated `log.md` entries inside managed marker regions, preserving hand-written prose around them — a file with malformed markers is never rewritten, so a generator can never delete your prose. Generators are dry-run by default and exit non-zero on drift, which doubles as a CI freshness check.
+
+**`madr` — [MADR](https://adr.github.io/madr/) architecture decision records.** One decision per file under `docs/decisions/`, named `NNNN-slug.md`, with a status lifecycle. The profile binds an `adr` schema to that subtree (no `type:` frontmatter needed), `hyalo new --type adr` scaffolds a decision with the MADR-4 sections, and `hyalo madr toc` maintains a table-of-contents dashboard in `docs/decisions/README.md`. Advisory rules catch dangling `superseded by` references and duplicate ADR numbers.
+
+**`skills` — [Agent Skills](https://agentskills.io/specification) SKILL.md validation.** The spec's frontmatter is unusually strict (slug-pattern `name`, length-bounded `description`), which makes hyalo a fast, CI-friendly validator for a whole skill collection: `hyalo lint --profile skills`. `hyalo new --type skill` scaffolds a compliant `SKILL.md`, and the profile re-admits the hidden `.claude/skills/**` directory so the canonical Claude Code skill location is reachable in place.
+
+**`changelog` — [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).** Enforces the full `CHANGELOG.md` grammar (version and date ordering, the six change categories, footer link references) as `CHANGELOG-*` lint rules, and maintains the file deterministically: `hyalo changelog add` appends an entry under `[Unreleased]`, and `hyalo changelog release X.Y.Z` rotates it into a dated version section — hyalo's own releases are cut this way. Works with a repo-root `CHANGELOG.md` even when your vault lives in a subdirectory.
+
+Each profile's full behaviour — schemas, generator edge cases, individual rules — is documented in its bundled skill (`hyalo init --profile <name> --claude`), in `hyalo lint-rules list`, and in `hyalo <cmd> --help`.
 
 ## Lint your vault in CI (GitHub Actions)
 
@@ -453,7 +265,7 @@ jobs:
 
 Three-dot `origin/<base>...HEAD` diffs against the *merge-base* of the PR base and HEAD, so a stale branch stays scoped to the files it changed — not to base-tip drift it never touched. The diff-aware shape matters because GitHub registers at most **10 error + 10 warning inline annotations per step**: scoping to the PR's own files spends that budget on findings the author can act on, while the full-vault job (on `push` to main, where the cap is irrelevant) catches the cross-file regressions a diff can't see — a deleted note others link to, a schema change.
 
-`--format github` emits one [GitHub Actions workflow command](https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions) per violation — `::error` / `::warning` lines that render as inline annotations on the PR diff — in deterministic `(path, line, rule)` order, appending a `::notice::` with the true totals whenever the counts exceed GitHub's inline cap. `--strict` promotes warnings to errors — including `HYALO006` broken links — so the job fails on a broken link; unparseable frontmatter is always an error (`HYALO005`), so a green lint means the vault is genuinely clean. `--files-from -` works on most file-taking commands (`find`, `set`, `mv`, `task`, …), not just `lint`.
+`--format github` emits one [GitHub Actions workflow command](https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions) per violation — `::error` / `::warning` lines that render as inline annotations on the PR diff — in deterministic `(path, line, rule)` order, appending a `::notice::` with the true totals whenever the counts exceed GitHub's inline cap. `--strict` promotes warnings to errors — including `HYALO006` broken links — so the job fails on a broken link; unparseable frontmatter is always an error (`HYALO005`), so a green lint means the vault is genuinely clean.
 
 For **OKF** vaults, add a reserved-file drift check — `hyalo okf index` is dry-run by default and exits non-zero when any `index.md` is stale:
 
@@ -497,10 +309,7 @@ jobs:
 The committed skill routes the agent to commands like
 `hyalo lint --strict --format github` (see findings), `hyalo lint --fix`
 (auto-fix the fixable rules), and `hyalo set <file> --property status=done`
-(targeted frontmatter edits). Fix-mode and read-only lint use different JSON
-shapes (`remaining_groups` vs `rule_groups`); `--format github` renders both, so
-`hyalo lint --fix --format github` still annotates any violation left unfixable
-(e.g. a missing required property) after the auto-fix pass.
+(targeted frontmatter edits).
 
 hyalo's own `lint-kb`/`lint-kb-full` jobs in [.github/workflows/ci.yml](.github/workflows/ci.yml) are the living reference.
 
@@ -530,42 +339,7 @@ type = "enum"
 values = ["planned", "in-progress", "completed", "superseded"]
 ```
 
-Supported property types: `string` (with optional `pattern`), `date` (`YYYY-MM-DD`), `datetime` (naive local ISO 8601 — `YYYY-MM-DDThh:mm:ss`, no timezone), `datetime-tz` (timezone-aware RFC 3339 — `YYYY-MM-DDThh:mm:ss` plus a `Z` or `±hh:mm` offset, e.g. `2026-05-28T22:44:47+00:00`), `number`, `boolean`, `list`, `enum` (with `values`), and `string-list` (with optional `item_pattern`). `datetime` and `datetime-tz` are disjoint: a naive value never satisfies `datetime-tz`, and a tz-aware value never satisfies `datetime`.
-
-A required property whose value is YAML null (`tags: ~`) or an empty array (`tags: []`) is reported as `required property "tags" must not be empty` — vacuous values are treated as semantically equivalent to absent. This fires regardless of declared constraint type, so `required = ["tags"]` (with `tags` typed as `list`) is the idiomatic way to enforce non-empty tags; there's no separate `min_items` knob. Atomic-typed required properties (`string`, `date`, `number`, ...) only need to be present — an empty string or zero still satisfies them.
-
-**Exempt (reserved) files:** `[schema] exempt = ["**/index.md", "**/log.md"]` lists vault-relative globs for files that are bound to no schema. They skip the missing-`type` warning, required-property checks, and undeclared-property warnings — useful for reserved files such as an [Open Knowledge Format](https://openknowledge.foundation/) bundle's `index.md`/`log.md`. Glob matching is vault-relative and cross-platform (paths are normalized to forward slashes). For bundle-root absolute links (`/x/y.md` resolved from the vault root), set `site_prefix = ""` so only the leading `/` is stripped — this also avoids mis-stripping when a subdirectory shares its name with the vault directory.
-
-Exempt-glob matching honors the vault's resolved `[links] case_insensitive` mode (see below): on a case-insensitive filesystem (the macOS/Windows default, or `case_insensitive = "true"`), a literally-named `INDEX.md` is exempted by `**/index.md` the same way `hyalo okf index` already treats `INDEX.md` as the reserved index file. On a case-sensitive filesystem (or `case_insensitive = "false"`), `INDEX.md` and `index.md` are distinct files and only the latter matches.
-
-See `hyalo types --help` for managing schemas from the CLI, and `hyalo lint` to validate your vault against them.
-
-### CWD-aware behaviour
-
-When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _context-aware_:
-
-- **`hyalo --help`** prepends a short banner confirming which vault `dir` is active — useful when working from shell history or AI agent loops. Banner emojis (`ℹ️ `/`⚠️`) are TTY-gated: piped output is plain text.
-- **`hyalo --version`** appends `(kb dir: <dir>)` so the resolved directory is visible at a glance. The base version string also includes the git short-sha and commit date when hyalo was built from a checkout — e.g. `hyalo 0.16.0 (abc123def456 2026-05-26)`. A `+dirty` suffix marks builds made with uncommitted changes. Set `CARGO_HYALO_FORCE_NO_GIT=1` at build time to force the bare semver form.
-- **`hyalo summary`** includes the resolved `kb dir:` as its first output line. The `--format json` envelope exposes the same value as a top-level `dir` field alongside `total`, `tags`, `properties`, etc.
-- **`hyalo config`** prints the full resolved configuration — handy for debugging `.hyalo.toml` resolution or feeding config into an LLM context.
-- Running from _inside_ the vault directory emits a warning banner suggesting you `cd ..` to the project root so hyalo can find `.hyalo.toml`.
-- Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time `note:` that `--dir` is redundant.
-
-### `--file` path semantics
-
-Subcommands that accept `--file <path>` (`find`, `set`, `backlinks`, `read`, `links`, `mv`) accept either a vault-relative path or an absolute path that points _inside_ the configured vault. Absolute in-vault paths are canonicalised to the vault-relative form (with a one-time stderr warning, since pasting absolute paths is usually an LLM accident). An absolute path that resolves _outside_ the vault exits non-zero with `error: file resolves outside vault boundary` rather than silently returning an empty result set.
-
-When `[links] case_insensitive` is enabled (`"true"`, or `"auto"` on a case-insensitive filesystem), `backlinks --file` also resolves the argument case-insensitively: passing `foo.md` finds an on-disk `Foo.md` even on a case-sensitive filesystem (Linux). Resolution walks each path component and requires a unique match per level — if two entries differ only in case at the same level, it declines to guess and reports the literal path as not found. The fallback only substitutes on-disk casing; it never crosses into a different directory and re-runs the same vault-boundary / traversal / symlink checks as the literal path.
-
-### Saved views
-
-Name a filter set once, recall it everywhere:
-
-```sh
-hyalo views set drafts --property status=draft
-hyalo find --view drafts                          # recall
-hyalo find --view drafts --tag rust               # extend with additional filters
-```
+Schemas support typed properties (`string`, `date`, `datetime`, `datetime-tz`, `number`, `boolean`, `list`, `enum`, `string-list` — with regex patterns, enum values, and length bounds), per-type filename templates, path-bound types (`[[schema.bind]]`) that apply a schema to a subtree without explicit `type:` frontmatter, and reserved-file exemptions (`[schema] exempt`). Manage schemas from the CLI with `hyalo types list|show|set`, validate with `hyalo lint`, and inspect the resolved configuration with `hyalo config`.
 
 ### Snapshot index
 
@@ -577,9 +351,7 @@ hyalo find --index ...      # instant queries, no disk scan
 hyalo drop-index            # clean up
 ```
 
-Mutations with `--index` patch the index in-place, keeping it current for subsequent queries.
-
-hyalo surfaces the index recommendation automatically: if a command takes longer than 500 ms or `hyalo summary` reports more than 500 files, a hint appears suggesting `hyalo create-index`. Both hints are suppressed when `--index`/`--index-file` is already in use, when `--quiet` is set, or when `--no-hints` is passed.
+Mutations with `--index` patch the index in-place, keeping it current for subsequent queries — and hyalo suggests creating an index automatically once a vault grows past ~500 files.
 
 ## Building from source
 
@@ -590,7 +362,7 @@ cargo build --release
 ## Releasing
 
 1. Bump the workspace version in `Cargo.toml`
-2. Update `CHANGELOG.md`
+2. Rotate the changelog with hyalo itself: `hyalo changelog release X.Y.Z --apply` (then replace the `TBD` footer link with the real compare URL)
 3. Cut the release: `gh release create vX.Y.Z --generate-notes`
 
 Publishing the release triggers [`release.yml`](.github/workflows/release.yml), a thin caller for the shared reusable pipeline in [ractive/release-workflows](https://github.com/ractive/release-workflows). From a single tag, it:
