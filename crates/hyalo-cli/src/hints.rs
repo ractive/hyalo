@@ -1734,10 +1734,18 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         .get("unfixable")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    // L-25: dry-run validates plans against on-disk text, so some `fixable`
+    // fixes may be stale (their text no longer matches). Discount them so the
+    // "Apply N fixes" hint count matches what `--apply` actually writes.
+    let unapplied = data
+        .get("unapplied")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let applicable = fixable.saturating_sub(unapplied);
 
-    if is_dry_run && fixable > 0 {
+    if is_dry_run && applicable > 0 {
         hints.push(Hint::new(
-            format!("Apply {fixable} fixes"),
+            format!("Apply {applicable} fixes"),
             build_command_with_glob(ctx, &["links", "fix", "--apply"]),
         ));
     }
@@ -1764,6 +1772,20 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
             "List files with remaining broken links",
             build_command_with_glob(ctx, &["find", "--broken-links"]),
         ));
+    }
+
+    // L-11: a non-zero `failed` count means some fixes produced a valid plan
+    // but the durable write itself failed mid-batch (e.g. read-only file).
+    // Point at the per-fix detail and suggest the most common cause.
+    let failed = data
+        .get("failed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if failed > 0 {
+        hints.push(Hint::without_cmd(format!(
+            "{failed} fix(es) failed to write — see `failed_fixes` for the per-file \
+             error, check file permissions"
+        )));
     }
 
     hints
@@ -1807,6 +1829,20 @@ fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint
             format!("Apply {total} auto-links"),
             parts.join(" "),
         ));
+    }
+
+    // L-11: a non-zero `files_failed` count means some files produced a
+    // valid auto-link plan but the durable write itself failed mid-batch.
+    // Point at the per-file detail and suggest the most common cause.
+    let files_failed = data
+        .get("files_failed")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if files_failed > 0 {
+        hints.push(Hint::without_cmd(format!(
+            "{files_failed} file(s) failed to write — see `apply_outcomes` for the \
+             per-file error, check file permissions"
+        )));
     }
 
     hints
@@ -2968,6 +3004,86 @@ mod tests {
         assert!(
             hints.iter().any(|h| h.cmd.contains("--broken-links")),
             "should suggest finding broken links: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn links_fix_apply_failures_suggest_checking_failed_fixes() {
+        let c = ctx(HintSource::LinksFix);
+        let data = json!({
+            "broken": 3,
+            "fixable": 3,
+            "unfixable": 0,
+            "applied": true,
+            "fixes": [],
+            "failed": 2,
+            "failed_fixes": [],
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.is_empty() && h.description.contains("failed_fixes")),
+            "should surface an advice-only hint pointing at failed_fixes: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn links_fix_no_failures_omits_failed_fixes_hint() {
+        let c = ctx(HintSource::LinksFix);
+        let data = json!({
+            "broken": 3,
+            "fixable": 3,
+            "unfixable": 0,
+            "applied": true,
+            "fixes": [],
+            "failed": 0,
+            "failed_fixes": [],
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints.iter().any(|h| h.description.contains("failed_fixes")),
+            "should not mention failed_fixes when nothing failed: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn links_auto_apply_failures_suggest_checking_apply_outcomes() {
+        let c = ctx(HintSource::LinksAuto);
+        let data = json!({
+            "total": 5,
+            "applied": true,
+            "files_applied": 3,
+            "files_skipped": 0,
+            "files_failed": 2,
+            "apply_outcomes": [],
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.cmd.is_empty() && h.description.contains("apply_outcomes")),
+            "should surface an advice-only hint pointing at apply_outcomes: {hints:?}"
+        );
+    }
+
+    #[test]
+    fn links_auto_no_failures_omits_apply_outcomes_hint() {
+        let c = ctx(HintSource::LinksAuto);
+        let data = json!({
+            "total": 5,
+            "applied": true,
+            "files_applied": 5,
+            "files_skipped": 0,
+            "files_failed": 0,
+            "apply_outcomes": [],
+        });
+        let hints = generate_hints(&c, &data, None);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("apply_outcomes")),
+            "should not mention apply_outcomes when nothing failed: {hints:?}"
         );
     }
 

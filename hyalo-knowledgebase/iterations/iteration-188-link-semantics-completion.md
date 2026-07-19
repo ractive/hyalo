@@ -29,9 +29,12 @@ HYALO002 warnings for those files clear.
 
 **Do NOT release; release is a separate user-gated step.**
 
-Depends on iter-187's `resolve_link(ctx, link, mode)` entry point —
-anchor validation and the lint rule both resolve through it, not
-through new ad-hoc loops.
+Iter-187 delivered only the write-path half; the resolver refactor was
+carried HERE as task 0 (below) and MUST land first in this iteration —
+anchor validation (task 3) and the HYALO006 rule (task 4) resolve
+through `resolve_link(ctx, link, mode)`, not through new ad-hoc loops.
+Task 0 is not optional and must not be descoped: it has now been
+deferred twice (184 → 187 → here) and this iteration is its terminus.
 
 **Constraints inherited from prior iterations:**
 
@@ -53,6 +56,47 @@ through new ad-hoc loops.
   lesson).
 
 ## Tasks
+
+### 0. Single resolver entry point + perf guard (carried from iter-187, terminus here) [0/6]
+
+Line references below are against main at `045f6cb`; re-derive after
+iter-187's PR #221 merges (it touched link_fix.rs/link_rewrite.rs).
+
+- [ ] Extend `link_resolve.rs` (currently only the mv-oriented
+  `LinkResolver`) with a public `resolve_link(ctx, link, mode)` entry
+  point: `ResolveMode::Exists` (find --broken-links, backlinks,
+  summary, orphan/dead-end) and `ResolveMode::Classify` (links fix's
+  Broken/CaseMismatch/Ambiguous/ExactHit). A `ResolveCtx` bundles
+  `canonical_dir`, `site_prefix`, `Option<&CaseInsensitiveIndex>`, and
+  the stem index. Move (or delegate) the policy in
+  `link_fix.rs::classify_link` and
+  `link_fix.rs::resolve_and_classify_link` so `link_fix.rs` no longer
+  owns resolution order
+- [ ] Migrate `find/mod.rs`'s inline per-link resolution block
+  (kind-dependent source-relative normalization + direct
+  `discovery::resolve_target` calls) onto
+  `resolve_link(.., ResolveMode::Exists)`; broken-links and
+  orphan/dead-end filters keep identical observable behavior (lock
+  with e2e before migrating)
+- [ ] Merge the near-duplicates `detect_broken_links` (test-only) and
+  `detect_broken_links_from_index` into one implementation over
+  `resolve_link`; port the ~10 unit tests onto the surviving entry
+  point
+- [ ] Finish the L-6 tail in `summary.rs`: orphan/dead-end counting
+  does manual case-SENSITIVE membership checks against
+  `all_targets()`/`all_sources()` — route through `LinkGraph`'s
+  `lower_index`-aware lookups so orphan/dead-end counts agree with
+  `backlinks_ci` on case-insensitive vaults; e2e proving `[[foo]]` →
+  `Foo.md` is not counted as orphan
+- [ ] Grep-audit AC (from iter-184): no independent stem-matching or
+  direct `discovery::resolve_target` calls in
+  `hyalo-cli/src/commands/` outside the shared entry point; document
+  the audit command + result in the PR description
+- [ ] Perf A/B (carried iter-187 task 5): benchmark main vs branch
+  with `bench-e2e.sh` — `links fix` dry-run scan path,
+  `find --broken-links`, synthetic 2000-file batch `mv --apply`.
+  Record before/after numbers here before ticking; within noise on
+  scan paths, no regression >5% on apply paths
 
 ### 1. L-19: `.md`-suffix normalization at Link construction [0/4]
 
@@ -207,6 +251,10 @@ through new ad-hoc loops.
 
 ## Acceptance Criteria
 
+- [ ] One resolver entry point: grep-audit shows no independent
+  stem-matching or direct `resolve_target` resolution loops in command
+  code outside `resolve_link`/`LinkGraph` (closes iter-184 AC 1,
+  carried via iter-187); perf A/B recorded
 - [ ] `hyalo lint --strict` can gate broken links in CI via HYALO006
   (closes iter-185 AC 1), with the graph built once per invocation
 - [ ] Anchored-link health visible in `find --broken-links` output as a

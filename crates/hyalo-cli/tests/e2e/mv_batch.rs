@@ -802,6 +802,107 @@ Beta.
 }
 
 // ---------------------------------------------------------------------------
+// Mixed-batch rollback: self-rewrite restored, external linker kept (PR #221
+// review finding 1 / DEC-056 amendment 2026-07-19)
+// ---------------------------------------------------------------------------
+
+/// A batch mv where two files (`movers/a.md`, `movers/b.md`) are moved
+/// together — `a.md` links to `b.md`, so `a.md`'s own plan at its NEW
+/// location is a "self-rewrite" — while a third file (`linkers/l.md`, not
+/// itself moved) holds an inbound link to one of the moved files and fails
+/// to write because its parent directory is read-only.
+///
+/// Expects: renames rolled back, `movers/a.md`'s restored content still
+/// contains the original `[[movers/b]]` link (no dangling `[[archive/b]]`),
+/// and the command fails with a message that still accurately describes the
+/// external linker file's fate.
+#[cfg(unix)]
+#[test]
+fn t15_mixed_batch_self_rewrite_restored_external_kept() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "movers/a.md",
+        "---\nstatus: completed\n---\nSee [[movers/b]].\n",
+    );
+    write_md(
+        tmp.path(),
+        "movers/b.md",
+        "---\nstatus: completed\n---\nB body.\n",
+    );
+    write_md(
+        tmp.path(),
+        "linkers/l.md",
+        "---\nstatus: x\n---\nLinks to [[movers/a]].\n",
+    );
+
+    let linkers_dir = tmp.path().join("linkers");
+    let orig_mode = fs::metadata(&linkers_dir).unwrap().permissions().mode();
+
+    // Make the linker file's parent directory read-only so `atomic_write`
+    // (which creates a NamedTempFile in the parent before persisting) fails
+    // for `linkers/l.md`'s in-place inbound rewrite, without affecting the
+    // renames themselves (movers/ stays writable).
+    fs::set_permissions(&linkers_dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let dir = tmp.path().to_str().unwrap();
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["mv", "--glob", "movers/*.md", "--to", "archive/", "--apply"])
+        .output()
+        .unwrap();
+
+    // Restore permissions immediately so TempDir cleanup doesn't fail.
+    fs::set_permissions(&linkers_dir, fs::Permissions::from_mode(orig_mode)).unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit, got success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // Renames rolled back: originals exist, destinations don't.
+    assert!(
+        tmp.path().join("movers/a.md").exists(),
+        "movers/a.md must be rolled back to its original path"
+    );
+    assert!(
+        tmp.path().join("movers/b.md").exists(),
+        "movers/b.md must be rolled back to its original path"
+    );
+    assert!(
+        !tmp.path().join("archive/a.md").exists(),
+        "archive/a.md must not exist after rollback"
+    );
+    assert!(
+        !tmp.path().join("archive/b.md").exists(),
+        "archive/b.md must not exist after rollback"
+    );
+
+    // a.md's self-rewrite must be restored to its ORIGINAL content — no
+    // dangling link to the (rolled-back) new location.
+    let a_content = fs::read_to_string(tmp.path().join("movers/a.md")).unwrap();
+    assert!(
+        a_content.contains("[[movers/b]]"),
+        "movers/a.md must be restored to its original content: {a_content}"
+    );
+    assert!(
+        !a_content.contains("[[archive/b]]"),
+        "movers/a.md must not contain a dangling link to the rolled-back destination: {a_content}"
+    );
+
+    // The error message must accurately describe the external linker file's
+    // fate (kept, not rolled back) and the self-rewrite restore.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("linkers/l.md") || stderr.contains("l.md"),
+        "error output must mention the external linker file: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // T14 — Single-graph-build performance smoke test
 // ---------------------------------------------------------------------------
 

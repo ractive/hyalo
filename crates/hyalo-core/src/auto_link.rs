@@ -12,9 +12,9 @@ use serde::Serialize;
 
 use globset::{GlobBuilder, GlobSetBuilder};
 
-use crate::discovery::{canonicalize_vault_dir, ensure_within_vault, match_globs};
-use crate::fs_util::atomic_write;
+use crate::discovery::match_globs;
 use crate::index::{IndexEntry, VaultIndex};
+use crate::link_rewrite::{Replacement, RewritePlan, apply_replacements, execute_plans_partial};
 use crate::links::{extract_link_spans_with_original, strip_wikilink_md_suffix};
 use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
 
@@ -48,6 +48,36 @@ pub struct AutoLinkMatch {
     pub link_target: String,
 }
 
+/// Per-file outcome when `--apply` runs (L-11 honest envelope).
+///
+/// One record per file that had at least one proposed match. `applied` files
+/// were durably rewritten; `skipped`/`failed` files carry a human-readable
+/// `reason`. Previously the skip and failure conditions only surfaced as
+/// stderr warnings and never appeared in the JSON envelope.
+#[derive(Debug, Clone, Serialize)]
+pub struct AutoApplyOutcome {
+    /// Vault-relative path (forward slashes) of the file.
+    pub file: String,
+    /// What happened to this file: `"applied"`, `"skipped"`, or `"failed"`.
+    pub status: AutoApplyStatus,
+    /// Human-readable reason for a skip or failure; `None` when applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Discriminant for [`AutoApplyOutcome`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoApplyStatus {
+    /// The file was durably rewritten on disk.
+    Applied,
+    /// The file was skipped before writing (not in scan cache, or its on-disk
+    /// content changed after the scan).
+    Skipped,
+    /// The write itself failed (e.g. read-only target, I/O error).
+    Failed,
+}
+
 /// Result of the auto-link scan.
 #[derive(Debug, Serialize)]
 pub struct AutoLinkReport {
@@ -62,6 +92,10 @@ pub struct AutoLinkReport {
     pub ambiguous_titles: Vec<String>,
     /// Whether changes were applied to disk.
     pub applied: bool,
+    /// Per-file apply outcomes (empty in preview mode). Includes applied,
+    /// skipped, and failed records so the caller can emit an honest envelope
+    /// (L-11).
+    pub apply_outcomes: Vec<AutoApplyOutcome>,
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +392,7 @@ pub fn auto_link(
             matches: Vec::new(),
             ambiguous_titles,
             applied: false,
+            apply_outcomes: Vec::new(),
         });
     }
 
@@ -473,9 +508,11 @@ pub fn auto_link(
     }
 
     // 5. Apply changes if requested.
-    if opts.apply {
-        apply_matches(dir, &all_matches, &scanned_content)?;
-    }
+    let apply_outcomes = if opts.apply {
+        apply_matches(dir, &all_matches, &scanned_content)?
+    } else {
+        Vec::new()
+    };
 
     let total = all_matches.len();
     Ok(AutoLinkReport {
@@ -484,6 +521,7 @@ pub fn auto_link(
         matches: all_matches,
         ambiguous_titles,
         applied: opts.apply,
+        apply_outcomes,
     })
 }
 
@@ -615,48 +653,56 @@ fn scan_file_for_matches(
 // Apply changes
 // ---------------------------------------------------------------------------
 
-/// Apply a batch of matches to the vault by rewriting files atomically.
+/// Apply a batch of matches to the vault by building [`RewritePlan`]s and
+/// executing them through the shared [`execute_plans_partial`] machinery
+/// (iter-187: single write path).
 ///
-/// Replacements are applied to the content collected during the scan phase
-/// (not re-read from disk), so byte offsets stay consistent.  A single
-/// verification re-read is still performed per file to detect concurrent
-/// modifications; if the on-disk content differs from the scanned snapshot
-/// the file is skipped with a warning.
+/// Replacements are computed from the content collected during the scan phase
+/// (not re-read from disk), so byte offsets stay consistent. A verification
+/// re-read is still performed per file to detect concurrent modifications: if
+/// the on-disk content differs from the scanned snapshot the file is skipped.
+/// This full-content compare is the stronger TOCTOU guard (vs. the mtime+size
+/// pair on `RewritePlan.mtime`), so plans are handed to `execute_plans_partial`
+/// with `mtime: None` — the content compare happened immediately before.
 ///
-/// Every write path is guarded by a vault-boundary check so that no path
-/// constructed from user-controlled data can escape the vault root.
+/// Returns one [`AutoApplyOutcome`] per file that had matches, recording
+/// applied / skipped / failed so the caller can emit an honest envelope (L-11).
+/// The vault-boundary safety check inside `execute_plans_partial` guards against
+/// any plan path escaping the vault root.
 fn apply_matches(
     dir: &Path,
     matches: &[AutoLinkMatch],
     scanned_content: &HashMap<String, String>,
-) -> Result<()> {
-    // Canonicalize the vault root once so every write can be checked cheaply.
-    let canonical_vault = canonicalize_vault_dir(dir)
-        .context("failed to canonicalize vault directory for write safety check")?;
-
-    // Group matches by file.
+) -> Result<Vec<AutoApplyOutcome>> {
+    // Group matches by file, preserving first-seen order for deterministic output.
+    let mut order: Vec<&str> = Vec::new();
     let mut by_file: HashMap<&str, Vec<&AutoLinkMatch>> = HashMap::new();
     for m in matches {
-        by_file.entry(&m.file).or_default().push(m);
+        by_file
+            .entry(&m.file)
+            .or_insert_with(|| {
+                order.push(&m.file);
+                Vec::new()
+            })
+            .push(m);
     }
 
-    for (rel_path, file_matches) in by_file {
-        let abs_path = dir.join(rel_path);
+    let mut outcomes: Vec<AutoApplyOutcome> = Vec::new();
+    let mut plans: Vec<RewritePlan> = Vec::new();
 
-        // Vault-boundary safety check: refuse to write outside the vault root.
-        let within = ensure_within_vault(&canonical_vault, &abs_path)
-            .with_context(|| format!("could not verify {} is within vault", abs_path.display()))?;
-        anyhow::ensure!(
-            within,
-            "refusing to write outside vault: {}",
-            abs_path.display()
-        );
+    for rel_path in order {
+        let file_matches = &by_file[rel_path];
+        let abs_path = dir.join(rel_path);
 
         // Use content from the scan phase.  If the entry is missing, the
         // concurrent-modification check below would compare disk-to-disk and
-        // always pass, so skip the file with a warning instead.
+        // always pass, so skip the file instead.
         let Some(content) = scanned_content.get(rel_path).map(String::as_str) else {
-            eprintln!("warning: {rel_path} not in scan cache, skipping (possible internal bug)");
+            outcomes.push(AutoApplyOutcome {
+                file: rel_path.to_owned(),
+                status: AutoApplyStatus::Skipped,
+                reason: Some("not in scan cache (possible internal bug)".to_owned()),
+            });
             continue;
         };
 
@@ -666,61 +712,64 @@ fn apply_matches(
         let disk_content = match std::fs::read_to_string(&abs_path) {
             Ok(c) => c,
             Err(err) => {
-                eprintln!("warning: could not verify {rel_path} after scan ({err}), skipping");
+                outcomes.push(AutoApplyOutcome {
+                    file: rel_path.to_owned(),
+                    status: AutoApplyStatus::Skipped,
+                    reason: Some(format!("could not verify after scan ({err})")),
+                });
                 continue;
             }
         };
         if disk_content != content {
-            eprintln!("warning: {rel_path} was modified after scan, skipping");
+            outcomes.push(AutoApplyOutcome {
+                file: rel_path.to_owned(),
+                status: AutoApplyStatus::Skipped,
+                reason: Some("modified after scan".to_owned()),
+            });
             continue;
         }
 
-        // Build per-line replacements: (line_idx (0-based), col, matched_text, link_target).
-        // We need to apply them from last to first within each line (and last to first line).
-        // Sort descending by (line, col).
-        let mut sorted_matches: Vec<&AutoLinkMatch> = file_matches;
-        sorted_matches.sort_by(|a, b| b.line.cmp(&a.line).then(b.col.cmp(&a.col)));
+        // Build a `Replacement` per match. `col` is the 0-based byte offset
+        // within the line; `apply_replacements` sorts right-to-left per line so
+        // earlier offsets stay valid.
+        let replacements: Vec<Replacement> = file_matches
+            .iter()
+            .map(|m| Replacement {
+                line: m.line,
+                byte_offset: m.col,
+                old_text: m.matched_text.clone(),
+                new_text: format!("[[{}]]", m.link_target),
+            })
+            .collect();
 
-        // Work on a per-line basis. We need to reconstruct the full content after edits.
-        // Split lines while preserving line endings.
-        let mut lines: Vec<String> = split_lines_preserving_endings(content);
-
-        for m in sorted_matches {
-            let line_idx = m.line.saturating_sub(1);
-            if let Some(line) = lines.get_mut(line_idx) {
-                let start = m.col;
-                let end = start + m.matched_text.len();
-                if end <= line.len() && line.get(start..end) == Some(&m.matched_text) {
-                    let replacement = format!("[[{}]]", m.link_target);
-                    line.replace_range(start..end, &replacement);
-                }
-            }
-        }
-
-        let new_content = lines.concat();
-        atomic_write(&abs_path, new_content.as_bytes())
-            .with_context(|| format!("failed to write {}", abs_path.display()))?;
+        let rewritten_content = apply_replacements(content, &replacements);
+        plans.push(RewritePlan {
+            path: abs_path,
+            rel_path: rel_path.to_owned(),
+            replacements,
+            rewritten_content,
+            // Full-content compare above is the stronger guard; skip the
+            // weaker mtime+size check in `write_single_plan`.
+            mtime: None,
+            original_content: None,
+        });
     }
 
-    Ok(())
-}
+    // Execute all buildable plans, continuing past per-file write failures.
+    let report = execute_plans_partial(dir, &plans)?;
+    for outcome in report.outcomes {
+        outcomes.push(AutoApplyOutcome {
+            file: outcome.rel_path,
+            status: if outcome.applied {
+                AutoApplyStatus::Applied
+            } else {
+                AutoApplyStatus::Failed
+            },
+            reason: outcome.error,
+        });
+    }
 
-/// Split content into lines while preserving line endings (`\n` or `\r\n`).
-///
-/// This allows `concat()` of the result to reconstruct the original content
-/// byte-for-byte (modulo applied replacements).
-fn split_lines_preserving_endings(content: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut remaining = content;
-    while let Some(pos) = remaining.find('\n') {
-        // Include the `\n` (and possible preceding `\r`) in the line string.
-        lines.push(remaining[..=pos].to_owned());
-        remaining = &remaining[pos + 1..];
-    }
-    if !remaining.is_empty() {
-        lines.push(remaining.to_owned());
-    }
-    lines
+    Ok(outcomes)
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,11 +1360,66 @@ mod tests {
         assert_eq!(report.matches.len(), 1);
         assert!(report.applied);
 
+        // L-11: the file is reported as applied in the per-file envelope.
+        assert_eq!(report.apply_outcomes.len(), 1);
+        assert_eq!(report.apply_outcomes[0].file, "notes.md");
+        assert_eq!(report.apply_outcomes[0].status, AutoApplyStatus::Applied);
+        assert!(report.apply_outcomes[0].reason.is_none());
+
         let written = std::fs::read_to_string(tmp.path().join("notes.md")).unwrap();
         assert!(
             written.contains("[[target]]"),
             "written content should contain wikilink: {written}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_apply_read_only_file_reports_failed() {
+        // L-11: a mid-batch write failure (read-only target) must surface as a
+        // `Failed` per-file outcome, not a silently-swallowed error.
+        use std::os::unix::fs::PermissionsExt;
+
+        let page = make_entry("target.md", vec![]);
+        let other = make_entry("notes.md", vec![]);
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "target.md", "");
+        let notes = write_file(&tmp, "notes.md", "See target for details.\n");
+
+        // Make the file read-only so the atomic rename-over fails.
+        let mut perms = std::fs::metadata(&notes).unwrap().permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(&notes, perms).unwrap();
+        // Also make the parent dir read-only so atomic_write's temp create fails.
+        let mut dir_perms = std::fs::metadata(tmp.path()).unwrap().permissions();
+        dir_perms.set_mode(0o555);
+        std::fs::set_permissions(tmp.path(), dir_perms).unwrap();
+
+        let index = MockIndex::new(vec![page, other]);
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: true,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
+        );
+
+        // Restore dir perms so TempDir cleanup can run regardless of outcome.
+        let mut restore = std::fs::metadata(tmp.path()).unwrap().permissions();
+        restore.set_mode(0o755);
+        let _ = std::fs::set_permissions(tmp.path(), restore);
+
+        let report = report.expect("auto_link should not abort on a per-file write failure");
+        assert_eq!(report.apply_outcomes.len(), 1);
+        assert_eq!(report.apply_outcomes[0].file, "notes.md");
+        assert_eq!(report.apply_outcomes[0].status, AutoApplyStatus::Failed);
+        assert!(report.apply_outcomes[0].reason.is_some());
     }
 
     #[test]

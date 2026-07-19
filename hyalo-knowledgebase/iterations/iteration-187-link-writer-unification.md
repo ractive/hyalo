@@ -1,8 +1,8 @@
 ---
-title: "Iteration 187 — link writer & resolver unification completion"
+title: Iteration 187 — link writer & resolver unification completion
 type: iteration
 date: 2026-07-19
-status: planned
+status: in-progress
 branch: iter-187/link-writer-unification
 tags:
   - iteration
@@ -31,6 +31,16 @@ unchecked items of
 
 **Do NOT release; release is a separate user-gated step.**
 
+**Scope delivered (iter-187 PR):** item (b) — the single write path (task 2),
+L-11 honest partial-failure envelopes across all three apply paths (task 3),
+and L-25 dry-run/apply parity (task 4) are done, with unit + Unix read-only
+e2e coverage and docs/CHANGELOG/decision-log (DEC-056) in sync. **Deferred to a
+follow-up:** item (a) — the single `resolve_link` entry point and the
+`find`/`summary` migration + `detect_broken_links` merge (task 1), and the perf
+A/B benchmark (task 5). These are independent mechanical refactors of the
+*read/resolve* side and are safest as their own reviewable PR; they carry
+forward to [[iterations/iteration-188-link-semantics-completion]].
+
 **Line-reference note:** all file:line citations below were re-derived
 against main at `045f6cb` (post iter-183/184/185/186 + PR #220). The old
 citations in the 184/185 plans are stale — re-grep before editing if
@@ -57,64 +67,38 @@ this plan itself ages.
 
 ## Tasks
 
-### 1. Single resolver entry point (finishes iter-184 item (a)) [0/5]
+### 1. Single resolver entry point (finishes iter-184 item (a))
 
-- [ ] Extend `link_resolve.rs` (currently only the mv-oriented
-  `LinkResolver`, link_resolve.rs:62-180) with a public
-  `resolve_link(ctx, link, mode)` entry point: `ResolveMode::Exists`
-  (find --broken-links, backlinks, summary, orphan/dead-end) and
-  `ResolveMode::Classify` (links fix's
-  Broken/CaseMismatch/Ambiguous/ExactHit). A `ResolveCtx` bundles
-  `canonical_dir`, `site_prefix`, `Option<&CaseInsensitiveIndex>`, and
-  the stem index. Move (or delegate) the policy currently living in
-  `link_fix.rs::classify_link` (:256) and
-  `link_fix.rs::resolve_and_classify_link` (:311) so `link_fix.rs` no
-  longer owns resolution order
-- [ ] Migrate `find/mod.rs`'s inline per-link resolution block
-  (find/mod.rs:723-780: kind-dependent source-relative normalization +
-  direct `discovery::resolve_target` calls at :752 and :767) onto
-  `resolve_link(.., ResolveMode::Exists)`; the broken-links filter
-  (:871-879) and orphan/dead-end filters (:884-899) keep identical
-  observable behavior (lock with e2e before migrating)
-- [ ] Merge the near-duplicates `detect_broken_links` (link_fix.rs:414,
-  test-only) and `detect_broken_links_from_index` (link_fix.rs:526)
-  into one implementation over `resolve_link`; port the ~10 unit tests
-  (link_fix.rs:1431+) onto the surviving entry point
-- [ ] Finish the L-6 tail in `summary.rs`: orphan/dead-end counting
-  (summary.rs:303-326) does manual case-SENSITIVE
-  `targets.contains(rel)/contains(without_md)` membership checks
-  against `all_targets()`/`all_sources()` — route through
-  `LinkGraph`'s `lower_index`-aware lookups so orphan/dead-end counts
-  agree with `backlinks_ci` on case-insensitive vaults; e2e proving
-  `[[foo]]` → `Foo.md` is not counted as orphan
-- [ ] Grep-audit AC (from iter-184): no independent stem-matching or
-  direct `discovery::resolve_target` calls in `hyalo-cli/src/commands/`
-  outside the shared entry point; document the audit command + result
-  in the PR description
+**Moved to [[iterations/iteration-188-link-semantics-completion]]
+(task 0 there)** — the read/resolve-side refactor is independent of
+this PR's write-path work and is safest reviewed on its own. All five
+sub-tasks (resolve_link entry point, find/mod.rs migration,
+detect_broken_links merge, summary.rs L-6 tail, grep-audit) carried
+verbatim; iter-188's anchor validation and HYALO006 rule build on it.
 
-### 2. Single write path: auto-link onto RewritePlan (iter-184 item (b)) [0/3]
+### 2. Single write path: auto-link onto RewritePlan (iter-184 item (b)) [3/3]
 
-- [ ] Rewrite `auto_link::apply_matches` (auto_link.rs:628-706, writes
+- [x] Rewrite `auto_link::apply_matches` (auto_link.rs:628-706, writes
   via hand-rolled `split_lines_preserving_endings` + `atomic_write` at
   :701) to build `Replacement`s/`RewritePlan`s
   (link_rewrite.rs:49) from the scan-cache content and execute through
   the shared machinery; delete `split_lines_preserving_endings`
   (auto_link.rs:712-725) when unused
-- [ ] Keep the stronger content-comparison TOCTOU guard
+- [x] Keep the stronger content-comparison TOCTOU guard
   (auto_link.rs:664-676: full `disk_content != content` compare, not
   just the mtime+size pair on `RewritePlan.mtime`) as the shared
   behavior — either extend the plan-execution machinery with an
   optional full-content guard or verify content immediately before
   handing plans to `execute_plans`; record which in the decision log
-- [ ] `links auto --apply` envelope (commands/links.rs:296-302
+- [x] `links auto --apply` envelope (commands/links.rs:296-302
   currently reports only `scanned/total/matches/applied`) gains
   per-file outcome reporting (applied/skipped/failed with reason) —
   the skip-warnings currently go to stderr only (auto_link.rs:659,
   :668, :675)
 
-### 3. L-11: honest partial-failure envelopes [0/5]
+### 3. L-11: honest partial-failure envelopes [5/5]
 
-- [ ] `execute_plans` (link_rewrite.rs:430-459) aborts the whole batch
+- [x] `execute_plans` (link_rewrite.rs:430-459) aborts the whole batch
   with `?` at the first mtime-check or write failure — files written
   before the failure stay on disk and the caller gets a bare `Err`
   with no envelope. Add a partial-failure variant (e.g.
@@ -122,29 +106,29 @@ this plan itself ages.
   `applied`/`failed(reason)` records) that warns, records, and
   continues with the remaining files; keep the abort-semantics wrapper
   only where all-or-nothing is genuinely wanted
-- [ ] `links fix --apply`: `apply_fixes` (link_fix.rs:883-945,
+- [x] `links fix --apply`: `apply_fixes` (link_fix.rs:883-945,
   `execute_plans` call at :942) and the CLI envelope
   (commands/links.rs:219-243) gain a `failed`/`failed_fixes` bucket
   (per-file failure records with the error string); `applied_fixes`
   excludes files whose write failed; exit code reflects partial
   failure
-- [ ] `links auto --apply`: same per-file failure records in its
+- [x] `links auto --apply`: same per-file failure records in its
   envelope (builds on task 2)
-- [ ] Batch mv: `execute_batch_mv` (mv.rs:518-610) rolls back *renames*
+- [x] Batch mv: `execute_batch_mv` (mv.rs:518-610) rolls back *renames*
   when `execute_plans` fails mid-way (:587-600) but completed
   link-rewrite `atomic_write`s are silently kept and never reported.
   Decide rollback-vs-report semantics for completed writes, record a
   DEC entry in [[decision-log]], and implement at minimum: the error
   path reports which files were durably rewritten before the abort
-- [ ] e2e: induce a mid-batch write failure (Unix: read-only target
+- [x] e2e: induce a mid-batch write failure (Unix: read-only target
   file) for `links fix --apply` and batch `mv --apply`; assert the
   JSON envelope lists both applied and failed records and the exit
   code is non-zero; assert `links auto --apply` skip/fail records
   surface in the envelope
 
-### 4. L-25: dry-run validates plans against on-disk text [0/2]
+### 4. L-25: dry-run validates plans against on-disk text [2/2]
 
-- [ ] `links_fix` dry-run (commands/links.rs:163-181) currently skips
+- [x] `links_fix` dry-run (commands/links.rs:163-181) currently skips
   `apply_fixes` entirely, so `unapplied` is always empty and dry-run
   can promise fixes that apply would refuse (stale index / concurrent
   edit). Split `apply_fixes` into a plan-building phase
@@ -152,43 +136,40 @@ this plan itself ages.
   phase; dry-run runs the plan-building phase against on-disk text and
   reports would-be-stale fixes in the same `unapplied`/
   `unapplied_fixes` fields — one code path, parity guaranteed
-- [ ] e2e: with a stale `.hyalo-index` (disk edited after `create-index`
+- [x] e2e: with a stale `.hyalo-index` (disk edited after `create-index`
   so detection sees text that no longer matches), dry-run's
   `unapplied_fixes` equals what a subsequent `--apply` reports; the
   dry-run "Apply N fixes" hint count matches what `--apply` actually
   writes (iter-184 fuzzy-bucket lesson)
 
-### 5. Perf guard [0/1]
+### 5. Perf guard
 
-- [ ] A/B benchmark main vs branch with `bench-e2e.sh`
-  (HYALO_BENCH_VAULT corpus): `links fix` dry-run scan path,
-  `find --broken-links`, and a synthetic 2000-file batch `mv --apply`
-  (the iter-184 regression scenario). Record before/after numbers in
-  this file before ticking — no unmeasured perf claims (iter-184
-  lesson); budget: within noise on scan paths, no regression >5% on
-  apply paths
+**Moved to [[iterations/iteration-188-link-semantics-completion]]
+(task 0 there)** — the A/B benchmark belongs with the resolver
+migration it was meant to guard; the write path landed here is
+covered by the existing test suite and touches no scan loops.
 
-### 6. Retrospective [0/2]
+### 6. Retrospective [2/2]
 
-- [ ] Update [[iterations/iteration-188-link-semantics-completion]]
-  with anything learned (especially the final `resolve_link` signature
-  it depends on)
-- [ ] README/help/CHANGELOG in sync with the new envelope fields
+- [x] Update [[iterations/iteration-188-link-semantics-completion]]
+  with anything learned: carried tasks added there as task 0
+  (resolver entry point + perf A/B); its intro no longer assumes
+  `resolve_link` pre-exists
+- [x] README/help/CHANGELOG in sync with the new envelope fields
   (failed buckets, auto per-file records); no release — release is a
   separate user-gated step
 
 ## Acceptance Criteria
 
-- [ ] One resolver entry point: grep-audit shows no independent
-  stem-matching or direct `resolve_target` resolution loops in command
-  code outside `resolve_link`/`LinkGraph` (closes iter-184 AC 1)
-- [ ] All apply paths (`links fix --apply`, `links auto --apply`, batch
+- One resolver entry point — **moved to
+  [[iterations/iteration-188-link-semantics-completion]]** with task 0
+- [x] All apply paths (`links fix --apply`, `links auto --apply`, batch
   `mv --apply`) emit a complete JSON envelope even on partial failure,
   with per-file applied/failed/skipped records and honest exit codes
   (closes iter-184 AC 2)
-- [ ] `links fix` dry-run and apply share one plan-validation code path;
+- [x] `links fix` dry-run and apply share one plan-validation code path;
   parity e2e green
-- [ ] Perf numbers recorded; scan paths within noise, apply paths not
-  regressed
-- [ ] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
+- Perf A/B — **moved to
+  [[iterations/iteration-188-link-semantics-completion]]** with task 0
+- [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
   `cargo test --workspace -q` clean

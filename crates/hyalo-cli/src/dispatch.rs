@@ -1571,7 +1571,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             } => {
                 // Scope the immutable borrow of snapshot_index (via resolve_index)
                 // so we can borrow it mutably for index updates afterwards.
-                let (outcome, modified_files) = match resolve_index(
+                let (outcome, modified_files, had_failures) = match resolve_index(
                     snapshot_index.as_ref(),
                     dir,
                     &[],
@@ -1611,8 +1611,13 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             },
                         )?
                     }
-                    IndexResolution::Outcome(outcome) => (outcome, Vec::new()),
+                    IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
                 };
+                // L-11: a mid-batch write failure yields a non-zero exit code
+                // even though the envelope is emitted in full.
+                if had_failures {
+                    ctx.exit_code_override = Some(1);
+                }
                 // resolved is dropped — safe to borrow snapshot_index mutably.
                 patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
                 Ok(outcome)
@@ -1628,7 +1633,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 glob,
                 index_flags: _, // consumed in run.rs before dispatch
             } => {
-                let (outcome, modified_files) = match resolve_index(
+                let (outcome, modified_files, had_failures) = match resolve_index(
                     snapshot_index.as_ref(),
                     dir,
                     &[],
@@ -1655,8 +1660,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         &glob,
                         effective_format,
                     )?,
-                    IndexResolution::Outcome(outcome) => (outcome, Vec::new()),
+                    IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
                 };
+                // L-11: partial write failure ⇒ non-zero exit code.
+                if had_failures {
+                    ctx.exit_code_override = Some(1);
+                }
                 patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
                 Ok(outcome)
             }

@@ -9,6 +9,59 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Honest partial-failure envelopes for link write paths** (iter-187): when a
+  file write fails mid-batch, `hyalo links fix --apply`, `hyalo links auto
+  --apply`, and batch `hyalo mv --apply` now emit a complete JSON envelope
+  rather than aborting with a bare error. `links fix --apply` gains `failed` /
+  `failed_fixes` buckets (each with the per-file error string); `links auto
+  --apply` gains `files_applied` / `files_skipped` / `files_failed` counts plus
+  a per-file `apply_outcomes` list (applied/skipped/failed with reason, so skips
+  that previously only went to stderr are now in the envelope). Any partial
+  failure yields a non-zero exit code. Files written before the failure are
+  reported as applied, never silently kept and unreported.
+
+### Fixed
+
+- **Batch `mv --apply` no longer leaves dangling links after a rolled-back
+  rename** (PR #221 review): when a mid-batch write failure rolled back file
+  renames, a "self-rewrite" plan — one whose rewritten content was written to
+  a file's own new (renamed) location, e.g. a moved file's outbound link
+  rewrite — was previously left in place even though its rename was undone,
+  stranding the file at its old path with content referencing the (now
+  reverted) new layout. Such plans are now identified by `path` coinciding
+  with one of the batch's own rename destinations, and their pre-batch
+  content is restored alongside the rename rollback. Plans on files outside
+  the rename set (pure external linker files) still keep the original
+  DEC-056 behavior of being kept and honestly reported.
+- **`hyalo links fix --apply` no longer aborts the whole batch on a per-file
+  I/O error** (PR #221 review): a `stat`/read failure for one source file
+  (e.g. deleted between detection and apply) now lands that file's fixes in
+  the `failed`/`failed_fixes` envelope and the remaining files in the batch
+  still get their fixes applied, instead of propagating the error and losing
+  all progress.
+
+### Changed
+
+- **`hyalo links fix` dry-run validates plans against on-disk text** (iter-187):
+  dry-run now runs the identical plan-building phase as `--apply`, so its
+  `unapplied` / `unapplied_fixes` fields report exactly the fixes `--apply`
+  would refuse (stale index / concurrent edit) instead of always being empty.
+  The "Apply N fixes" hint count now discounts would-be-stale fixes so it
+  matches what `--apply` actually writes.
+
+### Internal
+
+- **Unified link write path** (iter-187): `auto_link` now builds
+  `RewritePlan`s and writes through the shared `execute_plans_partial`
+  machinery instead of a hand-rolled line splitter (removed
+  `split_lines_preserving_endings`), keeping its stronger full-content TOCTOU
+  guard. Batch `mv` reports which link rewrites were durably applied before a
+  mid-batch abort (DEC-056: completed content writes on untouched linker files
+  are not rolled back; the renames are, along with the content of any
+  self-rewrite plan whose path coincided with a rename destination).
+
 ## [0.19.0] - 2026-07-19
 
 ### Added

@@ -67,7 +67,7 @@ pub fn links_fix(
     case_index: Option<&CaseInsensitiveIndex>,
     expand_short_form: bool,
     fuzzy: FuzzyApply,
-) -> Result<(CommandOutcome, Vec<String>)> {
+) -> Result<(CommandOutcome, Vec<String>, bool)> {
     let report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
 
@@ -156,28 +156,44 @@ pub fn links_fix(
     let mut modified_files = Vec::new();
     // Fixes that were part of the plan but produced no on-disk change (e.g. a
     // frontmatter occurrence whose text no longer matched what detection saw).
-    // Empty in dry-run mode: nothing has been attempted yet, so nothing can
-    // be reported as unapplied.
+    // L-25: dry-run also populates this by running the identical plan-building
+    // phase against on-disk text, so it reports exactly the fixes `--apply`
+    // would refuse — one code path, parity guaranteed.
     let mut unapplied_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
+    // Fixes whose file produced a valid plan but the durable write failed
+    // mid-batch (L-11). Non-empty ⇒ partial failure ⇒ non-zero exit code.
+    let mut failed_fixes: Vec<hyalo_core::link_fix::FailedFix> = Vec::new();
 
-    if !dry_run {
-        // Merge broken-link fixes and case-mismatch fixes into a single batch
-        // so `apply_fixes` reads and rewrites each source file once — two
-        // separate passes over the same file would see the first pass's
-        // rewrites and could misbehave on overlapping edits.
-        let mut all_fixes = certain_fixes.clone();
-        all_fixes.extend(applicable_fuzzy.iter().cloned());
-        all_fixes.extend(case_mismatches.iter().cloned());
+    // Merge broken-link fixes and case-mismatch fixes into a single batch so the
+    // apply/dry-run planner reads and rewrites each source file once — two
+    // separate passes over the same file would see the first pass's rewrites
+    // and could misbehave on overlapping edits.
+    let mut all_fixes = certain_fixes.clone();
+    all_fixes.extend(applicable_fuzzy.iter().cloned());
+    all_fixes.extend(case_mismatches.iter().cloned());
+
+    if dry_run {
         if !all_fixes.is_empty() {
-            let (plans, unapplied) = apply_fixes(dir, &all_fixes, site_prefix)?;
+            // L-25: validate plans against on-disk text without writing, so the
+            // dry-run `unapplied` set matches what `--apply` would report.
+            // `modified_files` stays empty here — dry-run must NOT patch the
+            // index; `_would_modify` is informational only.
+            let (_would_modify, unapplied) =
+                hyalo_core::link_fix::plan_fixes_dry_run(dir, &all_fixes, site_prefix)?;
             unapplied_fixes = unapplied;
-
-            // Only files that actually received a rewrite are "modified" —
-            // do not patch the index for files whose fixes were all unapplied.
-            modified_files = plans.into_iter().map(|p| p.rel_path).collect();
         }
+    } else if !all_fixes.is_empty() {
+        let (plans, unapplied, failed) = apply_fixes(dir, &all_fixes, site_prefix)?;
+        unapplied_fixes = unapplied;
+        failed_fixes = failed;
+
+        // Only files that actually received a durable rewrite are "modified" —
+        // do not patch the index for files whose fixes were all unapplied or
+        // whose write failed.
+        modified_files = plans.into_iter().map(|p| p.rel_path).collect();
     }
     let unapplied_count = unapplied_fixes.len();
+    let failed_count = failed_fixes.len();
 
     // Fixes actually written to disk this run (or, in dry-run, the full
     // plan — nothing has been attempted yet so "applied" is meaningless).
@@ -187,23 +203,35 @@ pub fn links_fix(
     let applied_fixes: Vec<_> = if dry_run {
         Vec::new()
     } else {
-        let unapplied_keys: std::collections::HashSet<(&str, usize, &str, &str)> = unapplied_fixes
-            .iter()
-            .map(|f| {
-                (
-                    f.source.as_str(),
-                    f.line,
-                    f.old_target.as_str(),
-                    f.new_target.as_str(),
-                )
-            })
-            .collect();
+        // A fix is "applied" only if it was neither unapplied (stale text) nor
+        // failed (write error). Both buckets exclude it from the applied set so
+        // "Applied: yes" never over-reports a fix that did not land on disk.
+        let mut excluded_keys: std::collections::HashSet<(&str, usize, &str, &str)> =
+            unapplied_fixes
+                .iter()
+                .map(|f| {
+                    (
+                        f.source.as_str(),
+                        f.line,
+                        f.old_target.as_str(),
+                        f.new_target.as_str(),
+                    )
+                })
+                .collect();
+        for ff in &failed_fixes {
+            excluded_keys.insert((
+                ff.fix.source.as_str(),
+                ff.fix.line,
+                ff.fix.old_target.as_str(),
+                ff.fix.new_target.as_str(),
+            ));
+        }
         certain_fixes
             .iter()
             .chain(applicable_fuzzy.iter())
             .chain(case_mismatches.iter())
             .filter(|f| {
-                !unapplied_keys.contains(&(
+                !excluded_keys.contains(&(
                     f.source.as_str(),
                     f.line,
                     f.old_target.as_str(),
@@ -230,6 +258,10 @@ pub fn links_fix(
         "applied_fixes": applied_fixes,
         "unapplied": unapplied_count,
         "unapplied_fixes": unapplied_fixes,
+        // L-11: fixes whose durable write failed mid-batch. Non-empty ⇒
+        // partial failure ⇒ non-zero exit code.
+        "failed": failed_count,
+        "failed_fixes": failed_fixes,
         "case_mismatches": case_mismatch_count,
         "case_mismatch_fixes": case_mismatches,
         "ambiguous": ambiguous_count,
@@ -249,6 +281,7 @@ pub fn links_fix(
             serde_json::to_string_pretty(&output).context("failed to serialize")?,
         ),
         modified_files,
+        failed_count > 0,
     ))
 }
 
@@ -272,7 +305,7 @@ pub fn links_auto(
     file_filter: Option<&str>,
     glob_filter: &[String],
     format: Format,
-) -> Result<(CommandOutcome, Vec<String>)> {
+) -> Result<(CommandOutcome, Vec<String>, bool)> {
     let opts = hyalo_core::auto_link::AutoLinkOptions {
         apply,
         min_length,
@@ -284,14 +317,31 @@ pub fn links_auto(
     };
     let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
 
-    // Collect unique modified files for the caller to patch the index.
+    // Collect unique modified files for the caller to patch the index. Only
+    // files that were actually applied (not skipped/failed) count as modified,
+    // so the index is never patched for a file whose write was skipped.
+    let applied_files: std::collections::HashSet<&str> = report
+        .apply_outcomes
+        .iter()
+        .filter(|o| o.status == hyalo_core::auto_link::AutoApplyStatus::Applied)
+        .map(|o| o.file.as_str())
+        .collect();
     let modified_files: Vec<String> = if report.applied {
-        let deduped: std::collections::HashSet<&str> =
-            report.matches.iter().map(|m| m.file.as_str()).collect();
-        deduped.into_iter().map(str::to_owned).collect()
+        applied_files.iter().map(|s| (*s).to_owned()).collect()
     } else {
         Vec::new()
     };
+
+    // Per-file apply outcome counts for the envelope.
+    let (applied_count, skipped_count, failed_count) =
+        report
+            .apply_outcomes
+            .iter()
+            .fold((0usize, 0usize, 0usize), |(a, s, f), o| match o.status {
+                hyalo_core::auto_link::AutoApplyStatus::Applied => (a + 1, s, f),
+                hyalo_core::auto_link::AutoApplyStatus::Skipped => (a, s + 1, f),
+                hyalo_core::auto_link::AutoApplyStatus::Failed => (a, s, f + 1),
+            });
 
     let output = serde_json::json!({
         "scanned": report.scanned,
@@ -299,6 +349,13 @@ pub fn links_auto(
         "matches": report.matches,
         "ambiguous_titles": report.ambiguous_titles,
         "applied": report.applied,
+        // L-11: per-file apply outcomes (applied/skipped/failed with reason).
+        // Empty in preview mode. `files_applied`/`files_skipped`/`files_failed`
+        // are the counts; `apply_outcomes` carries the per-file detail.
+        "files_applied": applied_count,
+        "files_skipped": skipped_count,
+        "files_failed": failed_count,
+        "apply_outcomes": report.apply_outcomes,
     });
 
     let _ = format;
@@ -307,6 +364,7 @@ pub fn links_auto(
             serde_json::to_string_pretty(&output).context("failed to serialize")?,
         ),
         modified_files,
+        failed_count > 0,
     ))
 }
 

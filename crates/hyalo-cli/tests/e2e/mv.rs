@@ -1963,3 +1963,62 @@ fn mv_batch_without_destination_is_user_error() {
         "expected a destination-related error, got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-11: batch mv reports durably-rewritten files before a mid-batch abort
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn batch_mv_apply_reports_failed_inbound_rewrite_and_rolls_back_renames() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    // Two files to move via --glob so the batch path is used.
+    write_md(tmp.path(), "movers/p1.md", "---\ntitle: P1\n---\nBody.\n");
+    write_md(tmp.path(), "movers/p2.md", "---\ntitle: P2\n---\nBody.\n");
+    // An external linker file (in its own dir) with a path-form link to p1 that
+    // must be rewritten when p1 moves. We make its dir read-only so the inbound
+    // rewrite write fails mid-batch.
+    write_md(
+        tmp.path(),
+        "linkers/l.md",
+        "---\ntitle: L\n---\nSee [[movers/p1]] here.\n",
+    );
+
+    // Make linkers/ read-only so the atomic write to l.md fails.
+    let linkers = tmp.path().join("linkers");
+    let mut perms = fs::metadata(&linkers).unwrap().permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&linkers, perms).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--glob", "movers/*.md", "--to", "archive/", "--apply"])
+        .output()
+        .unwrap();
+
+    // Restore perms for cleanup.
+    let mut restore = fs::metadata(&linkers).unwrap().permissions();
+    restore.set_mode(0o755);
+    let _ = fs::set_permissions(&linkers, restore);
+
+    // The batch must fail (non-zero) and the error must name the durably
+    // rewritten file(s) / the failure — not a bare abort.
+    assert!(
+        !output.status.success(),
+        "read-only inbound rewrite must fail the batch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("linkers/l.md") || stderr.contains("batch mv aborted"),
+        "error should report the failed inbound rewrite: {stderr}"
+    );
+
+    // Renames were rolled back — the movers stay put.
+    assert!(
+        tmp.path().join("movers/p1.md").exists(),
+        "renames must be rolled back on failure"
+    );
+    assert!(tmp.path().join("movers/p2.md").exists());
+}

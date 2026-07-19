@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -584,21 +585,144 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
     }
 
     // All renames succeeded — apply link rewrites.
-    if let Err(e) = link_rewrite::execute_plans(dir, plans) {
-        // Roll back renames so the vault is left in a consistent state.
-        for (was_dst, was_src) in applied.iter().rev() {
-            if let Err(rb_err) = fs::rename(was_dst, was_src) {
-                eprintln!(
-                    "warning: rollback failed for {} -> {}: {rb_err}",
-                    was_dst.display(),
-                    was_src.display()
-                );
+    //
+    // L-11 / DEC-056: completed link-rewrite `atomic_write`s are only rolled
+    // back for "self-rewrite" plans — plans whose `path` coincides with one
+    // of this batch's own rename destinations (the moved file's own inbound
+    // and/or outbound rewrites). For those, undoing the rename without also
+    // undoing the content would strand the file at its old path with content
+    // that references the new (post-rename) layout — a dangling link. Plans
+    // on files that were never renamed (pure external "linker" files) keep
+    // the original DEC-056 behavior: kept and honestly reported, since a
+    // faithful rollback for arbitrary linker files would need capturing
+    // pre-images for every plan, not just the ones this batch renames.
+    let report = match link_rewrite::execute_plans_partial(dir, plans) {
+        Ok(r) => r,
+        Err(e) => {
+            // Fatal (vault-boundary) failure: roll back renames and abort.
+            rollback_renames(&applied);
+            return Err(e);
+        }
+    };
+
+    if report.has_failures() {
+        // Roll back renames so the directory layout is consistent.
+        rollback_renames(&applied);
+
+        // Map each rename destination (a self-rewrite plan's `path`) back to
+        // its now-restored old path, so a successfully-applied self-rewrite
+        // plan's content can be restored to match.
+        let dst_to_src: HashMap<PathBuf, PathBuf> = renames
+            .iter()
+            .map(|(old_rel, new_rel)| (dir.join(new_rel), dir.join(old_rel)))
+            .collect();
+
+        let plan_by_rel: HashMap<&str, &RewritePlan> =
+            plans.iter().map(|p| (p.rel_path.as_str(), p)).collect();
+
+        let mut self_rewrites_restored: Vec<String> = Vec::new();
+        let mut self_rewrites_restore_failed: Vec<String> = Vec::new();
+        let mut external_kept: Vec<String> = Vec::new();
+
+        for outcome in report.outcomes.iter().filter(|o| o.applied) {
+            let Some(plan) = plan_by_rel.get(outcome.rel_path.as_str()) else {
+                continue;
+            };
+            if let Some(old_path) = dst_to_src.get(&plan.path) {
+                // Self-rewrite: the rename was just rolled back, so this
+                // file now lives at `old_path` but still holds the rewritten
+                // (post-rename) content. Restore its pre-batch content so the
+                // file ends up byte-for-byte as it was before the batch.
+                match &plan.original_content {
+                    Some(original) => {
+                        match hyalo_core::fs_util::atomic_write(old_path, original.as_bytes()) {
+                            Ok(()) => self_rewrites_restored.push(outcome.rel_path.clone()),
+                            Err(restore_err) => {
+                                eprintln!(
+                                    "warning: failed to restore original content for {}: {restore_err:#}",
+                                    old_path.display()
+                                );
+                                self_rewrites_restore_failed.push(outcome.rel_path.clone());
+                            }
+                        }
+                    }
+                    None => {
+                        // Should not happen: every plan keyed to a rename
+                        // destination is built with `original_content` set
+                        // (see `plan_batch_mv`). Report it as kept rather than
+                        // silently mislabeling it as rolled back.
+                        external_kept.push(outcome.rel_path.clone());
+                    }
+                }
+            } else {
+                // Genuinely external linker file — untouched by any rename.
+                // Kept and reported per DEC-056.
+                external_kept.push(outcome.rel_path.clone());
             }
         }
-        return Err(e);
+
+        let failed: Vec<String> = report
+            .outcomes
+            .iter()
+            .filter(|o| !o.applied)
+            .map(|o| {
+                format!(
+                    "{}: {}",
+                    o.rel_path,
+                    o.error.as_deref().unwrap_or("write failed")
+                )
+            })
+            .collect();
+
+        let mut msg = format!(
+            "batch mv aborted: {} link rewrite(s) failed [{}]; renames were rolled back",
+            failed.len(),
+            failed.join("; "),
+        );
+        if !self_rewrites_restored.is_empty() {
+            let _ = write!(
+                msg,
+                "; {} self-rewritten file(s) had their original content restored \
+                 (rolled back along with their rename) [{}]",
+                self_rewrites_restored.len(),
+                self_rewrites_restored.join(", "),
+            );
+        }
+        if !self_rewrites_restore_failed.is_empty() {
+            let _ = write!(
+                msg,
+                "; WARNING: {} self-rewritten file(s) could not have their original \
+                 content restored — they may contain dangling links [{}]",
+                self_rewrites_restore_failed.len(),
+                self_rewrites_restore_failed.join(", "),
+            );
+        }
+        if !external_kept.is_empty() {
+            let _ = write!(
+                msg,
+                "; {} external file(s) were durably rewritten before the abort and \
+                 were NOT rolled back [{}]",
+                external_kept.len(),
+                external_kept.join(", "),
+            );
+        }
+        return Err(anyhow::anyhow!(msg));
     }
 
     Ok(())
+}
+
+/// Roll back a set of already-applied renames (best effort; logs failures).
+fn rollback_renames(applied: &[(PathBuf, PathBuf)]) {
+    for (was_dst, was_src) in applied.iter().rev() {
+        if let Err(rb_err) = fs::rename(was_dst, was_src) {
+            eprintln!(
+                "warning: rollback failed for {} -> {}: {rb_err}",
+                was_dst.display(),
+                was_src.display()
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

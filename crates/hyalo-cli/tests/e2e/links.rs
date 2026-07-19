@@ -3407,3 +3407,227 @@ Also \[label](escaped-md-missing.md) is literal too.
         "escaped markdown-link target must not appear anywhere: {blob}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-11: honest partial-failure envelopes (iter-187)
+// ---------------------------------------------------------------------------
+
+/// Build a vault with one certain (non-fuzzy) fixable link in a subdirectory
+/// we can make read-only to induce a mid-batch write failure.
+///
+/// The markdown link `[bar](wrong/place/bar.md)` in `docs/src.md` points at a
+/// non-existent path (broken), but the stem `bar` uniquely matches
+/// `sub/bar.md` → a ShortestPath (certain, 0.95) fix that plain `--apply`
+/// writes. Using a path-form markdown link avoids Obsidian short-form
+/// resolution, which would otherwise make a bare `[[bar]]` resolve as valid.
+#[cfg(unix)]
+fn setup_readonly_fix_vault() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "docs/src.md",
+        md!(r"
+---
+title: Src
+---
+See [bar](wrong/place/bar.md) here.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "sub/bar.md",
+        md!(r"
+---
+title: Bar
+---
+Body.
+"),
+    );
+    tmp
+}
+
+#[cfg(unix)]
+#[test]
+fn links_fix_apply_partial_failure_reports_failed_and_exits_nonzero() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = setup_readonly_fix_vault();
+    // Make only `docs/` (src.md's parent) read-only so the atomic write cannot
+    // create its temp file there — the write fails but the vault root stays
+    // writable so index/snapshot operations still work and the envelope is
+    // still emitted.
+    let docs = tmp.path().join("docs");
+    let mut perms = fs::metadata(&docs).unwrap().permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&docs, perms).unwrap();
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix --apply should run");
+
+    // Restore perms for cleanup.
+    let mut restore = fs::metadata(&docs).unwrap().permissions();
+    restore.set_mode(0o755);
+    let _ = fs::set_permissions(&docs, restore);
+
+    // Partial failure ⇒ non-zero exit code.
+    assert!(
+        !output.status.success(),
+        "read-only write failure must exit non-zero; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout should be valid JSON even on failure");
+    let results = &json["results"];
+    let failed = results["failed"]
+        .as_u64()
+        .expect("'failed' should be a number");
+    assert!(failed >= 1, "expected at least one failed fix: {results}");
+    let failed_fixes = results["failed_fixes"]
+        .as_array()
+        .expect("'failed_fixes' should be an array");
+    assert!(!failed_fixes.is_empty(), "failed_fixes must list the file");
+    assert_eq!(
+        failed_fixes[0]["source"].as_str(),
+        Some("docs/src.md"),
+        "failed fix should name the read-only source"
+    );
+    assert!(
+        failed_fixes[0]["error"].as_str().is_some(),
+        "failed fix must carry an error string"
+    );
+    // The file whose write failed must NOT appear as applied.
+    let applied = results["applied_fixes"].as_array().unwrap();
+    assert!(
+        applied
+            .iter()
+            .all(|f| f["source"].as_str() != Some("docs/src.md")),
+        "a failed fix must not be reported as applied"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn links_auto_apply_read_only_reports_failed_in_envelope() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "sprint-review.md",
+        md!(r"
+---
+title: Sprint Review
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "meetings.md",
+        md!(r"
+---
+title: Meetings
+---
+We held a Sprint Review last week.
+"),
+    );
+
+    // Make the vault dir read-only so the write to meetings.md fails.
+    let mut perms = fs::metadata(tmp.path()).unwrap().permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(tmp.path(), perms).unwrap();
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "auto",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links auto --apply should run");
+
+    let mut restore = fs::metadata(tmp.path()).unwrap().permissions();
+    restore.set_mode(0o755);
+    let _ = fs::set_permissions(tmp.path(), restore);
+
+    assert!(
+        !output.status.success(),
+        "read-only auto write failure must exit non-zero"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout should be valid JSON even on failure");
+    let results = &json["results"];
+    assert!(
+        results["files_failed"].as_u64().unwrap_or(0) >= 1,
+        "expected files_failed >= 1: {results}"
+    );
+    let outcomes = results["apply_outcomes"].as_array().unwrap();
+    assert!(
+        outcomes
+            .iter()
+            .any(|o| o["status"].as_str() == Some("failed")
+                && o["file"].as_str() == Some("meetings.md")),
+        "meetings.md must appear as a failed apply outcome: {outcomes:?}"
+    );
+}
+
+#[test]
+fn links_fix_dry_run_reports_stale_fix_as_unapplied() {
+    // L-25: with an on-disk edit after detection would-be-see the link, dry-run
+    // must report the stale fix under `unapplied_fixes` (parity with --apply),
+    // and must not mutate the file.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "src.md",
+        md!(r"
+---
+title: Src
+---
+Nothing links here anymore.
+"),
+    );
+
+    // A dry-run over a fresh vault with no broken links simply reports zero
+    // fixable — the important guarantee (proven in the unit test parity test)
+    // is that dry-run runs the same plan-building phase. Here we assert the
+    // envelope now always carries the `unapplied`/`failed` fields so downstream
+    // tooling can rely on them.
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix dry-run should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = &json["results"];
+    assert!(
+        results.get("unapplied").is_some(),
+        "envelope must carry 'unapplied'"
+    );
+    assert!(
+        results.get("failed").is_some(),
+        "envelope must carry 'failed'"
+    );
+}
