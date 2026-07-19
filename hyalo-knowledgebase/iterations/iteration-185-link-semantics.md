@@ -64,6 +64,22 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
   or — if unavailable — a synthetic vault at comparable scale with
   numbers recorded in the plan) before being ticked, not marked done on
   the strength of an untested assumption.
+- **CI's Linux runner caught a filesystem-case-sensitivity assumption
+  that macOS/Windows dev machines hide.** iter-184's own new e2e test
+  (`backlinks_case_insensitive_agrees_across_casings`) called
+  `backlinks --file foo.md` expecting it to resolve against an on-disk
+  `Foo.md`, and passed locally on macOS purely because APFS is
+  case-insensitive by default — it failed on `ubuntu-latest` in CI (a
+  genuinely case-sensitive filesystem) with "file not found". Root
+  cause: `discovery::resolve_file` (used by `backlinks --file`, and any
+  other command that resolves a CLI file argument) does a literal
+  `Path::is_file()` check with no case-insensitive fallback, so it never
+  actually consults `[links] case_insensitive` — only the *graph-level*
+  lookup (`LinkGraph::backlinks_ci`) is case-insensitive-aware. Any new
+  test or feature that exercises a filesystem-casing scenario must be
+  validated against a case-sensitive assumption (or run on Linux CI)
+  before being trusted, not just eyeballed on a macOS/Windows dev
+  machine. See task 3 below (new) for closing this specific gap.
 
 ## Tasks
 
@@ -100,7 +116,26 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
   (discovery.rs:714-842) so `my%20page.md` resolves; encoding kept
   as-written on rewrite
 
-### 4. Retrospective
+### 4. Case-insensitive CLI file-argument resolution (new, from iter-184 review)
+
+- [ ] `discovery::resolve_file` (used by `--file` args on `backlinks`,
+  `read`, `set`, `remove`, `append`, single-file `mv`, etc.) does a
+  literal `Path::is_file()` check with no case-insensitive fallback, so
+  it never actually consults `[links] case_insensitive` — confirmed by
+  CI: `backlinks --file foo.md` fails with "file not found" on Linux
+  when only `Foo.md` exists, even with case-insensitive mode on. Only
+  the graph-level lookup (`LinkGraph::backlinks_ci`) honors the setting.
+- [ ] Decide scope: thread `case_insensitive_mode` (or a prebuilt case
+  index) into `resolve_file`, falling back to a case-insensitive
+  directory scan when the literal-case lookup misses. Note
+  `resolve_file` is used by more than just `backlinks` — audit call
+  sites and vault-boundary/path-traversal checks stay correct for the
+  fallback path too.
+- [ ] e2e: `backlinks --file foo.md` (lowercase arg) finds `Foo.md` on a
+  case-insensitive vault, run on Linux CI (not just locally) so a
+  filesystem-accident pass doesn't mask a regression again.
+
+### 5. Retrospective
 
 - [ ] Re-run the full link-review fixture corpus (multi-line spans,
   BOM, CRLF, anchors, aliases, escapes) across find/mv/fix/auto/lint —

@@ -23,9 +23,17 @@ struct BacklinkItem {
 /// `limit` caps how many backlink entries are returned (`None` = no cap).
 ///
 /// When `case_insensitive` is true, links that differ from the resolved path
-/// only in ASCII case are also returned (via `LinkGraph::backlinks_ci`), so
-/// that `backlinks Foo.md` and `backlinks foo.md` agree on a case-insensitive
-/// vault — matching how `mv` and `find --broken-links` resolve targets.
+/// only in ASCII case are also returned (via `LinkGraph::backlinks_ci`), so a
+/// linking file that wrote `[[foo]]` still counts as a backlink of `Foo.md`
+/// even though the wikilink casing doesn't match the target's on-disk name.
+///
+/// NOTE: this only makes the *link-target lookup* case-insensitive.
+/// `file_arg` itself is still resolved via `discovery::resolve_file`, a
+/// literal filesystem check — on a case-sensitive filesystem (Linux),
+/// `backlinks --file foo.md` still fails with "file not found" unless
+/// `foo.md` is the real on-disk casing. Pass the file's actual casing (e.g.
+/// `Foo.md`) as `file_arg`; only the *matching* is case-insensitive, not the
+/// CLI argument resolution.
 pub fn backlinks(
     index: &dyn VaultIndex,
     file_arg: &str,

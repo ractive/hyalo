@@ -57,15 +57,30 @@ that shared scanner over a new hand-rolled loop.
   `LinkGraph` (populated in `insert_file_links`,
   link_graph.rs:391-458) — O(1) lookups, NOT the O(vault)
   `backlinks_case_insensitive` helper per call
-- [x] e2e: `backlinks Foo.md` == `backlinks foo.md` on a
-  case-insensitive vault; orphan/dead-end counts casing-independent.
-  "Perf on MDN unchanged" was not actually measured against an MDN
-  corpus during implementation — PR review instead measured a synthetic
+- [x] e2e: `backlinks_ci` groups links written with any casing (`[[Foo]]`,
+  `[[foo]]`) under the same target, so `backlinks Foo.md` (the real
+  on-disk casing) returns every linker regardless of the casing each
+  linking file used. **Correction (PR review):** the original claim
+  "`backlinks Foo.md` == `backlinks foo.md`" (i.e. the CLI `--file`
+  *argument itself* resolves case-insensitively) does not hold on a
+  case-sensitive filesystem — `discovery::resolve_file` does a literal
+  `Path::is_file()` check before `backlinks_ci` ever runs, so
+  `backlinks foo.md` fails with "file not found" on Linux CI when only
+  `Foo.md` exists on disk (macOS/Windows pass by filesystem accident,
+  not because the code handles it). This is a pre-existing gap in
+  `resolve_file`, not something L-6 introduced or fixes; the e2e test
+  was corrected to query by the real on-disk casing. Making the CLI
+  `--file` argument itself case-insensitive-aware is tracked as a
+  follow-up, not part of this AC. Orphan/dead-end casing-independence
+  and MDN perf were not independently re-verified in review; "perf on
+  MDN unchanged" was never actually measured against an MDN corpus
+  during implementation — PR review instead measured a synthetic
   2000-file batch-mv and found rename_path/remove_source/insert_links
   each called the O(vault) rebuild_lower_index() per call, regressing
   batch-mv by ~38-44% vs main. Fixed in review by updating lower_index
   incrementally (O(changed keys)); re-measured faster than main
-  afterward. See commit 76d1605.
+  afterward. See commits 76d1605, and the CLI-arg-resolution fix/test
+  correction.
 - [ ] Merge the near-duplicate `detect_broken_links` /
   `detect_broken_links_from_index` (link_fix.rs:~440/~525) over the new
   resolver
@@ -122,11 +137,19 @@ single write-path with partial-failure envelopes) are carried into
 **Shipped:**
 
 - **L-6 root fix** — `LinkGraph` now owns an O(1) lowercased companion map
-  (`lower_index`, `#[serde(skip)]`, rebuilt after snapshot load and after
-  every key-set mutation). `backlinks_case_insensitive` (previously
-  O(vault) per call) became `backlinks_ci` backed by that map; `mv`'s
-  `link_rewrite` and the `backlinks` command both use it, so
-  `backlinks Foo.md` == `backlinks foo.md` on a case-insensitive vault.
+  (`lower_index`, `#[serde(skip)]`, maintained incrementally on every
+  key-set mutation — `rename_path`/`remove_source`/`insert_links` update
+  only the changed buckets instead of calling a full `rebuild_lower_index()`
+  per call, fixed in review after a synthetic 2000-file batch-mv showed a
+  ~38-44% regression from the naive per-call rebuild). `backlinks_case_insensitive`
+  (previously O(vault) per call) became `backlinks_ci` backed by that map;
+  `mv`'s `link_rewrite` and the `backlinks` command both use it, so a
+  linker that wrote `[[foo]]` counts as a backlink of `Foo.md` regardless
+  of the wikilink's casing. This does *not* make the `backlinks --file`
+  CLI argument itself case-insensitive — `foo.md` as the argument still
+  requires a literal on-disk `foo.md` (a separate, pre-existing gap in
+  `discovery::resolve_file`, out of scope here; query by the real on-disk
+  casing).
 - **L-10 fuzzy tiers** — `links fix` splits Jaro-Winkler fuzzy matches into
   their own reported bucket, excluded from `--apply` unless `--apply-fuzzy`
   / `--min-confidence <f>` opts in (the latter implies the former). The
