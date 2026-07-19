@@ -1096,7 +1096,12 @@ mod tests {
     fn resolve_target_percent_encoded_space() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("my dest.md"), "# Dest").unwrap();
-        let canon = tmp.path().canonicalize().unwrap();
+        // Use dunce::canonicalize (via canonicalize_vault_dir), not the raw
+        // std canonicalize: on Windows std's version returns a `\\?\`
+        // extended-length-path prefix, which `ensure_within_vault`'s own
+        // dunce-canonicalized comparison would then fail to prefix-match,
+        // making this test spuriously fail on windows-latest CI.
+        let canon = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(
             resolve_target(&canon, "my%20dest.md", None, None).as_deref(),
             Some("my dest.md")
