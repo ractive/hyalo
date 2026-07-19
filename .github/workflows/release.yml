@@ -24,6 +24,9 @@ jobs:
       # Publishes the .deb/.rpm to the hosted apt/yum repos at Cloudsmith
       # (non-blocking; needs the CLOUDSMITH_API_KEY repo secret):
       cloudsmith-repo: ractive/hyalo
+      # Publishes a -bin PKGBUILD to the AUR (non-blocking; needs the
+      # AUR_SSH_PRIVATE_KEY repo secret):
+      aur-package: hyalo-bin
       # Ship shell completions in archives and deb/rpm. Copies into
       # crates/hyalo-cli/ because cargo-deb/cargo-generate-rpm resolve
       # asset paths relative to the crate directory.
