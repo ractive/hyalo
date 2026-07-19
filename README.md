@@ -153,7 +153,7 @@ All artifacts are idempotent — re-running `hyalo init --claude` updates to the
 
 ## OKF (Open Knowledge Format)
 
-[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is a vendor-neutral format for **knowledge bundles**: a directory of Markdown "concept" files with YAML frontmatter, distributed as a git repo or tarball. Every concept has exactly one required field — `type` — plus recommended `title`, `description`, `resource`, `tags`, and an RFC 3339 `timestamp`. Reserved `index.md`/`log.md` files are frontmatter-free, except the bundle-root `index.md`, which may carry a single `okf_version` key and nothing else.
+[OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) is a vendor-neutral format for **knowledge bundles**: a directory of Markdown "concept" files with YAML frontmatter, distributed as a git repo or tarball. Every concept has exactly one required field — `type` — plus recommended `title`, `description`, `resource`, `tags`, and an RFC 3339 `timestamp`; reserved `index.md`/`log.md` files are frontmatter-free.
 
 hyalo makes OKF a first-class target:
 
@@ -164,15 +164,12 @@ hyalo init --profile okf --claude   # also install the bundled `okf` skill
 
 The `okf` profile merges a declarative config fragment into `.hyalo.toml`:
 
-- `[schema.default] required = ["type"]` — the one OKF-mandated field.
-- Recommended props declared with types: `title`/`description` (string), `resource` (URL-pattern string), `tags` (list), `timestamp` (`datetime-tz`, offset-aware).
+- `[schema.default] required = ["type"]` — the one OKF-mandated field — plus the recommended props declared with types (`timestamp` as offset-aware `datetime-tz`).
 - `[schema] exempt = ["**/index.md", "**/log.md"]` — reserved files skip the required-`type` check.
 - `site_prefix = ""` — bundle-absolute links (`/tables/x.md`, the spec-recommended form) resolve from the bundle root.
 - `validate_on_write = true` — authoring stays conformant.
 
-The profile is **vendor-neutral**: it ships **no example `[schema.types.*]`** (a real vault's concept `type` values are domain-specific). Declare your own domain types under `[schema.types."<name>"]` — quoted keys with spaces are supported — with recommended `# Schema` / `# Citations` `required_sections`. The bundled `okf` skill's "Adding domain types" section walks through it.
-
-Profiles are **composable** and **idempotent**: multiple `--profile` runs coexist in one vault. The fragment is deep-merged, and array config keys **union** rather than clobber — each profile's `[schema] exempt` globs, `[[schema.bind]]` entries, `[schema.default] required` fields, and `[lint] profiles` markers all accumulate, so a later `init --profile` never shrinks an earlier one's config or your hand-added entries. Hand-written comments and key order survive the merge, re-running is byte-idempotent, and when a profile overwrites a differing **scalar** value it prints a `warning: conflict: <key> <old> -> <new> (profile <name>)` line to stderr (string values keep their TOML quotes, e.g. `warning: conflict: site_prefix "custom" -> "" (profile okf)`) — nothing is lost silently. With `--claude`, the bundled `okf` skill teaches Claude the OKF concept model, reserved-file rules, link forms, and the exact hyalo commands — hyalo owns the deterministic frontmatter/link mechanics while the LLM does the semantic work.
+The profile is **vendor-neutral** — it ships no example `[schema.types.*]`; declare your own domain types under `[schema.types."<name>"]` (the bundled `okf` skill's "Adding domain types" section walks through it). Profiles are **composable** and **idempotent**: multiple `--profile` runs deep-merge into one `.hyalo.toml`, array config keys union rather than clobber, and when a profile overwrites a differing scalar it prints a `warning: conflict: …` line to stderr — nothing is lost silently.
 
 ### Reserved-file generators (`okf index` / `okf log`)
 
@@ -188,19 +185,11 @@ hyalo okf log --message "Added blocks table" --apply
 hyalo okf log tables --action Update --message "Refreshed schema" --apply
 ```
 
-- **`okf index`** walks each directory, groups its child concepts by frontmatter `type` (untyped concepts fall under `Other`), and emits `* [title](relative-link) - description` lines (title falls back to the filename stem; description optional). Immediate subdirectories are listed under a `Subdirectories` group — but a subdirectory that contains no concepts and no nested subdirectories gets no `index.md` of its own and is omitted from the parent's `Subdirectories` list (empty branches are never linked to a page that would not exist). The generated list lives inside a stable managed region delimited by `<!-- okf:index:begin -->` / `<!-- okf:index:end -->` markers, so any hand-written prose outside the markers is preserved verbatim across runs. The bundle-root `index.md`'s lone `okf_version` frontmatter key is kept. Links are relative and forward-slashed (cross-platform), and always **CommonMark-valid**: destinations with spaces are angle-bracket wrapped (`](<blocks table.md>)`), `[`/`]` in titles are escaped, and multi-line descriptions are collapsed to one line — so a spaced or unicode filename never renders as literal text on GitHub. Running `--apply` twice is a no-op (idempotent); `--dry-run` (the default) exits non-zero on drift, so it doubles as a **CI freshness check**.
-  - **Non-destructive adopt:** an existing `index.md` that has *no* markers is **adopted** — its entire hand-written body is preserved and the managed region is appended after it (dry-run reports `adopt (preserving N existing lines)`). Only `--replace` overwrites such a file with a fresh managed index. On case-insensitive filesystems an existing `INDEX.md` is recognized as the reserved file and adopted by its on-disk casing.
-  - **Malformed markers are never rewritten:** a file whose markers are **dangling** (a begin with no end, or an end with no begin), **reversed**, or **duplicated** is left byte-identical and reported (`skip`) with a stderr warning — the generator never splices across a broken marker, so it can never delete the hand prose that follows one (a former data-loss edge). Fix the markers by hand; the companion `OKF-INDEX-MARKERS` lint rule flags the same condition in CI. In `--dry-run` a malformed-marker file counts as drift.
-  - **Robust apply:** a single impossible or unwritable target (e.g. a *directory* literally named `index.md`) is warned-and-skipped, and the run continues writing every other index — no partial mid-run abort. Dry-run detects such targets and reports `skip` instead of claiming `create`. The exit code reflects any write failure.
-  - **Scoping & malformed files:** files matching an `[okf] ignore` glob in `.hyalo.toml` (e.g. `_template/**`, `test/fixture-vault/**`) are neither indexed nor generated into. A concept whose frontmatter cannot be parsed is skipped with a stderr warning (suppressed by `-q`/`--quiet`) and the run continues (a scoped run never fails on a bad file outside its scope). A nonexistent scope directory is rejected (exit 1) instead of vacuously passing a CI check.
-- **`okf log`** prepends a dated entry under today's `YYYY-MM-DD` heading (newest first) to a scope-selectable `log.md`. The `TARGET` argument picks the log: a directory (`TARGET/log.md`), a `log.md` path (written directly), or omitted (the bundle-root `log.md`, per SPEC §7 directory-local scope). `--action Update` prefixes a bold action word (an empty `--action ""` is a user error, like an empty `--message`). A multi-line `--message` keeps the log structure valid — continuation lines are indented under the bullet, so a `## fake heading` inside the message can't break out into a real heading. The file is created (frontmatter-free) when absent, and `TARGET` is validated to stay inside the bundle; a nonexistent directory target is rejected consistently by both dry-run and apply (create it first).
+**`okf index`** groups each directory's concepts by frontmatter `type` and emits `* [title](relative-link) - description` lines into a managed region delimited by `<!-- okf:index:begin -->` / `<!-- okf:index:end -->` markers — hand-written prose outside the markers is preserved verbatim, links are always CommonMark-valid (a spaced or unicode filename never renders as literal text), and `--apply` is idempotent. `--dry-run` (the default) exits non-zero on drift, so it doubles as a CI freshness check. A file whose markers are malformed (dangling, reversed, or duplicated) is never rewritten — it is left byte-identical and reported, so the generator can never delete hand prose behind a broken marker.
 
-Both generators default to `--dry-run` and mutate only with `--apply`, matching hyalo's `links fix` / `links auto` convention. Configure the generator scope with an `[okf]` section:
+**`okf log`** prepends a dated entry under today's `YYYY-MM-DD` heading (newest first) to a scope-selectable `log.md`: `TARGET` picks a directory (`TARGET/log.md`), a `log.md` path, or — omitted — the bundle root. The file is created (frontmatter-free) when absent.
 
-```toml
-[okf]
-ignore = ["_template/**", "test/fixture-vault/**"]  # skip these trees
-```
+Both generators default to `--dry-run` and mutate only with `--apply`, and skip trees listed in an `[okf] ignore = ["_template/**"]` section of `.hyalo.toml`. Finer edge-case semantics (non-destructive adoption of marker-less files, per-file skip behavior on unparseable frontmatter) are documented in the bundled `okf` skill (`hyalo init --profile okf --claude`) and surfaced by the `OKF-*` lint rules (`hyalo lint-rules list`).
 
 ### Validate an OKF bundle (`lint --profile okf`)
 
@@ -213,13 +202,11 @@ git diff --name-only origin/main...HEAD | hyalo lint --profile okf --files-from 
 
 The profile honours OKF's **permissive-consumption** model — *warn, don't reject*:
 
-- **Errors only** on the two things SPEC §9 makes hard requirements: a non-reserved `.md` with no parseable frontmatter block, or one whose block lacks a non-empty `type`. Reserved `index.md`/`log.md` are exempt (they are frontmatter-free by design).
-- **Warns, never rejects,** on everything the spec says a consumer MUST NOT reject on: broken cross-links, reserved-file structure drift (`index.md` should be a link list; `log.md` should be date-grouped, newest-first), missing or malformed `# Citations`, and augmentation regressions (a `# Schema`/`# Citations` section emptied out).
+- **Errors only** on the SPEC §9 hard requirements: a non-reserved `.md` with no parseable frontmatter block, or one whose block lacks a non-empty `type`.
+- **Warns, never rejects,** on broken cross-links, reserved-file structure drift, missing or malformed `# Citations`, and augmentation regressions.
 - **Always accepts** unknown `type` values and extra frontmatter keys.
 
-Advisory citation rules make the `# Citations` convention first-class: `OKF-CITATIONS-PRESENT` (a claim-bearing concept should cite), `OKF-CITATIONS-WELL-FORMED` (entries are links — both numbered `1.` and `-` bullet lists accepted), and `OKF-CITATIONS-RESOLVE` (bundle-relative / `references/…` links resolve on disk; external `http(s)` URLs are surfaced but not network-checked). Each OKF rule is individually toggleable with `hyalo lint-rules set OKF-… --enabled false` and appears in `hyalo lint-rules list`.
-
-Because the overlay reuses the init fragment, a vault created with `hyalo init --profile okf` (which records `[lint] profiles = ["okf"]`) runs the same rules under a plain `hyalo lint` — `--profile okf` on such a vault is a no-op.
+Advisory `OKF-CITATIONS-*` rules make the `# Citations` convention first-class (a claim-bearing concept should cite; entries are links; bundle-relative links resolve on disk); each OKF rule is toggleable via `hyalo lint-rules set OKF-… --enabled false`. A vault created with `hyalo init --profile okf` records `[lint] profiles = ["okf"]`, so the same rules run under a plain `hyalo lint` — `--profile okf` there is a no-op.
 
 ## MADR profile — Architecture Decision Records
 
@@ -425,6 +412,98 @@ hyalo completions fish > ~/.config/fish/completions/hyalo.fish
 
 `hyalo completions --help` lists every supported shell (also elvish and powershell). `hyalo completion` (singular) remains as a backward-compatible alias.
 
+## Lint your vault in CI (GitHub Actions)
+
+Gate every change on a clean vault. The [`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the prebuilt release binary in seconds — no compilation — so a full-vault gate is two steps:
+
+```yaml
+# .github/workflows/lint-kb.yml
+name: Lint knowledgebase
+on:
+  push:
+    branches: [main]
+jobs:
+  lint-kb-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ractive/setup-hyalo@v1          # installs hyalo, adds it to PATH
+      - run: hyalo lint --strict --format github
+```
+
+Pin the binary with `with: { version: v0.20.0 }` (the default `latest` tracks the newest release). Run the job from the repo root: `.hyalo.toml` supplies the vault `dir`, and annotation paths are emitted relative to the repository root so they land on the right file and line.
+
+On a **pull request**, use the diff-aware variant instead: pipe `git diff` into `--files-from -` to lint only the files the PR touches (non-markdown paths are skipped and vault-dir prefixes are stripped automatically — no pre-filtering needed). Check out with `fetch-depth: 0` so the merge-base is available:
+
+```yaml
+jobs:
+  lint-kb:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                      # full history for the three-dot merge-base
+      - uses: ractive/setup-hyalo@v1
+      - run: |
+          git fetch --quiet origin "${{ github.base_ref }}"
+          git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" \
+            | hyalo lint --strict --format github --files-from -
+```
+
+Three-dot `origin/<base>...HEAD` diffs against the *merge-base* of the PR base and HEAD, so a stale branch stays scoped to the files it changed — not to base-tip drift it never touched. The diff-aware shape matters because GitHub registers at most **10 error + 10 warning inline annotations per step**: scoping to the PR's own files spends that budget on findings the author can act on, while the full-vault job (on `push` to main, where the cap is irrelevant) catches the cross-file regressions a diff can't see — a deleted note others link to, a schema change.
+
+`--format github` emits one [GitHub Actions workflow command](https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions) per violation — `::error` / `::warning` lines that render as inline annotations on the PR diff — in deterministic `(path, line, rule)` order, appending a `::notice::` with the true totals whenever the counts exceed GitHub's inline cap. `--strict` promotes warnings to errors — including `HYALO006` broken links — so the job fails on a broken link; unparseable frontmatter is always an error (`HYALO005`), so a green lint means the vault is genuinely clean. `--files-from -` works on most file-taking commands (`find`, `set`, `mv`, `task`, …), not just `lint`.
+
+For **OKF** vaults, add a reserved-file drift check — `hyalo okf index` is dry-run by default and exits non-zero when any `index.md` is stale:
+
+```yaml
+      - run: hyalo okf index   # dry-run; non-zero exit on drift
+```
+
+### `@claude` agent on GitHub (claude-code-action)
+
+Because [`setup-hyalo`](https://github.com/ractive/setup-hyalo) puts the binary on
+`PATH` before the agent runs, a [`claude-code-action`](https://github.com/anthropics/claude-code-action)
+workflow can hand `@claude` the full hyalo toolbox — so an `@claude` mention on a
+PR or issue can triage and *fix* lint findings (`hyalo lint --fix`, `hyalo set`,
+`hyalo mv`) rather than just report them. Commit the hyalo skill first with
+`hyalo init --claude` (add `--profile okf` for an OKF bundle) so the agent knows
+to prefer the CLI over raw file edits.
+
+```yaml
+# .github/workflows/claude.yml
+name: claude
+on:
+  issue_comment:
+    types: [created]
+jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ractive/setup-hyalo@v1          # hyalo on PATH before the agent starts
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Let the agent run any hyalo subcommand (lint/find/set/mv/task/...).
+          allowed_tools: Bash(hyalo:*)
+```
+
+The committed skill routes the agent to commands like
+`hyalo lint --strict --format github` (see findings), `hyalo lint --fix`
+(auto-fix the fixable rules), and `hyalo set <file> --property status=done`
+(targeted frontmatter edits). Fix-mode and read-only lint use different JSON
+shapes (`remaining_groups` vs `rule_groups`); `--format github` renders both, so
+`hyalo lint --fix --format github` still annotates any violation left unfixable
+(e.g. a missing required property) after the auto-fix pass.
+
+hyalo's own `lint-kb`/`lint-kb-full` jobs in [.github/workflows/ci.yml](.github/workflows/ci.yml) are the living reference.
+
 ## Configuration
 
 `hyalo init` creates a `.hyalo.toml` in your project root. All fields are optional — CLI flags always take precedence.
@@ -487,216 +566,6 @@ hyalo views set drafts --property status=draft
 hyalo find --view drafts                          # recall
 hyalo find --view drafts --tag rust               # extend with additional filters
 ```
-
-### CI diff-aware lint
-
-`--files-from <PATH>` (or `-` for stdin) scopes any command to a caller-supplied file list,
-bypassing the directory walk entirely. This is ideal for linting only changed files in CI:
-
-```sh
-# Lint only the markdown files touched on this branch.
-# Three-dot `origin/main...HEAD` diffs against the *merge-base* of main and the
-# branch, so a stale branch is scoped to files IT changed — not to files that
-# drifted on main's tip since the branch forked (which two-dot `origin/main`
-# would wrongly include). This is the form the CI job runs (see below).
-git diff --name-only origin/main...HEAD -- '**/*.md' | hyalo lint --files-from -
-
-# Non-.md paths (build artifacts, source files) are skipped —
-# no need to pre-filter git diff output. Repo-relative paths that start with
-# the vault directory prefix (e.g. `hyalo-knowledgebase/notes/foo.md` when
-# the vault is configured as `dir = "hyalo-knowledgebase"`) are stripped
-# automatically — so the recipe above works whether the vault is the repo
-# root or a subdirectory.
-# Counters in the JSON envelope show what was skipped (under `.results`):
-git diff --name-only origin/main...HEAD | hyalo lint --files-from - --format json \
-  | jq '{missing: .results.files_missing, non_md: .results.files_skipped_non_md}'
-```
-
-Dropped input paths are no longer JSON-only: `--format text` prints a
-`note: N input paths missing, M non-markdown skipped` line on stderr and
-`--format github` emits the same as a `::notice::` in the job log, so a
-diff-scoped run always shows what it left out without piping through `jq`.
-An explicitly named `--file` that is excluded by `[lint] ignore` likewise
-prints a notice instead of silently reporting `0 files checked`.
-
-**Parse errors fail the check.** A file whose frontmatter cannot be parsed
-(invalid YAML, duplicate keys, an oversized scalar) is reported as an
-error-severity **`HYALO005` / `frontmatter-parse-error`** violation and counts
-toward `files_checked` — it can no longer silently vanish from the scan and
-leave a green lint. The rule is listed in `hyalo lint-rules list` and its
-severity is configurable via `[lint.rules.HYALO005]`, but no profile downgrades
-it. A green `hyalo lint` in CI therefore means the vault is genuinely clean.
-
-**Broken links can gate CI.** The **`HYALO006` / `broken-link`** rule flags any
-wikilink or markdown link whose target does not exist in the vault. It is
-enabled and `warn` by default; `hyalo lint --strict` promotes it to an error so
-CI fails on a broken link. Resolution runs against the whole vault (built once
-per invocation from the `--index` snapshot when present, else a single walk), so
-it is correct under `--files-from` too — a diff-scoped file that links to an
-untouched-but-existing file is not falsely reported. Configure it with
-`[lint.rules.HYALO006]` (e.g. `severity = "error"` to gate without `--strict`,
-or `enabled = false` to turn it off).
-
-**Broken heading anchors surface in `find --broken-links`.** A link like
-`[[Foo#Section]]` or `[t](foo.md#Section)` whose target file exists but whose
-`#Section` heading does not is reported as a *broken anchor* — a category
-distinct from a broken target. In JSON the link gains `fragment` and
-`broken_anchor: true`; the two categories are never both set on one link.
-Anchor matching is exact and case-insensitive (Obsidian convention:
-`[[Foo#tasks]]` matches `## Tasks`), decodes percent-encoded markdown
-fragments for comparison, and skips `^block-id` refs (block ids are not
-indexed). On the `--index` path, headings come from the snapshot — rebuild the
-index (`hyalo create-index`) after upgrading to pick up fragment data. The
-`HYALO006` lint rule stays **target-only** — anchors are checked by `find`, not
-by `lint`, so anchor semantics soak one release before any CI gate consumes
-them.
-
-`--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, `append`,
-`task toggle`, `task set`, `task read`, `read`, and `backlinks`.
-It is mutually exclusive with `--glob` and `--file`.
-
-`--glob` is accepted on all file-taking commands except `read`, `backlinks`,
-and `task read` (which are single-file commands and will return an error if
-`--glob` is used).
-
-### GitHub PR annotations (`--format github`)
-
-`hyalo lint --format github` emits one [GitHub Actions workflow command] per
-violation, so findings render as **inline annotations on the PR diff** — no `jq`
-glue required. Errors become `::error`, warnings become `::warning`, and a
-one-line `N errors, M warnings in K files` summary is printed at the end so the
-job log stays readable. The lint still exits non-zero on errors, failing the
-check. `--format github` is lint-only; other subcommands reject it.
-
-Annotations are emitted in a **deterministic order** — sorted by `(path, line,
-rule)` — so a run is byte-for-byte reproducible and CI logs diff cleanly.
-
-**hyalo never truncates**: the per-rule and per-file display caps are lifted, so
-every finding is emitted as a workflow command, even past the default 50-file
-cap. **GitHub does** — it registers at most **10 `error` + 10 `warning`
-annotations per workflow step**; workflow commands beyond that are still in the
-job log but do not surface as inline annotations. When a run exceeds either cap
-hyalo appends a `::notice::` stating the true totals so the truncation is
-visible (and stays quiet when both are under the cap). To keep that budget spent
-on a PR's own findings rather than a vault-wide backlog, scope the PR check to
-changed files with `--files-from -` (below) and run the full-vault lint on a
-push-to-main job instead — see this repo's [`ci.yml`](.github/workflows/ci.yml)
-(`lint-kb` + `lint-kb-full`) for the pattern.
-
-Under `--fix --dry-run --format github`, violations that `--fix` *would* resolve
-are rendered as `::notice` annotations with a `[fixable]` title prefix and the
-summary switches to `N fixable, M remaining`, so a dry-run preview reads
-distinctly from a plain lint run.
-
-Drop this into a workflow to lint your whole vault on every PR. The
-[`setup-hyalo`](https://github.com/ractive/setup-hyalo) action installs the
-prebuilt binary in seconds — no compilation — so the whole check is two steps:
-
-> **Note**: [`ractive/setup-hyalo@v1`](https://github.com/ractive/setup-hyalo)
-> is published and installs the latest *release* binary. `--format github`
-> is not in a release yet (it ships in the next release after v0.17.0), so
-> until then run the lint step as plain `hyalo lint --strict` — same pass/fail
-> behavior, just without inline PR annotations.
-
-```yaml
-# .github/workflows/lint-kb.yml
-name: Lint knowledgebase
-on:
-  pull_request:
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ractive/setup-hyalo@v1          # installs hyalo, adds it to PATH
-      # Run from the repo root so annotation paths resolve against the workspace.
-      # `.hyalo.toml` sets `dir = "..."`, so `hyalo lint` targets the vault.
-      - run: hyalo lint --strict --format github
-```
-
-Pin the binary with `with: { version: v0.17.0 }`; the default `latest` tracks the
-newest release. If you'd rather not depend on the action, install hyalo any other
-way (Homebrew, `cargo-binstall`, `cargo install hyalo-cli --locked`, or a release
-binary — see [Installation](#installation)) before the lint step.
-
-Paths are emitted **relative to the repository root**: vault-relative paths are
-prefixed with the vault dir's path relative to the current directory, so the job
-**must run from the repo root** for annotations to land on the right file/line.
-
-For a diff-aware variant that only annotates files touched on the branch — the
-recommended shape for a `pull_request` job, so GitHub's 10-per-type annotation
-cap is spent on the PR's own findings — combine it with `--files-from -`.
-Checkout with `fetch-depth: 0` (full history) so the three-dot merge-base is
-available, and diff against `github.base_ref` (not a hard-coded `main`):
-
-```yaml
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: ractive/setup-hyalo@v1
-      - run: |
-          git fetch --quiet origin "${{ github.base_ref }}"
-          git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '**/*.md' \
-            | hyalo lint --strict --files-from - --format github
-```
-
-Pair it with a full-vault lint on `push: { branches: [main] }` to catch
-cross-file regressions the diff-aware check can't see (a deleted note others
-link to, a schema change) — annotation caps don't matter on a post-merge push.
-See this repo's [`ci.yml`](.github/workflows/ci.yml) for the `lint-kb` /
-`lint-kb-full` split.
-
-For **OKF** vaults, add an optional second step to catch reserved-file
-(`index.md` / `log.md`) drift — `hyalo okf index` is dry-run by default and exits
-non-zero when the on-disk artifacts are stale:
-
-```yaml
-      - name: Check OKF reserved-file drift
-        run: hyalo okf index   # dry-run; non-zero exit on drift
-```
-
-[GitHub Actions workflow command]: https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
-
-### `@claude` agent on GitHub (claude-code-action)
-
-Because [`setup-hyalo`](https://github.com/ractive/setup-hyalo) puts the binary on
-`PATH` before the agent runs, a [`claude-code-action`](https://github.com/anthropics/claude-code-action)
-workflow can hand `@claude` the full hyalo toolbox — so an `@claude` mention on a
-PR or issue can triage and *fix* lint findings (`hyalo lint --fix`, `hyalo set`,
-`hyalo mv`) rather than just report them. Commit the hyalo skill first with
-`hyalo init --claude` (add `--profile okf` for an OKF bundle) so the agent knows
-to prefer the CLI over raw file edits.
-
-```yaml
-# .github/workflows/claude.yml
-name: claude
-on:
-  issue_comment:
-    types: [created]
-jobs:
-  claude:
-    if: contains(github.event.comment.body, '@claude')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ractive/setup-hyalo@v1          # hyalo on PATH before the agent starts
-      - uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Let the agent run any hyalo subcommand (lint/find/set/mv/task/...).
-          allowed_tools: Bash(hyalo:*)
-```
-
-The committed skill routes the agent to commands like
-`hyalo lint --strict --format github` (see findings), `hyalo lint --fix`
-(auto-fix the fixable rules), and `hyalo set <file> --property status=done`
-(targeted frontmatter edits). Fix-mode and read-only lint use different JSON
-shapes (`remaining_groups` vs `rule_groups`); `--format github` renders both, so
-`hyalo lint --fix --format github` still annotates any violation left unfixable
-(e.g. a missing required property) after the auto-fix pass.
 
 ### Snapshot index
 
