@@ -75,5 +75,5 @@ alone, together they make the tool feel predictable for agents.
 
 ## Acceptance Criteria
 
-- [x] Each task has an e2e test locking the new behavior
+- [x] Each task has an e2e test locking the new behavior: `set_enum_violation_emits_advisory_note_and_writes`, `set_pattern_violation_emits_advisory_note_and_writes`, `jq_with_format_text_exits_one`, `count_with_jq_exits_one`, `set_json_value_echoes_coerced_list`, `new_omits_pattern_violating_placeholder`, `find_property_regex_parse_error_shows_engine_detail`, `mv_positional_destination_moves_file`, `changelog_add_wrap_breaks_long_message_into_hanging_indent`
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
