@@ -201,6 +201,30 @@ fn create_index_custom_output_path() {
     );
 }
 
+#[test]
+fn create_index_bare_relative_filename() {
+    // L-26: a bare relative output filename (e.g. `idx.bin`) has
+    // `parent() == Some("")`. The vault-boundary check must treat that as the
+    // current directory rather than failing to canonicalize an empty path.
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--dir", "."])
+        .args(["create-index", "--output", "idx.bin"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "bare relative --output should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        tmp.path().join("idx.bin").exists(),
+        "idx.bin should be created in the vault directory"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // drop-index
 // ---------------------------------------------------------------------------

@@ -19,6 +19,68 @@ add the semantics the review showed are missing — each lands in exactly
 one place now. Findings L-16, L-19, L-21, L-22, L-23 from
 [[reviews/link-handling-review-2026-07-18]].
 
+**Carried over from iter-184 (Phase C):** iter-184 shipped the L-6 root
+fix (an O(1) lowercased companion map in `LinkGraph`, `backlinks_ci`) plus
+L-10/L-12/L-24/L-26, but deferred the two large mechanical refactors so its
+PR stayed reviewable. Fold these into Phase D before/with the semantics
+work: (a) the single `resolve_link(ctx, link, mode)` entry point collapsing
+the find/mod, `link_fix`, `backlinks`, and `summary` call sites onto
+`LinkResolver`/`LinkGraph`; (b) `auto_link::apply_matches` onto
+`execute_plans`/`RewritePlan` with the stronger TOCTOU guard; (c) L-11
+per-file partial-failure envelope (applied/failed/skipped) + batch-mv
+rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
+
+**Lessons from iter-184 PR review (apply to this iteration too):**
+
+- **`LinkGraph.lower_index` must stay incrementally maintained, not
+  rebuilt.** iter-184's first cut had `rename_path`/`remove_source`/
+  `insert_links` each call a full O(vault) `rebuild_lower_index()` per
+  invocation; since batch-mv calls these once per file, this regressed
+  batch-mv throughput ~38-44% vs main (measured on a synthetic 2000-file
+  vault) before being fixed in review to update only the changed
+  `lower_index` buckets. Any new `LinkGraph` key-set mutation added by
+  the `resolve_link` unification (item (a) above) or by L-11's
+  partial-failure envelope work must follow the same incremental
+  pattern — do not reintroduce a bulk rebuild inside a per-file loop.
+  See `lower_index_stays_consistent_across_incremental_mutations` in
+  `link_graph.rs` for the regression-test pattern (compares incremental
+  state against a from-scratch rebuild) — extend it if new mutation
+  methods are added.
+- **"Reported separately, excluded from apply" buckets must exclude
+  their own count from the general bucket, not just add a new field.**
+  iter-184's fuzzy-match tier (L-10) initially left `fixable`/`fixes`
+  counting fuzzy matches *in addition to* the new `fuzzy`/`fuzzy_fixes`
+  bucket, so the dry-run "Apply N fixes" hint promised fixes that plain
+  `--apply` didn't write. When L-22's broken-anchor category (or any
+  other new low-confidence/opt-in bucket) is added, make sure the
+  headline counts (`broken`, `fixable`, hint text) reflect only what the
+  *default* action set actually touches, and add an e2e assertion that
+  running the suggested hint command produces the promised result.
+- **Perf claims need an actual measurement, not an assumption.**
+  iter-184's plan had a ticked "perf on MDN unchanged" sub-claim that
+  turned out to be unverified (no MDN corpus was benchmarked in that
+  PR). Item 1's "Perf guard: ... MDN-scale timing within budget" task
+  below should be backed by a real before/after timing run (MDN corpus,
+  or — if unavailable — a synthetic vault at comparable scale with
+  numbers recorded in the plan) before being ticked, not marked done on
+  the strength of an untested assumption.
+- **CI's Linux runner caught a filesystem-case-sensitivity assumption
+  that macOS/Windows dev machines hide.** iter-184's own new e2e test
+  (`backlinks_case_insensitive_agrees_across_casings`) called
+  `backlinks --file foo.md` expecting it to resolve against an on-disk
+  `Foo.md`, and passed locally on macOS purely because APFS is
+  case-insensitive by default — it failed on `ubuntu-latest` in CI (a
+  genuinely case-sensitive filesystem) with "file not found". Root
+  cause: `discovery::resolve_file` (used by `backlinks --file`, and any
+  other command that resolves a CLI file argument) does a literal
+  `Path::is_file()` check with no case-insensitive fallback, so it never
+  actually consults `[links] case_insensitive` — only the *graph-level*
+  lookup (`LinkGraph::backlinks_ci`) is case-insensitive-aware. Any new
+  test or feature that exercises a filesystem-casing scenario must be
+  validated against a case-sensitive assumption (or run on Linux CI)
+  before being trusted, not just eyeballed on a macOS/Windows dev
+  machine. See task 3 below (new) for closing this specific gap.
+
 ## Tasks
 
 ### 1. Anchor validation (L-21)
@@ -54,7 +116,26 @@ one place now. Findings L-16, L-19, L-21, L-22, L-23 from
   (discovery.rs:714-842) so `my%20page.md` resolves; encoding kept
   as-written on rewrite
 
-### 4. Retrospective
+### 4. Case-insensitive CLI file-argument resolution (new, from iter-184 review)
+
+- [ ] `discovery::resolve_file` (used by `--file` args on `backlinks`,
+  `read`, `set`, `remove`, `append`, single-file `mv`, etc.) does a
+  literal `Path::is_file()` check with no case-insensitive fallback, so
+  it never actually consults `[links] case_insensitive` — confirmed by
+  CI: `backlinks --file foo.md` fails with "file not found" on Linux
+  when only `Foo.md` exists, even with case-insensitive mode on. Only
+  the graph-level lookup (`LinkGraph::backlinks_ci`) honors the setting.
+- [ ] Decide scope: thread `case_insensitive_mode` (or a prebuilt case
+  index) into `resolve_file`, falling back to a case-insensitive
+  directory scan when the literal-case lookup misses. Note
+  `resolve_file` is used by more than just `backlinks` — audit call
+  sites and vault-boundary/path-traversal checks stay correct for the
+  fallback path too.
+- [ ] e2e: `backlinks --file foo.md` (lowercase arg) finds `Foo.md` on a
+  case-insensitive vault, run on Linux CI (not just locally) so a
+  filesystem-accident pass doesn't mask a regression again.
+
+### 5. Retrospective
 
 - [ ] Re-run the full link-review fixture corpus (multi-line spans,
   BOM, CRLF, anchors, aliases, escapes) across find/mv/fix/auto/lint —

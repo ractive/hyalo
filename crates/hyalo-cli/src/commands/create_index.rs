@@ -30,9 +30,17 @@ pub fn create_index(
     // caller specified a custom output path.
     if output.is_some() && !allow_outside_vault {
         let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
-        let parent = index_path
-            .parent()
-            .context("output path has no parent directory")?;
+        // A bare relative filename (e.g. `--index-file idx.bin`) yields
+        // `parent() == Some("")`, which is not a canonicalizable path. Treat an
+        // empty parent as the current directory so the boundary check compares
+        // against `.` rather than failing on an empty path.
+        let parent = match index_path.parent() {
+            Some(p) if p.as_os_str().is_empty() => Path::new("."),
+            Some(p) => p,
+            None => {
+                anyhow::bail!("output path has no parent directory");
+            }
+        };
         let canonical_parent = dunce::canonicalize(parent).with_context(|| {
             format!(
                 "failed to canonicalize parent of output path: {}",

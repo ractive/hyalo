@@ -61,6 +61,57 @@ Also links to [[target|the target page]].
 }
 
 #[test]
+fn backlinks_case_insensitive_agrees_across_casings() {
+    // L-6: on a case-insensitive vault, `backlinks_ci` in the link graph
+    // groups links written with *any* casing (`[[Foo]]`, `[[foo]]`) under the
+    // same target, so `backlinks <file>` returns every linker regardless of
+    // how each linking file wrote the wikilink.
+    //
+    // NOTE: this only exercises the graph-level lookup (`LinkGraph::backlinks_ci`).
+    // The CLI `--file` argument itself is still resolved via a literal
+    // filesystem check (`discovery::resolve_file`), which is case-sensitive
+    // on a case-sensitive filesystem (Linux) regardless of the `[links]
+    // case_insensitive` config — `backlinks foo.md` fails with "file not
+    // found" there even though `backlinks Foo.md` (the real on-disk casing)
+    // succeeds. That CLI-arg-resolution gap is a separate, pre-existing
+    // limitation (not introduced by L-6) and is out of scope here; querying
+    // by the file's actual on-disk casing is the supported path.
+    use std::fs;
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n\n[links]\ncase_insensitive = \"true\"\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "Foo.md", "# Foo\n");
+    write_md(tmp.path(), "a.md", "See [[Foo]]\n");
+    write_md(tmp.path(), "b.md", "See [[foo]]\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["backlinks", "--file", "Foo.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "backlinks Foo.md failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sources: std::collections::BTreeSet<String> = json["results"]["backlinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["source"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        sources,
+        ["a.md", "b.md"].iter().map(|s| (*s).to_owned()).collect(),
+        "both a.md ([[Foo]]) and b.md ([[foo]]) must link to Foo regardless of the casing each used"
+    );
+}
+
+#[test]
 fn backlinks_finds_markdown_links() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "notes/target.md", "# Target\n");

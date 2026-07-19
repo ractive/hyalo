@@ -725,10 +725,15 @@ impl SnapshotIndex {
                     .enumerate()
                     .map(|(i, e)| (e.rel_path.clone(), i))
                     .collect();
+                // The graph's lowercased companion map is `#[serde(skip)]`, so a
+                // freshly-deserialized graph has an empty one — rebuild it from
+                // the restored index keys so `backlinks_ci` works off snapshots.
+                let mut graph = data.graph;
+                graph.rebuild_lower_index();
                 Some(Self {
                     entries,
                     path_index,
-                    graph: data.graph,
+                    graph,
                     header: data.header,
                     bm25_index: data.bm25_index,
                     frontmatter_link_props: None,
