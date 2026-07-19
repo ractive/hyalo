@@ -117,6 +117,12 @@ what GitHub will register.
 
 ## Notes
 
+- 2026-07-19: MD013 disabled vault-wide (`.hyalo.toml` `[lint.rules]`,
+  user decision — legacy soft-wrapped files made it 97% of all warnings).
+  Vault is now 0 errors / ~22 warnings, so steady-state cap pressure is
+  gone; this iteration still stands for annotation *ownership* (PR
+  findings, not vault backlog), determinism, and the truncation notice
+  for per-file bursts.
 - Independent of the 183→184→185 link chain — can run before, after, or
   between them.
 - Out of scope: annotation *budgeting* beyond the notice (e.g. picking

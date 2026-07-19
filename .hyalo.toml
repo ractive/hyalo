@@ -158,7 +158,6 @@ ignore = [
 ]
 
 [lint.rules]
-MD013 = true
 # Completed iterations often keep a trailing "mark completed / move to done"
 # housekeeping checkbox unticked. That is a normal, not an error, state for this
 # vault, so HYALO002 is advisory (warn) here rather than a CI-failing error.
