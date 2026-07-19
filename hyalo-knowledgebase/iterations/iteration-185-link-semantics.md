@@ -87,7 +87,7 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 
 ## Tasks
 
-### 1. Anchor validation (L-21)
+### 1. Anchor validation (L-21) [0/3]
 
 - [ ] Anchors are carried through resolution (not discarded at parse,
   links.rs:488-490): `[[Foo#nonexistent-heading]]` is reportable as
@@ -99,7 +99,10 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 - [ ] Perf guard: anchor validation only reads target files that are
   actually linked with an anchor; MDN-scale timing within budget
 
-### 2. Broken-link lint rule (L-22)
+Not started this PR — deferred (see Implementation notes below); requires
+plumbing the vault `LinkGraph` into heading-content reads for anchors.
+
+### 2. Broken-link lint rule (L-22) [0/3]
 
 - [ ] New HYALO004 lint rule: broken wikilink/markdown link targets
   (and optionally broken anchors, severity-configurable) so link health
@@ -108,19 +111,24 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
   respects `[lint] ignore` and `[okf]`/exempt semantics
 - [ ] Docs: lint-rules list/show entries, README, knowledgebase
 
-### 3. Escapes and normalization (L-16, L-19, L-23)
+Not started this PR — deferred; `HYALO004` is already taken (datetime-format),
+future rule should be `HYALO006`; needs a vault-level graph cache plumbed into
+`hyalo-mdlint`, which currently has no link-graph access.
+
+### 3. Escapes and normalization (L-16, L-19, L-23) [1/3]
 
 - [x] L-16: `\[[not-a-link]]` is not extracted (backslash escape per
   CommonMark/Obsidian); rewiters leave it untouched
 - [ ] L-19: `.md`-suffix normalization happens at `Link` construction
   (with an as-written field preserved); remove the manual re-strip at
   auto_link.rs:552-557 and audit consumers comparing targets across
-  link kinds
+  link kinds — deferred, touches the `Link` type shape and every
+  cross-kind consumer; sized as a follow-up to avoid a wide diff.
 - [ ] L-23: percent-decode markdown link targets in `resolve_target`
   (discovery.rs:714-842) so `my%20page.md` resolves; encoding kept
-  as-written on rewrite
+  as-written on rewrite — deferred alongside L-19.
 
-### 4. Case-insensitive CLI file-argument resolution (new, from iter-184 review)
+### 4. Case-insensitive CLI file-argument resolution (new, from iter-184 review) [3/3]
 
 - [x] `discovery::resolve_file` (used by `--file` args on `backlinks`,
   `read`, `set`, `remove`, `append`, single-file `mv`, etc.) does a
@@ -139,13 +147,21 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
   case-insensitive vault, run on Linux CI (not just locally) so a
   filesystem-accident pass doesn't mask a regression again.
 
-### 5. Retrospective
+Scope landed via `discovery::resolve_file_ci` + `resolve_case_insensitive`,
+wired through `resolve_file_user_ci` into `backlinks` only (the command that
+already carried `case_insensitive`); other `--file` commands (`read`, `set`,
+`remove`, `append`, `mv`) still use the case-sensitive `resolve_file_user` and
+remain a follow-up if needed.
+
+### 5. Retrospective [0/2]
 
 - [ ] Re-run the full link-review fixture corpus (multi-line spans,
   BOM, CRLF, anchors, aliases, escapes) across find/mv/fix/auto/lint —
   all consistent
 - [ ] Close out [[reviews/link-handling-review-2026-07-18]]: mark each
   L-finding fixed/deferred with a pointer
+
+Not done this PR — deferred to a future iteration once tasks 1-3 land.
 
 ## Implementation notes (this PR)
 
