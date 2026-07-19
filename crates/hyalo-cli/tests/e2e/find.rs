@@ -3549,6 +3549,43 @@ fn find_orphan_returns_isolated_files() {
     assert!(results[0]["backlinks"].is_array());
 }
 
+/// L-6 alignment: a case-insensitive inbound link (`[[foo]]` → `Foo.md`)
+/// counts as inbound for `--orphan`/`--dead-end`, consistent with the
+/// `backlinks` command and `summary` (both route through `backlinks_ci`).
+#[test]
+fn find_orphan_counts_case_insensitive_inbound() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n[[foo]]\n");
+    write_md(tmp.path(), "Foo.md", "---\ntitle: Foo\n---\nContent.\n");
+
+    for (flag, expected) in [("--orphan", Vec::new()), ("--dead-end", vec!["Foo.md"])] {
+        let output = hyalo_no_hints()
+            .args([
+                "--dir",
+                tmp.path().to_str().unwrap(),
+                "find",
+                flag,
+                "--format",
+                "json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let files: Vec<&str> = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["file"].as_str().unwrap())
+            .collect();
+        assert_eq!(files, expected, "{flag} files: {files:?}");
+    }
+}
+
 #[test]
 fn find_dead_end_returns_files_with_inbound_only() {
     let tmp = tempfile::TempDir::new().unwrap();

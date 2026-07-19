@@ -810,9 +810,12 @@ pub fn find(
         };
 
         // --- Backlinks from pre-built link graph ---
+        // Case-insensitive lookup (L-6): keeps `find --fields backlinks`,
+        // `--orphan`, and `--dead-end` consistent with the `backlinks`
+        // command and `summary`, which route through `backlinks_ci`.
         let backlinks = if fields.backlinks {
             let entries_bl = link_graph_ref
-                .map(|graph| graph.backlinks(&entry.rel_path))
+                .map(|graph| graph.backlinks_ci(&entry.rel_path))
                 .unwrap_or_default();
             Some(
                 entries_bl
