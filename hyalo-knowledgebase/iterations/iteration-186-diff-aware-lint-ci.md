@@ -50,7 +50,7 @@ what GitHub will register.
 
 ## Tasks
 
-### 1. CI: split lint-kb into diff-aware (PR) + full (main)
+### 1. CI: split lint-kb into diff-aware (PR) + full (main) [5/5]
 
 - [x] `lint-kb` (pull_request): checkout with enough history for a
   merge-base diff (`fetch-depth: 0`, or depth-1 plus an explicit
@@ -77,7 +77,7 @@ what GitHub will register.
   `lint-kb-full` on main — deliberate trade-off, annotations belong to
   the PR's own files
 
-### 2. hyalo: `--format github` truncation honesty
+### 2. hyalo: `--format github` truncation honesty [4/4]
 
 - [x] Deterministic emission order: sort annotations by (path, line,
   rule) before emitting — which findings GitHub registers under its cap
@@ -93,7 +93,7 @@ what GitHub will register.
 - [x] e2e tests: ordering is sorted and stable; notice appears at >10 and
   not at ≤10; existing exit-code contract unchanged
 
-### 3. Verification
+### 3. Verification [3/3]
 
 - [x] Dogfood PR: touch one KB file introducing a deliberate MD013
   warning → the PR check annotates exactly that file (registered
