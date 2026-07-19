@@ -91,7 +91,7 @@ versioning and allows a floating `@v1` tag. Skills land in consumer repos via
   `ractive/setup-hyalo@v1`; new `@claude` agent recipe (`claude-code-action` +
   `setup-hyalo` + `allowed_tools: Bash(hyalo:*)`); fix-mode `--format github`
   behavior verified against an unfixable missing-property violation.
-- Decision recorded: [[decision-log#DEC-051]] (separate repo + floating `@v1`).
+- Decision recorded: [[decision-log]] (separate repo + floating `@v1`).
 
 **Blocked — needs a human:**
 

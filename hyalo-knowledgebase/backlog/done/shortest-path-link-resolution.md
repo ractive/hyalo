@@ -31,5 +31,5 @@ Requires knowing all files in the vault to find the shortest match — essential
 
 ## References
 
-- [[decision-log#DEC-014]]: current simple resolution, explicitly defers shortest-path
-- [[iterations/done/iteration-02-links#Later — Indexing]]: mentions this as a deferred feature
+- [[decision-log#DEC-014: Simple Direct Link Resolution (2026-03-20)]]: current simple resolution, explicitly defers shortest-path
+- [[iterations/done/iteration-02-links]]: mentions this as a deferred feature

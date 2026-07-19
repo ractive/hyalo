@@ -39,5 +39,5 @@ Follows the same pattern as fenced code block tracking:
 
 ## References
 
-- [[decision-log#DEC-015]]: originally deferred, now resolved
+- [[decision-log]]: originally deferred, now resolved
 - [[backlog/done/comment-block-handling]]: backlog item (status: done)

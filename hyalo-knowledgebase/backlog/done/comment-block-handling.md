@@ -30,7 +30,7 @@ Small — the scanner already tracks fenced code block state with the same open/
 
 ## References
 
-- [[decision-log#DEC-015]]: documented as known limitation, explicitly noted as "straightforward to add"
+- [[decision-log]]: documented as known limitation, explicitly noted as "straightforward to add"
 - [[iterations/done/iteration-02-links]]: listed under Known Limitations
 
 ## My Comments

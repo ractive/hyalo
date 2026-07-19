@@ -144,7 +144,7 @@ hyalo command the same way.
 - [x] CHANGELOG `Unreleased` entry under Added.
 - [x] Decision-log: add DEC-044 capturing "VCS-agnostic scoping via
       `--files-from` instead of a git-integrated `--since` flag", with
-      reference to [[research/ff-rdp-discipline-consumer-notes#B]].
+      reference to [[research/ff-rdp-discipline-consumer-notes]].
 
 ## Tasks
 
@@ -239,7 +239,7 @@ hyalo command the same way.
 
 ## References
 
-- [[research/ff-rdp-discipline-consumer-notes#B]] — the consumer
+- [[research/ff-rdp-discipline-consumer-notes]] — the consumer
   feature where `--files-from` was proposed and James's reasoning for
   preferring it over a git-coupled `--since` flag
 - [[iteration-138-schema-extensions-and-new-command]] — the

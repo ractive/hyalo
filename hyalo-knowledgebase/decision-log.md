@@ -24,7 +24,7 @@ status: reference
 
 ## DEC-003: ~~`--path` for File Targeting~~ (2026-03-20) — SUPERSEDED by DEC-018
 
-**Decision:** ~~Single `--path` flag for all file targeting.~~ Replaced by `--file` (single file) and `--glob` (pattern). See [[decision-log#DEC-018]].
+**Decision:** ~~Single `--path` flag for all file targeting.~~ Replaced by `--file` (single file) and `--glob` (pattern). See [[decision-log]].
 
 The following still applies: always relative to `--dir`, always requires `.md` extension, no fuzzy wikilink-style name resolution. Leading `./` is tolerated and normalized. Missing `.md` triggers a helpful error with a hint.
 
@@ -146,7 +146,7 @@ The old `--path` flag is retired. Both flags are always relative to `--dir` and 
 
 **Why (original):** Tasks live in the markdown body, so vault-wide task search requires reading the full content of every file — not just frontmatter. Without an index, this is O(n) full-file reads per invocation.
 
-**Superseded by:** Iteration 9 introduced vault-wide and glob-scoped task support (`--file`, `--glob`, or no scope flag). The multi-visitor scanner ([[decision-log#DEC-028]]) made this feasible — each file is opened exactly once regardless of how many data dimensions are collected. Vault-wide tasks are now consistent with the tags API and give LLM agents a single-call way to find all open work.
+**Superseded by:** Iteration 9 introduced vault-wide and glob-scoped task support (`--file`, `--glob`, or no scope flag). The multi-visitor scanner ([[decision-log#DEC-028: Multi-Visitor Scanner Architecture (2026-03-21)]]) made this feasible — each file is opened exactly once regardless of how many data dimensions are collected. Vault-wide tasks are now consistent with the tags API and give LLM agents a single-call way to find all open work.
 
 ## DEC-022: Tags Support Vault-Wide Operations Without Index (2026-03-20)
 
@@ -547,7 +547,7 @@ Research across tools:
 
 ## DEC-044: VCS-Agnostic Scoping via `--files-from` (2026-05-24)
 
-**Context:** Consumer repos (ff-rdp and similar, see [[research/ff-rdp-discipline-consumer-notes]]) wanted to scope `hyalo lint` to only the files touched on a branch — "diff-aware lint in CI". The first instinct was a `--since <git-ref>` flag that would shell out to `git diff --name-only`. See [[research/ff-rdp-discipline-consumer-notes#B]] for the full discussion.
+**Context:** Consumer repos (ff-rdp and similar, see [[research/ff-rdp-discipline-consumer-notes]]) wanted to scope `hyalo lint` to only the files touched on a branch — "diff-aware lint in CI". The first instinct was a `--since <git-ref>` flag that would shell out to `git diff --name-only`. See [[research/ff-rdp-discipline-consumer-notes]] for the full discussion.
 
 **Decision:** No git integration. Add `--files-from <PATH>` (or `-` for stdin) instead. The caller supplies the file list via any tool that fits their VCS: `git diff --name-only`, `hg status -n`, `make .changed`, a script. Hyalo accepts a flat newline-separated list and operates on exactly that set.
 

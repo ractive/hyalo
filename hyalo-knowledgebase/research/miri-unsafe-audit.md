@@ -14,7 +14,7 @@ status: active
 # Miri Evaluation & Unsafe Audit
 
 How Miri fits into hyalo's test surface, what it found, and how the remaining
-`unsafe` should be approached. Companion to [[decision-log#DEC-042]].
+`unsafe` should be approached. Companion to [[decision-log]].
 
 ## Setup
 

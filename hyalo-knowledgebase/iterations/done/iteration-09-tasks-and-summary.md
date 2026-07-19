@@ -47,7 +47,7 @@ Three features plus an architectural improvement:
 
 ## Architecture: Multi-Visitor Scanner (resolved)
 
-Chose **option 1: multi-visitor scanner** — see [[decision-log#DEC-028]].
+Chose **option 1: multi-visitor scanner** — see [[decision-log#DEC-028: Multi-Visitor Scanner Architecture (2026-03-21)]].
 
 `FileVisitor` trait with `on_frontmatter`, `on_body_line`, `on_code_fence_open`, `on_code_fence_close`. `scan_file_multi` drives multiple visitors in a single pass. All commands now open each file exactly once:
 

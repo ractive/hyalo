@@ -89,7 +89,7 @@ Only `[x]` and `[X]` are considered "done". All other status characters are "not
 
 ### Behavior Notes
 
-- `--file` is required for all task commands (no vault-wide mode, see [[decision-log#DEC-021]])
+- `--file` is required for all task commands (no vault-wide mode, see [[decision-log#DEC-021: Tasks Are File-Scoped Only (2026-03-20) — SUPERSEDED]])
 - `task toggle` flips `[ ]` → `[x]` and `[x]` / `[X]` → `[ ]`. For custom statuses like `[-]`, toggle sets to `[x]` (marking done)
 - `task set-status` accepts any single character
 - Line numbers are 1-based (matching editor conventions)

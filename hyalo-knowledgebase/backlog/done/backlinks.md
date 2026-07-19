@@ -27,7 +27,7 @@ Returns a list of files that contain `[[decision-log]]` or `[[decision-log#DEC-0
 
 ## Constraints
 
-Requires scanning all files in the vault for every call — O(n) full-file reads. Already deferred to the indexing iteration (see [[decision-log#DEC-013]]). Without an index, this is too slow for large vaults.
+Requires scanning all files in the vault for every call — O(n) full-file reads. Already deferred to the indexing iteration (see [[decision-log#DEC-013: Defer backlinks/orphans/deadends to Indexing (2026-03-20)]]). Without an index, this is too slow for large vaults.
 
 ## Workaround
 

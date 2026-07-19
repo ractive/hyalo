@@ -22,7 +22,7 @@ During iteration 6 dogfooding, `--format text` produced output like `properties:
 
 ## Approach
 
-JSON is the single source of truth. Each output type (typed struct) gets a `&'static str` jq filter. Filters are looked up by computing a "key signature" — the sorted comma-joined top-level keys of the JSON object. Unknown shapes fall back to the old generic formatter. See [[decision-log#DEC-027]].
+JSON is the single source of truth. Each output type (typed struct) gets a `&'static str` jq filter. Filters are looked up by computing a "key signature" — the sorted comma-joined top-level keys of the JSON object. Unknown shapes fall back to the old generic formatter. See [[decision-log]].
 
 ## Tasks
 

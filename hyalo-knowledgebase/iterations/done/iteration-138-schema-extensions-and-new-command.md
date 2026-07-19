@@ -14,7 +14,7 @@ tags:
   - consumer-tooling
 related:
   - "[[research/ff-rdp-discipline-consumer-notes]]"
-  - "[[decision-log#DEC-041]]"
+  - "[[decision-log#DEC-041: Markdown Linter — Embed mdbook-lint-core + HYALO Native Rules (2026-05-04)]]"
 ---
 
 ## Goal
@@ -250,7 +250,7 @@ Companion to [[research/ff-rdp-discipline-consumer-notes]].
 
 - [[research/ff-rdp-discipline-consumer-notes]] — the consumer wishlist
   and the design dialogue that produced this scope
-- [[decision-log#DEC-041]] — markdown linter foundation
+- [[decision-log#DEC-041: Markdown Linter — Embed mdbook-lint-core + HYALO Native Rules (2026-05-04)]] — markdown linter foundation
 - [[backlog/done/property-regex-yaml-lists]] — already-shipped piece
   (regex matching inside YAML list values, via `--property X~=`); this
   iter adds the validation half of the same feature

@@ -14,7 +14,7 @@ tags:
 
 ## Goal
 
-Provide CLI commands to list, inspect, add, and remove tags in YAML frontmatter. Tags are frontmatter-only — inline `#tags` in markdown body are not supported (see [[decision-log#DEC-020]]). Support both single-file and multi-file (glob) operations, including batch tag/untag across directories.
+Provide CLI commands to list, inspect, add, and remove tags in YAML frontmatter. Tags are frontmatter-only — inline `#tags` in markdown body are not supported (see [[decision-log]]). Support both single-file and multi-file (glob) operations, including batch tag/untag across directories.
 
 ## CLI Interface
 

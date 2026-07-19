@@ -188,7 +188,7 @@ heading like `# No Tasks heading` because "Tasks" is a substring of
 "No Tasks heading".
 
 This is documented intentional behavior, not a bug. From
-[[decision-log#DEC for iter-36]]:
+[[decision-log#DEC-033: Advanced Filter Syntax for iter-36 (2026-03-25)]]:
 
 > Section substring default — `--section` changed from exact
 > whole-string to case-insensitive substring (contains) matching. This
@@ -214,7 +214,7 @@ action needed.
 ### NEW-3: prior NEW-2 from `dogfood-v0160-deep.md` still open — MEDIUM
 
 The multi-segment `--dir` prefix-strip in `--files-from` reported in
-[[dogfood-v0160-deep#NEW-2]] is unchanged in this build.
+[[dogfood-v0160-deep]] is unchanged in this build.
 
 ```
 $ cd /Users/james/devel/mdn
