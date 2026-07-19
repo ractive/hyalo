@@ -60,7 +60,7 @@ Based on the Obsidian CLI, the most valuable commands for AI agents are:
 
 Obsidian's search syntax is the gold standard. Target compatibility:
 
-```
+```text
 # Property queries
 [status:ready]
 [type:story]

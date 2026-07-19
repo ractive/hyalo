@@ -87,7 +87,7 @@ hyalo lint --format json
 
 ### Output (text)
 
-```
+```text
 iterations/iteration-101-bm25.md:
   error  missing required property "foo" (type: iteration)
   error  property "status" value "planed" not in [planned, in-progress, completed, ...] (did you mean "planned"?)

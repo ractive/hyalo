@@ -12,6 +12,7 @@ branch: iter-159/pi-integration
 ---
 
 ## Goal
+
 Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring the existing `--claude` flag functionality.
 
 ## Tasks
@@ -60,20 +61,25 @@ Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring
 ## Changes Made
 
 ### 1. **Command-line Arguments (`crates/hyalo-cli/src/cli/args.rs`)**
+
 - Added `pi: bool` field to the `Init` struct with proper documentation
 - Updated command help text to include pi integration examples
 - Updated `Deinit` command description to mention pi artifact removal
 
 ### 2. **Command Execution (`crates/hyalo-cli/src/run.rs`)**
+
 - Modified the `Init` pattern match to extract both `claude` and `pi` flags
 - Updated call to `init_commands::run_init()` to pass the `pi` parameter
 
 ### 3. **Core Implementation (`crates/hyalo-cli/src/commands/init.rs`)**
+
 #### Function Signatures
+
 - Updated `run_init()` to accept `pi: bool` parameter
 - Updated `run_init_in()` to accept `pi: bool` parameter alongside existing `claude` parameter
 
 #### PI Integration Logic
+
 - Added conditional pi installation steps that run independently of claude installation
 - PI installation creates:
   - `.pi/skills/hyalo/SKILL.md` (hyalo skill for pi)
@@ -82,6 +88,7 @@ Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring
   - `.pi/package.json` (pi package configuration)
 
 #### Deinit Updates
+
 - Enhanced `run_deinit_in()` to remove pi artifacts:
   - `.pi/skills/hyalo/SKILL.md`
   - `.pi/skills/hyalo-tidy/SKILL.md`
@@ -90,6 +97,7 @@ Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring
 - Properly cleans up empty `.pi/` directory structure
 
 #### Template Constants
+
 - Added embedded template constants for pi artifacts:
   - `PI_SKILL_CONTENT`
   - `PI_TIDY_SKILL_CONTENT`
@@ -97,6 +105,7 @@ Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring
   - `PI_PACKAGE_JSON_CONTENT`
 
 ### 4. **Template Files (`crates/hyalo-cli/templates/`)**
+
 Created four new template files:
 - **`skill-hyalo-pi.md`**: Direct copy from hoppy project's pi skill
 - **`skill-hyalo-tidy-pi.md`**: Modified from hoppy project (replaced "hoppy-knowledgebase" with "hyalo-knowledgebase" sentinel)
@@ -104,6 +113,7 @@ Created four new template files:
 - **`package.json`**: Configuration for pi package registration
 
 ### 5. **Test Updates**
+
 Updated all test calls to `run_init_in()` to include the new `pi` parameter (set to `false` for existing tests), ensuring test suite passes.
 
 ## Key Design Decisions

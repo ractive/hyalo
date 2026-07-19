@@ -27,7 +27,7 @@ hyalo set f.md --property "huge=$(python3 -c 'print("x"*10000)')"
 # exit 0, JSON envelope confirms write
 hyalo find --file f.md
 # warning: skipping f.md: frontmatter too large (no closing `---` found
-#          within 200 lines / 8192 bytes)
+# within 200 lines / 8192 bytes)
 # No results
 ```
 
@@ -66,6 +66,7 @@ frontmatter fits under 8 KiB by a wide margin, B is fine too.
 Whichever budget is chosen, the write side must:
 
 - Reject the write upfront with a structured error:
+
   ```json
   {
     "error": "frontmatter would exceed size budget",
@@ -74,6 +75,7 @@ Whichever budget is chosen, the write side must:
     "file": "f.md"
   }
   ```
+
 - Exit non-zero. No partial write. No silent truncation.
 
 **3. Read-side warning becomes one-time + actionable.**
