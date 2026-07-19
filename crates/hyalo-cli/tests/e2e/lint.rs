@@ -2299,6 +2299,100 @@ fn lint_github_never_truncates_annotations() {
     );
 }
 
+/// `--format github` emits annotations sorted by (path, line, rule) so the
+/// subset GitHub keeps under its per-type cap is stable across runs (iter-186).
+/// Files are created in a non-sorted order; the annotation stream must be
+/// lexicographically ordered by path regardless.
+#[test]
+fn lint_github_annotations_sorted_by_path() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n[schema.default]\nrequired = []\n");
+    // Create files in a deliberately unsorted order.
+    for name in ["m.md", "a.md", "z.md", "c.md"] {
+        write_md(tmp.path(), name, "---\na: 1\na: 2\n---\n# Body\n");
+    }
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code().unwrap(), 1);
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let paths: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.starts_with("::error file="))
+        .map(|l| {
+            l.trim_start_matches("::error file=")
+                .split(',')
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["a.md", "c.md", "m.md", "z.md"],
+        "github annotations must be sorted by path; got:\n{stdout}"
+    );
+}
+
+/// `--format github` appends a truncation `::notice::` when the warning count
+/// exceeds GitHub's per-type cap (10), naming the true total — and stays quiet
+/// when under the cap (iter-186). MD013 is enabled here (it is disabled
+/// vault-wide by default) to generate many warnings on long lines cheaply.
+#[test]
+fn lint_github_truncation_notice_over_cap() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint.rules.MD013]\nenabled = true\n",
+    );
+    // 12 files each with one over-length line -> 12 MD013 warnings > cap of 10.
+    let long = "x".repeat(200);
+    for i in 0..12 {
+        write_md(
+            tmp.path(),
+            &format!("long{i:02}.md"),
+            &format!("---\ntitle: T\n---\n{long}\n"),
+        );
+    }
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "github"])
+        .output()
+        .unwrap();
+    let stdout = std::str::from_utf8(&out.stdout).unwrap();
+    let notice = stdout
+        .lines()
+        .find(|l| l.starts_with("::notice::"))
+        .unwrap_or_else(|| panic!("expected a truncation ::notice::; got:\n{stdout}"));
+    assert!(
+        notice.contains("12 warnings") && notice.contains("at most 10"),
+        "notice must state the true total and the cap; got: {notice}"
+    );
+
+    // Under the cap: no notice. One file, one warning.
+    let tmp2 = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp2.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint.rules.MD013]\nenabled = true\n",
+    );
+    write_md(
+        tmp2.path(),
+        "one.md",
+        &format!("---\ntitle: T\n---\n{long}\n"),
+    );
+    let out2 = hyalo_no_hints()
+        .current_dir(tmp2.path())
+        .args(["lint", "--format", "github"])
+        .output()
+        .unwrap();
+    let stdout2 = std::str::from_utf8(&out2.stdout).unwrap();
+    assert!(
+        !stdout2.contains("::notice::"),
+        "no truncation notice under the cap; got:\n{stdout2}"
+    );
+}
+
 /// Skip-summary line appears in BOTH text and github when `--files-from` drops
 /// input paths, with the correct counters; absent when all inputs resolve (UX-B).
 #[test]

@@ -208,7 +208,7 @@ ignore = ["_template/**", "test/fixture-vault/**"]  # skip these trees
 
 ```bash
 hyalo lint --profile okf                 # validate the whole bundle
-git diff --name-only origin/main | hyalo lint --profile okf --files-from -   # scope to a diff in CI
+git diff --name-only origin/main...HEAD | hyalo lint --profile okf --files-from -   # scope to a diff in CI
 ```
 
 The profile honours OKF's **permissive-consumption** model — *warn, don't reject*:
@@ -290,7 +290,7 @@ The `changelog` profile binds a frontmatter-less `changelog` type to the literal
 
 ```sh
 hyalo lint --profile changelog                          # validate CHANGELOG.md
-git diff --name-only origin/main | hyalo lint --profile changelog --files-from -   # CI on a diff
+git diff --name-only origin/main...HEAD | hyalo lint --profile changelog --files-from -   # CI on a diff
 ```
 
 The grammar is **stricter than the other profiles** (a malformed changelog is a real defect), so most rules default to **error**: `CHANGELOG-TITLE`, `CHANGELOG-VERSION-HEADING`, `CHANGELOG-CATEGORY`, `CHANGELOG-VERSION-ORDER` (versions strictly descending), `CHANGELOG-DATE-ORDER` (dates non-increasing), and `CHANGELOG-UNRELEASED-POSITION`. Two soft rules warn: `CHANGELOG-EMPTY-SECTION` and `CHANGELOG-LINK-REF` (every version heading needs a matching footer link ref and vice versa). All appear in `hyalo lint-rules list` and are toggleable via `hyalo lint-rules set CHANGELOG-… --enabled false`.
@@ -477,8 +477,12 @@ hyalo find --view drafts --tag rust               # extend with additional filte
 bypassing the directory walk entirely. This is ideal for linting only changed files in CI:
 
 ```sh
-# Lint only the markdown files touched on this branch
-git diff --name-only origin/main -- '**/*.md' | hyalo lint --files-from -
+# Lint only the markdown files touched on this branch.
+# Three-dot `origin/main...HEAD` diffs against the *merge-base* of main and the
+# branch, so a stale branch is scoped to files IT changed — not to files that
+# drifted on main's tip since the branch forked (which two-dot `origin/main`
+# would wrongly include). This is the form the CI job runs (see below).
+git diff --name-only origin/main...HEAD -- '**/*.md' | hyalo lint --files-from -
 
 # Non-.md paths (build artifacts, source files) are skipped —
 # no need to pre-filter git diff output. Repo-relative paths that start with
@@ -487,7 +491,7 @@ git diff --name-only origin/main -- '**/*.md' | hyalo lint --files-from -
 # automatically — so the recipe above works whether the vault is the repo
 # root or a subdirectory.
 # Counters in the JSON envelope show what was skipped (under `.results`):
-git diff --name-only origin/main | hyalo lint --files-from - --format json \
+git diff --name-only origin/main...HEAD | hyalo lint --files-from - --format json \
   | jq '{missing: .results.files_missing, non_md: .results.files_skipped_non_md}'
 ```
 
@@ -522,9 +526,21 @@ glue required. Errors become `::error`, warnings become `::warning`, and a
 one-line `N errors, M warnings in K files` summary is printed at the end so the
 job log stays readable. The lint still exits non-zero on errors, failing the
 check. `--format github` is lint-only; other subcommands reject it.
-Annotations are **never truncated** under `--format github` — the per-rule and
-per-file display caps are lifted so every finding lands on the PR, even past the
-default 50-file cap.
+
+Annotations are emitted in a **deterministic order** — sorted by `(path, line,
+rule)` — so a run is byte-for-byte reproducible and CI logs diff cleanly.
+
+**hyalo never truncates**: the per-rule and per-file display caps are lifted, so
+every finding is emitted as a workflow command, even past the default 50-file
+cap. **GitHub does** — it registers at most **10 `error` + 10 `warning`
+annotations per workflow step**; workflow commands beyond that are still in the
+job log but do not surface as inline annotations. When a run exceeds either cap
+hyalo appends a `::notice::` stating the true totals so the truncation is
+visible (and stays quiet when both are under the cap). To keep that budget spent
+on a PR's own findings rather than a vault-wide backlog, scope the PR check to
+changed files with `--files-from -` (below) and run the full-vault lint on a
+push-to-main job instead — see this repo's [`ci.yml`](.github/workflows/ci.yml)
+(`lint-kb` + `lint-kb-full`) for the pattern.
 
 Under `--fix --dry-run --format github`, violations that `--fix` *would* resolve
 are rendered as `::notice` annotations with a `[fixable]` title prefix and the
@@ -566,15 +582,28 @@ Paths are emitted **relative to the repository root**: vault-relative paths are
 prefixed with the vault dir's path relative to the current directory, so the job
 **must run from the repo root** for annotations to land on the right file/line.
 
-For a diff-aware variant that only annotates files touched on the branch, combine
-it with `--files-from -`:
+For a diff-aware variant that only annotates files touched on the branch — the
+recommended shape for a `pull_request` job, so GitHub's 10-per-type annotation
+cap is spent on the PR's own findings — combine it with `--files-from -`.
+Checkout with `fetch-depth: 0` (full history) so the three-dot merge-base is
+available, and diff against `github.base_ref` (not a hard-coded `main`):
 
 ```yaml
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ractive/setup-hyalo@v1
       - run: |
-          git fetch origin main --depth=1
-          git diff --name-only origin/main -- '**/*.md' \
+          git fetch --quiet origin "${{ github.base_ref }}"
+          git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '**/*.md' \
             | hyalo lint --strict --files-from - --format github
 ```
+
+Pair it with a full-vault lint on `push: { branches: [main] }` to catch
+cross-file regressions the diff-aware check can't see (a deleted note others
+link to, a schema change) — annotation caps don't matter on a post-merge push.
+See this repo's [`ci.yml`](.github/workflows/ci.yml) for the `lint-kb` /
+`lint-kb-full` split.
 
 For **OKF** vaults, add an optional second step to catch reserved-file
 (`index.md` / `log.md`) drift — `hyalo okf index` is dry-run by default and exits
