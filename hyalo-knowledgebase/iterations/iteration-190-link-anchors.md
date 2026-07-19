@@ -31,6 +31,35 @@ hangs off the single shared entry point, not a new ad-hoc loop.
 
 **Do NOT release; release is a separate user-gated step.**
 
+**Lessons carried from iter-189 (apply here):**
+
+- **Re-derive `discovery.rs` line citations before use.** iter-189 inserted
+  ~370 lines into discovery.rs (the Classify-mode collapse: `LinkResolution`,
+  `StemIndex`, `classify_link`, `classify_short_form_wikilink`,
+  `classify_link_from_source`, `normalize_link_target` all now live there,
+  above `percent_decode_path` / `resolve_target`). Every `discovery.rs:NNN`
+  citation in this plan that predates iter-189 is a first-pass estimate —
+  confirm against `main` at the branch point before relying on it, the same
+  way iter-189 had to re-derive its own citations against post-187/188 main.
+- **Anchor validation should build on `classify_link_from_source` /
+  `resolve_link_from_source`, not a third loop.** iter-189's collapse means
+  there is now exactly one Exists-mode and one Classify-mode entry point in
+  discovery.rs; task 3's `find --broken-links` wiring should call the
+  existing `resolve_link_from_source` for the target and add the anchor
+  check as a second, independent step on its `Some(path)` result — do not
+  duplicate the kind-dependent target-normalization branching that
+  `normalize_link_target` already owns.
+- **AC-fidelity gate wants the load-bearing symbol on the same line as its
+  `- [ ]`.** `ac-fidelity-check.sh` only regex-matches the checkbox's first
+  line; continuation lines are invisible to it. When ticking task/AC boxes
+  in this plan, put the backtick-quoted test name or symbol that proves the
+  claim on the `- [x]` line itself, not wrapped onto a later line.
+- **A single squashed PR commit means "commit history proves before/after"
+  phrasing doesn't hold.** If task 1/6's e2e-locks-before-migration
+  sequencing doesn't survive as separate commits into the PR, phrase the AC
+  as "e2e present and green in the shipped tree" rather than relying on
+  commit ordering as the evidence.
+
 **Constraints inherited (iter-188 task 3 + DEC-058/059):**
 
 - ONE wire-shape change: `fragment: Option<String>` on `Link`
@@ -81,10 +110,14 @@ hangs off the single shared entry point, not a new ad-hoc loop.
   recommendation
 - [ ] Decide + record (part of DEC-060, task 2): markdown fragments may be
   percent-encoded (`[t](note.md#my%20heading)`) — decode via
-  `percent_decode_path` (discovery.rs:858) for matching only; the written
-  form is preserved (spans never cover the fragment). Note
-  `resolve_target` continues to strip fragment/query itself
-  (discovery.rs:929-936) so target resolution is unchanged by this task
+  `percent_decode_path` (discovery.rs:1185, re-derive before use — iter-189
+  inserted ~370 lines above it for the Classify-mode collapse, so this and
+  every other discovery.rs citation in this plan is a first-pass estimate,
+  not gospel) for matching only; the written form is preserved (spans never
+  cover the fragment). Note `resolve_target` continues to strip
+  fragment/query itself (discovery.rs:1243+, the `// Strip fragment (#...)
+  and query string (?...)` comment) so target resolution is unchanged by
+  this task
 
 ### 2. Exact-heading anchor matcher (new shared helper) [0/4]
 

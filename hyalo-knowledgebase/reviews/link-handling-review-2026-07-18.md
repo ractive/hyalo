@@ -305,7 +305,7 @@ review's `status` moves from `active` to `resolved`.
 - **L-3** resolved — multi-line code spans handled by the unified scanner ([[iterations/iteration-183-link-scanner-unification]]).
 - **L-4** resolved — single scanner used by every subcommand ([[iterations/iteration-183-link-scanner-unification]]).
 - **L-5** resolved — `mv --index` refreshes link-graph entries ([[iterations/iteration-184-link-resolver-writer-unification]]).
-- **L-6** resolved — case-insensitive `lower_index` lookups shared across backlinks/orphan/summary; the summary orphan/dead-end tail was routed through the shared graph lookups in [[iterations/iteration-188-link-semantics-completion]].
+- **L-6** resolved — case-insensitive `lower_index` lookups shared across backlinks/orphan/summary. The `backlinks`/`backlinks_ci` foundation landed in [[iterations/iteration-188-link-semantics-completion]], but the summary orphan/dead-end tail was still case-*sensitive* through iter-188; it was actually routed through the shared `backlinks_ci` lookup in [[iterations/iteration-189-resolver-classify-collapse]] (the one observable fix of that otherwise refactor-only iteration). Note: `find --orphan` / `find --dead-end` still compute inbound via case-sensitive `backlinks` — a documented follow-up (see iter-189 task 3), tracked so `find` and `summary` orphan counts do not silently diverge without a record.
 - **L-7** resolved — `links fix` preserves anchors via the shared fragment-aware helper ([[iterations/iteration-184-link-resolver-writer-unification]]).
 - **L-8** resolved — `%%` comment-state ordering guard ([[iterations/iteration-183-link-scanner-unification]]).
 - **L-9** resolved — fuzzy phantom-tie seeding fixed ([[iterations/iteration-184-link-resolver-writer-unification]]).

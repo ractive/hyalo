@@ -964,6 +964,98 @@ No links.
     assert_eq!(disk_orphans, 1);
 }
 
+/// L-6 fix (iter-189): orphan/dead-end inbound membership must be
+/// case-insensitive, matching `backlinks_ci` and the `backlinks` command.
+///
+/// `a.md` writes `[[foo]]`; the on-disk file is `Foo.md` (capital F). Before the
+/// fix, the case-sensitive `all_targets().contains("Foo.md")` check missed the
+/// lower-cased written key `foo`, so `Foo.md` was miscounted as an orphan even
+/// though `backlinks Foo.md` finds `a.md` as a linker. After the fix `Foo.md`
+/// has inbound (dead-end), and orphans drop to zero. Verified on both the
+/// disk-scan and `--index` paths (they must agree).
+#[test]
+fn summary_orphan_dead_end_case_insensitive_inbound() {
+    let tmp = TempDir::new().unwrap();
+    let dir_str = tmp.path().to_str().unwrap();
+
+    // a.md → foo (written lower-case) via wikilink; has outbound.
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+---
+[[foo]]
+"),
+    );
+    // Foo.md exists (capital F), no outbound links → inbound only → dead-end,
+    // NOT an orphan, once inbound membership is case-insensitive.
+    write_md(
+        tmp.path(),
+        "Foo.md",
+        md!(r"
+---
+title: Foo
+---
+No links.
+"),
+    );
+
+    // --- Disk scan ---
+    let disk_out = hyalo_no_hints()
+        .args(["--dir", dir_str, "--format", "json"])
+        .arg("summary")
+        .output()
+        .unwrap();
+    assert!(
+        disk_out.status.success(),
+        "disk summary failed: {}",
+        String::from_utf8_lossy(&disk_out.stderr)
+    );
+    let disk_json: serde_json::Value = serde_json::from_slice(&disk_out.stdout).unwrap();
+    let disk_orphans = disk_json["results"]["orphans"].as_u64().unwrap();
+    let disk_dead_ends = disk_json["results"]["dead_ends"].as_u64().unwrap();
+
+    // --- Index path ---
+    let idx_create = hyalo_no_hints()
+        .args(["--dir", dir_str])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        idx_create.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&idx_create.stderr)
+    );
+    let idx_out = hyalo_no_hints()
+        .args(["--dir", dir_str])
+        .args(["summary", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        idx_out.status.success(),
+        "index summary failed: {}",
+        String::from_utf8_lossy(&idx_out.stderr)
+    );
+    let idx_json: serde_json::Value = serde_json::from_slice(&idx_out.stdout).unwrap();
+    let idx_orphans = idx_json["results"]["orphans"].as_u64().unwrap();
+    let idx_dead_ends = idx_json["results"]["dead_ends"].as_u64().unwrap();
+
+    assert_eq!(
+        disk_orphans, idx_orphans,
+        "disk scan and index orphan counts must agree"
+    );
+    assert_eq!(
+        disk_dead_ends, idx_dead_ends,
+        "disk scan and index dead-end counts must agree"
+    );
+    // `Foo.md` is a dead-end (inbound via case-insensitive [[foo]], no outbound);
+    // `a.md` has outbound. So zero orphans, one dead-end.
+    assert_eq!(disk_orphans, 0, "Foo.md must not be counted as an orphan");
+    assert_eq!(disk_dead_ends, 1, "Foo.md must be counted as a dead-end");
+}
+
 // ---------------------------------------------------------------------------
 // Dead-end detection
 // ---------------------------------------------------------------------------

@@ -2,9 +2,10 @@
 //!
 //! # Overview
 //!
-//! 1. [`detect_broken_links`] / [`detect_broken_links_from_index`] — scan a
-//!    vault for links that cannot be resolved to an existing file and return a
-//!    [`BrokenLinkReport`].
+//! 1. [`detect_broken_links_from_index`] — scan a vault for links that cannot
+//!    be resolved to an existing file and return a [`BrokenLinkReport`]. It
+//!    classifies each link via the shared Classify-mode entry point
+//!    [`crate::discovery::classify_link_from_source`].
 //!
 //! 2. [`plan_fixes`] — for each broken link, find the best candidate file using
 //!    a priority-ordered strategy (case-insensitive → extension mismatch →
@@ -23,9 +24,9 @@ use serde::Serialize;
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::canonicalize_vault_dir;
-use crate::discovery::resolve_target;
+use crate::discovery::{LinkResolution, StemIndex, classify_link_from_source};
 use crate::index::VaultIndex;
-use crate::link_graph::{FileLinks, normalize_target};
+use crate::link_graph::normalize_target;
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
     find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
@@ -139,390 +140,8 @@ pub struct FailedFix {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Classify a single link's resolution against the filesystem and an optional
-/// case-insensitive index.
-///
-/// Returns:
-/// - `Resolved(None)` — link resolves exactly and its on-disk casing matches
-///   the canonical form (or no index was supplied).
-/// - `Resolved(Some(canonical))` — link resolves exactly but the on-disk
-///   casing differs from the canonical form (case-insensitive filesystem
-///   papered over a mismatch); caller should record as a case-mismatch.
-/// - `CaseMismatch(canonical)` — exact resolution failed but the case index
-///   found a unique canonical path; caller should record as a case-mismatch.
-/// - `ShortFormValid` — a short-form wikilink whose stem resolves to exactly
-///   one file in the vault with matching casing; nothing to fix.
-/// - `ShortFormStemMismatch(correct_stem)` — a short-form wikilink whose stem
-///   resolves to exactly one file, but the written casing of the stem differs
-///   from the on-disk filename stem; `new_target` is the corrected stem
-///   (never a path — never expanded).
-/// - `ShortFormAmbiguous` — a short-form wikilink whose stem matches ≥2 files.
-/// - `Broken` — nothing resolves.
-#[derive(PartialEq)]
-enum LinkResolution {
-    Resolved(Option<String>),
-    CaseMismatch(String),
-    ShortFormValid,
-    ShortFormStemMismatch(String),
-    ShortFormAmbiguous,
-    Broken,
-}
-
-/// Precomputed case-insensitive stem → candidate paths map used to resolve
-/// short-form wikilinks when no [`CaseInsensitiveIndex`] is available.
-/// Built once per `detect_broken_links*` call so each lookup is O(1).
-struct StemIndex {
-    map: HashMap<String, Vec<String>>,
-}
-
-impl StemIndex {
-    fn build(vault_files: &[String]) -> Self {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        for path in vault_files {
-            let fname = path.rsplit('/').next().unwrap_or(path.as_str());
-            let stem = fname.strip_suffix(".md").unwrap_or(fname);
-            map.entry(stem.to_ascii_lowercase())
-                .or_default()
-                .push(path.clone());
-        }
-        Self { map }
-    }
-
-    fn lookup(&self, stem: &str) -> Vec<&str> {
-        self.map
-            .get(&stem.to_ascii_lowercase())
-            .map(|v| v.iter().map(String::as_str).collect())
-            .unwrap_or_default()
-    }
-}
-
-/// Classify a short-form wikilink target (no `/`) against the vault's stem
-/// index.  Returns a `LinkResolution` that covers valid, stem-case-mismatch,
-/// ambiguous, and broken cases without ever producing a full path.
-///
-/// When `expand_short_form` is `true`, the caller has opted into path
-/// expansion — skip the short-form special handling and let the caller fall
-/// through to regular path-based classification.
-fn classify_short_form_wikilink(
-    target: &str,
-    stem_index: &StemIndex,
-    case_index: Option<&CaseInsensitiveIndex>,
-    expand_short_form: bool,
-) -> Option<LinkResolution> {
-    if expand_short_form {
-        return None; // caller should use regular path-based classification
-    }
-
-    // Only apply to bare stems (no directory separator). Wikilinks with an
-    // explicit `.md` extension (e.g. `[[Note.md]]`) are path-like targets;
-    // let the caller handle them via regular path-based classification rather
-    // than mismatching them as stem lookups against `"Note.md"`.
-    if target.contains('/') || target.contains('\\') {
-        return None;
-    }
-    // Skip wikilinks with an explicit `.md` extension (case-insensitive),
-    // which are path-like targets and should go through path-based handling.
-    if std::path::Path::new(target)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-    {
-        return None;
-    }
-
-    // Look up the stem case-insensitively. Prefer the case_index when
-    // available (O(1) hash lookup); otherwise use the precomputed
-    // per-invocation stem index built from `vault_files`.
-    let matches: Vec<&str> = if let Some(idx) = case_index {
-        idx.lookup_stem_all(target)
-            .iter()
-            .map(String::as_str)
-            .collect()
-    } else {
-        stem_index.lookup(target)
-    };
-
-    match matches.len() {
-        0 => Some(LinkResolution::Broken),
-        1 => {
-            // Exactly one match — the link is valid. Check if the stem casing differs.
-            let canonical_path = matches[0];
-            let canonical_fname = canonical_path.rsplit('/').next().unwrap_or(canonical_path);
-            let canonical_stem = canonical_fname
-                .strip_suffix(".md")
-                .unwrap_or(canonical_fname);
-
-            if target == canonical_stem {
-                Some(LinkResolution::ShortFormValid)
-            } else {
-                // Stem casing differs — propose the canonical stem (not a full path).
-                Some(LinkResolution::ShortFormStemMismatch(
-                    canonical_stem.to_string(),
-                ))
-            }
-        }
-        _ => Some(LinkResolution::ShortFormAmbiguous),
-    }
-}
-
-fn classify_link(
-    canonical_dir: &Path,
-    resolved_target: &str,
-    site_prefix: Option<&str>,
-    case_index: Option<&CaseInsensitiveIndex>,
-) -> LinkResolution {
-    let exact = resolve_target(canonical_dir, resolved_target, site_prefix, None);
-
-    if let Some(exact_str) = exact {
-        // Link resolves exactly. If we have a case index, also check whether the
-        // resolved path has incorrect casing compared to the canonical on-disk
-        // path. On case-insensitive filesystems, `exact` may contain the
-        // user-written casing rather than the canonical casing.
-        if let Some(idx) = case_index
-            && let Some(canonical_path) =
-                resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
-        {
-            let canonical_fwd = canonical_path.replace('\\', "/");
-            let exact_fwd = exact_str.replace('\\', "/");
-            if exact_fwd != canonical_fwd {
-                return LinkResolution::Resolved(Some(canonical_fwd));
-            }
-        }
-        return LinkResolution::Resolved(None);
-    }
-
-    // Exact resolution failed. If we have a case index, try the
-    // case-insensitive fallback. `resolve_target` already handles the `.md`
-    // extension fallback internally, so any successful indexed resolution
-    // here means the link is a case-mismatch (possibly combined with a
-    // stem/full extension style difference).
-    if let Some(idx) = case_index
-        && let Some(canonical_path) =
-            resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
-    {
-        return LinkResolution::CaseMismatch(canonical_path.replace('\\', "/"));
-    }
-
-    LinkResolution::Broken
-}
-
-/// Resolve a link's target to a vault-relative path and classify it.
-///
-/// Centralizes the bare-basename-fallback logic shared by
-/// [`detect_broken_links`] and [`detect_broken_links_from_index`].  The
-/// returned `LinkResolution` is the verdict for the *resolved* path so the
-/// caller doesn't need to invoke [`classify_link`] a second time (which would
-/// double the stat syscalls in the bare-basename path).
-///
-/// `vault_files` is the flat list of vault-relative paths (used for short-form
-/// stem resolution when `case_index` is `None`).
-///
-/// `expand_short_form` — when `true`, skip Obsidian short-form handling and
-/// fall through to regular path-based classification (old behavior, opt-in via
-/// `--expand-short-form`).
-fn resolve_and_classify_link(
-    canonical: &Path,
-    source_rel: &str,
-    link: &crate::links::Link,
-    site_prefix: Option<&str>,
-    case_index: Option<&CaseInsensitiveIndex>,
-    stem_index: &StemIndex,
-    expand_short_form: bool,
-) -> (String, LinkResolution) {
-    match link.kind {
-        LinkKind::Wikilink => {
-            // For short-form wikilinks (no `/`), apply Obsidian stem resolution first.
-            // This prevents `resolve_target`'s internal stem lookup (inside classify_link)
-            // from misidentifying a valid short-form link as a CaseMismatch.
-            //
-            // Strategy (when !expand_short_form):
-            // 1. Try strict path-only check (no case_index) to catch vault-root exact files.
-            // 2. If path-only resolves → check for case mismatch via the full classify_link.
-            // 3. If path-only fails → use stem classification to determine the correct verdict.
-            //
-            // When expand_short_form=true: bypass stem classification entirely and use the
-            // regular classify_link path, which may expand short-form via stem resolution.
-            if !link.target.contains('/') && !link.target.contains('\\') {
-                if expand_short_form {
-                    // `--expand-short-form` opted into old path-expansion behavior.
-                    // Check path-only (no index) so that the internal stem lookup in
-                    // `resolve_target` cannot silently turn `[[Corina]]` into
-                    // `CaseMismatch("sub/Corina.md")` — we want it to be `Broken`
-                    // when `Corina.md` doesn't exist at the vault root, so that
-                    // `plan_fixes` can then suggest the full path `[[sub/Corina]]`.
-                    let res = classify_link(canonical, &link.target, site_prefix, None);
-                    return (link.target.clone(), res);
-                }
-                // Strategy (when !expand_short_form):
-                // 1. Try strict path-only check (no case_index) to catch vault-root exact files.
-                // 2. If path-only resolves → check for case mismatch via the full classify_link.
-                // 3. If path-only fails → use stem classification to determine the correct verdict.
-                let path_only = classify_link(canonical, &link.target, site_prefix, None);
-                if let LinkResolution::Resolved(_) = path_only {
-                    // File exists at the vault root (exact path). Re-run with full
-                    // case_index to detect root-file casing mismatches (e.g. [[corina]]
-                    // for vault-root Corina.md) and keep the short form.
-                    let full_res = classify_link(canonical, &link.target, site_prefix, case_index);
-                    return (link.target.clone(), full_res);
-                }
-                // Path-only failed → use stem classification.
-                if let Some(stem_res) = classify_short_form_wikilink(
-                    &link.target,
-                    stem_index,
-                    case_index,
-                    false, // expand_short_form already checked above
-                ) {
-                    return (link.target.clone(), stem_res);
-                }
-            }
-            // Path-form link or classify_short_form_wikilink returned None (shouldn't
-            // happen; it always returns Some when called with expand_short_form=false).
-            // Fall through to the regular path-based classification.
-            let res = classify_link(canonical, &link.target, site_prefix, case_index);
-            (link.target.clone(), res)
-        }
-        LinkKind::Markdown => {
-            if link.target.starts_with('/') {
-                let res = classify_link(canonical, &link.target, site_prefix, case_index);
-                (link.target.clone(), res)
-            } else if link.target.contains('/') || link.target.contains('\\') {
-                let target = normalize_target(Path::new(source_rel), &link.target);
-                let res = classify_link(canonical, &target, site_prefix, case_index);
-                (target, res)
-            } else {
-                // Bare basename: try source-relative first, fall back to
-                // vault-relative on Broken so globally-unique stems still resolve.
-                let src_rel = normalize_target(Path::new(source_rel), &link.target);
-                let src_resolution = classify_link(canonical, &src_rel, site_prefix, case_index);
-                if src_resolution == LinkResolution::Broken {
-                    let res = classify_link(canonical, &link.target, site_prefix, case_index);
-                    (link.target.clone(), res)
-                } else {
-                    (src_rel, src_resolution)
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Broken link detection
 // ---------------------------------------------------------------------------
-
-/// Detect broken links from pre-collected file links data.
-///
-/// `file_links` is a slice of [`FileLinks`] (from `link_graph.rs`).
-/// Uses [`resolve_target`] to check if each link target exists.
-///
-/// When `case_index` is provided, links that resolve only via the
-/// case-insensitive fallback are surfaced as [`FixStrategy::LinkCaseMismatch`]
-/// entries in [`BrokenLinkReport::case_mismatches`] rather than as broken.
-///
-/// When `expand_short_form` is `true`, short-form wikilinks (no `/`) are NOT
-/// given special Obsidian stem resolution — they fall through to path-based
-/// classification, which may expand them to full paths.  Default is `false`
-/// (Obsidian-compatible short-form handling).
-#[allow(dead_code)] // Used in tests only; CLI uses detect_broken_links_from_index
-pub(crate) fn detect_broken_links(
-    dir: &Path,
-    file_links: &[FileLinks],
-    site_prefix: Option<&str>,
-    case_index: Option<&CaseInsensitiveIndex>,
-    expand_short_form: bool,
-) -> BrokenLinkReport {
-    let Ok(canonical) = canonicalize_vault_dir(dir) else {
-        return BrokenLinkReport {
-            total_links: 0,
-            broken: Vec::new(),
-            case_mismatches: Vec::new(),
-            ambiguous: Vec::new(),
-        };
-    };
-
-    // Build a precomputed stem index for short-form stem resolution when no
-    // case_index is provided. Built once per call so each lookup is O(1)
-    // instead of a full linear scan of the vault per short-form link.
-    let vault_files: Vec<String> = file_links
-        .iter()
-        .map(|fl| fl.source.to_string_lossy().replace('\\', "/"))
-        .collect();
-    let stem_index = StemIndex::build(&vault_files);
-
-    let mut total_links = 0usize;
-    let mut broken: Vec<BrokenLinkInfo> = Vec::new();
-    let mut case_mismatches: Vec<FixPlan> = Vec::new();
-    let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
-
-    for fl in file_links {
-        let source_str = fl.source.to_string_lossy().replace('\\', "/");
-
-        for (line, link) in &fl.links {
-            total_links += 1;
-
-            let (_resolved_target, resolution) = resolve_and_classify_link(
-                &canonical,
-                &source_str,
-                link,
-                site_prefix,
-                case_index,
-                &stem_index,
-                expand_short_form,
-            );
-
-            match resolution {
-                LinkResolution::Resolved(None) | LinkResolution::ShortFormValid => {}
-                LinkResolution::Resolved(Some(canonical_str))
-                | LinkResolution::CaseMismatch(canonical_str) => {
-                    case_mismatches.push(FixPlan {
-                        source: source_str.clone(),
-                        line: *line,
-                        old_target: link.target.clone(),
-                        new_target: canonical_str,
-                        strategy: FixStrategy::LinkCaseMismatch,
-                        confidence: 1.0,
-                    });
-                }
-                LinkResolution::ShortFormStemMismatch(correct_stem) => {
-                    case_mismatches.push(FixPlan {
-                        source: source_str.clone(),
-                        line: *line,
-                        old_target: link.target.clone(),
-                        new_target: correct_stem,
-                        strategy: FixStrategy::LinkCaseMismatch,
-                        confidence: 1.0,
-                    });
-                }
-                LinkResolution::ShortFormAmbiguous => {
-                    ambiguous.push(BrokenLinkInfo {
-                        source: source_str.clone(),
-                        line: *line,
-                        target: link.target.clone(),
-                    });
-                }
-                LinkResolution::Broken => {
-                    broken.push(BrokenLinkInfo {
-                        source: source_str.clone(),
-                        line: *line,
-                        target: link.target.clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-    case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-    ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-
-    BrokenLinkReport {
-        total_links,
-        broken,
-        case_mismatches,
-        ambiguous,
-    }
-}
 
 /// Detect broken links from index entries.
 ///
@@ -568,7 +187,7 @@ pub fn detect_broken_links_from_index(
         for (line, link) in &entry.links {
             total_links += 1;
 
-            let (_resolved_target, resolution) = resolve_and_classify_link(
+            let (_resolved_target, resolution) = classify_link_from_source(
                 &canonical,
                 &entry.rel_path,
                 link,
@@ -1307,7 +926,6 @@ fn build_replacements_for_file(
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     // --- Fuzzy matching helpers ---
@@ -1336,6 +954,68 @@ mod tests {
             fs::write(&path, content).unwrap();
         }
         dir
+    }
+
+    /// Minimal in-memory [`VaultIndex`] built from hand-specified
+    /// `(rel_path, links)` pairs. Used to exercise
+    /// [`detect_broken_links_from_index`] with precisely-controlled outbound
+    /// links (line numbers, targets, kinds) without going through the scanner —
+    /// the direct successor to the retired `detect_broken_links(&[FileLinks])`
+    /// test path (iter-189 task 4).
+    struct MockIndex {
+        entries: Vec<crate::index::IndexEntry>,
+        graph: crate::link_graph::LinkGraph,
+    }
+
+    impl MockIndex {
+        fn new(files: &[(&str, Vec<(usize, crate::links::Link)>)]) -> Self {
+            let mut entries: Vec<crate::index::IndexEntry> = files
+                .iter()
+                .map(|(rel, links)| crate::index::IndexEntry {
+                    rel_path: (*rel).to_string(),
+                    modified: String::new(),
+                    properties: indexmap::IndexMap::default(),
+                    tags: Vec::new(),
+                    sections: Vec::new(),
+                    tasks: Vec::new(),
+                    links: links.clone(),
+                    bm25_tokens: None,
+                    bm25_language: None,
+                })
+                .collect();
+            entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+            Self {
+                entries,
+                graph: crate::link_graph::LinkGraph::default(),
+            }
+        }
+    }
+
+    impl VaultIndex for MockIndex {
+        fn entries(&self) -> &[crate::index::IndexEntry] {
+            &self.entries
+        }
+        fn get(&self, rel_path: &str) -> Option<&crate::index::IndexEntry> {
+            self.entries.iter().find(|e| e.rel_path == rel_path)
+        }
+        fn link_graph(&self) -> &crate::link_graph::LinkGraph {
+            &self.graph
+        }
+    }
+
+    /// Build a single-source [`MockIndex`] from a source path and its links,
+    /// ensuring the source file itself is present as an entry too so that the
+    /// stem index sees it (mirrors the old `FileLinks { source, links }` shape).
+    fn mock_index(
+        source: &str,
+        links: Vec<(usize, crate::links::Link)>,
+        extra_files: &[&str],
+    ) -> MockIndex {
+        let mut files: Vec<(&str, Vec<(usize, crate::links::Link)>)> = vec![(source, links)];
+        for f in extra_files {
+            files.push((f, Vec::new()));
+        }
+        MockIndex::new(&files)
     }
 
     // --- LinkMatcher unit tests ---
@@ -1591,18 +1271,19 @@ See [broken](old-name.md) here.
         assert_eq!(report.unfixable.len(), 1);
     }
 
-    // --- detect_broken_links: basic ---
+    // --- detect_broken_links_from_index: basic ---
+    // (Ported from the retired FileLinks-based `detect_broken_links` in
+    //  iter-189 task 4; assertions preserved verbatim.)
 
     #[test]
     fn detect_broken_links_finds_missing() {
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         let tmp = vault_with_files(&[("index.md", "[[existing]]"), ("existing.md", "")]);
 
-        let file_links = vec![FileLinks {
-            source: PathBuf::from("index.md"),
-            links: vec![
+        let index = mock_index(
+            "index.md",
+            vec![
                 (
                     1,
                     Link {
@@ -1620,28 +1301,28 @@ See [broken](old-name.md) here.
                     },
                 ),
             ],
-        }];
+            &["existing.md"],
+        );
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, None, false);
 
         assert_eq!(report.total_links, 2);
         assert_eq!(report.broken.len(), 1);
         assert_eq!(report.broken[0].target, "missing");
     }
 
-    // --- detect_broken_links: sorted output ---
+    // --- detect_broken_links_from_index: sorted output ---
 
     #[test]
     fn detect_broken_links_sorted() {
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         let tmp = vault_with_files(&[("a.md", ""), ("b.md", "")]);
 
-        let file_links = vec![
-            FileLinks {
-                source: PathBuf::from("b.md"),
-                links: vec![(
+        let index = MockIndex::new(&[
+            (
+                "b.md",
+                vec![(
                     3,
                     Link {
                         target: "gone".to_string(),
@@ -1649,10 +1330,10 @@ See [broken](old-name.md) here.
                         kind: LinkKind::Wikilink,
                     },
                 )],
-            },
-            FileLinks {
-                source: PathBuf::from("a.md"),
-                links: vec![
+            ),
+            (
+                "a.md",
+                vec![
                     (
                         5,
                         Link {
@@ -1670,10 +1351,10 @@ See [broken](old-name.md) here.
                         },
                     ),
                 ],
-            },
-        ];
+            ),
+        ]);
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, None, false);
 
         assert_eq!(report.broken.len(), 3);
         // Sorted by (source, line)
@@ -2077,7 +1758,6 @@ See [broken](old-name.md) here.
     #[test]
     fn detect_broken_links_emits_case_mismatch_with_index() {
         use crate::case_index::CaseInsensitiveIndex;
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         // On-disk: `web/foo.md` (lowercase). Link written as `Web/Foo` (PascalCase).
@@ -2087,9 +1767,9 @@ See [broken](old-name.md) here.
         let mut idx = CaseInsensitiveIndex::new();
         idx.insert("web/foo.md");
 
-        let file_links = vec![FileLinks {
-            source: PathBuf::from("source.md"),
-            links: vec![(
+        let index = mock_index(
+            "source.md",
+            vec![(
                 1,
                 Link {
                     target: "Web/Foo".to_string(),
@@ -2097,12 +1777,13 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                 },
             )],
-        }];
+            &["web/foo.md"],
+        );
 
         // Without index: case_mismatches is always empty regardless of FS type.
         // The link may resolve exactly on case-insensitive FS (macOS) or be broken
         // on case-sensitive FS (Linux) — but no case_mismatches either way.
-        let report_no_idx = detect_broken_links(tmp.path(), &file_links, None, None, false);
+        let report_no_idx = detect_broken_links_from_index(tmp.path(), &index, None, None, false);
         assert_eq!(report_no_idx.total_links, 1);
         assert!(
             report_no_idx.case_mismatches.is_empty(),
@@ -2112,7 +1793,8 @@ See [broken](old-name.md) here.
         // With index: total_links is still 1 and accounting is consistent.
         // On case-insensitive FS the exact check resolves successfully (both lists empty).
         // On case-sensitive FS the link is reported as a case_mismatch (not broken).
-        let report_with_idx = detect_broken_links(tmp.path(), &file_links, None, Some(&idx), false);
+        let report_with_idx =
+            detect_broken_links_from_index(tmp.path(), &index, None, Some(&idx), false);
         assert_eq!(report_with_idx.total_links, 1);
         let total_classified = report_with_idx.broken.len() + report_with_idx.case_mismatches.len();
         assert!(
@@ -2124,7 +1806,6 @@ See [broken](old-name.md) here.
     #[test]
     fn detect_broken_links_case_mismatch_has_correct_strategy() {
         use crate::case_index::CaseInsensitiveIndex;
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         // Build a case-sensitive vault setup by checking the actual FS behavior.
@@ -2133,9 +1814,9 @@ See [broken](old-name.md) here.
         let mut idx = CaseInsensitiveIndex::new();
         idx.insert("web/foo.md");
 
-        let file_links = vec![FileLinks {
-            source: PathBuf::from("source.md"),
-            links: vec![(
+        let index = mock_index(
+            "source.md",
+            vec![(
                 1,
                 Link {
                     target: "Web/Foo".to_string(),
@@ -2143,9 +1824,10 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                 },
             )],
-        }];
+            &["web/foo.md"],
+        );
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, Some(&idx), false);
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, Some(&idx), false);
 
         // Regardless of FS case sensitivity: if there are case_mismatches,
         // they must use the LinkCaseMismatch strategy and confidence 1.0.
@@ -2175,7 +1857,6 @@ See [broken](old-name.md) here.
         // case-insensitively), but on case-sensitive filesystems the stem
         // path was taken and emitted the wrong strategy label.
         use crate::case_index::CaseInsensitiveIndex;
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         let tmp = vault_with_files(&[("iteration_protocols.md", ""), ("source.md", "")]);
@@ -2185,9 +1866,9 @@ See [broken](old-name.md) here.
         idx.insert("iteration_protocols.md");
         idx.insert("source.md");
 
-        let file_links = vec![FileLinks {
-            source: PathBuf::from("source.md"),
-            links: vec![(
+        let index = mock_index(
+            "source.md",
+            vec![(
                 1,
                 Link {
                     target: "Iteration_Protocols".to_string(),
@@ -2195,9 +1876,10 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                 },
             )],
-        }];
+            &["iteration_protocols.md"],
+        );
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, Some(&idx), false);
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, Some(&idx), false);
 
         assert_eq!(
             report.case_mismatches.len(),
@@ -2233,14 +1915,13 @@ See [broken](old-name.md) here.
     /// The link should resolve via source-relative lookup and produce no case-mismatch.
     #[test]
     fn bare_basename_markdown_link_in_subfolder_not_flagged() {
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         let tmp = vault_with_files(&[("a/foo.md", "[x](bar.md)\n"), ("a/bar.md", "# Bar\n")]);
 
-        let file_links = vec![FileLinks {
-            source: PathBuf::from("a/foo.md"),
-            links: vec![(
+        let index = mock_index(
+            "a/foo.md",
+            vec![(
                 1,
                 Link {
                     target: "bar.md".to_string(),
@@ -2248,9 +1929,10 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Markdown,
                 },
             )],
-        }];
+            &["a/bar.md"],
+        );
 
-        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, None, false);
 
         assert_eq!(
             report.case_mismatches.len(),
@@ -2306,14 +1988,13 @@ See [broken](old-name.md) here.
 
     #[test]
     fn detect_broken_links_no_index_no_case_mismatches() {
-        use crate::link_graph::FileLinks;
         use crate::links::{Link, LinkKind};
 
         let tmp = vault_with_files(&[("web/foo.md", ""), ("source.md", "")]);
 
-        let file_links = vec![FileLinks {
-            source: PathBuf::from("source.md"),
-            links: vec![(
+        let index = mock_index(
+            "source.md",
+            vec![(
                 1,
                 Link {
                     target: "Web/Foo".to_string(),
@@ -2321,10 +2002,11 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                 },
             )],
-        }];
+            &["web/foo.md"],
+        );
 
         // Without case index: case_mismatches must always be empty.
-        let report = detect_broken_links(tmp.path(), &file_links, None, None, false);
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, None, false);
         assert!(
             report.case_mismatches.is_empty(),
             "case_mismatches must be empty when no index is provided"

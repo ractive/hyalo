@@ -72,19 +72,23 @@ prioritized).
 - [x] Migrated `find/mod.rs`'s inline per-link resolution block onto the shared
   entry point; broken-links / orphan / dead-end filters keep identical
   observable behavior (existing e2e green).
-- carried: the `link_fix.rs` Classify-side policy (`classify_link` /
-  `resolve_and_classify_link`) and the `detect_broken_links` merge onto a
-  unified `resolve_link(.., ResolveMode::Classify)` — deferred-with-reason
-  (large refactor, no behavior change; the Exists path is the one both new
-  features needed).
-- carried: `summary.rs` orphan/dead-end L-6 tail routed through `lower_index`
-  lookups — deferred-with-reason (independent of the semantics shipped here).
+- carried → done-in-189: the `link_fix.rs` Classify-side policy
+  (`classify_link` / `resolve_and_classify_link`) and the `detect_broken_links`
+  merge landed in [[iterations/iteration-189-resolver-classify-collapse]] as
+  `discovery::classify_link_from_source` (Classify-mode sibling of the Exists
+  entry point, both routed through a shared `normalize_link_target` helper); the
+  test-only `detect_broken_links` twin was deleted and its unit tests ported.
+- carried → done-in-189: `summary.rs` orphan/dead-end L-6 tail routed through
+  the `lower_index`-backed `backlinks_ci` lookup in
+  [[iterations/iteration-189-resolver-classify-collapse]] (the one observable
+  fix of that refactor-only iteration).
 - [x] Grep-audit: `find/mod.rs` no longer inlines resolution; the two features
   added this round both route through the shared entry point (audit command in
   the PR description).
-- carried: full bench-e2e A/B — deferred-with-reason (no hot-path change
-  landed this round; the shared entry point is the same `resolve_target` calls
-  refactored, not new work per link).
+- carried → done-in-189: full bench-e2e A/B ran in
+  [[iterations/iteration-189-resolver-classify-collapse]] (links-fix dry-run,
+  find --broken-links, batch mv --apply — all within noise vs baseline
+  `9cebfdc`).
 
 ### 1. L-19: `.md`-suffix normalization [done — no shape bump] [1/1]
 

@@ -1,8 +1,18 @@
-//! Unified link resolver for all `hyalo` link-mutating commands.
+//! Unified **rewrite-planning** link resolver for `hyalo`'s link-*mutating*
+//! commands (`mv`, auto-link planning).
 //!
-//! [`LinkResolver`] consolidates the three independent resolver implementations
-//! that existed before iter-150:
-//! - `StemIndex` in `link_fix.rs`
+//! [`LinkResolver`] is the write-side resolver: it decides how to *rewrite* a
+//! link when a file moves or a bare title is auto-linked. It is deliberately
+//! **distinct** from the read-side entry points in
+//! [`crate::discovery`] — `resolve_link_from_source` (Exists mode: "does this
+//! link resolve to a vault file?") and `classify_link_from_source` (Classify
+//! mode: the full fix-policy verdict used by `links fix`). A reader auditing for
+//! stray resolution loops should count this module as the sanctioned
+//! rewrite-planning resolver, not a rogue duplicate of those two.
+//!
+//! It consolidates the three independent resolver implementations that existed
+//! before iter-150:
+//! - `StemIndex` (now in `discovery.rs`, formerly `link_fix.rs`)
 //! - `CaseInsensitiveIndex` in `link_graph.rs`
 //! - Ad-hoc canonicalization in `link_rewrite.rs:plan_inbound_rewrites`
 //!
