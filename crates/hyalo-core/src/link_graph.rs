@@ -523,6 +523,17 @@ fn insert_file_links(
         // prefix.  Normalize these the same way as markdown links so that
         // `[[./b]]` in `notes/a.md` is indexed as `notes/b` and matches
         // a backlink query for `notes/b.md`.
+        // L-23: percent-decode markdown destinations so that a linker who wrote
+        // `[x](my%20dest.md)` is indexed under the decoded key `my dest.md` —
+        // matching how callers query `backlinks "my dest.md"` and stopping
+        // `find --broken-links` from false-positiving. Malformed / non-UTF-8
+        // escapes keep the literal text (helper returns None). Wikilinks are not
+        // decoded (they never carry percent-escapes).
+        if link.kind == LinkKind::Markdown
+            && let Some(decoded) = crate::discovery::percent_decode_path(&link.target)
+        {
+            link.target = decoded;
+        }
         if link.kind == LinkKind::Wikilink && link.target.starts_with("./") {
             link.target = normalize_target(&file_links.source, &link.target[2..]);
         } else if link.kind == LinkKind::Markdown

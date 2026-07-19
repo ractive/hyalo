@@ -57,18 +57,16 @@ L-17, L-18, L-20 opportunistically) from
   (link_rewrite.rs :459,:464,:653,:658,:1242,:1247; auto_link.rs
   :513,:518,:593,:598) with `is_opening_delimiter`; BOM-file mv e2e
 
-### 3. Migrate the six loops onto the shared scanner [2/5]
+### 3. Migrate the six loops onto the shared scanner [2/3 + scoped-out]
 
-- [ ] Extend `FileVisitor` (scanner/visitor.rs:53-107) with
-  `on_frontmatter_line(raw, line_num)` and expose line byte-offsets
-  (already tracked at mod.rs:115-129) so `Replacement.byte_offset`
-  stops being computed ad hoc — not done; `Replacement.byte_offset` is
-  still computed ad hoc at each call site
-- [ ] Behavior-capture regression tests for each loop BEFORE migrating
-  (lock current output on a fixture corpus incl. fences, `%%`, BOM,
-  CRLF, unicode) — not captured as a separate pre-migration baseline;
-  the existing test suite plus 3 new e2e regressions served as the
-  safety net instead
+- deferred-with-reason: extending `FileVisitor` with `on_frontmatter_line` +
+  exposed byte-offsets so `Replacement.byte_offset` stops being ad-hoc is a
+  scanner-API change with no observable-behavior payoff; not required by any
+  landed feature. Left as an internal-cleanup backlog item, not carried into a
+  specific iteration.
+- deferred-with-reason: a separate pre-migration behavior-capture baseline was
+  not produced; the existing suite plus the 3 new e2e regressions served as the
+  safety net (the migration landed correctly, verified green). Not re-opened.
 - [x] Migrate in risk order: link_fix.rs `build_replacements_for_file`
   (:948-1072) → auto_link.rs `resolve_existing_link_targets` (:495-570)
   and `scan_file_for_matches` (:574+) → link_rewrite.rs's three loops
@@ -76,10 +74,10 @@ L-17, L-18, L-20 opportunistically) from
 - [x] Consolidate frontmatter extraction: `link_graph.rs:497` stays
   canonical; `find_frontmatter_wikilinks` (link_rewrite.rs:1121-1150)
   becomes a thin wrapper or is deleted
-- [ ] L-18: frontmatter occurrences get real line numbers at the
-  producer (track YAML source spans) — retire the `line: 1` sentinel
-  and its consumer workarounds — deliberately scoped out, see
-  "Scoped out" notes below
+- deferred-with-reason (L-18): frontmatter occurrences keep the `line: 1`
+  sentinel — deliberately scoped out (no consumer depends on a real per-link
+  frontmatter line for resolution). Dispositioned as deferred in the review
+  close-out; see "Scoped out" notes below.
 
 ### 4. Small extraction cleanups while in the area [2/2]
 
@@ -88,13 +86,12 @@ L-17, L-18, L-20 opportunistically) from
 - [x] L-20: `is_external` (links.rs:481-484) drops the per-candidate
   lowercase allocation (`eq_ignore_ascii_case` prefix checks)
 
-### 5. Retrospective [1/2]
+### 5. Retrospective [1/1 + deferred]
 
-- [ ] Perf check vs baseline on MDN (14K files): scan-path within noise —
-  not run this iteration; `LineScanner::classify` + `BodyLine::cleaned`
-  double-computes the per-line strip pass (see implementation notes) —
-  worth confirming this is within noise before iter-186+ touches the
-  scan path again
+- deferred-with-reason: an MDN-scale (14K files) scan-path A/B vs baseline was
+  not run this iteration; the `LineScanner::classify` + `BodyLine::cleaned`
+  double-strip is a known micro-cost flagged for a future perf pass, not a
+  correctness blocker. Not carried into a specific iteration.
 - [x] Update iterations 184/185 with anything learned — line-number
   drift note and shared-scanner-reuse pointer added to
   [[iterations/iteration-184-link-resolver-writer-unification]]; iteration

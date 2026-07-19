@@ -78,6 +78,11 @@ pub const VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT: &str = "schema/missing-req
 /// `[lint.rules.HYALO005]`, but it is never silently downgraded by a profile.
 pub const RULE_ID_FRONTMATTER_PARSE_ERROR: &str = "HYALO005";
 
+/// Rule id for the broken-link check (HYALO006). Enabled + warn by default,
+/// promoted to error under `--strict`. Vault-aware: implemented CLI-side in
+/// [`crate::commands::link_lint`] where the link graph / case index live.
+pub const RULE_ID_BROKEN_LINK: &str = "HYALO006";
+
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize)]
 pub struct Violation {
@@ -1594,6 +1599,11 @@ pub struct ExtLintOptions<'a> {
     /// globs (e.g. `**/index.md`) fold case the same way `hyalo okf index`
     /// does on case-insensitive filesystems.
     pub case_insensitive: bool,
+    /// Vault-wide context for the HYALO006 broken-link rule, built ONCE per
+    /// invocation in the dispatch arm (link graph / case index) and shared by
+    /// reference across the rayon workers. `None` when HYALO006 is disabled or
+    /// filtered out, so no graph is built and the rule never runs.
+    pub link_lint_ctx: Option<crate::commands::link_lint::LinkLintContext>,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -1630,6 +1640,9 @@ pub fn lint_files_extended(
     let changelog_profile = opts.changelog_profile;
     let vault_dir = opts.vault_dir;
     let case_insensitive = opts.case_insensitive;
+    // Shared HYALO006 context (built once in dispatch); borrowed by every
+    // worker. `None` disables the rule for this run.
+    let link_ctx = opts.link_lint_ctx.as_ref();
 
     // Process files in parallel. Each worker lints one file.
     let lint_file = |(full_path, rel_path): &(std::path::PathBuf, String)| {
@@ -1651,6 +1664,7 @@ pub fn lint_files_extended(
             changelog_profile,
             vault_dir,
             case_insensitive,
+            link_ctx,
         )
     };
     #[cfg(not(miri))]
@@ -2203,6 +2217,7 @@ fn lint_one_file_extended(
     changelog_profile: bool,
     vault_dir: &Path,
     case_insensitive: bool,
+    link_ctx: Option<&crate::commands::link_lint::LinkLintContext>,
 ) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
     // trimmed line changing what counts as a duplicate blank line), so a
@@ -2728,6 +2743,54 @@ fn lint_one_file_extended(
             .entry(rule_id)
             .or_default()
             .push(diag_to_violation(d, false));
+    }
+
+    // HYALO006 (broken-link) — vault-aware rule. Runs only when a shared
+    // LinkLintContext was built for this invocation (it is skipped when the
+    // rule is disabled or filtered out, so no context is constructed). Each of
+    // the file's links is resolved through the single shared resolver entry
+    // point; unresolved ones become findings. Severity follows the
+    // configurable / --strict pattern used by the other HYALO rules.
+    if let Some(link_ctx) = link_ctx {
+        let base_sev = md_lint_config
+            .rules
+            .get(RULE_ID_BROKEN_LINK)
+            .and_then(hyalo_mdlint::RuleOverride::severity)
+            .map_or("warn", |s| {
+                if s.eq_ignore_ascii_case("error") {
+                    "error"
+                } else {
+                    "warn"
+                }
+            });
+        // --strict promotes the default warn to error (unless the user pinned
+        // an explicit severity via `[lint.rules.HYALO006] severity`).
+        let has_explicit_sev = md_lint_config
+            .rules
+            .get(RULE_ID_BROKEN_LINK)
+            .and_then(hyalo_mdlint::RuleOverride::severity)
+            .is_some();
+        let severity = if strict && !has_explicit_sev {
+            "error"
+        } else {
+            base_sev
+        };
+        for f in
+            crate::commands::link_lint::check_broken_links(link_ctx, content.as_bytes(), rel_path)
+        {
+            violations_by_rule
+                .entry(RULE_ID_BROKEN_LINK.to_owned())
+                .or_default()
+                .push(InternalViolation {
+                    line: to_file_line(f.line),
+                    column: 1,
+                    message: f.message,
+                    severity: severity.to_owned(),
+                    fix: None,
+                    fixed: false,
+                    autofixable: None,
+                });
+        }
     }
 
     // OKF conformance profile — advisory (warn-level) rules layered on top of
@@ -3623,6 +3686,7 @@ type = \"skill\"
             skills_profile: false,
             changelog_profile: false,
             case_insensitive: false,
+            link_lint_ctx: None,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }

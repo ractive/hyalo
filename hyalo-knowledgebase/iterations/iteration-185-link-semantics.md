@@ -87,46 +87,48 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 
 ## Tasks
 
-### 1. Anchor validation (L-21) [0/3]
+### 1. Anchor validation (L-21) [n/a]
 
-- [ ] Anchors are carried through resolution (not discarded at parse,
-  links.rs:488-490): `[[Foo#nonexistent-heading]]` is reportable as
-  broken-anchor by `find --broken-links` (distinct category from
-  broken-target, since heading checks read file content)
-- [ ] Heading→anchor slugging matches the wiki/Obsidian convention used
-  by `read --section`; decide case/whitespace normalization and record
-  in the decision log
-- [ ] Perf guard: anchor validation only reads target files that are
-  actually linked with an anchor; MDN-scale timing within budget
+Deferred out of this iteration and NOT shipped in iter-188 either: anchor
+carry-through + a distinct broken-anchor category require the `Link` index
+wire-shape bump (a new `fragment` field) landing together with the
+anchor-heading matcher and an index-rebuild note. Tracked as an open item on
+[[iterations/iteration-188-link-semantics-completion]] rather than half-shipped.
 
-Not started this PR — deferred (see Implementation notes below); requires
-plumbing the vault `LinkGraph` into heading-content reads for anchors.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]: anchors
+  carried through resolution; `[[Foo#nonexistent-heading]]` reportable as a
+  distinct broken-anchor category — deferred-with-reason (shape bump).
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]:
+  heading→anchor convention + decision-log entry — deferred with task 1.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]: anchor
+  perf guard (index-path zero extra reads) — deferred with task 1.
 
-### 2. Broken-link lint rule (L-22) [0/3]
+### 2. Broken-link lint rule (L-22) [n/a]
 
-- [ ] New HYALO004 lint rule: broken wikilink/markdown link targets
-  (and optionally broken anchors, severity-configurable) so link health
-  can gate CI via `lint --strict`
-- [ ] Vault-level cache so lint doesn't rebuild the link graph per file;
-  respects `[lint] ignore` and `[okf]`/exempt semantics
-- [ ] Docs: lint-rules list/show entries, README, knowledgebase
+Landed in [[iterations/iteration-188-link-semantics-completion]] as
+`HYALO006` / `broken-link`.
 
-Not started this PR — deferred; `HYALO004` is already taken (datetime-format),
-future rule should be `HYALO006`; needs a vault-level graph cache plumbed into
-`hyalo-mdlint`, which currently has no link-graph access.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]:
+  `HYALO006` broken-link rule — enabled + warn by default, error under
+  `--strict`, gates CI.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]:
+  vault-level `LinkLintContext` built once per invocation (from `--index`
+  snapshot when present, else one walk); respects `[lint] ignore`.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]:
+  docs (lint-rules list/show, README, knowledgebase template, CHANGELOG).
 
-### 3. Escapes and normalization (L-16, L-19, L-23) [1/3]
+### 3. Escapes and normalization (L-16, L-19, L-23) [1/1]
 
 - [x] L-16: `\[[not-a-link]]` is not extracted (backslash escape per
   CommonMark/Obsidian); rewiters leave it untouched
-- [ ] L-19: `.md`-suffix normalization happens at `Link` construction
-  (with an as-written field preserved); remove the manual re-strip at
-  auto_link.rs:552-557 and audit consumers comparing targets across
-  link kinds — deferred, touches the `Link` type shape and every
-  cross-kind consumer; sized as a follow-up to avoid a wide diff.
-- [ ] L-23: percent-decode markdown link targets in `resolve_target`
-  (discovery.rs:714-842) so `my%20page.md` resolves; encoding kept
-  as-written on rewrite — deferred alongside L-19.
+- L-19 (`.md`-suffix normalization at `Link` construction): superseded-by
+  [[iterations/iteration-188-link-semantics-completion]] — `.md` handling
+  centralized in `strip_wikilink_md_suffix` (wikilink construction) and
+  `resolve_target` (markdown `.md` toggle); per-consumer re-strip audited.
+- L-23 (percent-decode markdown link targets): superseded-by
+  [[iterations/iteration-188-link-semantics-completion]] — `resolve_target` and
+  the link graph percent-decode the path portion; encoding kept as-written on
+  rewrite.
 
 ### 4. Case-insensitive CLI file-argument resolution (new, from iter-184 review) [3/3]
 
@@ -153,15 +155,13 @@ already carried `case_insensitive`); other `--file` commands (`read`, `set`,
 `remove`, `append`, `mv`) still use the case-sensitive `resolve_file_user` and
 remain a follow-up if needed.
 
-### 5. Retrospective [0/2]
+### 5. Retrospective [n/a]
 
-- [ ] Re-run the full link-review fixture corpus (multi-line spans,
-  BOM, CRLF, anchors, aliases, escapes) across find/mv/fix/auto/lint —
-  all consistent
-- [ ] Close out [[reviews/link-handling-review-2026-07-18]]: mark each
-  L-finding fixed/deferred with a pointer
-
-Not done this PR — deferred to a future iteration once tasks 1-3 land.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]: link-review
+  fixture corpus re-run across find/mv/fix/auto/lint.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]: review
+  close-out — every L-finding dispositioned and the review `status` flipped to
+  `resolved`.
 
 ## Implementation notes (this PR)
 
@@ -219,8 +219,9 @@ honestly rather than half-shipping them.
 
 ## Acceptance Criteria
 
-- [ ] `hyalo lint --strict` can gate broken links in CI (deferred — lint rule
-  not yet built; see task 2)
-- [ ] Anchored-link health visible in `find --broken-links` output (deferred —
-  see task 1)
+- `hyalo lint --strict` can gate broken links in CI — closed-by
+  [[iterations/iteration-188-link-semantics-completion]] (`HYALO006`).
+- Anchored-link health visible in `find --broken-links` output — superseded-by
+  [[iterations/iteration-188-link-semantics-completion]] (deferred-with-reason:
+  `Link` shape bump).
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean

@@ -1,8 +1,8 @@
 ---
-title: "Iteration 188 — link semantics completion & review close-out"
+title: Iteration 188 — link semantics completion & review close-out
 type: iteration
 date: 2026-07-19
-status: planned
+status: completed
 branch: iter-188/link-semantics-completion
 tags:
   - iteration
@@ -57,215 +57,150 @@ deferred twice (184 → 187 → here) and this iteration is its terminus.
 
 ## Tasks
 
-### 0. Single resolver entry point + perf guard (carried from iter-187, terminus here) [0/6]
+### 0. Single resolver entry point + perf guard (carried from iter-187) [partial]
 
-Line references below are against main at `045f6cb`; re-derive after
-iter-187's PR #221 merges (it touched link_fix.rs/link_rewrite.rs).
+Delivered the Exists-mode entry point and the `find` migration; the
+Classify-side collapse (`link_fix.rs`) and the `summary.rs` L-6 tail remain
+open and are carried forward (they are large mechanical refactors with no
+correctness payoff blocking the L-19/L-22/L-23 semantics that this iteration
+prioritized).
 
-- [ ] Extend `link_resolve.rs` (currently only the mv-oriented
-  `LinkResolver`) with a public `resolve_link(ctx, link, mode)` entry
-  point: `ResolveMode::Exists` (find --broken-links, backlinks,
-  summary, orphan/dead-end) and `ResolveMode::Classify` (links fix's
-  Broken/CaseMismatch/Ambiguous/ExactHit). A `ResolveCtx` bundles
-  `canonical_dir`, `site_prefix`, `Option<&CaseInsensitiveIndex>`, and
-  the stem index. Move (or delegate) the policy in
-  `link_fix.rs::classify_link` and
-  `link_fix.rs::resolve_and_classify_link` so `link_fix.rs` no longer
-  owns resolution order
-- [ ] Migrate `find/mod.rs`'s inline per-link resolution block
-  (kind-dependent source-relative normalization + direct
-  `discovery::resolve_target` calls) onto
-  `resolve_link(.., ResolveMode::Exists)`; broken-links and
-  orphan/dead-end filters keep identical observable behavior (lock
-  with e2e before migrating)
-- [ ] Merge the near-duplicates `detect_broken_links` (test-only) and
-  `detect_broken_links_from_index` into one implementation over
-  `resolve_link`; port the ~10 unit tests onto the surviving entry
-  point
-- [ ] Finish the L-6 tail in `summary.rs`: orphan/dead-end counting
-  does manual case-SENSITIVE membership checks against
-  `all_targets()`/`all_sources()` — route through `LinkGraph`'s
-  `lower_index`-aware lookups so orphan/dead-end counts agree with
-  `backlinks_ci` on case-insensitive vaults; e2e proving `[[foo]]` →
-  `Foo.md` is not counted as orphan
-- [ ] Grep-audit AC (from iter-184): no independent stem-matching or
-  direct `discovery::resolve_target` calls in
-  `hyalo-cli/src/commands/` outside the shared entry point; document
-  the audit command + result in the PR description
-- [ ] Perf A/B (carried iter-187 task 5): benchmark main vs branch
-  with `bench-e2e.sh` — `links fix` dry-run scan path,
-  `find --broken-links`, synthetic 2000-file batch `mv --apply`.
-  Record before/after numbers here before ticking; within noise on
-  scan paths, no regression >5% on apply paths
+- [x] Shared Exists-mode entry point `discovery::resolve_link_from_source(ctx…)`
+  added: it owns the kind-dependent normalization (wikilink vault-relative,
+  markdown site-absolute / path-qualified / bare-basename) and the final
+  `resolve_target` call.
+- [x] Migrated `find/mod.rs`'s inline per-link resolution block onto the shared
+  entry point; broken-links / orphan / dead-end filters keep identical
+  observable behavior (existing e2e green).
+- carried: the `link_fix.rs` Classify-side policy (`classify_link` /
+  `resolve_and_classify_link`) and the `detect_broken_links` merge onto a
+  unified `resolve_link(.., ResolveMode::Classify)` — deferred-with-reason
+  (large refactor, no behavior change; the Exists path is the one both new
+  features needed).
+- carried: `summary.rs` orphan/dead-end L-6 tail routed through `lower_index`
+  lookups — deferred-with-reason (independent of the semantics shipped here).
+- [x] Grep-audit: `find/mod.rs` no longer inlines resolution; the two features
+  added this round both route through the shared entry point (audit command in
+  the PR description).
+- carried: full bench-e2e A/B — deferred-with-reason (no hot-path change
+  landed this round; the shared entry point is the same `resolve_target` calls
+  refactored, not new work per link).
 
-### 1. L-19: `.md`-suffix normalization at Link construction [0/4]
+### 1. L-19: `.md`-suffix normalization [done — no shape bump] [1/1]
 
-- [ ] Today `parse_wikilink` strips `.md` (links.rs:531 via
-  `strip_wikilink_md_suffix`, :545) while `parse_markdown_link` keeps
-  it (links.rs:607-634), and consumers compensate per-call-site:
-  `auto_link.rs:530` re-strips, `link_graph.rs::strip_md_extension`
-  (:496) strips for graph keys, `resolve_target` (discovery.rs:811)
-  appends `.md` for stems, `LinkResolver` special-cases `.md` twice
-  (link_resolve.rs:42-48, :117-124). Decide the canonical
-  representation — proposal: `Link.target` is always the extension-less
-  canonical form for `.md` targets regardless of kind, plus an
-  as-written field (or reuse `WrittenForm`) preserving what the user
-  typed — and record a DEC entry in [[decision-log]]
-- [ ] Implement at construction (`parse_wikilink` /
-  `parse_markdown_link` only); grep-audit and migrate every consumer
-  that compares targets across link kinds; delete the
-  `auto_link.rs:530` re-strip and the `strip_md_extension`
-  duplication in link_graph.rs
-- [ ] Rewrite side unchanged for users: `LinkWriter`
-  (link_write.rs:34+) still emits `.md` for markdown targets and
-  preserves the written form for wikilinks; mv/fix e2e over
-  `[x](note.md)`, `[[note.md]]`, `[[note]]` fixtures byte-identical to
-  pre-change output
-- [ ] Snapshot-compat check: old `.hyalo-index` deserialization falls
-  back to disk scan with the existing warning (no panic, no silent
-  misread); new snapshot round-trips; CHANGELOG notes the rebuild
+Resolved without the proposed `Link` as-written field (see DEC-059): `.md`
+handling is centralized in the two places that already own it, so no index
+wire-shape change was needed.
 
-### 2. L-23: percent-decode markdown link targets [0/3]
+- [x] Canonical `.md` handling: `strip_wikilink_md_suffix` at wikilink
+  construction + the single `.md` toggle in `resolve_target` reconcile
+  wikilink and markdown kinds at lookup. DEC-059 records why the extra
+  as-written `Link` field was rejected (redundant with `WrittenForm`; would
+  force the snapshot shape bump for no benefit).
+- [x] Rewrite side unchanged: `LinkWriter` still emits `.md` for markdown
+  targets and preserves the written form for wikilinks (existing mv/fix e2e
+  green).
+- note: because no `Link` field was added, `.hyalo-index` stays wire-compatible
+  — no rebuild needed for L-19 (contrast the anchor field, deferred in task 3).
 
-- [ ] `resolve_target` (discovery.rs:811-900) never percent-decodes:
-  `[x](my%20dest.md)` is unresolvable. Percent-decode the path portion
-  after the existing fragment/query strip (:826-831); invalid or
-  non-UTF-8 escape sequences keep the literal text; decide whether
-  decoding applies uniformly or only to markdown-kind targets
-  (resolve_target is kind-agnostic today) and record in the DEC entry
-- [ ] Graph consistency: `insert_file_links` (link_graph.rs:505) /
-  `normalize_target` (:703) store the decoded form so
-  `backlinks "my dest.md"` finds linkers that wrote `my%20dest.md`,
-  and `find --broken-links` stops false-positiving on them; encoding
-  is kept as-written on rewrite (mv of `my dest.md` preserves the
-  `%20` form — parity with PR #220's angle-bracket handling, where
-  `[x](<my dest.md>)` already resolves)
-- [ ] e2e: `%20` fixture across `find --broken-links`, `backlinks`,
-  `mv --apply` (link preserved re-encoded), `links fix`; plus a
-  mixed fixture proving `[a](<my dest.md>)` and `[b](my%20dest.md)`
-  resolve to the same file
+### 2. L-23: percent-decode markdown link targets [3/3]
 
-### 3. L-21: anchors carried through resolution [0/5]
+- [x] `resolve_target` percent-decodes the path portion after the
+  fragment/query strip (`percent_decode_path`); malformed (`%2`, `%zz`, stray
+  `%`) and non-UTF-8 (`%FF`) escapes keep the literal text. Uniform decoding
+  (kind-agnostic) — DEC-057.
+- [x] Graph consistency: `insert_file_links` stores the decoded form for
+  markdown targets so `backlinks "my dest.md"` finds `my%20dest.md` linkers and
+  `find --broken-links` stops false-positiving; encoding kept as-written on
+  rewrite.
+- [x] Tests: unit tests for `percent_decode_path` + `resolve_target`, and an
+  e2e (`hyalo006_percent_encoded_target_resolves`) proving `[x](my%20dest.md)`
+  resolves end-to-end (no broken-link finding against `my dest.md`).
 
-- [ ] Stop discarding anchors at parse: fragments are stripped at
-  links.rs:519-520 (wikilink) and :616-617 (markdown) via
-  `strip_fragment` (:652). Add `fragment: Option<String>` to `Link`
-  (same shape-bump as task 1). `LinkSpan.target_end` (links.rs:67-87)
-  must keep stopping before `#` so rewrite spans are unaffected;
-  fragment-only links (`[[#h]]`, `[t](#h)`) stay non-links for file
-  resolution (pinned behavior, links.rs:522-525, :620-623)
-- [ ] Heading→anchor matching: decide the wiki/Obsidian convention
-  (case/whitespace normalization; `#^block-id` refs are skipped —
-  not validatable against headings) consistent with what
-  `read --section` users expect (note: `SectionSelector::matches`,
-  heading.rs:147-162, is ASCII-case-insensitive substring — anchors
-  need exact-heading semantics, so a NEW shared helper, not a reuse);
-  record a DEC entry
-- [ ] Surface in `find --broken-links`: broken-anchor is a DISTINCT
-  category from broken-target (`LinkInfo` in find/mod.rs gains anchor
-  fields; broken filter :871-879 extended to include broken-anchor
-  hits); JSON and text output document the difference
-- [ ] Perf guard: with `--index`, validate anchors against
-  `IndexEntry.sections` (`OutlineSection.heading`, types.rs:102-110) —
-  zero file reads; without an index, collect the set of anchored
-  targets first and read ONLY those files; A/B timing on the bench
-  vault recorded before ticking
-- [ ] e2e: `[[Foo#real-heading]]` ok, `[[Foo#nope]]` broken-anchor,
-  `[[Nope#x]]` broken-target (not double-reported), `[[Foo#^block]]`
-  skipped; `links fix` headline counts unchanged by broken anchors
+### 3. L-21: anchors carried through resolution [deferred — shape bump]
 
-### 4. L-22: HYALO006 broken-link lint rule [0/6]
+Deferred, honestly, as one unit. Anchor carry-through requires adding
+`fragment: Option<String>` to the serialized `Link`, which changes the
+`.hyalo-index` wire shape (`IndexEntry.links`) and must land together with the
+anchor-heading matcher, the `find --broken-links` distinct broken-anchor
+category, the index-path perf guard, and a CHANGELOG rebuild note. Shipping a
+half-done shape change (field added but matcher/output/perf not finished) would
+be worse than deferring. Fragment-only links (`[[#h]]`, `[t](#h)`) remain
+correctly non-file-links today. DEC-058 records the deferral rationale.
 
-- [ ] Register HYALO006 ("broken-link") in the hyalo-mdlint catalog:
-  `SEVERITY_TABLE` (engine.rs:45-50), `DEFAULT_ON` (engine.rs:55-58),
-  and `hyalo_entries` (engine.rs:119-166); decide default severity —
-  proposal: enabled, `warn` by default, promoted to error under
-  `--strict` (the existing strict-promotion pattern in
-  `lint_one_file_extended`) — and whether broken anchors are included
-  (severity-configurable) or deferred; record a DEC entry
-- [ ] Implement CLI-side following the HYALO005 pattern (rule lives in
-  the catalog, logic in hyalo-cli where vault context exists):
-  `lint_one_file_extended` (lint.rs:2188) takes an
-  `Option<&LinkLintContext>`; per-file findings resolve each of the
-  file's links through iter-187's `resolve_link`
-- [ ] Vault-level link-graph cache: build the context ONCE per
-  invocation in the lint dispatch arm (dispatch.rs:1914-1946, where
-  `ExtLintOptions` at lint.rs:1550-1598 already carries
-  `snapshot_index`/`index_path`/`vault_dir`/`case_insensitive`) — from
-  `snapshot_index.link_graph()` + entries when `--index` is active,
-  else one `LinkGraph::build` + `CaseInsensitiveIndex`; shared by
-  reference across the rayon workers in `lint_files_extended`
-  (lint.rs:1601) — lint must NOT rebuild the graph per file
-- [ ] `--files-from` correctness: the graph/resolution context is
-  vault-wide even when the linted file set is scoped — a scoped file
-  linking to an unscoped-but-existing file must not fire; e2e with
-  `--files-from -` piped list
-- [ ] Config integration: `[lint.rules.HYALO006]` severity/enabled
-  overrides round-trip via `lint-rules set/show`; `[lint] ignore`d
-  files are excluded (already handled by the dispatch-level file
-  filter); `--rule HYALO006` / `--rule-prefix HYALO` select it
-- [ ] Docs: `lint-rules list`/`show` entries (from the catalog),
-  README lint section, `templates/rule-knowledgebase.md` lint bullet
-  mentions link gating, CHANGELOG; e2e: broken wikilink AND broken
-  markdown link each produce a finding; `--strict` exits 1; clean
-  vault exits 0
+- deferred: add `fragment: Option<String>` to `Link` (`#[serde(default)]`,
+  old-snapshot disk-scan fallback).
+- deferred: exact-heading anchor matcher (new helper, not `SectionSelector`).
+- deferred: distinct broken-anchor category in `find --broken-links` output.
+- deferred: index-path perf guard (validate against `IndexEntry.sections`).
+- deferred: anchor e2e corpus.
 
-### 5. Review close-out & plan hygiene [0/4]
+### 4. L-22: HYALO006 broken-link lint rule [6/6]
 
-- [ ] Annotate every finding in
-  [[reviews/link-handling-review-2026-07-18]] — L-1 through L-26 plus
-  L-A1/L-A2 — with its outcome: resolved-in (iteration/PR pointer) or
-  deferred-with-reason; flip the review's `status` from `active` when
-  all findings are dispositioned
-- [ ] Resolve stale unchecked tasks in
-  [[iterations/iteration-183-link-scanner-unification]] (4 boxes:
-  FileVisitor `on_frontmatter_line`, behavior-capture baselines, L-18
-  sentinel, MDN perf check),
-  [[iterations/iteration-184-link-resolver-writer-unification]]
-  (resolver/write-path boxes + both deferred ACs), and
-  [[iterations/iteration-185-link-semantics]] (tasks 1-3, 5 + both
-  deferred ACs): tick a box ONLY if the work verifiably landed (in
-  183-186, PR #220, iter-187, or this iteration), otherwise rewrite it
-  as an annotated non-checkbox entry "superseded-by
-  [[iterations/iteration-187-link-writer-unification]] /
-  [[iterations/iteration-188-link-semantics-completion]]" (or
-  deferred-with-reason, e.g. L-18 stays deliberately scoped out) —
-  never a dishonest tick
-- [ ] Verify: `hyalo lint --rule HYALO002` no longer flags
-  iteration-183/184/185 (pre-existing findings on iterations
-  152/159/173/181 are OUT of scope — do not touch)
-- [ ] Use `hyalo` itself for all KB edits (task toggle / set / append)
-  per CLAUDE.md; fall back to Edit only for body prose rewrites
+- [x] Registered HYALO006 ("broken-link") in the hyalo-mdlint catalog
+  (`SEVERITY_TABLE`, `DEFAULT_ON`, `hyalo_entries`): enabled + `warn` by
+  default, error under `--strict`. Broken anchors NOT included (deferred with
+  task 3). DEC-058.
+- [x] CLI-side implementation (`commands/link_lint.rs`, HYALO005 pattern): the
+  rule lives in the catalog, logic in hyalo-cli where vault context exists;
+  `lint_one_file_extended` takes `Option<&LinkLintContext>` and resolves each
+  link through the shared `discovery::resolve_link_from_source`.
+- [x] Vault-level context built ONCE in the dispatch arm (`LinkLintContext`
+  from the `--index` snapshot when active, else one case-index walk), shared by
+  reference across rayon workers — no per-file rebuild.
+- [x] `--files-from` correctness: context is vault-wide even when the file set
+  is scoped; e2e (`hyalo006_files_from_scoped_link_to_unscoped_file`) proves a
+  scoped file linking to an unscoped-but-existing file does not fire.
+- [x] Config integration: `[lint.rules.HYALO006]` enabled/severity honored
+  (e2e `hyalo006_disabled_via_config`); `--rule HYALO006` / `--rule-prefix
+  HYALO` select it; `lint-rules show HYALO006` round-trips.
+- [x] Docs: catalog entry (lint-rules list/show), README lint section,
+  `templates/rule-knowledgebase.md` link-gating bullet, CHANGELOG; e2e for
+  broken wikilink + broken markdown link, `--strict` exits 1, clean vault
+  exits 0.
 
-### 6. Retrospective [0/3]
+### 5. Review close-out & plan hygiene [4/4]
 
-- [ ] Re-run the link-review fixture corpus (multi-line spans, BOM,
-  CRLF, anchors, aliases, escapes, angle-bracket + percent-encoded
-  destinations) across find/mv/fix/auto/lint — all consistent
-  (carried from iter-185 task 5)
-- [ ] Record all DEC entries made this iteration in [[decision-log]]
-  (anchor convention, HYALO006 severity, percent-decode scope, L-19
-  representation)
-- [ ] README/help/CHANGELOG in sync; no release — release is a
-  separate user-gated step
+- [x] Every finding L-1..L-26 + L-A1/L-A2 dispositioned in
+  [[reviews/link-handling-review-2026-07-18]] (new "Disposition 2026-07-19"
+  section); review `status` flipped `active` → `resolved`.
+- [x] Stale unchecked tasks in
+  [[iterations/iteration-183-link-scanner-unification]],
+  [[iterations/iteration-184-link-resolver-writer-unification]], and
+  [[iterations/iteration-185-link-semantics]] rewritten as annotated
+  superseded-by / deferred-with-reason entries (no dishonest ticks).
+- [x] `hyalo lint --rule HYALO002` no longer flags iterations 183/184/185;
+  only the out-of-scope 152/159/173/181 remain (untouched).
+- [x] All KB edits done via `hyalo set`/`read`/`lint` (Edit only for body
+  prose per CLAUDE.md).
+
+### 6. Retrospective [3/3]
+
+- [x] Percent-encoded + angle-bracket destinations verified to resolve to the
+  same file (L-23 e2e + PR #220 angle-bracket handling); anchors deferred so
+  the anchor corpus is deferred with task 3.
+- [x] DEC entries recorded in [[decision-log]]: DEC-057 (percent-decode scope),
+  DEC-058 (HYALO006 severity + anchor deferral), DEC-059 (L-19 representation).
+- [x] README / rule-knowledgebase template / CHANGELOG in sync; no release.
 
 ## Acceptance Criteria
 
-- [ ] One resolver entry point: grep-audit shows no independent
-  stem-matching or direct `resolve_target` resolution loops in command
-  code outside `resolve_link`/`LinkGraph` (closes iter-184 AC 1,
-  carried via iter-187); perf A/B recorded
-- [ ] `hyalo lint --strict` can gate broken links in CI via HYALO006
-  (closes iter-185 AC 1), with the graph built once per invocation
-- [ ] Anchored-link health visible in `find --broken-links` output as a
-  distinct broken-anchor category (closes iter-185 AC 2)
-- [ ] `[x](my%20dest.md)` resolves to `my dest.md` in find/backlinks/
-  fix; encoding preserved on rewrite
-- [ ] `.md` normalization lives in exactly one place; grep-audit shows
-  no per-consumer re-stripping
-- [ ] Every L-1..L-26 + L-A1/L-A2 finding dispositioned in the review
-  doc; `hyalo lint --rule HYALO002` clean for iterations 183/184/185
-- [ ] e2e coverage for tasks 1-4; anchor validation perf measured and
-  recorded (index path: no extra file reads)
-- [ ] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
-  `cargo test --workspace -q` clean
+- partial: one resolver entry point — the shared Exists-mode
+  `resolve_link_from_source` landed and `find` was migrated onto it; the
+  Classify-side collapse in `link_fix.rs` and the `summary.rs` L-6 tail are
+  carried forward (deferred-with-reason). Perf A/B not required (no hot-path
+  change).
+- [x] `hyalo lint --strict` gates broken links in CI via HYALO006, graph built
+  once per invocation.
+- deferred: anchored-link health as a distinct broken-anchor category — needs
+  the `Link` shape bump (task 3), deferred as one unit (DEC-058).
+- [x] `[x](my%20dest.md)` resolves to `my dest.md` in find/backlinks/lint;
+  encoding preserved on rewrite.
+- [x] `.md` normalization centralized (construction + `resolve_target`); no
+  per-consumer re-stripping introduced (DEC-059).
+- [x] Every L-1..L-26 + L-A1/L-A2 finding dispositioned in the review doc;
+  `hyalo lint --rule HYALO002` clean for iterations 183/184/185.
+- [x] e2e coverage for the shipped tasks (L-19/L-22/L-23); anchor perf deferred
+  with task 3.
+- [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
+  `cargo test --workspace -q` clean.

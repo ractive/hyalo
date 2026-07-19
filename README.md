@@ -510,6 +510,16 @@ leave a green lint. The rule is listed in `hyalo lint-rules list` and its
 severity is configurable via `[lint.rules.HYALO005]`, but no profile downgrades
 it. A green `hyalo lint` in CI therefore means the vault is genuinely clean.
 
+**Broken links can gate CI.** The **`HYALO006` / `broken-link`** rule flags any
+wikilink or markdown link whose target does not exist in the vault. It is
+enabled and `warn` by default; `hyalo lint --strict` promotes it to an error so
+CI fails on a broken link. Resolution runs against the whole vault (built once
+per invocation from the `--index` snapshot when present, else a single walk), so
+it is correct under `--files-from` too — a diff-scoped file that links to an
+untouched-but-existing file is not falsely reported. Configure it with
+`[lint.rules.HYALO006]` (e.g. `severity = "error"` to gate without `--strict`,
+or `enabled = false` to turn it off).
+
 `--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, `append`,
 `task toggle`, `task set`, `task read`, `read`, and `backlinks`.
 It is mutually exclusive with `--glob` and `--file`.

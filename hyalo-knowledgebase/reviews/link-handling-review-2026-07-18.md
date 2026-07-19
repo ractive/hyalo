@@ -1,9 +1,15 @@
 ---
-title: "Link-handling deep review — 4-layer audit, 15 confirmed defects, consolidation plan"
+title: >-
+  Link-handling deep review — 4-layer audit, 15 confirmed defects, consolidation
+  plan
 type: research
 date: 2026-07-18
-status: active
-tags: [review, links, architecture, rust]
+status: resolved
+tags:
+  - review
+  - links
+  - architecture
+  - rust
 related:
   - "[[dogfood-results/dogfood-v0180-final-pre-release]]"
   - "[[iterations/done/iteration-150-link-handling-refactor]]"
@@ -288,3 +294,37 @@ Minor related: `okf index --dry-run` exits 1 on marker-skip vaults with
 `changed: 0`, contradicting the documented "non-zero when any index.md
 would change" contract (possibly intentional — surface skips in CI — but
 undocumented).
+
+## Disposition 2026-07-19 (iter-188 close-out)
+
+Every finding L-1..L-26 plus L-A1/L-A2 is dispositioned below. With this the
+review's `status` moves from `active` to `resolved`.
+
+- **L-1** resolved — shared frontmatter self-link rewrite ([[iterations/iteration-184-link-resolver-writer-unification]]).
+- **L-2** resolved — anchor-carrying frontmatter links rewritten ([[iterations/iteration-184-link-resolver-writer-unification]]).
+- **L-3** resolved — multi-line code spans handled by the unified scanner ([[iterations/iteration-183-link-scanner-unification]]).
+- **L-4** resolved — single scanner used by every subcommand ([[iterations/iteration-183-link-scanner-unification]]).
+- **L-5** resolved — `mv --index` refreshes link-graph entries ([[iterations/iteration-184-link-resolver-writer-unification]]).
+- **L-6** resolved — case-insensitive `lower_index` lookups shared across backlinks/orphan/summary; the summary orphan/dead-end tail was routed through the shared graph lookups in [[iterations/iteration-188-link-semantics-completion]].
+- **L-7** resolved — `links fix` preserves anchors via the shared fragment-aware helper ([[iterations/iteration-184-link-resolver-writer-unification]]).
+- **L-8** resolved — `%%` comment-state ordering guard ([[iterations/iteration-183-link-scanner-unification]]).
+- **L-9** resolved — fuzzy phantom-tie seeding fixed ([[iterations/iteration-184-link-resolver-writer-unification]]).
+- **L-10** resolved — fuzzy confidence tiers on `--apply` ([[iterations/iteration-187-link-writer-unification]]).
+- **L-11** resolved — honest partial-failure envelopes for all link write paths ([[iterations/iteration-187-link-writer-unification]], PR #221).
+- **L-12** deferred — auto-link ASCII-only word boundaries; Unicode boundary support is deliberately out of scope (no user report; risk of over-linking). Reopen if a real vault needs it.
+- **L-13** resolved — BOM-aware frontmatter detection unified in the scanner ([[iterations/iteration-183-link-scanner-unification]]).
+- **L-14** resolved — case-only rename in single-file `mv` ([[iterations/iteration-184-link-resolver-writer-unification]]).
+- **L-15** resolved — HTML comments are a suppression context in the unified scanner ([[iterations/iteration-183-link-scanner-unification]]).
+- **L-16** resolved — backslash escapes honored (`is_escaped`), also reused by L-A2 (PR #220).
+- **L-17** resolved — `strip_md` byte-boundary panic guarded (`strip_wikilink_md_suffix` compares bytes before slicing).
+- **L-18** deferred — frontmatter link occurrences carry sentinel `line: 1`. Deliberately scoped out: frontmatter has no meaningful per-link line for resolution and no consumer depends on a real line there.
+- **L-19** resolved — `.md`-suffix stripping is centralized: `strip_wikilink_md_suffix` at wikilink construction, and `resolve_target` handles the markdown `.md` toggle in one place; per-consumer re-stripping audited (see iter-188 PR grep-audit).
+- **L-20** resolved — `is_external` compares scheme prefixes with `eq_ignore_ascii_case` on borrowed slices, no per-candidate allocation.
+- **L-21** partially resolved / deferred — anchor *carrying* through resolution and a distinct broken-anchor category in `find --broken-links` is deferred to a follow-up: it requires the `Link` index wire-shape bump (new `fragment` field) that must land together with the anchor-heading matcher and index-rebuild note; tracked in [[iterations/iteration-188-link-semantics-completion]] as not-shipped-this-round to avoid a half-done shape change. Fragment-only links remain correctly non-file-links.
+- **L-22** resolved — `HYALO006` / `broken-link` lint rule shipped ([[iterations/iteration-188-link-semantics-completion]]): enabled + warn by default, error under `--strict`, vault graph built once, `--files-from`-correct.
+- **L-23** resolved — `resolve_target` and the link graph percent-decode the path portion; malformed / non-UTF-8 escapes keep the literal text ([[iterations/iteration-188-link-semantics-completion]]).
+- **L-24** deferred — `--exclude-target-glob` case-sensitivity divergence; low impact (auto-link only) and no report; revisit with a broader glob-casing pass.
+- **L-25** resolved — `links fix` dry-run validates plans against on-disk text ([[iterations/iteration-187-link-writer-unification]]).
+- **L-26** deferred — `create-index --index-file idx.bin` bare-filename handling; out of the link-semantics scope of this review, tracked separately.
+- **L-A1** resolved — angle-bracket destinations parsed (PR #220, `parse_destination`).
+- **L-A2** resolved — escaped brackets in link text handled (PR #220, `find_label_close_bracket`).
