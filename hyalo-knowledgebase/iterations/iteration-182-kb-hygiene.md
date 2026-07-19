@@ -36,7 +36,7 @@ current build parses cleanly.
 
 ## Tasks
 
-### 1. Stale broken links (5 genuinely stale, fix by hand — fuzzy would mislink)
+### 1. Stale broken links (5 genuinely stale, fix by hand — fuzzy would mislink) [5/5]
 
 - [x] `research/release-pipeline-unification.md`:
   `[[iteration-80-musl-targets-winget]]` — locate the real
@@ -53,7 +53,7 @@ current build parses cleanly.
 - [x] `iterations/iteration-168-skills-profile.md`: `[[doc]]` — retarget
   or backtick
 
-### 2. Pseudo-links in dogfood reports
+### 2. Pseudo-links in dogfood reports [1/1]
 
 - [x] Backtick the illustrative wikilinks (`[[schema.bind]]` ×8,
   `[[fake-login]]` ×2, `[[NEW-1/3/4]]`, `[[old]]`, `[[new]]`,
@@ -61,7 +61,7 @@ current build parses cleanly.
   single-line code spans only (multi-line spans hit BUG-16 / review
   finding L-3 until iter-183 lands)
 
-### 3. Duplicate iteration files
+### 3. Duplicate iteration files [2/2]
 
 - [x] `iterations/done/iteration-25-release-profile-and-quick-wins.md` vs
   `iteration-25-release-profile-quick-wins.md`: diff, keep the canonical
@@ -89,7 +89,7 @@ current build parses cleanly.
   `-and-quick-wins.md` duplicate was deleted (`git rm`), leaving one
   iteration-25 file in `iterations/done/`.
 
-### 4. Status truth
+### 4. Status truth [2/2]
 
 - [x] Triage the 34 `status: completed` files with open tasks (view
   `completed-with-todos`): tick verified-done tasks, reopen or annotate
@@ -135,7 +135,7 @@ current build parses cleanly.
     reintroduce exactly the false-tick defect that review caught. They
     are left as-is pending per-item verification in a future pass.
 
-### 5. Vendored subtree
+### 5. Vendored subtree [1/1]
 
 - [x] Decide handling for `research/setup-hyalo-action/` (vendored
   README/PUBLISH/fixture files polluting summary counters): exclude from
@@ -154,13 +154,13 @@ current build parses cleanly.
   config key); it dovetails with iter-180 task 3, which can later
   generalise a vault-scan exclude config if more subtrees appear.
 
-### 6. Verification
+### 6. Verification [1/1]
 
 - [x] `hyalo find --broken-links` reports only intentional/unfixable
   links; `hyalo lint --strict` stays exit 0; `hyalo summary` counters
   reflect the cleanup
 
-## Acceptance Criteria
+## Acceptance Criteria [3/3]
 
 - [x] Broken-link count drops from 25 to the documented unfixable rest [deferred — not applicable: docs-only PR; verified via command output, not a source-diff token]
 - [x] The `iteration-25-*` duplicate in this iteration's scope is resolved (canonical file kept, superseded draft removed); NOT a general zero-duplicates claim — see note below [deferred — not applicable: AC text scoped to this iteration's actual work, not a source-diff token]
