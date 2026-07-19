@@ -297,6 +297,42 @@ fn anchor_matrix_indexed() {
     assert_matrix(&json, "index");
 }
 
+/// Text output renders the fragment on the target and marks a missing
+/// heading as `(broken anchor)` — in the nested `links:` section of find
+/// results, not just the standalone LinkInfo shape the doc tests cover.
+#[test]
+fn anchor_text_output_marks_broken_anchor() {
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir,
+            "find",
+            "--broken-links",
+            "--fields",
+            "links",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo find --broken-links should run");
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("\"Foo#nope\" → \"Foo.md\" (broken anchor)"),
+        "broken anchor must be visible in text output, got:\n{text}"
+    );
+    assert!(
+        !text.contains("\"Foo#Real\" → \"Foo.md\" (broken anchor)"),
+        "resolved anchor must not be marked broken, got:\n{text}"
+    );
+    assert!(
+        text.contains("\"Nope#x\" (unresolved)"),
+        "broken target keeps the unresolved marker (with fragment shown), got:\n{text}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // `links fix` headline counts are NOT inflated by broken anchors
 // ---------------------------------------------------------------------------

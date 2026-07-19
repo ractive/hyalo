@@ -868,10 +868,13 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
         parts.push(r#""  score: \(.score)""#.to_owned());
     }
 
-    // Links: header then each as "    \"target\" → \"path\"" or "    \"target\" (unresolved)"
+    // Links: header then each as "    \"target\" → \"path\"" or "    \"target\" (unresolved)".
+    // Anchored links (L-21) append "#fragment" to the target and, when the
+    // heading is missing, " (broken anchor)" after the path — keep in sync
+    // with LINK_INFO_ANCHORED_FILTER, which renders the standalone shape.
     if map.contains_key("links") {
         parts.push(
-            r#"if (.links | length) > 0 then "  links:\n\(.links | map("    \"\(.target)\"\(if .path then " → \"\(.path)\"" else " (unresolved)" end)") | join("\n"))" else empty end"#.to_owned(),
+            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 
