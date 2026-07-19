@@ -205,9 +205,43 @@ struct ParsedDestination<'a> {
     /// the `<...>` form; verbatim otherwise).
     target_raw: &'a str,
     /// Byte offset (relative to the start of the destination, i.e. right
-    /// after `(`) of the first byte past the destination (and any title),
-    /// up to and including the closing `)`.
+    /// after `(`) of the first byte past the `)` that closes the link
+    /// (skipping any intervening title, which may itself contain `)`).
     end: usize,
+}
+
+/// Locate the `)` that closes a markdown link, given the text immediately
+/// after an angle-bracket destination's closing `>`. Skips leading
+/// whitespace and an optional CommonMark title (`"…"`, `'…'`, or `(…)`,
+/// escape-aware), so a `)` inside the title is not mistaken for the closing
+/// paren. Returns the byte offset of the closing `)` within `s`, or `None`
+/// if what follows is neither a title nor the closing paren (per CommonMark
+/// the construct is then not a link).
+fn find_close_paren_after_destination(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    match bytes.get(i) {
+        Some(b')') => Some(i),
+        Some(&open @ (b'"' | b'\'' | b'(')) => {
+            let close = if open == b'(' { b')' } else { open };
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == close && !is_escaped(bytes, i) {
+                    i += 1;
+                    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                        i += 1;
+                    }
+                    return (bytes.get(i) == Some(&b')')).then_some(i);
+                }
+                i += 1;
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Parse a markdown link destination starting at `rest` (the text right
@@ -216,10 +250,15 @@ struct ParsedDestination<'a> {
 /// Handles both bare destinations (`dest.md`, up to the first `)`) and
 /// CommonMark angle-bracket destinations (`<my dest.md>`, which may contain
 /// spaces and literal `)`), per L-A1. For the angle form, the destination is
-/// closed by the first unescaped `>`; anything between it and the closing
-/// `)` (e.g. a `"title"`) is ignored since this file does not otherwise
+/// closed by the first unescaped `>`; an optional title between it and the
+/// closing `)` is skipped (escape-aware, so a `)` inside the title does not
+/// truncate the span) but not stored, since this file does not otherwise
 /// track link titles. Returns `None` if no closing `)` can be found for the
 /// destination.
+///
+/// Known CommonMark deviation: an unescaped `<` inside the angle form
+/// (`<foo<bar.md>`) should invalidate the destination per spec, but is
+/// accepted here; hyalo is not a full CommonMark parser elsewhere either.
 fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
     let bytes = rest.as_bytes();
     if bytes.first() == Some(&b'<') {
@@ -238,10 +277,11 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
         let close_angle = close_angle?;
         let target_raw = &rest[1..close_angle];
 
-        // Whatever follows `>` up to `)` (whitespace, optional title) is not
-        // part of the target; just locate the closing `)`.
+        // Whatever follows `>` (whitespace, optional title) is not part of
+        // the target; locate the `)` that actually closes the link — a bare
+        // `find(')')` would stop inside a title containing `)`.
         let after_angle = &rest[close_angle + 1..];
-        let close_paren = after_angle.find(')')?;
+        let close_paren = find_close_paren_after_destination(after_angle)?;
         let end = close_angle + 1 + close_paren + 1;
 
         Some(ParsedDestination { target_raw, end })
@@ -1244,6 +1284,45 @@ mod tests {
         // target_start/target_end must point at the unwrapped text so a
         // writer splice re-emits the angle brackets around a new target.
         assert_eq!(&text[span.target_start..span.target_end], "my dest.md");
+    }
+
+    #[test]
+    fn angle_bracket_destination_with_title_containing_paren() {
+        // A `)` inside the title must not truncate the span: full_end has to
+        // land past the real closing paren or a writer splice corrupts the
+        // line during `mv`/`links fix --apply`.
+        let text = r#"[text](<dest.md> "a (note)") tail"#;
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        let span = &spans[0];
+        assert_eq!(span.link.target, "dest.md");
+        assert_eq!(
+            &text[span.full_start..span.full_end],
+            r#"[text](<dest.md> "a (note)")"#
+        );
+    }
+
+    #[test]
+    fn angle_bracket_destination_with_single_quote_and_paren_titles() {
+        for text in [
+            r"[text](<dest.md> 'a (note)')",
+            r"[text](<dest.md> (a note))",
+        ] {
+            let mut links = Vec::new();
+            extract_links_from_text(text, &mut links);
+            assert_eq!(links.len(), 1, "failed for {text}");
+            assert_eq!(links[0].target, "dest.md", "failed for {text}");
+        }
+    }
+
+    #[test]
+    fn angle_bracket_destination_followed_by_garbage_is_not_a_link() {
+        // Per CommonMark, only whitespace and an optional title may sit
+        // between the closing `>` and the `)`.
+        let text = "[text](<dest.md> junk)";
+        let mut links = Vec::new();
+        extract_links_from_text(text, &mut links);
+        assert!(links.is_empty());
     }
 
     // --- L-A2: escaped brackets in link text ---
