@@ -380,13 +380,16 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
         "expected at least 1 broken link, got {broken_count}"
     );
 
-    // fixable >= 1 because [[Authnticaton]] fuzzy-matches authentication.md
+    // The only fixable link in this fixture ([[Authnticaton]] →
+    // authentication.md) is a fuzzy (Jaro-Winkler) match, so it is reported
+    // in the `fuzzy`/`fuzzy_fixes` bucket, not `fixable`/`fixes` (L-10:
+    // `fixable`/`fixes` cover only certain, non-fuzzy fixes).
     let fixable_count = json["results"]["fixable"]
         .as_u64()
         .expect("'fixable' should be a number");
-    assert!(
-        fixable_count >= 1,
-        "expected at least 1 fixable link, got {fixable_count}"
+    assert_eq!(
+        fixable_count, 0,
+        "no certain (non-fuzzy) fixes in this fixture, got {fixable_count}"
     );
 
     // By default (no --apply), applied must be false
@@ -397,16 +400,25 @@ fn links_fix_dry_run_reports_broken_and_fixable() {
         "dry-run should report applied=false"
     );
 
-    // fixes is an array with entries having source, line, old_target, new_target
+    // fixes is empty (the only candidate is fuzzy); the fuzzy fix is reported
+    // separately with source/line/old_target/new_target/confidence.
     let fixes = json["results"]["fixes"]
         .as_array()
         .expect("'fixes' should be an array");
     assert!(
-        !fixes.is_empty(),
-        "fixes array should not be empty when fixable > 0"
+        fixes.is_empty(),
+        "fixes array should be empty when the only candidate is fuzzy: {fixes:?}"
     );
 
-    let first_fix = &fixes[0];
+    let fuzzy_fixes = json["results"]["fuzzy_fixes"]
+        .as_array()
+        .expect("'fuzzy_fixes' should be an array");
+    assert!(
+        !fuzzy_fixes.is_empty(),
+        "fuzzy_fixes should contain the [[Authnticaton]] candidate"
+    );
+
+    let first_fix = &fuzzy_fixes[0];
     assert!(
         first_fix["source"].is_string(),
         "fix entry must have 'source'"
@@ -443,9 +455,10 @@ fn links_fix_dry_run_detects_fuzzy_match() {
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
 
-    let fixes = json["results"]["fixes"]
+    // Fuzzy candidates are reported in `fuzzy_fixes`, not `fixes` (L-10).
+    let fixes = json["results"]["fuzzy_fixes"]
         .as_array()
-        .expect("'fixes' should be an array");
+        .expect("'fuzzy_fixes' should be an array");
 
     // [[Authnticaton]] in d.md should be proposed as a fix to authentication.md
     let has_auth_fix = fixes.iter().any(|fix| {
@@ -508,10 +521,16 @@ fn links_fix_apply_reduces_broken_links() {
         "links fix --apply should report applied=true"
     );
 
-    let fixed_count = apply_json["results"]["fixable"]
-        .as_u64()
-        .expect("'fixable' should be a number");
-    assert!(fixed_count >= 1, "should have applied at least 1 fix");
+    // The only fix in this fixture is the fuzzy match, opted into via
+    // --apply-fuzzy; it shows up in `applied_fixes`, not `fixable` (which
+    // covers only certain, non-fuzzy fixes — L-10).
+    let applied_fixes = apply_json["results"]["applied_fixes"]
+        .as_array()
+        .expect("'applied_fixes' should be an array");
+    assert!(
+        !applied_fixes.is_empty(),
+        "should have applied at least 1 fix"
+    );
 
     // Capture the broken link count reported by the apply run (before fixes were written).
     let before_broken = apply_json["results"]["broken"]
@@ -741,6 +760,15 @@ fn links_fix_apply_excludes_fuzzy_by_default() {
     assert!(
         json["results"]["fuzzy"].as_u64().unwrap_or(0) >= 1,
         "fuzzy bucket should contain the [[Authnticaton]] candidate: {json}"
+    );
+    // `fixable` must NOT count the fuzzy candidate: it drives the "Apply N
+    // fixes" hint text for plain `--apply`, which does not write fuzzy
+    // fixes. Counting it here would make the hint promise a fix that a
+    // plain `--apply` run does not actually deliver.
+    assert_eq!(
+        json["results"]["fixable"].as_u64(),
+        Some(0),
+        "fixable must exclude the fuzzy-only candidate so the apply hint doesn't overpromise: {json}"
     );
     assert_eq!(
         json["results"]["fuzzy_applied"].as_bool(),

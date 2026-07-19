@@ -216,10 +216,15 @@ pub fn links_fix(
 
     let output = serde_json::json!({
         "broken": broken.len(),
-        "fixable": fix_report.fixes.len(),
+        // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
+        // plain `--apply` writes. Fuzzy matches are reported exclusively in
+        // the `fuzzy`/`fuzzy_fixes` bucket below — counting them here too
+        // would make "Fixable: N" (and the "Apply N fixes" hint) overpromise
+        // what a plain `--apply` actually writes.
+        "fixable": certain_fixes.len(),
         "unfixable": fix_report.unfixable.len(),
         "ignored": ignored_count,
-        "fixes": fix_report.fixes,
+        "fixes": certain_fixes,
         "unfixable_links": fix_report.unfixable,
         "applied": !dry_run,
         "applied_fixes": applied_fixes,
