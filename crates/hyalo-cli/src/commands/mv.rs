@@ -584,21 +584,64 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
     }
 
     // All renames succeeded — apply link rewrites.
-    if let Err(e) = link_rewrite::execute_plans(dir, plans) {
-        // Roll back renames so the vault is left in a consistent state.
-        for (was_dst, was_src) in applied.iter().rev() {
-            if let Err(rb_err) = fs::rename(was_dst, was_src) {
-                eprintln!(
-                    "warning: rollback failed for {} -> {}: {rb_err}",
-                    was_dst.display(),
-                    was_src.display()
-                );
-            }
+    //
+    // L-11 (DEC-187-batch-mv-report): completed link-rewrite `atomic_write`s
+    // are NOT rolled back (a reliable content rollback would need per-file
+    // pre-images and is out of scope). Instead we use the partial-execution
+    // path so a mid-batch write failure can honestly *report* exactly which
+    // files were durably rewritten before the abort, then still roll back the
+    // renames to keep the directory structure consistent.
+    let report = match link_rewrite::execute_plans_partial(dir, plans) {
+        Ok(r) => r,
+        Err(e) => {
+            // Fatal (vault-boundary) failure: roll back renames and abort.
+            rollback_renames(&applied);
+            return Err(e);
         }
-        return Err(e);
+    };
+
+    if report.has_failures() {
+        // Roll back renames so the directory layout is consistent, then report
+        // which link rewrites were durably applied before the failure.
+        rollback_renames(&applied);
+        let applied_paths = report.applied_paths();
+        let failed: Vec<String> = report
+            .outcomes
+            .iter()
+            .filter(|o| !o.applied)
+            .map(|o| {
+                format!(
+                    "{}: {}",
+                    o.rel_path,
+                    o.error.as_deref().unwrap_or("write failed")
+                )
+            })
+            .collect();
+        return Err(anyhow::anyhow!(
+            "batch mv aborted: {} link rewrite(s) failed [{}]; \
+             {} file(s) were durably rewritten before the abort and were NOT rolled back [{}]; \
+             renames were rolled back",
+            failed.len(),
+            failed.join("; "),
+            applied_paths.len(),
+            applied_paths.join(", "),
+        ));
     }
 
     Ok(())
+}
+
+/// Roll back a set of already-applied renames (best effort; logs failures).
+fn rollback_renames(applied: &[(PathBuf, PathBuf)]) {
+    for (was_dst, was_src) in applied.iter().rev() {
+        if let Err(rb_err) = fs::rename(was_dst, was_src) {
+            eprintln!(
+                "warning: rollback failed for {} -> {}: {rb_err}",
+                was_dst.display(),
+                was_src.display()
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

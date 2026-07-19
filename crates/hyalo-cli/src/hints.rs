@@ -1734,10 +1734,18 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         .get("unfixable")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    // L-25: dry-run validates plans against on-disk text, so some `fixable`
+    // fixes may be stale (their text no longer matches). Discount them so the
+    // "Apply N fixes" hint count matches what `--apply` actually writes.
+    let unapplied = data
+        .get("unapplied")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let applicable = fixable.saturating_sub(unapplied);
 
-    if is_dry_run && fixable > 0 {
+    if is_dry_run && applicable > 0 {
         hints.push(Hint::new(
-            format!("Apply {fixable} fixes"),
+            format!("Apply {applicable} fixes"),
             build_command_with_glob(ctx, &["links", "fix", "--apply"]),
         ));
     }

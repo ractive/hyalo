@@ -27,8 +27,8 @@ use crate::discovery::resolve_target;
 use crate::index::VaultIndex;
 use crate::link_graph::{FileLinks, normalize_target};
 use crate::link_rewrite::{
-    Replacement, RewritePlan, apply_replacements, execute_plans, find_frontmatter_wikilinks,
-    rewrite_frontmatter_wikilink_text,
+    Replacement, RewritePlan, apply_replacements, execute_plans_partial,
+    find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
 };
 use crate::links::{
     LinkKind, extract_link_spans_with_original, parse_wikilink, strip_wikilink_md_suffix,
@@ -122,6 +122,20 @@ pub struct FixReport {
     pub fixes: Vec<FixPlan>,
     /// Broken links for which no suitable candidate could be found.
     pub unfixable: Vec<BrokenLinkInfo>,
+}
+
+/// A fix whose source file's on-disk write failed during `--apply` (L-11).
+///
+/// Distinct from an *unapplied* fix (whose on-disk text no longer matched what
+/// detection saw, so no `Replacement` was built): a failed fix produced a valid
+/// plan but the durable write itself failed (e.g. read-only target, I/O error).
+#[derive(Debug, Clone, Serialize)]
+pub struct FailedFix {
+    /// The fix that could not be written.
+    #[serde(flatten)]
+    pub fix: FixPlan,
+    /// Human-readable failure reason from the write layer.
+    pub error: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -875,16 +889,21 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
 /// wikilinks), applies them via [`apply_replacements`], and writes back via
 /// [`execute_plans`].
 ///
-/// Returns `(plans, unapplied)` where `plans` are the [`RewritePlan`]s
-/// actually written to disk, and `unapplied` lists the input [`FixPlan`]s
-/// that produced no [`Replacement`] (e.g. because the on-disk text no longer
-/// matches what detection saw). Callers should treat `unapplied` fixes as
-/// NOT applied when reporting results — do not assume every input fix landed.
+/// Returns `(applied_plans, unapplied, failed)` where:
+/// - `applied_plans` are the [`RewritePlan`]s that were durably written to disk.
+/// - `unapplied` lists input [`FixPlan`]s that produced no [`Replacement`]
+///   (e.g. because the on-disk text no longer matched what detection saw, or
+///   the file exceeded the size limit).
+/// - `failed` lists fixes whose file produced a valid plan but the durable
+///   write failed mid-batch (L-11); remaining files still get written.
+///
+/// Callers must treat both `unapplied` and `failed` fixes as NOT applied when
+/// reporting results, and set a non-zero exit code when `failed` is non-empty.
 pub fn apply_fixes(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<RewritePlan>, Vec<FixPlan>)> {
+) -> Result<(Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>)> {
     // Group fixes by source file.
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
@@ -893,6 +912,9 @@ pub fn apply_fixes(
 
     let mut plans: Vec<RewritePlan> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
+    // Map each plan's rel_path → the fixes it carries, so a mid-batch write
+    // failure can be reported against the specific fixes that did not land.
+    let mut fixes_by_plan: HashMap<String, Vec<FixPlan>> = HashMap::new();
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
@@ -920,17 +942,21 @@ pub fn apply_fixes(
         let (replacements, satisfied) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
 
+        let mut satisfied_fixes: Vec<FixPlan> = Vec::new();
         for (idx, fix) in file_fixes.iter().enumerate() {
-            if !satisfied.contains(&idx) {
+            if satisfied.contains(&idx) {
+                satisfied_fixes.push((*fix).clone());
+            } else {
                 unapplied.push((*fix).clone());
             }
         }
 
         if !replacements.is_empty() {
             let rewritten_content = apply_replacements(&content, &replacements);
+            fixes_by_plan.insert((*source_rel).to_string(), satisfied_fixes);
             plans.push(RewritePlan {
                 path: abs_path,
-                rel_path: source_rel.to_string(),
+                rel_path: (*source_rel).to_string(),
                 replacements,
                 rewritten_content,
                 mtime: file_mtime,
@@ -938,9 +964,95 @@ pub fn apply_fixes(
         }
     }
 
-    execute_plans(dir, &plans)?;
+    // Execute all plans, continuing past per-file write failures so the caller
+    // gets an honest applied/failed split even on a mid-batch failure (L-11).
+    let report = execute_plans_partial(dir, &plans)?;
 
-    Ok((plans, unapplied))
+    let mut failed: Vec<FailedFix> = Vec::new();
+    let mut applied_plans: Vec<RewritePlan> = Vec::new();
+    let mut outcome_by_rel: HashMap<&str, (bool, Option<String>)> = HashMap::new();
+    for o in &report.outcomes {
+        outcome_by_rel.insert(o.rel_path.as_str(), (o.applied, o.error.clone()));
+    }
+    for plan in plans {
+        // A missing outcome (should not happen) is treated as applied — the
+        // failure path only fires on an explicit `applied == false` record.
+        if let Some((false, err)) = outcome_by_rel.get(plan.rel_path.as_str()) {
+            let reason = err.clone().unwrap_or_else(|| "write failed".to_string());
+            if let Some(fs) = fixes_by_plan.remove(&plan.rel_path) {
+                for fix in fs {
+                    failed.push(FailedFix {
+                        fix,
+                        error: reason.clone(),
+                    });
+                }
+            }
+        } else {
+            applied_plans.push(plan);
+        }
+    }
+
+    Ok((applied_plans, unapplied, failed))
+}
+
+/// Dry-run counterpart of [`apply_fixes`]: build the same [`RewritePlan`]s
+/// against on-disk text but write nothing (L-25).
+///
+/// Running the identical plan-building phase means dry-run's `unapplied` set is
+/// exactly what `--apply` would refuse — a fix whose on-disk text no longer
+/// matches what detection saw (stale index / concurrent edit) is reported as
+/// unapplied in *both* modes. Without this, dry-run always reported an empty
+/// `unapplied` and could promise fixes that a subsequent `--apply` would drop.
+///
+/// Returns `(would_modify, unapplied)` where `would_modify` is the set of
+/// vault-relative paths that would receive at least one rewrite, and
+/// `unapplied` lists the fixes whose on-disk text no longer matches.
+pub fn plan_fixes_dry_run(
+    dir: &Path,
+    fixes: &[FixPlan],
+    site_prefix: Option<&str>,
+) -> Result<(Vec<String>, Vec<FixPlan>)> {
+    let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
+    for fix in fixes {
+        by_source.entry(fix.source.as_str()).or_default().push(fix);
+    }
+
+    let mut would_modify: Vec<String> = Vec::new();
+    let mut unapplied: Vec<FixPlan> = Vec::new();
+
+    for (source_rel, file_fixes) in &by_source {
+        let abs_path = dir.join(source_rel.replace('\\', "/"));
+        // File vanished since detection — every fix for it is stale.
+        let Ok(meta) = std::fs::metadata(&abs_path) else {
+            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
+            continue;
+        };
+        if meta.len() > MAX_FILE_SIZE {
+            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&abs_path) else {
+            unapplied.extend(file_fixes.iter().map(|f| (*f).clone()));
+            continue;
+        };
+
+        let (replacements, satisfied) =
+            build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
+
+        for (idx, fix) in file_fixes.iter().enumerate() {
+            if !satisfied.contains(&idx) {
+                unapplied.push((*fix).clone());
+            }
+        }
+
+        if !replacements.is_empty() {
+            would_modify.push((*source_rel).to_string());
+        }
+    }
+
+    would_modify.sort();
+    unapplied.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    Ok((would_modify, unapplied))
 }
 
 /// Walk `content` line by line and build [`Replacement`]s for all link fixes
@@ -1537,7 +1649,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1569,7 +1681,7 @@ See [broken](old-name.md) here.
             confidence: 1.0,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1605,7 +1717,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1, "frontmatter fix must produce a RewritePlan");
         assert!(
@@ -1639,7 +1751,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1682,7 +1794,7 @@ See [broken](old-name.md) here.
             },
         ];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1726,7 +1838,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1756,7 +1868,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1789,7 +1901,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert!(plans.is_empty(), "no replacement should have been produced");
         assert_eq!(unapplied.len(), 1);
@@ -1822,7 +1934,7 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
@@ -1857,7 +1969,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
@@ -1892,7 +2004,7 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
@@ -2358,5 +2470,72 @@ See [broken](old-name.md) here.
             "with expand_short_form, [[Corina]] not at vault root must be broken; report: {report:?}"
         );
         assert_eq!(report.broken[0].target, "Corina");
+    }
+
+    // --- L-25: dry-run / apply parity ---
+
+    #[test]
+    fn plan_fixes_dry_run_matches_apply_on_fresh_text() {
+        // A fix that would apply cleanly must be reported as would-modify by
+        // dry-run and produce no unapplied entries — matching what apply does.
+        let tmp = vault_with_files(&[
+            ("index.md", "See [[wrongname]] for details.\n"),
+            ("correct-name.md", ""),
+        ]);
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrongname".to_string(),
+            new_target: "correct-name.md".to_string(),
+            strategy: FixStrategy::FuzzyMatch,
+            confidence: 0.9,
+        }];
+
+        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        assert_eq!(would_modify, vec!["index.md"]);
+        assert!(unapplied.is_empty(), "fresh text: nothing stale");
+
+        // Dry-run must not have written anything.
+        let on_disk = fs::read_to_string(tmp.path().join("index.md")).unwrap();
+        assert!(
+            on_disk.contains("[[wrongname]]"),
+            "dry-run must not mutate disk"
+        );
+    }
+
+    #[test]
+    fn plan_fixes_dry_run_reports_stale_fix_like_apply() {
+        // L-25: when the on-disk text no longer matches what detection saw
+        // (stale index / concurrent edit), the fix must show up as unapplied in
+        // BOTH dry-run and apply — one code path, guaranteed parity.
+        let tmp = vault_with_files(&[
+            // On disk the link is already gone — the plan below is stale.
+            ("index.md", "Nothing to see here.\n"),
+            ("correct-name.md", ""),
+        ]);
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrongname".to_string(),
+            new_target: "correct-name.md".to_string(),
+            strategy: FixStrategy::FuzzyMatch,
+            confidence: 0.9,
+        }];
+
+        let (would_modify_dry, unapplied_dry) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        assert!(would_modify_dry.is_empty(), "stale fix modifies nothing");
+        assert_eq!(
+            unapplied_dry.len(),
+            1,
+            "stale fix must be reported unapplied"
+        );
+
+        // apply must report the identical unapplied set.
+        let (plans, unapplied_apply, failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        assert!(plans.is_empty());
+        assert!(failed.is_empty());
+        assert_eq!(unapplied_apply.len(), unapplied_dry.len());
+        assert_eq!(unapplied_apply[0].old_target, unapplied_dry[0].old_target);
     }
 }

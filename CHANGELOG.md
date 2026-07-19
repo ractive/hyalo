@@ -9,6 +9,38 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Honest partial-failure envelopes for link write paths** (iter-187): when a
+  file write fails mid-batch, `hyalo links fix --apply`, `hyalo links auto
+  --apply`, and batch `hyalo mv --apply` now emit a complete JSON envelope
+  rather than aborting with a bare error. `links fix --apply` gains `failed` /
+  `failed_fixes` buckets (each with the per-file error string); `links auto
+  --apply` gains `files_applied` / `files_skipped` / `files_failed` counts plus
+  a per-file `apply_outcomes` list (applied/skipped/failed with reason, so skips
+  that previously only went to stderr are now in the envelope). Any partial
+  failure yields a non-zero exit code. Files written before the failure are
+  reported as applied, never silently kept and unreported.
+
+### Changed
+
+- **`hyalo links fix` dry-run validates plans against on-disk text** (iter-187):
+  dry-run now runs the identical plan-building phase as `--apply`, so its
+  `unapplied` / `unapplied_fixes` fields report exactly the fixes `--apply`
+  would refuse (stale index / concurrent edit) instead of always being empty.
+  The "Apply N fixes" hint count now discounts would-be-stale fixes so it
+  matches what `--apply` actually writes.
+
+### Internal
+
+- **Unified link write path** (iter-187): `auto_link` now builds
+  `RewritePlan`s and writes through the shared `execute_plans_partial`
+  machinery instead of a hand-rolled line splitter (removed
+  `split_lines_preserving_endings`), keeping its stronger full-content TOCTOU
+  guard. Batch `mv` reports which link rewrites were durably applied before a
+  mid-batch abort (DEC-187: completed content writes are not rolled back; the
+  renames are).
+
 ## [0.19.0] - 2026-07-19
 
 ### Added

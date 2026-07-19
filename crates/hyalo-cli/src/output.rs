@@ -500,7 +500,7 @@ const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" en
 /// Empty case: `No backlinks found for "file"`.
 const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
 
-/// `LinksFix result`: `{ambiguous, ambiguous_links, applied, applied_fixes, broken, case_mismatch_fixes, case_mismatches, fixable, fixes, ignored, unapplied, unapplied_fixes, unfixable, unfixable_links}`
+/// `LinksFix result`: `{ambiguous, ambiguous_links, applied, applied_fixes, broken, case_mismatch_fixes, case_mismatches, failed, failed_fixes, fixable, fixes, ignored, unapplied, unapplied_fixes, unfixable, unfixable_links}`
 /// Format: summary line with fix status. Includes case-mismatch and ambiguous counts when non-zero.
 /// On `--apply`, the per-fix detail lines show only fixes that were actually
 /// written to disk (`applied_fixes`); on dry-run they show the full plan
@@ -508,11 +508,11 @@ const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No 
 /// count (fixes whose on-disk text no longer matched the plan) gets its own
 /// section so a stale or partially-applied run is never silently reported as
 /// fully applied.
-const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.fuzzy_fixes | length) > 0 then "\nFuzzy matches (low-confidence, \(if .fuzzy_applied then "applied" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [fuzzy \((.confidence * 1000 | floor) / 1000)]") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)""#;
+const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.fuzzy_fixes | length) > 0 then "\nFuzzy matches (low-confidence, \(if .fuzzy_applied then "applied" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [fuzzy \((.confidence * 1000 | floor) / 1000)]") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)""#;
 
-/// `LinksAuto result`: `{ambiguous_titles, applied, matches, scanned, total}`
+/// `LinksAuto result`: `{ambiguous_titles, applied, apply_outcomes, files_applied, files_failed, files_skipped, matches, scanned, total}`
 /// Format: summary line + per-match details.
-const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
+const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
@@ -587,12 +587,14 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "dry_run,modified,scanned,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
-        // LinksFix result
-        "ambiguous,ambiguous_links,applied,applied_fixes,broken,case_mismatch_fixes,case_mismatches,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_fixes,fuzzy_min_confidence,ignored,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
+        // LinksFix result (iter-187 adds `failed`/`failed_fixes` for L-11)
+        "ambiguous,ambiguous_links,applied,applied_fixes,broken,case_mismatch_fixes,case_mismatches,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_fixes,fuzzy_min_confidence,ignored,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
             Some(LINKS_FIX_FILTER)
         }
-        // LinksAuto result
-        "ambiguous_titles,applied,matches,scanned,total" => Some(LINKS_AUTO_FILTER),
+        // LinksAuto result (iter-187 adds per-file apply outcome fields for L-11)
+        "ambiguous_titles,applied,apply_outcomes,files_applied,files_failed,files_skipped,matches,scanned,total" => {
+            Some(LINKS_AUTO_FILTER)
+        }
         // MvResult
         "dry_run,from,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)
