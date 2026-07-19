@@ -2,7 +2,7 @@
 title: "Iteration 185 — link semantics extensions (Phase D: anchors, lint rule, escapes)"
 type: iteration
 date: 2026-07-18
-status: in-progress
+status: completed
 branch: iter-185/link-semantics
 tags:
   - iteration
