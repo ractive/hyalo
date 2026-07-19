@@ -2,7 +2,7 @@
 title: Iteration 187 — link writer & resolver unification completion
 type: iteration
 date: 2026-07-19
-status: in-progress
+status: completed
 branch: iter-187/link-writer-unification
 tags:
   - iteration
