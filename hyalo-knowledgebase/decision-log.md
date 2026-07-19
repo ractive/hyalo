@@ -859,3 +859,25 @@ cross-cutting change out of scope for a docs-truth iteration. Authors who want
 strictness can hand-declare a schema binding for those paths. Revisit if a real
 OKF consumer starts rejecting bundles over reserved-file frontmatter drift. See
 [[iterations/iteration-177-okf-docs-truth]].
+
+## DEC-055: Backslash escaping of links follows CommonMark odd-backslash rule (2026-07-18)
+
+**Decision:** A link opener that is preceded by an **odd** number of backslashes
+is treated as literal text and is not extracted (L-16). `\[[x]]` → literal;
+`\\[[x]]` → a real link (the `\\` renders as one literal backslash, leaving the
+`[` unescaped); `\\\[[x]]` → literal again. The escape is evaluated at the
+*opener byte* the parser is about to consume: for a markdown link and a plain
+`[[wikilink]]` that is the `[`; for an embed `![[…]]` the `!` and the `[[` are
+independent — `\![[x]]` escapes only the `!` and still yields a normal
+(non-embed) `[[x]]` wikilink, whereas `!\[[x]]` escapes the `[[` and suppresses
+the whole embed. Implemented as `links::is_escaped(bytes, pos)` counting
+preceding `\` bytes and applied in both `extract_links_from_text_with_original`
+and `extract_link_spans_with_original`, so extraction and rewriting share one
+rule and rewriters never touch an escaped link.
+
+**Why:** Matches CommonMark's backslash-escape semantics (odd count escapes,
+even count is a literal-backslash run) and Obsidian's behavior for `\[[…]]`.
+Doing it at the shared span extractor means every consumer — `find
+--broken-links`, `mv`, `links fix`, `auto`, and any future lint rule — inherits
+the same escape handling for free, with no per-command special-casing. See
+[[iterations/iteration-185-link-semantics]].

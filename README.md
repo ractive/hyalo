@@ -459,6 +459,8 @@ When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _contex
 
 Subcommands that accept `--file <path>` (`find`, `set`, `backlinks`, `read`, `links`, `mv`) accept either a vault-relative path or an absolute path that points _inside_ the configured vault. Absolute in-vault paths are canonicalised to the vault-relative form (with a one-time stderr warning, since pasting absolute paths is usually an LLM accident). An absolute path that resolves _outside_ the vault exits non-zero with `error: file resolves outside vault boundary` rather than silently returning an empty result set.
 
+When `[links] case_insensitive` is enabled (`"true"`, or `"auto"` on a case-insensitive filesystem), `backlinks --file` also resolves the argument case-insensitively: passing `foo.md` finds an on-disk `Foo.md` even on a case-sensitive filesystem (Linux). Resolution walks each path component and requires a unique match per level — if two entries differ only in case at the same level, it declines to guess and reports the literal path as not found. The fallback only substitutes on-disk casing; it never crosses into a different directory and re-runs the same vault-boundary / traversal / symlink checks as the literal path.
+
 ### Saved views
 
 Name a filter set once, recall it everywhere:

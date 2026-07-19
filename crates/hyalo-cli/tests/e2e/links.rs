@@ -3295,3 +3295,56 @@ close`` then a real broken [[reallymissing]].
         "the broken link after the span closes must still be reported: {files:?}"
     );
 }
+
+#[test]
+fn find_broken_links_ignores_backslash_escaped_link() {
+    // L-16: a backslash-escaped link (`\[[not-a-link]]`) is literal text per
+    // CommonMark / Obsidian and must NOT be extracted — so it can never be
+    // reported as a broken link, even though the target does not exist.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "escaped.md",
+        md!(r"
+---
+title: Escaped
+---
+This \[[escaped-missing]] is literal, but this [[real-missing]] is broken.
+Also \[label](escaped-md-missing.md) is literal too.
+"),
+    );
+    let files = broken_link_files(tmp.path());
+    // The file appears because of the unescaped `[[real-missing]]`.
+    assert!(
+        files.contains(&"escaped.md".to_owned()),
+        "the unescaped broken link must be reported: {files:?}"
+    );
+
+    // Inspect the per-file broken-link targets to confirm the escaped ones are
+    // absent and only the real one is present.
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "find",
+            "--broken-links",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find --broken-links should run");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let blob = json.to_string();
+    assert!(
+        blob.contains("real-missing"),
+        "unescaped broken target should be listed: {blob}"
+    );
+    assert!(
+        !blob.contains("escaped-missing"),
+        "escaped wikilink target must not appear anywhere: {blob}"
+    );
+    assert!(
+        !blob.contains("escaped-md-missing"),
+        "escaped markdown-link target must not appear anywhere: {blob}"
+    );
+}

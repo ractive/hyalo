@@ -250,7 +250,34 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
 /// Resolve a path argument relative to `--dir`. Verifies it exists and is `.md`.
 /// Returns the full path under `dir` and the normalized relative path (for display).
 /// Rejects absolute paths and `..` segments to prevent escaping the base directory.
+///
+/// This is the case-sensitive form — equivalent to
+/// [`resolve_file_ci`]`(dir, path_arg, false)`. Use `resolve_file_ci` to honor
+/// `[links] case_insensitive` for CLI `--file` arguments.
 pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), FileResolveError> {
+    resolve_file_ci(dir, path_arg, false)
+}
+
+/// Like [`resolve_file`], but when `case_insensitive` is `true` and the literal
+/// (exact-casing) lookup misses, fall back to a case-insensitive directory scan
+/// of the target's parent, resolving to the real on-disk casing when exactly
+/// one case-variant exists.
+///
+/// This closes the gap (iter-184 CI failure) where `backlinks --file foo.md`
+/// failed with "file not found" on a case-sensitive filesystem (Linux) even
+/// with `[links] case_insensitive = "true"`, because the literal
+/// `Path::is_file()` check never consulted the setting. On a case-insensitive
+/// filesystem (macOS/Windows default) the literal check already succeeds, so
+/// the fallback is a no-op there.
+///
+/// The fallback runs through the same vault-boundary / traversal / symlink
+/// checks as the literal path — it only substitutes the on-disk casing of the
+/// final path components, never a different directory.
+pub fn resolve_file_ci(
+    dir: &Path,
+    path_arg: &str,
+    case_insensitive: bool,
+) -> Result<(PathBuf, String), FileResolveError> {
     // Reject null bytes before any further processing.  A null byte in the
     // path could bypass the `.md` extension check on some platforms because
     // the OS treats the string as ending at the first `\0`.
@@ -301,7 +328,20 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
         });
     }
 
-    let full = dir.join(&normalized);
+    let mut full = dir.join(&normalized);
+    if !full.is_file() {
+        // Case-insensitive fallback: when the literal-casing lookup misses and
+        // the caller opted into case-insensitive resolution, walk each path
+        // component and match it against on-disk entries ignoring ASCII case.
+        // Only accept a unique match at every level — an ambiguous level (two
+        // entries differing only in case) is left to the literal `NotFound`.
+        if case_insensitive
+            && let Some((ci_full, ci_rel)) = resolve_case_insensitive(dir, &normalized)
+        {
+            full = ci_full;
+            normalized = ci_rel;
+        }
+    }
     if !full.is_file() {
         // Try fuzzy-matching against .md siblings in the same parent directory.
         if let Some(sibling_name) = fuzzy_match_sibling(&full) {
@@ -341,6 +381,63 @@ pub fn resolve_file(dir: &Path, path_arg: &str) -> Result<(PathBuf, String), Fil
     }
 
     Ok((full, normalized))
+}
+
+/// Resolve a vault-relative path case-insensitively by walking components.
+///
+/// For each component of `rel` (forward-slash form), scan the corresponding
+/// on-disk directory and pick the entry whose name equals the component under
+/// ASCII case-folding. Requires exactly one such entry at every level — if a
+/// level is ambiguous (e.g. both `Foo` and `foo` exist) or missing, returns
+/// `None` and the caller keeps the literal `NotFound`.
+///
+/// Returns the real-casing full path and its vault-relative (forward-slash)
+/// form. Does no vault-boundary check itself — the caller re-runs the same
+/// `ensure_within_vault` guard on the result.
+fn resolve_case_insensitive(dir: &Path, rel: &str) -> Option<(PathBuf, String)> {
+    // Empty or already-literal-matching inputs are handled by the caller.
+    if rel.is_empty() {
+        return None;
+    }
+
+    let mut current = dir.to_path_buf();
+    let mut real_components: Vec<String> = Vec::new();
+
+    for component in rel.split('/') {
+        if component.is_empty() {
+            return None;
+        }
+
+        // Case-insensitive scan of `current` for a unique match. We always scan
+        // (rather than short-circuiting on an exact-casing `is_file`) so that on
+        // a case-insensitive host FS we still recover the *true* on-disk casing
+        // instead of echoing the caller's argument casing. Prefer an exact-case
+        // hit when one is present alongside case-variants.
+        let entries = std::fs::read_dir(&current).ok()?;
+        let mut exact: Option<String> = None;
+        let mut ci_matches: Vec<String> = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name();
+            let name_str = name.to_str()?;
+            if name_str == component {
+                exact = Some(name_str.to_owned());
+            } else if name_str.eq_ignore_ascii_case(component) {
+                ci_matches.push(name_str.to_owned());
+            }
+        }
+        let on_disk_name = match (exact, ci_matches.len()) {
+            // Exact-casing entry present — always prefer it.
+            (Some(e), _) => e,
+            // Exactly one case-variant — use it.
+            (None, 1) => ci_matches.into_iter().next()?,
+            // Zero or ambiguous (>1) — cannot resolve.
+            (None, _) => return None,
+        };
+        current = current.join(&on_disk_name);
+        real_components.push(on_disk_name);
+    }
+
+    Some((current, real_components.join("/")))
 }
 
 /// Find the closest `.md` sibling by Levenshtein distance.
@@ -977,6 +1074,124 @@ mod tests {
         let (path, rel) = resolve_file(tmp.path(), "note.md").unwrap();
         assert!(path.is_file());
         assert_eq!(rel, "note.md");
+    }
+
+    // --- Task 4: case-insensitive CLI file-argument resolution ---
+
+    #[test]
+    fn resolve_file_ci_off_does_not_fallback() {
+        // With case_insensitive = false, a lowercase arg must NOT resolve to a
+        // capitalized on-disk file (mirrors case-sensitive-filesystem behavior
+        // regardless of the host FS).
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("Foo.md"), "").unwrap();
+
+        let err = resolve_file_ci(tmp.path(), "foo.md", false);
+        // On a case-insensitive host FS the literal is_file() would succeed, so
+        // only assert the negative on a genuinely case-sensitive scan by
+        // checking the *rel casing* when it does resolve.
+        if let Ok((_, rel)) = err {
+            // Host FS is case-insensitive: literal lookup wins, rel keeps arg casing.
+            assert_eq!(rel, "foo.md");
+        }
+    }
+
+    #[test]
+    fn resolve_file_ci_on_resolves_wrong_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("Foo.md"), "").unwrap();
+
+        let (path, rel) = resolve_file_ci(tmp.path(), "foo.md", true).unwrap();
+        assert!(path.is_file());
+        // On a case-sensitive FS the fallback substitutes the real casing
+        // (`Foo.md`); on a case-insensitive host the literal `is_file()` already
+        // succeeds and keeps the arg casing (`foo.md`). Both are valid — the
+        // point is that resolution succeeds either way.
+        let host_ci = crate::case_index::probe_case_insensitive(tmp.path()).unwrap_or(false);
+        if host_ci {
+            assert_eq!(rel, "foo.md");
+        } else {
+            assert_eq!(rel, "Foo.md");
+        }
+    }
+
+    #[test]
+    fn resolve_file_ci_on_resolves_nested_wrong_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("Sub/Deep")).unwrap();
+        fs::write(tmp.path().join("Sub/Deep/Note.md"), "").unwrap();
+
+        let (path, rel) = resolve_file_ci(tmp.path(), "sub/deep/note.md", true).unwrap();
+        assert!(path.is_file());
+        let host_ci = crate::case_index::probe_case_insensitive(tmp.path()).unwrap_or(false);
+        if host_ci {
+            assert_eq!(rel, "sub/deep/note.md");
+        } else {
+            assert_eq!(rel, "Sub/Deep/Note.md");
+        }
+    }
+
+    #[test]
+    fn resolve_case_insensitive_direct_nested_substitutes_casing() {
+        // Unit-level: the component-walk helper itself always substitutes the
+        // real casing regardless of host FS (it lists dirs and matches names),
+        // so this asserts the substitution logic directly without depending on
+        // the outer literal `is_file()` short-circuit.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("Sub/Deep")).unwrap();
+        fs::write(tmp.path().join("Sub/Deep/Note.md"), "").unwrap();
+
+        let (_full, rel) =
+            resolve_case_insensitive(tmp.path(), "SUB/deep/NOTE.md").expect("should resolve");
+        assert_eq!(rel, "Sub/Deep/Note.md");
+    }
+
+    #[test]
+    fn resolve_file_ci_exact_case_unaffected() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("Foo.md"), "").unwrap();
+
+        // Exact casing still resolves and keeps its casing.
+        let (_, rel) = resolve_file_ci(tmp.path(), "Foo.md", true).unwrap();
+        assert_eq!(rel, "Foo.md");
+    }
+
+    #[test]
+    fn resolve_file_ci_missing_still_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("Foo.md"), "").unwrap();
+
+        // A file that doesn't exist in any casing still errors.
+        assert!(matches!(
+            resolve_file_ci(tmp.path(), "bar.md", true),
+            Err(FileResolveError::NotFound { .. } | FileResolveError::NotFoundSuggestion { .. })
+        ));
+    }
+
+    #[test]
+    fn resolve_case_insensitive_ambiguous_returns_none() {
+        // When two entries differ only in case at the same level, the scan is
+        // ambiguous and must not guess. (Skipped on case-insensitive host FS
+        // where the two files can't coexist.)
+        let tmp = tempfile::tempdir().unwrap();
+        let a = fs::write(tmp.path().join("Foo.md"), "");
+        let b = fs::write(tmp.path().join("foo.md"), "");
+        if a.is_ok() && b.is_ok() && tmp.path().join("Foo.md").exists() {
+            // Verify both really coexist (case-sensitive FS).
+            let count = fs::read_dir(tmp.path())
+                .unwrap()
+                .filter(|e| {
+                    e.as_ref().is_ok_and(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .eq_ignore_ascii_case("foo.md")
+                    })
+                })
+                .count();
+            if count == 2 {
+                assert!(resolve_case_insensitive(tmp.path(), "FOO.md").is_none());
+            }
+        }
     }
 
     #[test]

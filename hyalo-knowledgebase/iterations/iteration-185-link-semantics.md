@@ -2,9 +2,13 @@
 title: "Iteration 185 — link semantics extensions (Phase D: anchors, lint rule, escapes)"
 type: iteration
 date: 2026-07-18
-status: planned
+status: in-progress
 branch: iter-185/link-semantics
-tags: [iteration, links, lint, features]
+tags:
+  - iteration
+  - links
+  - lint
+  - features
 depends-on: "[[iterations/iteration-184-link-resolver-writer-unification]]"
 related:
   - "[[reviews/link-handling-review-2026-07-18]]"
@@ -106,7 +110,7 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 
 ### 3. Escapes and normalization (L-16, L-19, L-23)
 
-- [ ] L-16: `\[[not-a-link]]` is not extracted (backslash escape per
+- [x] L-16: `\[[not-a-link]]` is not extracted (backslash escape per
   CommonMark/Obsidian); rewiters leave it untouched
 - [ ] L-19: `.md`-suffix normalization happens at `Link` construction
   (with an as-written field preserved); remove the manual re-strip at
@@ -118,20 +122,20 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 
 ### 4. Case-insensitive CLI file-argument resolution (new, from iter-184 review)
 
-- [ ] `discovery::resolve_file` (used by `--file` args on `backlinks`,
+- [x] `discovery::resolve_file` (used by `--file` args on `backlinks`,
   `read`, `set`, `remove`, `append`, single-file `mv`, etc.) does a
   literal `Path::is_file()` check with no case-insensitive fallback, so
   it never actually consults `[links] case_insensitive` — confirmed by
   CI: `backlinks --file foo.md` fails with "file not found" on Linux
   when only `Foo.md` exists, even with case-insensitive mode on. Only
   the graph-level lookup (`LinkGraph::backlinks_ci`) honors the setting.
-- [ ] Decide scope: thread `case_insensitive_mode` (or a prebuilt case
+- [x] Decide scope: thread `case_insensitive_mode` (or a prebuilt case
   index) into `resolve_file`, falling back to a case-insensitive
   directory scan when the literal-case lookup misses. Note
   `resolve_file` is used by more than just `backlinks` — audit call
   sites and vault-boundary/path-traversal checks stay correct for the
   fallback path too.
-- [ ] e2e: `backlinks --file foo.md` (lowercase arg) finds `Foo.md` on a
+- [x] e2e: `backlinks --file foo.md` (lowercase arg) finds `Foo.md` on a
   case-insensitive vault, run on Linux CI (not just locally) so a
   filesystem-accident pass doesn't mask a regression again.
 
@@ -143,8 +147,64 @@ rollback-vs-report semantics; (d) L-25 dry-run/apply single-path parity.
 - [ ] Close out [[reviews/link-handling-review-2026-07-18]]: mark each
   L-finding fixed/deferred with a pointer
 
+## Implementation notes (this PR)
+
+This PR lands the two most self-contained, correctness-critical findings from
+the plan with full unit + e2e coverage, and scopes the deep cross-crate items
+honestly rather than half-shipping them.
+
+**Shipped**
+
+- **L-16 (backslash escapes)** — `links.rs`: a new `is_escaped(bytes, pos)`
+  helper counts preceding backslashes (odd = escaped, CommonMark/Obsidian
+  semantics). Both extraction paths (`extract_links_from_text_with_original`,
+  `extract_link_spans_with_original`) now skip an escaped opener. Decisions
+  recorded: `\[[x]]` → literal; `\\[[x]]` → real link (`\\` renders as one
+  literal backslash); `\![[x]]` escapes only the `!` and still yields a normal
+  `[[x]]` wikilink; `!\[[x]]` (backslash before `[[`) suppresses the embed.
+  Rewriters get this for free since they consume the same span extractor.
+  Covered by 10 unit tests in `links.rs` + an e2e
+  (`find_broken_links_ignores_backslash_escaped_link`) proving escaped targets
+  never surface in `find --broken-links`.
+- **Task 4 (case-insensitive `--file` resolution)** — closes the iter-184 CI
+  gap. `discovery::resolve_file_ci(dir, path_arg, case_insensitive)` +
+  `resolve_case_insensitive` component-walk helper: when the literal-casing
+  lookup misses and the caller opted in, walk each path component and match it
+  against on-disk entries under ASCII case-folding, requiring a *unique* match
+  per level (ambiguous levels bail to the literal `NotFound`). The fallback
+  reuses the same vault-boundary / traversal / symlink guards — it only
+  substitutes on-disk casing, never a different directory. `resolve_file`
+  stays as `resolve_file_ci(.., false)` for back-compat (all existing callers
+  and 30+ tests unchanged). CLI: `resolve_file_user_ci` threads the flag;
+  `backlinks` (which already had `case_insensitive`) routes through it.
+  Covered by unit tests in `discovery.rs` (incl. ambiguous-returns-none and a
+  direct nested-casing substitution test that is host-FS-independent) + an
+  e2e (`backlinks_ci_resolves_lowercase_file_arg_against_capitalized_file`)
+  that supersedes the "known limitation" note in
+  `backlinks_case_insensitive_agrees_across_casings`. Host-FS-sensitive
+  assertions are gated on `probe_case_insensitive` so a macOS pass can't mask
+  a Linux-CI regression.
+
+**Deferred (not in this PR) — remain open in the tasks above**
+
+- **L-19 / L-23** (task 3) — `.md`-normalization-at-construction with an
+  as-written field, and percent-decoding markdown targets. These touch the
+  `Link` type shape and every consumer that compares targets across link
+  kinds; sized as a follow-up to avoid a wide, hard-to-review diff.
+- **L-21 anchor validation** (task 1) and **broken-link lint rule** (task 2) —
+  both require plumbing the vault `LinkGraph` into new places (heading-content
+  reads for anchors; a vault-level graph cache into the `hyalo-mdlint` crate,
+  which currently has no link-graph access). Note the plan's proposed
+  `HYALO004` id is already taken (datetime-format) — the future rule should be
+  `HYALO006`.
+- **iter-184 carried refactors** (a–d: `resolve_link` unification,
+  `apply_matches`→`execute_plans`, L-11 partial-failure envelope, L-25
+  parity) — large mechanical refactors, out of scope for this focused PR.
+
 ## Acceptance Criteria
 
-- [ ] `hyalo lint --strict` can gate broken links in CI
-- [ ] Anchored-link health visible in `find --broken-links` output
-- [ ] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
+- [ ] `hyalo lint --strict` can gate broken links in CI (deferred — lint rule
+  not yet built; see task 2)
+- [ ] Anchored-link health visible in `find --broken-links` output (deferred —
+  see task 1)
+- [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean
