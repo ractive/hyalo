@@ -11,6 +11,34 @@ and this project adheres to
 
 ### Added
 
+- **Broken-anchor detection in `find --broken-links`** (iter-190, L-21): links
+  now carry their `#fragment` (heading anchor) through parsing and resolution.
+  `find --broken-links` reports a **broken anchor** — a link whose target file
+  exists but whose `#heading` does not — as a category distinct from a broken
+  target. In JSON, an anchored link gains `fragment` and (when the heading is
+  missing) `broken_anchor: true`; text output renders `"Foo#Real" → "Foo.md"`
+  and marks a missing heading as `(broken anchor)`. The two categories are
+  never both reported on one link (a broken target skips the anchor check), and
+  broken anchors do **not** inflate `links fix`'s `broken` / `fixable` counts or
+  its "Apply N fixes" hint — `links fix` stays target-only, letting anchor
+  semantics soak one release behind `find` before any lint/CI gate consumes
+  them. Anchor matching is exact and case-insensitive (Obsidian convention:
+  `[[Foo#tasks]]` matches `## Tasks`), decodes percent-encoded markdown
+  fragments (`foo.md#my%20heading`) for comparison only (the written form is
+  preserved), and skips `^block-id` refs (block ids are not indexed). Validation
+  reads headings from the already-materialized index/scan sections — **zero
+  extra file reads** on the `--index` path, and no per-file re-read on disk scan.
+  `mv` and `links fix` preserve fragments byte-exact (the rewrite span stops
+  before `#`).
+
+  The `Link` wire-shape gained an additive `fragment: Option<String>` field
+  (`#[serde(default)]`), serialized into `.hyalo-index` entries and the
+  persisted link graph. The field is **backward compatible**: existing
+  `.hyalo-index` snapshots load unchanged (fragments read as `None`, so no false
+  anchor reports from stale entries). To pick up fragment data for anchor
+  validation on the `--index` path, **rebuild the index** with `hyalo
+  create-index` after upgrading.
+
 - **`HYALO006` / `broken-link` lint rule** (iter-188): `hyalo lint` now flags
   wikilinks and markdown links that point at a vault file which does not exist.
   Enabled and `warn` by default; `hyalo lint --strict` promotes it to an error

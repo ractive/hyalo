@@ -436,6 +436,18 @@ const LINK_INFO_LABEL_FILTER: &str = r#""  \"\(.target)\" (unresolved) [\(.label
 /// Format: `  "target" → "path" [label]`
 const LINK_INFO_FULL_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\" [\(.label)]""#;
 
+/// `LinkInfo` carrying a `#fragment` (L-21, iter-190).
+///
+/// Unified filter for every anchored-link shape (with/without `path`, `label`,
+/// and `broken_anchor`). Missing optional keys read as `null` in jq, so a
+/// single filter covers all six fragment-bearing key signatures:
+/// - `"target"` and `"path"` render as before, with the `#fragment` appended;
+/// - `broken_anchor == true` marks the anchor as `(broken anchor)` after the
+///   (resolved) path, so it reads distinctly from a broken TARGET
+///   `(unresolved)`;
+/// - a `[label]` suffix is appended when present.
+const LINK_INFO_ANCHORED_FILTER: &str = r#""  \"\(.target)#\(.fragment)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)""#;
+
 /// `TaskCount`: `{done, total}`
 const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
 
@@ -555,6 +567,15 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "path,target" => Some(LINK_INFO_PATH_FILTER),
         "label,target" => Some(LINK_INFO_LABEL_FILTER),
         "label,path,target" => Some(LINK_INFO_FULL_FILTER),
+        // LinkInfo carrying a `#fragment` (L-21): fragment is present, plus any
+        // combination of optional path/label, and broken_anchor only when true
+        // (which implies path+fragment). One unified filter handles them all.
+        "fragment,target"
+        | "fragment,path,target"
+        | "fragment,label,target"
+        | "fragment,label,path,target"
+        | "broken_anchor,fragment,path,target"
+        | "broken_anchor,fragment,label,path,target" => Some(LINK_INFO_ANCHORED_FILTER),
         // TaskCount
         "done,total" => Some(TASK_COUNT_FILTER),
         // OutlineSection (with and without tasks)
@@ -2223,6 +2244,50 @@ mod tests {
         let out = jq(LINK_INFO_PATH_FILTER, &val).unwrap();
         assert!(out.contains("note-b"));
         assert!(out.contains("note-b.md"));
+    }
+
+    #[test]
+    fn link_info_anchored_resolved_filter() {
+        // Target and anchor both resolve.
+        let val = json!({"path": "foo.md", "target": "Foo", "fragment": "Real"});
+        let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+        assert!(out.contains("Foo#Real"));
+        assert!(out.contains("foo.md"));
+        assert!(!out.contains("broken anchor"));
+        assert!(!out.contains("unresolved"));
+    }
+
+    #[test]
+    fn link_info_anchored_broken_anchor_filter() {
+        // Target resolves but the anchor does not — distinct from unresolved.
+        let val = json!({
+            "path": "foo.md", "target": "Foo", "fragment": "Nope", "broken_anchor": true
+        });
+        let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+        assert!(out.contains("Foo#Nope"));
+        assert!(out.contains("foo.md"));
+        assert!(out.contains("broken anchor"));
+        assert!(!out.contains("unresolved"));
+    }
+
+    #[test]
+    fn link_info_anchored_broken_target_filter() {
+        // Target unresolved: anchor check never ran, path is null.
+        let val = json!({"target": "Nope", "fragment": "x"});
+        let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+        assert!(out.contains("Nope#x"));
+        assert!(out.contains("unresolved"));
+        assert!(!out.contains("broken anchor"));
+    }
+
+    #[test]
+    fn link_info_anchored_with_label_filter() {
+        let val = json!({
+            "path": "foo.md", "target": "Foo", "fragment": "Real", "label": "click"
+        });
+        let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+        assert!(out.contains("Foo#Real"));
+        assert!(out.contains("[click]"));
     }
 
     // --- outline type filters ---

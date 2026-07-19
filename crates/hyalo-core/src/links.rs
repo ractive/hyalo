@@ -55,6 +55,18 @@ pub struct Link {
     pub label: Option<String>,
     /// The kind of link syntax used in the source text.
     pub kind: LinkKind,
+    /// The `#fragment` (heading anchor or `^block-id`) that followed the
+    /// target, WITHOUT the leading `#`. `None` when the link had no fragment.
+    ///
+    /// For markdown links the fragment is preserved exactly as written (it may
+    /// be percent-encoded); anchor matching decodes it. `target` never contains
+    /// the fragment, and the rewrite span stops before the `#`, so the written
+    /// fragment bytes are always preserved through `mv` / `links fix`.
+    ///
+    /// L-21 (iter-190): added to carry anchors through resolution and enable
+    /// broken-anchor validation in `find --broken-links`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment: Option<String>,
 }
 
 /// The kind of link syntax used in the source text.
@@ -516,8 +528,9 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
         (inner, None)
     };
 
-    // Strip fragment (heading/block ref) — not surfaced in output
-    let target = strip_fragment(target_part);
+    // Split the fragment (heading/block ref) off the target. The fragment is
+    // carried on the Link (L-21) without the leading `#`.
+    let (target, fragment) = split_target_and_fragment(target_part);
 
     // Fragment-only links like [[#heading]] are same-file heading links, not file links
     if target.is_empty() {
@@ -534,6 +547,7 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
         target: target.to_string(),
         label,
         kind: LinkKind::Wikilink,
+        fragment,
     })
 }
 
@@ -613,8 +627,10 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
         return None;
     }
 
-    // Strip fragment (heading/block ref) — not surfaced in output
-    let target = strip_fragment(target_raw);
+    // Split the fragment (heading/block ref) off the target. The fragment is
+    // carried on the Link (L-21) without the leading `#`, preserving its
+    // written form (it may be percent-encoded).
+    let (target, fragment) = split_target_and_fragment(target_raw);
 
     // Fragment-only links like [text](#heading) are same-file heading links, not file links
     if target.is_empty() {
@@ -629,6 +645,7 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
             Some(label_text.to_string())
         },
         kind: LinkKind::Markdown,
+        fragment,
     })
 }
 
@@ -647,10 +664,19 @@ fn is_external(target: &str) -> bool {
         || has_prefix_ci(target, "mailto:")
 }
 
-/// Strip the fragment (#heading or #^block-id) from a target string,
-/// returning only the base target name.
-fn strip_fragment(target: &str) -> &str {
-    target.split('#').next().unwrap_or(target)
+/// Split a target string into its base target and optional `#fragment`.
+///
+/// The fragment is returned WITHOUT the leading `#`. Only the FIRST `#` is
+/// treated as the fragment delimiter; any subsequent `#` bytes stay in the
+/// fragment (Obsidian block/heading refs never contain a bare `#`, and this
+/// keeps percent-encoded markdown fragments intact). An empty fragment
+/// (`target#`) yields `None`.
+fn split_target_and_fragment(target: &str) -> (&str, Option<String>) {
+    match target.split_once('#') {
+        Some((base, frag)) if !frag.is_empty() => (base, Some(frag.to_string())),
+        Some((base, _)) => (base, None),
+        None => (target, None),
+    }
 }
 
 #[cfg(test)]
@@ -1055,6 +1081,64 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].link.target, "note");
         assert_eq!(&text[spans[0].target_start..spans[0].target_end], "note");
+        // L-21: the fragment round-trips onto the Link WITHOUT the leading `#`,
+        // while the rewrite span still stops before `#` so the `#heading` bytes
+        // are untouched by any splice.
+        assert_eq!(spans[0].link.fragment.as_deref(), Some("heading"));
+        assert_eq!(&text[spans[0].target_end..spans[0].full_end], "#heading]]");
+    }
+
+    #[test]
+    fn span_markdown_fragment_roundtrips_and_span_untouched() {
+        // L-21: markdown fragment captured (percent-encoded form preserved on
+        // the Link) while the rewrite span stops before `#`.
+        let text = "[t](note.md#my%20heading)";
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].link.target, "note.md");
+        assert_eq!(spans[0].link.fragment.as_deref(), Some("my%20heading"));
+        assert_eq!(&text[spans[0].target_start..spans[0].target_end], "note.md");
+        assert_eq!(
+            &text[spans[0].target_end..spans[0].full_end],
+            "#my%20heading)"
+        );
+    }
+
+    #[test]
+    fn parse_wikilink_fragment_and_alias() {
+        // Fragment stored without `#`; alias still parsed independently.
+        let link = parse_wikilink("note#section|display").unwrap();
+        assert_eq!(link.target, "note");
+        assert_eq!(link.fragment.as_deref(), Some("section"));
+        assert_eq!(link.label.as_deref(), Some("display"));
+    }
+
+    #[test]
+    fn parse_wikilink_block_ref_fragment() {
+        let link = parse_wikilink("note#^block-id").unwrap();
+        assert_eq!(link.target, "note");
+        assert_eq!(link.fragment.as_deref(), Some("^block-id"));
+    }
+
+    #[test]
+    fn parse_wikilink_no_fragment() {
+        let link = parse_wikilink("note").unwrap();
+        assert_eq!(link.fragment, None);
+    }
+
+    #[test]
+    fn parse_wikilink_trailing_hash_empty_fragment() {
+        // `[[note#]]` — empty fragment collapses to None (not a real anchor).
+        let link = parse_wikilink("note#").unwrap();
+        assert_eq!(link.target, "note");
+        assert_eq!(link.fragment, None);
+    }
+
+    #[test]
+    fn parse_markdown_link_fragment() {
+        let link = parse_markdown_link("t", "note.md#Real").unwrap();
+        assert_eq!(link.target, "note.md");
+        assert_eq!(link.fragment.as_deref(), Some("Real"));
     }
 
     #[test]

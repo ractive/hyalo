@@ -740,10 +740,29 @@ pub fn find(
                             site_prefix,
                             case_index,
                         );
+                        // L-21: broken-anchor check. Only runs when the TARGET
+                        // resolved (`path` is `Some`) — a broken target is never
+                        // also reported as a broken anchor. The target file's
+                        // headings come from the index entry (zero file reads on
+                        // the index path; already-scanned sections on disk scan).
+                        // `^block-id` fragments are skipped by the matcher.
+                        let broken_anchor = match (&path, &link.fragment) {
+                            (Some(target_path), Some(fragment)) => {
+                                index.get(target_path).is_some_and(|target_entry| {
+                                    !hyalo_core::anchor::fragment_matches_headings(
+                                        fragment,
+                                        &target_entry.sections,
+                                    )
+                                })
+                            }
+                            _ => false,
+                        };
                         LinkInfo {
                             target: link.target.clone(),
                             path,
                             label: link.label.clone(),
+                            fragment: link.fragment.clone(),
+                            broken_anchor,
                         }
                     })
                     .collect::<Vec<_>>(),
@@ -838,13 +857,17 @@ pub fn find(
         };
 
         // --- Apply broken-links filter ---
+        // L-21: a file qualifies if it has EITHER a broken target (`path: None`)
+        // OR a broken anchor. The two categories stay distinguishable in the
+        // per-link output (`path`/`broken_anchor`); this filter only decides
+        // which files to surface.
         if broken_links {
             let has_broken = obj
                 .links
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .any(|l| l.path.is_none());
+                .any(|l| l.path.is_none() || l.broken_anchor);
             if !has_broken {
                 continue;
             }

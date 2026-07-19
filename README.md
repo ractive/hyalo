@@ -520,6 +520,20 @@ untouched-but-existing file is not falsely reported. Configure it with
 `[lint.rules.HYALO006]` (e.g. `severity = "error"` to gate without `--strict`,
 or `enabled = false` to turn it off).
 
+**Broken heading anchors surface in `find --broken-links`.** A link like
+`[[Foo#Section]]` or `[t](foo.md#Section)` whose target file exists but whose
+`#Section` heading does not is reported as a *broken anchor* — a category
+distinct from a broken target. In JSON the link gains `fragment` and
+`broken_anchor: true`; the two categories are never both set on one link.
+Anchor matching is exact and case-insensitive (Obsidian convention:
+`[[Foo#tasks]]` matches `## Tasks`), decodes percent-encoded markdown
+fragments for comparison, and skips `^block-id` refs (block ids are not
+indexed). On the `--index` path, headings come from the snapshot — rebuild the
+index (`hyalo create-index`) after upgrading to pick up fragment data. The
+`HYALO006` lint rule stays **target-only** — anchors are checked by `find`, not
+by `lint`, so anchor semantics soak one release before any CI gate consumes
+them.
+
 `--files-from` is available on `find`, `lint`, `mv`, `set`, `remove`, `append`,
 `task toggle`, `task set`, `task read`, `read`, and `backlinks`.
 It is mutually exclusive with `--glob` and `--file`.

@@ -167,7 +167,7 @@ impl HyaloLintEngine {
             RuleCatalogEntry {
                 id: "HYALO006".to_owned(),
                 name: "broken-link".to_owned(),
-                description: "A wikilink or markdown link points at a vault file that does not exist. Warns by default; promoted to error under --strict so CI can gate broken links.".to_owned(),
+                description: "A wikilink or markdown link points at a vault file that does not exist. Checks the link TARGET only — a broken `#heading` anchor is not flagged here; use `find --broken-links` for anchors. Warns by default; promoted to error under --strict so CI can gate broken links.".to_owned(),
                 default_severity: DiagSeverity::Warn,
                 default_enabled: true,
                 autofixable: false,
