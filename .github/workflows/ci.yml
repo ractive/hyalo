@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -59,10 +62,50 @@ jobs:
   # setup-hyalo is deliberately NOT pinned to a SHA: floating on the
   # first-party mutable `@v1` tag is the recorded design (DEC-051) and exactly
   # what consumers run — which is the point of the dogfood.
+  #
+  # DIFF-AWARE (iter-186): on a PR this lints only the markdown files the PR
+  # actually touches (`git diff | hyalo lint --files-from -`). GitHub registers
+  # at most 10 warning + 10 error annotations per step, so scoping to the PR's
+  # own files spends that budget on findings the author can act on — instead of
+  # letting a vault-wide backlog exhaust the cap first (the iter-171 failure).
+  # DELIBERATE GAP: a PR that breaks *other* files (e.g. deletes a note others
+  # link to, or a schema change) passes this diff-aware check because those
+  # files aren't in the diff; the `lint-kb-full` job below catches such
+  # cross-file regressions on every push to main, where annotation caps don't
+  # matter. Annotations belong to the PR's own files by design.
   lint-kb:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 gives full history so the merge-base with the PR base is
+      # available for a three-dot diff (see below).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: ractive/setup-hyalo@v1
+      - name: Lint changed knowledgebase files
+        # Three-dot `A...HEAD` diffs against the merge-base of the PR base and
+        # HEAD, so a stale branch is annotated only for files IT changed — not
+        # for base-tip drift it never touched (two-dot would do the latter).
+        # `--diff-filter=d` drops deleted paths (nothing to lint); a docs-
+        # untouched PR yields an empty list and `--files-from -` exits 0
+        # ("0 files checked"), keeping the job green. `${{ github.base_ref }}`
+        # (not a hard-coded `main`) keeps this correct for any base branch.
+        run: |
+          git fetch --quiet origin "${{ github.base_ref }}"
+          git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" \
+            | hyalo lint --strict --files-from - --format github
+
+  # FULL-VAULT (iter-186): the diff-aware PR job above never sees cross-file
+  # regressions, so full-vault `--strict` enforcement runs here on every push to
+  # main — annotation caps are irrelevant on a post-merge push (no PR diff to
+  # annotate), and this is the safety net for the deliberate gap documented on
+  # `lint-kb`. This is the vault-health gate that used to live on the PR job.
+  lint-kb-full:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ractive/setup-hyalo@v1
-      - name: Lint knowledgebase
+      - name: Lint full knowledgebase
         run: hyalo lint --strict --format github

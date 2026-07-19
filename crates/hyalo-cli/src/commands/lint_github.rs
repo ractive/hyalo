@@ -30,6 +30,32 @@
 
 use std::fmt::Write as _;
 
+/// GitHub registers at most this many annotations of each type (`error`,
+/// `warning`, `notice`) per workflow *step*. Beyond the cap, further
+/// annotations of that type are silently dropped from the PR check — hyalo
+/// still emits every workflow command, but GitHub will not surface them.
+/// When a run exceeds this for errors or warnings we append a truncation
+/// `::notice::` so the reader knows findings were hidden (iter-186).
+const GITHUB_ANNOTATION_CAP: u64 = 10;
+
+/// One error/warning annotation, collected before emission so the full set can
+/// be sorted deterministically by `(path, line, rule)`. Which findings GitHub
+/// registers under its per-type cap depends on emission order, so a stable
+/// order makes the surfaced subset reproducible across runs (iter-186 —
+/// root cause of the iter-171 evidence flakiness).
+struct Annotation {
+    /// `"error"` or `"warning"` — the workflow command name.
+    command: &'static str,
+    /// Repo-root-relative file path (already prefixed).
+    file: String,
+    /// 1-based line, or `None` for a file-level annotation (sorts first).
+    line: Option<u64>,
+    /// Rule id used as the annotation `title` (may be empty).
+    rule: String,
+    /// The (un-escaped) message text.
+    message: String,
+}
+
 /// Render the extended lint JSON payload as GitHub Actions workflow commands
 /// plus a trailing summary line.
 ///
@@ -39,6 +65,10 @@ use std::fmt::Write as _;
 /// lint) or `remaining_groups[].violations[]` (fix mode — `fixed_groups` are
 /// omitted from annotations since they're no longer problems), plus the
 /// top-level `errors` / `warnings` / `files_with_violations` counters.
+///
+/// Error/warning annotations are emitted in a deterministic order — sorted by
+/// `(path, line, rule)` — so the subset GitHub keeps under its per-type cap is
+/// stable across runs. Fix-mode `::notice` annotations follow, in file order.
 ///
 /// `path_prefix` is prepended (with a `/` separator, always forward-slash for
 /// portability) to each vault-relative file path so annotations resolve against
@@ -54,6 +84,12 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
     // is visibly different from a plain lint run (df-own-kb U6): a reviewer can
     // tell at a glance which findings `--fix` would resolve versus which remain.
     let is_fix_mode = payload.get("total_fixed").is_some();
+
+    // Collect error/warning annotations first so they can be sorted before
+    // emission (iter-186). Fix-mode `::notice` lines are written directly in
+    // file order below — they are informational and not subject to the same
+    // determinism/cap concern as the error/warning annotations GitHub gates.
+    let mut annotations: Vec<Annotation> = Vec::new();
 
     if let Some(files) = payload.get("files").and_then(|f| f.as_array()) {
         for file_entry in files {
@@ -106,7 +142,17 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
                                 .get("message")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or("");
-                            write_command(&mut out, severity, &full_path, line, rule, message);
+                            annotations.push(Annotation {
+                                command: if severity == "error" {
+                                    "error"
+                                } else {
+                                    "warning"
+                                },
+                                file: full_path.clone(),
+                                line,
+                                rule: rule.to_owned(),
+                                message: message.to_owned(),
+                            });
                         }
                     }
                 }
@@ -122,16 +168,53 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
                         .get("message")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("");
-                    write_command(&mut out, severity, &full_path, None, "", message);
+                    annotations.push(Annotation {
+                        command: if severity == "error" {
+                            "error"
+                        } else {
+                            "warning"
+                        },
+                        file: full_path.clone(),
+                        line: None,
+                        rule: String::new(),
+                        message: message.to_owned(),
+                    });
                 }
             }
+        }
+    }
 
+    // Deterministic emission order: sort by (path, line, rule) so which
+    // annotations GitHub registers under its per-type cap is stable across runs
+    // (iter-186). File-level annotations (line == None) sort before lined ones
+    // for the same path.
+    annotations.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.rule.cmp(&b.rule))
+    });
+    for a in &annotations {
+        write_command(&mut out, a.command, &a.file, a.line, &a.rule, &a.message);
+    }
+
+    // Fix-mode `::notice` annotations (would-be-fixed violations), in file
+    // order. Kept separate from the sorted error/warning stream above.
+    if is_fix_mode && let Some(files) = payload.get("files").and_then(|f| f.as_array()) {
+        for file_entry in files {
+            let file = file_entry
+                .get("file")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let full_path = if file == ".hyalo.toml" {
+                file.to_owned()
+            } else {
+                join_path(&prefix, file)
+            };
             // Fix-mode: annotate would-be-fixed violations as `::notice` with a
             // `[fixable]` title prefix so they read distinctly from the errors
             // and warnings that remain (df-own-kb U6).
-            if is_fix_mode
-                && let Some(fixed_groups) =
-                    file_entry.get("fixed_groups").and_then(|fg| fg.as_array())
+            if let Some(fixed_groups) = file_entry.get("fixed_groups").and_then(|fg| fg.as_array())
             {
                 for group in fixed_groups {
                     let rule = group
@@ -208,6 +291,30 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
         .or_else(|| payload.get("files_with_issues"))
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+
+    // Truncation honesty (iter-186): GitHub registers at most
+    // `GITHUB_ANNOTATION_CAP` annotations of each type per step. When this run
+    // emitted more errors or warnings than that, the PR check silently drops
+    // the overflow — so emit a `::notice::` stating the true totals and the cap
+    // GitHub will apply. Stay quiet when nothing is hidden (both under the cap).
+    if errors > GITHUB_ANNOTATION_CAP || warnings > GITHUB_ANNOTATION_CAP {
+        let mut over = Vec::new();
+        if errors > GITHUB_ANNOTATION_CAP {
+            over.push(format!("{errors} {}", plural(errors, "error", "errors")));
+        }
+        if warnings > GITHUB_ANNOTATION_CAP {
+            over.push(format!(
+                "{warnings} {}",
+                plural(warnings, "warning", "warnings")
+            ));
+        }
+        let _ = writeln!(
+            out,
+            "::notice::hyalo emitted {} but GitHub registers at most {GITHUB_ANNOTATION_CAP} annotations of each type per step; the rest are not shown on the PR. Run `hyalo lint --strict` locally (or see the lint-kb-full check on main) for the full list.",
+            over.join(" and "),
+        );
+    }
+
     let _ = write!(
         out,
         "{errors} {}, {warnings} {} in {files_with_issues} {}",
@@ -389,13 +496,15 @@ mod tests {
         });
         let out = render(&payload, "kb");
         let lines: Vec<&str> = out.lines().collect();
+        // Sorted by (path, line, rule): same path, so line 1 (SCHEMA) precedes
+        // line 3 (HYALO001) despite HYALO001 appearing first in the payload.
         assert_eq!(
             lines[0],
-            "::error file=kb/notes/a.md,line=3,title=HYALO001::missing required property \"title\""
+            "::warning file=kb/notes/a.md,line=1,title=SCHEMA::no 'type' property"
         );
         assert_eq!(
             lines[1],
-            "::warning file=kb/notes/a.md,line=1,title=SCHEMA::no 'type' property"
+            "::error file=kb/notes/a.md,line=3,title=HYALO001::missing required property \"title\""
         );
         assert_eq!(lines[2], "1 error, 1 warning in 1 file");
     }
@@ -545,5 +654,142 @@ mod tests {
         assert_eq!(escape_data("a\r\nb"), "a%0D%0Ab");
         // A bell character (0x07) is stripped too.
         assert_eq!(escape_data("beep\u{7}beep"), "beepbeep");
+    }
+
+    /// Annotations are emitted sorted by (path, line, rule), regardless of the
+    /// order files/groups/violations appear in the payload (iter-186). This
+    /// makes the subset GitHub keeps under its per-type cap reproducible.
+    #[test]
+    fn render_sorts_annotations_by_path_line_rule() {
+        let payload = json!({
+            "files": [
+                {
+                    "file": "z/late.md",
+                    "rule_groups": [
+                        {"rule": "MD013", "severity": "warn",
+                         "violations": [{"line": 2, "message": "z2"}]}
+                    ]
+                },
+                {
+                    "file": "a/early.md",
+                    "rule_groups": [
+                        // Two violations on the same line: MD040 must sort
+                        // before MD041 by rule id. And line 5 sorts after
+                        // line 1 within the same file.
+                        {"rule": "MD041", "severity": "warn",
+                         "violations": [{"line": 1, "message": "a1-md041"}]},
+                        {"rule": "MD040", "severity": "warn",
+                         "violations": [{"line": 1, "message": "a1-md040"}]},
+                        {"rule": "MD013", "severity": "warn",
+                         "violations": [{"line": 5, "message": "a5"}]},
+                        // line 0 (file-level) must sort before all lined ones.
+                        {"rule": "SCHEMA", "severity": "warn",
+                         "violations": [{"line": 0, "message": "a0"}]}
+                    ]
+                }
+            ],
+            "errors": 0,
+            "warnings": 5,
+            "files_with_violations": 2
+        });
+        let out = render(&payload, "");
+        let lines: Vec<&str> = out.lines().collect();
+        let messages: Vec<&str> = lines
+            .iter()
+            .take_while(|l| l.starts_with("::"))
+            .map(|l| l.rsplit("::").next().unwrap())
+            .collect();
+        assert_eq!(messages, vec!["a0", "a1-md040", "a1-md041", "a5", "z2"]);
+    }
+
+    /// The sort is stable across payload input order: reversing the file order
+    /// yields byte-identical output (iter-171 flakiness root cause).
+    #[test]
+    fn render_ordering_is_stable_across_input_permutations() {
+        let group = |rule: &str, line: u64, msg: &str| {
+            json!({"rule": rule, "severity": "warn",
+                   "violations": [{"line": line, "message": msg}]})
+        };
+        let file_a = json!({"file": "a.md", "rule_groups": [group("MD013", 3, "a3")]});
+        let file_b = json!({"file": "b.md", "rule_groups": [group("MD013", 1, "b1")]});
+        let forward = json!({
+            "files": [file_a.clone(), file_b.clone()],
+            "errors": 0, "warnings": 2, "files_with_violations": 2
+        });
+        let reversed = json!({
+            "files": [file_b, file_a],
+            "errors": 0, "warnings": 2, "files_with_violations": 2
+        });
+        assert_eq!(render(&forward, ""), render(&reversed, ""));
+    }
+
+    /// A truncation `::notice::` appears when warnings exceed the cap, naming
+    /// the true total; it is absent at or below the cap (iter-186).
+    #[test]
+    fn render_emits_truncation_notice_over_cap() {
+        let make = |warns: u64| {
+            let violations: Vec<_> = (1..=warns)
+                .map(|i| json!({"line": i, "message": format!("w{i}")}))
+                .collect();
+            json!({
+                "files": [{
+                    "file": "a.md",
+                    "rule_groups": [{"rule": "MD013", "severity": "warn", "violations": violations}]
+                }],
+                "errors": 0,
+                "warnings": warns,
+                "files_with_violations": 1
+            })
+        };
+        // Exactly at the cap: no notice.
+        let out = render(&make(GITHUB_ANNOTATION_CAP), "");
+        assert!(
+            !out.contains("::notice::"),
+            "no truncation notice at the cap, got:\n{out}"
+        );
+        // Over the cap: a notice naming the true total and the cap.
+        let out = render(&make(GITHUB_ANNOTATION_CAP + 5), "");
+        let notice = out
+            .lines()
+            .find(|l| l.starts_with("::notice::"))
+            .expect("truncation notice present over the cap");
+        assert!(notice.contains("15 warnings"), "got: {notice}");
+        assert!(
+            notice.contains(&format!("at most {GITHUB_ANNOTATION_CAP}")),
+            "got: {notice}"
+        );
+        // The summary line still reports the true totals.
+        assert!(out.contains("0 errors, 15 warnings in 1 file"));
+    }
+
+    /// When both errors and warnings exceed the cap, the notice names both.
+    #[test]
+    fn render_truncation_notice_names_both_types() {
+        let group = |rule: &str, sev: &str, n: u64| {
+            let vs: Vec<_> = (1..=n)
+                .map(|i| json!({"line": i, "message": format!("{rule}-{i}")}))
+                .collect();
+            json!({"rule": rule, "severity": sev, "violations": vs})
+        };
+        let payload = json!({
+            "files": [{
+                "file": "a.md",
+                "rule_groups": [
+                    group("HYALO001", "error", 11),
+                    group("MD013", "warn", 12)
+                ]
+            }],
+            "errors": 11,
+            "warnings": 12,
+            "files_with_violations": 1
+        });
+        let out = render(&payload, "");
+        let notice = out
+            .lines()
+            .find(|l| l.starts_with("::notice::"))
+            .expect("notice present");
+        assert!(notice.contains("11 errors"), "got: {notice}");
+        assert!(notice.contains("12 warnings"), "got: {notice}");
+        assert!(notice.contains(" and "), "got: {notice}");
     }
 }

@@ -29,6 +29,19 @@ and this project adheres to
 
 ### Changed
 
+- **`--format github` is deterministic and truncation-honest** (iter-186):
+  annotations are now emitted sorted by `(path, line, rule)`, so which findings
+  GitHub keeps under its per-step annotation cap is stable across runs. hyalo
+  still emits every workflow command, but GitHub registers at most 10 `error` +
+  10 `warning` annotations per step — when a run exceeds either cap hyalo now
+  appends a `::notice::` stating the true totals so the truncation is visible
+  (quiet when both are under the cap). The exit-code contract is unchanged.
+  The project's own CI (`.github/workflows/ci.yml`) is split accordingly: a
+  diff-aware `lint-kb` job lints only a PR's changed files
+  (`git diff origin/$BASE...HEAD | hyalo lint --files-from -`) so the annotation
+  budget is spent on the PR's own findings, plus a full-vault `lint-kb-full` job
+  on push to main to catch cross-file regressions the diff-aware check can't
+  see.
 - **Exit-code contract: flag-conflict user errors exit 1, not 2** (iter-181):
   combining `--jq` with `--format text`, `--count` with `--jq`, `--count` on a
   non-list command, and `--format github` on a non-lint command now exit `1`
