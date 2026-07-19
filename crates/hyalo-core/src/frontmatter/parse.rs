@@ -179,6 +179,27 @@ pub(crate) fn is_opening_delimiter(line: &str) -> bool {
     opening_delimiter(line).is_some()
 }
 
+/// Canonical **closing** frontmatter delimiter policy (iter-183 L-4).
+///
+/// A closing `---` is recognized **leniently**: the line is a closing
+/// delimiter when, after trimming leading and trailing ASCII whitespace, it
+/// is exactly `---`. This is deliberately more permissive than the *opening*
+/// delimiter ([`opening_delimiter`], which is strict-column-0) because every
+/// streaming reader in the crate (`read_frontmatter_from_reader`,
+/// `find_body_offset`, `skip_frontmatter`, and the multi-visitor `scanner`)
+/// has always closed frontmatter on `line.trim() == "---"`. Consolidating the
+/// three lenient sites (plus the scanner and the body-scan loops) onto this
+/// single helper guarantees they can never drift, and documents the choice in
+/// one place so `find` / `read` / `lint` / `mv` all agree on where a
+/// frontmatter block ends — including the indented `  ---` edge case.
+///
+/// The `line` passed here must already have any trailing `\n` / `\r` stripped
+/// (all callers pass a trimmed-of-line-ending slice), but a defensive
+/// `trim()` also tolerates raw lines.
+pub(crate) fn is_closing_delimiter(line: &str) -> bool {
+    line.trim() == "---"
+}
+
 /// Represents parsed frontmatter and the remaining body content.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Used in tests only
@@ -534,7 +555,7 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
             );
         }
         let trimmed = line.trim_end_matches(['\n', '\r']);
-        if trimmed.trim() == "---" {
+        if is_closing_delimiter(trimmed) {
             // Consumed up to and including the closing `---\n`
             break;
         }
@@ -579,7 +600,7 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
         }
         line_count += 1;
         let trimmed = buf.trim_end_matches(['\n', '\r']);
-        if trimmed.trim() == "---" {
+        if is_closing_delimiter(trimmed) {
             break;
         }
         total_bytes += n;
@@ -619,7 +640,7 @@ pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
     for line in lines {
         has_content_lines = true;
         let line = line.context("failed to read line")?;
-        if line.trim() == "---" {
+        if is_closing_delimiter(&line) {
             closed = true;
             break;
         }
@@ -683,17 +704,19 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
         return Ok((None, content));
     }
 
-    // Find the closing `---`
+    // Find the closing `---` line. `pos` is the byte offset of the start of
+    // the delimiter line (which may carry leading whitespace for an indented
+    // `  ---`, per the lenient `is_closing_delimiter` policy).
     if let Some(pos) = find_closing_delimiter(after_opening) {
         let yaml = &after_opening[..pos];
-        let rest = &after_opening[pos + 3..];
-        // Skip the newline after closing `---`
-        let body = if let Some(stripped) = rest.strip_prefix('\n') {
-            stripped
-        } else if let Some(stripped) = rest.strip_prefix("\r\n") {
-            stripped
-        } else {
-            rest
+        // The body starts just after the delimiter line's terminator. Find the
+        // end of the delimiter line rather than assuming it is exactly `---`
+        // at `pos`, so an indented `  ---` (or a trailing-space `--- `) does
+        // not leave delimiter bytes in the returned body.
+        let delim_line = &after_opening[pos..];
+        let body = match delim_line.find('\n') {
+            Some(nl) => &delim_line[nl + 1..],
+            None => "", // delimiter is the last line; no body follows
         };
         Ok((Some(yaml), body))
     } else {
@@ -704,30 +727,32 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
     }
 }
 
-/// Find the position of `---` at the start of a line in the given string.
+/// Find the byte offset of the closing `---` line in the given string.
+///
+/// Shares the closing-delimiter policy with the streaming readers via
+/// [`is_closing_delimiter`] (iter-183 L-4): a line is a closing delimiter when
+/// its trimmed content is exactly `---`, so an indented `  ---` closes the
+/// block here just as it does in `read_frontmatter_from_reader` /
+/// `skip_frontmatter` / the scanner. The returned offset points at the first
+/// byte of that line (after any leading whitespace is *not* stripped — the
+/// caller slices from the line start), and `extract_frontmatter` slices the
+/// YAML up to it.
 #[allow(dead_code)] // Called by extract_frontmatter, which is used in tests only
 fn find_closing_delimiter(s: &str) -> Option<usize> {
-    // Check if it starts right at position 0
-    if s.starts_with("---")
-        && (s.len() == 3
-            || s.as_bytes().get(3) == Some(&b'\n')
-            || s.as_bytes().get(3) == Some(&b'\r'))
-    {
-        return Some(0);
-    }
-
-    // Search for `\n---`
-    let mut search_from = 0;
-    while let Some(pos) = s[search_from..].find("\n---") {
-        let abs_pos = search_from + pos + 1; // position of the first `-`
-        let after = abs_pos + 3;
-        if after == s.len()
-            || s.as_bytes().get(after) == Some(&b'\n')
-            || s.as_bytes().get(after) == Some(&b'\r')
-        {
-            return Some(abs_pos);
+    // Walk each line, tracking its start offset, and return the first whose
+    // trimmed content is exactly `---`.
+    let mut line_start = 0usize;
+    loop {
+        let line_end = s[line_start..]
+            .find('\n')
+            .map_or(s.len(), |i| line_start + i);
+        let line = &s[line_start..line_end];
+        if is_closing_delimiter(line) {
+            return Some(line_start);
         }
-        search_from = abs_pos + 3;
+        if line_end >= s.len() {
+            return None;
+        }
+        line_start = line_end + 1;
     }
-    None
 }

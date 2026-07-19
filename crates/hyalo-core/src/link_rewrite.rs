@@ -24,9 +24,7 @@ use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
 use crate::link_resolve::LinkResolver;
 use crate::link_write::{LinkWriter, SpanReplacement};
 use crate::links::{LinkKind, PreserveForm, Resolution, extract_link_spans_with_original};
-use crate::scanner::{
-    FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
-};
+use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -496,62 +494,35 @@ fn plan_inbound_rewrites(
 
     let mut replacements = Vec::new();
     let mut skipped_ambiguous: Vec<SkippedAmbiguous> = Vec::new();
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
+    // Shared, cross-line-aware line classifier (iter-183 Phase B).
+    let mut scanner = LineScanner::new();
 
-    for line in content.split('\n') {
-        line_num += 1;
-
-        // ---- Frontmatter handling (trim() matches scanner behaviour) ----
-        if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                    continue;
-                }
+    for (line, rest) in lines_with_rest(content) {
+        let body = match scanner.classify(line, rest) {
+            LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
+            LineClass::Frontmatter => {
                 // H-4: also rewrite wikilinks inside frontmatter link
                 // properties so single-file mv doesn't leave dangling
                 // frontmatter links (previously only the batch path did this).
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
-                    line, line_num, old_rel, old_stem, new_rel, new_stem, case_index,
+                    line,
+                    scanner.line_num(),
+                    old_rel,
+                    old_stem,
+                    new_rel,
+                    new_stem,
+                    case_index,
                 );
                 replacements.extend(fm_repls);
                 continue;
             }
-            // No frontmatter block found; mark done.
-            frontmatter_done = true;
-        }
+            LineClass::Body(body) => body,
+        };
+        let line_num = scanner.line_num();
 
-        // ---- Comment fence (Obsidian %% blocks) ----
-        if in_comment_fence {
-            if is_comment_fence(line) {
-                in_comment_fence = false;
-            }
-            continue;
-        }
-
-        // ---- Fenced code block ----
-        if fence.process_line(line) {
-            continue;
-        }
-
-        // ---- Comment fence opening (only outside code blocks) ----
-        if is_comment_fence(line) {
-            in_comment_fence = true;
-            continue;
-        }
-
-        // ---- Extract and compare link spans ----
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        // ---- Extract and compare link spans (inline code, `%%` comments,
+        //      cross-line code spans, and HTML comments already blanked) ----
+        let cleaned = body.cleaned(line, rest);
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
@@ -690,34 +661,20 @@ fn plan_outbound_rewrites(
 ) -> Vec<Replacement> {
     let link_resolver = LinkResolver::new(case_index, site_prefix);
     let mut replacements = Vec::new();
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
+    // Shared, cross-line-aware line classifier (iter-183 Phase B).
+    let mut scanner = LineScanner::new();
 
-    for line in content.split('\n') {
-        line_num += 1;
-
-        // ---- Frontmatter handling (trim() matches scanner behaviour) ----
-        if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                    continue;
-                }
+    for (line, rest) in lines_with_rest(content) {
+        let body = match scanner.classify(line, rest) {
+            LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
+            LineClass::Frontmatter => {
                 // L-1: the moved file's OWN frontmatter self-links (e.g.
                 // `related: - "[[old]]"` or `"[[old#anchor]]"`) must be rewritten
                 // to the new path — otherwise a plain rename leaves a dangling
                 // self-reference. Only `plan_inbound_rewrites` did this before.
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
                     line,
-                    line_num,
+                    scanner.line_num(),
                     old_rel,
                     old_stem,
                     new_rel,
@@ -727,34 +684,13 @@ fn plan_outbound_rewrites(
                 replacements.extend(fm_repls);
                 continue;
             }
-            frontmatter_done = true;
-        }
+            LineClass::Body(body) => body,
+        };
+        let line_num = scanner.line_num();
 
-        // ---- Comment fence (Obsidian %% blocks) ----
-        // When already inside a comment, only look for the closing `%%`.
-        // Code fences are literal text inside comments, so don't process them.
-        if in_comment_fence {
-            if is_comment_fence(line) {
-                in_comment_fence = false;
-            }
-            continue;
-        }
-
-        // ---- Fenced code block ----
-        if fence.process_line(line) {
-            continue;
-        }
-
-        // ---- Comment fence opening (only outside code blocks) ----
-        // A `%%` inside a fenced code block is literal text, not a delimiter.
-        if is_comment_fence(line) {
-            in_comment_fence = true;
-            continue;
-        }
-
-        // ---- Extract all link spans ----
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        // ---- Extract all link spans (inline code, `%%` comments, cross-line
+        //      code spans, and HTML comments already blanked) ----
+        let cleaned = body.cleaned(line, rest);
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {
@@ -1278,57 +1214,35 @@ fn plan_outbound_rewrites_batch(
     dir_changed: bool,
 ) -> Vec<Replacement> {
     let mut replacements = Vec::new();
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
+    // Shared, cross-line-aware line classifier (iter-183 Phase B).
+    let mut scanner = LineScanner::new();
 
-    for line in content.split('\n') {
-        line_num += 1;
-
-        // Frontmatter
-        if !frontmatter_done {
-            if line_num == 1 && line.trim() == "---" {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                    continue;
-                }
+    for (line, rest) in lines_with_rest(content) {
+        let body = match scanner.classify(line, rest) {
+            LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
+            LineClass::Frontmatter => {
                 // L-1 (batch): rewrite the moved file's OWN frontmatter
                 // self-links so a batch rename doesn't leave a dangling
                 // self-reference in frontmatter.
                 let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
                 let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
-                    line, line_num, old_rel, old_stem, new_rel, new_stem, None,
+                    line,
+                    scanner.line_num(),
+                    old_rel,
+                    old_stem,
+                    new_rel,
+                    new_stem,
+                    None,
                 );
                 replacements.extend(fm_repls);
                 continue;
             }
-            frontmatter_done = true;
-        }
+            LineClass::Body(body) => body,
+        };
+        let line_num = scanner.line_num();
 
-        if in_comment_fence {
-            if is_comment_fence(line) {
-                in_comment_fence = false;
-            }
-            continue;
-        }
-        if fence.process_line(line) {
-            continue;
-        }
-        if is_comment_fence(line) {
-            in_comment_fence = true;
-            continue;
-        }
-
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        let cleaned = body.cleaned(line, rest);
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in spans {

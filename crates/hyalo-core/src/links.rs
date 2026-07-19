@@ -478,9 +478,18 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
 }
 
 /// Check if a target is an external link (http, https, mailto).
+///
+/// L-20: compares scheme prefixes with `eq_ignore_ascii_case` on borrowed
+/// slices instead of allocating a lowercased copy of the whole target for
+/// every candidate.
 fn is_external(target: &str) -> bool {
-    let lower = target.to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
+    fn has_prefix_ci(target: &str, prefix: &str) -> bool {
+        target.len() >= prefix.len()
+            && target.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+    }
+    has_prefix_ci(target, "http://")
+        || has_prefix_ci(target, "https://")
+        || has_prefix_ci(target, "mailto:")
 }
 
 /// Strip the fragment (#heading or #^block-id) from a target string,

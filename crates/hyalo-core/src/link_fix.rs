@@ -30,10 +30,10 @@ use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans, find_frontmatter_wikilinks,
     rewrite_frontmatter_wikilink_text,
 };
-use crate::links::{LinkKind, extract_link_spans_with_original, parse_wikilink};
-use crate::scanner::{
-    FenceTracker, MAX_FILE_SIZE, is_comment_fence, strip_inline_code, strip_inline_comments,
+use crate::links::{
+    LinkKind, extract_link_spans_with_original, parse_wikilink, strip_wikilink_md_suffix,
 };
+use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
 // ---------------------------------------------------------------------------
 // Report types
 // ---------------------------------------------------------------------------
@@ -706,15 +706,13 @@ impl LinkMatcher {
 
     /// Returns `true` if `candidate` (vault-relative) refers to the same file
     /// as `source`, ignoring `.md` suffix and ASCII case.
+    ///
+    /// L-17: uses the shared [`strip_wikilink_md_suffix`] instead of a private
+    /// `strip_md`. Both strip a trailing `.md`; the shared helper additionally
+    /// requires at least one character before `.md`, so a pathological bare
+    /// `.md` candidate is compared verbatim (it is never a real vault path).
     fn is_self_link(source: &str, candidate: &str) -> bool {
-        fn strip_md(s: &str) -> &str {
-            if s.len() >= 3 && s[s.len() - 3..].eq_ignore_ascii_case(".md") {
-                &s[..s.len() - 3]
-            } else {
-                s
-            }
-        }
-        strip_md(source).eq_ignore_ascii_case(strip_md(candidate))
+        strip_wikilink_md_suffix(source).eq_ignore_ascii_case(strip_wikilink_md_suffix(candidate))
     }
 
     /// Try to find a matching file for a broken link target.
@@ -975,11 +973,9 @@ fn build_replacements_for_file(
 
     let mut replacements = Vec::new();
     let mut satisfied: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut fence = FenceTracker::new();
-    let mut in_comment_fence = false;
-    let mut in_frontmatter = false;
-    let mut frontmatter_done = false;
-    let mut line_num = 0usize;
+    // Shared, cross-line-aware line classifier (iter-183 Phase B): one lexer
+    // for frontmatter, fences, `%%` comments, and cross-line code/HTML spans.
+    let mut scanner = LineScanner::new();
 
     // Frontmatter-derived FixPlans always carry `line: 1` (see
     // `LinkGraphVisitor::extract_frontmatter_wikilinks`, which has no
@@ -989,24 +985,14 @@ fn build_replacements_for_file(
     // physical line it sits on.
     let frontmatter_fixes: &[(usize, &FixPlan)] = fixes_by_line.get(&1).map_or(&[], Vec::as_slice);
 
-    for line in content.split('\n') {
-        line_num += 1;
+    for (line, rest) in lines_with_rest(content) {
+        let class = scanner.classify(line, rest);
+        let line_num = scanner.line_num();
 
         // --- Frontmatter ---
-        if !frontmatter_done {
-            // BOM-aware: detection (scanner) enters frontmatter via the same
-            // predicate, so the rewrite path must too or BOM-prefixed files
-            // silently keep their broken frontmatter links.
-            if line_num == 1 && crate::frontmatter::is_opening_delimiter(line) {
-                in_frontmatter = true;
-                continue;
-            }
-            if in_frontmatter {
-                if line.trim() == "---" {
-                    in_frontmatter = false;
-                    frontmatter_done = true;
-                    continue;
-                }
+        match class {
+            LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
+            LineClass::Frontmatter => {
                 if !frontmatter_fixes.is_empty() {
                     for occ in find_frontmatter_wikilinks(line) {
                         let Some(link) = parse_wikilink(occ.target) else {
@@ -1047,34 +1033,23 @@ fn build_replacements_for_file(
                 }
                 continue;
             }
-            frontmatter_done = true;
+            LineClass::Body(_) => {}
         }
 
-        // --- Fenced code block ---
-        // Process code fences BEFORE the `%%` comment toggle so a literal `%%`
-        // inside a fenced code block is treated as code, not a comment
-        // delimiter (L-8; mirrors `auto_link.rs`'s ordering).
-        if fence.process_line(line) {
-            continue;
-        }
-
-        // --- Comment fence (Obsidian %% blocks) ---
-        if !fence.in_fence() && is_comment_fence(line) {
-            in_comment_fence = !in_comment_fence;
-            continue;
-        }
-        if in_comment_fence {
-            continue;
-        }
+        // Body line (`LineClass::Body`). The shared scanner already handled
+        // fences, `%%` comment blocks, and cross-line code/HTML suppression.
+        let LineClass::Body(body) = class else {
+            unreachable!("all non-Body classes were handled above")
+        };
 
         // If there are no fixes on this line, skip expensive span extraction.
         let Some(line_fixes) = fixes_by_line.get(&line_num) else {
             continue;
         };
 
-        // Extract link spans (skipping inline code and comments).
-        let stripped_code = strip_inline_code(line);
-        let cleaned = strip_inline_comments(stripped_code.as_ref());
+        // Extract link spans (inline code, `%%` comments, cross-line code
+        // spans, and HTML comments are already blanked by the shared scanner).
+        let cleaned = body.cleaned(line, rest);
         let spans = extract_link_spans_with_original(&cleaned, line);
 
         for span in &spans {

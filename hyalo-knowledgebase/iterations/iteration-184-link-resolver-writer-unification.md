@@ -21,6 +21,21 @@ divergence (L-6) at the root and making apply-time failures honest
 (L-11). Also lands the fuzzy-confidence and auto-link correctness items
 that belong to this layer.
 
+**Note from iter-183 (Phase B):** the file:line citations below for
+`auto_link.rs` and `link_fix.rs` predate iter-183's migration onto the
+shared `LineScanner` (`scanner/body_state.rs`), which shifted line numbers
+in both files by tens of lines (`auto_link.rs` net -102 lines,
+`link_fix.rs` net restructured). `auto_link::apply_matches` is now at
+`auto_link.rs:623`, not `:689-767`; `resolve_and_classify_link` is at
+`link_fix.rs:311`, not `:371-391`. Re-grep exact locations before editing
+rather than trusting these line numbers. `find/mod.rs` was untouched by
+iter-183 so its citations should still be accurate. Also worth reusing:
+iter-183 established a `lines_with_rest`/stateful-scanner pattern
+(`crate::scanner::{LineScanner, LineClass, lines_with_rest}`) for any
+body-scan loop that needs frontmatter/fence/comment-aware iteration — if
+Phase C's write-path unification needs to re-scan file bodies, prefer
+that shared scanner over a new hand-rolled loop.
+
 ## Tasks
 
 ### 1. Single resolver (L-6 root fix)

@@ -1,12 +1,16 @@
 #![allow(clippy::missing_errors_doc)]
 
+mod body_state;
 mod fence;
 mod frontmatter;
 mod strip;
 mod visitor;
 
+pub use body_state::{BodyLine, LineClass, LineScanner, lines_with_rest};
 pub use fence::{FenceTracker, extract_fence_language};
-pub use strip::{strip_inline_code, strip_inline_comments};
+pub use strip::{
+    strip_html_comments, strip_inline_code, strip_inline_code_stateful, strip_inline_comments,
+};
 pub use visitor::FileVisitor;
 
 pub(crate) use fence::{detect_opening_fence, is_closing_fence};
@@ -182,7 +186,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
             line_idx += 1;
             fm_line_count += 1;
 
-            if trimmed.trim() == "---" {
+            if crate::frontmatter::is_closing_delimiter(trimmed) {
                 found_close = true;
                 break;
             }
@@ -249,8 +253,17 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
     }
 
     // --- Phase 2: Body ---
-    let mut fence: Option<(char, usize)> = None;
-    let mut in_comment = false;
+    let mut body = BodyState::default();
+
+    // `rest_after(idx)` is all document text after the line at `line_starts[idx]`
+    // — the multi-line code-span lookahead needs it (L-3).
+    let rest_after = |idx: usize| -> &str {
+        if idx + 1 < line_count {
+            &text[line_starts[idx + 1]..]
+        } else {
+            ""
+        }
+    };
 
     if fm_lines > 0 {
         line_num = fm_lines;
@@ -258,11 +271,11 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
         // First line was not frontmatter — process it as a body line.
         dispatch_body_line(
             first_line,
+            rest_after(0),
             line_num,
             visitors,
             &mut active,
-            &mut fence,
-            &mut in_comment,
+            &mut body,
         );
         if !active.iter().any(|&a| a) {
             return Ok(());
@@ -270,6 +283,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
     }
 
     while line_idx < line_count {
+        let cur_idx = line_idx;
         let line = get_line(line_idx);
         line_idx += 1;
         line_num += 1;
@@ -287,11 +301,11 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 
         dispatch_body_line(
             line,
+            rest_after(cur_idx),
             line_num,
             visitors,
             &mut active,
-            &mut fence,
-            &mut in_comment,
+            &mut body,
         );
         if !active.iter().any(|&a| a) {
             break;
@@ -361,7 +375,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
             }
             fm_line_count += 1;
             let trimmed = buf.trim_end_matches(['\n', '\r']);
-            if trimmed.trim() == "---" {
+            if crate::frontmatter::is_closing_delimiter(trimmed) {
                 found_close = true;
                 break;
             }
@@ -428,22 +442,24 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
     }
 
     // --- Phase 2: Body ---
-    let mut fence: Option<(char, usize)> = None;
-    let mut in_comment = false;
+    let mut body = BodyState::default();
 
     if fm_lines > 0 {
         line_num = fm_lines;
     }
 
-    // If the first line was not frontmatter, process it as a body line
+    // If the first line was not frontmatter, process it as a body line.
+    // The streaming reader has no cheap whole-document lookahead, so it passes
+    // `""` for `rest`: an unclosed opener stays literal (single-line
+    // semantics). This path is test-only; production uses `scan_slice_multi`.
     if fm_lines == 0 {
         dispatch_body_line(
             &first_trimmed,
+            "",
             line_num,
             visitors,
             &mut active,
-            &mut fence,
-            &mut in_comment,
+            &mut body,
         );
         if !active.iter().any(|&a| a) {
             return Ok(());
@@ -469,14 +485,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
         }
         let line = buf.trim_end_matches(['\n', '\r']);
 
-        dispatch_body_line(
-            line,
-            line_num,
-            visitors,
-            &mut active,
-            &mut fence,
-            &mut in_comment,
-        );
+        dispatch_body_line(line, "", line_num, visitors, &mut active, &mut body);
         if !active.iter().any(|&a| a) {
             break;
         }
@@ -614,19 +623,41 @@ fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
     }
 }
 
+/// Cross-line body-scan state carried between calls to [`dispatch_body_line`].
+///
+/// Beyond the fenced-code-block and Obsidian `%%` comment-block tracking that
+/// the scanner has always had, this now also carries a **cross-line inline
+/// code span** (iter-183 L-3) and a **cross-line HTML comment** (L-15) so that
+/// `[[links]]` and `[t](x.md)` hidden inside a span/comment opened on an
+/// earlier line are not delivered to visitors.
+#[derive(Debug, Default)]
+struct BodyState {
+    /// Open fenced code block: `(fence_char, run_length)`.
+    fence: Option<(char, usize)>,
+    /// Inside an Obsidian `%%` comment block.
+    in_comment: bool,
+    /// Length of an inline code-span backtick run left open on a prior line.
+    open_code_run: Option<usize>,
+    /// Inside a multi-line HTML `<!-- … -->` comment.
+    in_html_comment: bool,
+}
+
 /// Dispatch a single body line to active visitors, handling code fence state.
+///
+/// `rest` is the remaining document text after `line`, used only for the
+/// multi-line code-span lookahead (L-3); pass `""` when unavailable.
 fn dispatch_body_line(
     line: &str,
+    rest: &str,
     line_num: usize,
     visitors: &mut [&mut dyn FileVisitor],
     active: &mut [bool],
-    fence: &mut Option<(char, usize)>,
-    in_comment: &mut bool,
+    state: &mut BodyState,
 ) {
     // Code fences take highest priority — %% inside a code block is literal.
-    if let Some((fence_char, fence_count)) = *fence {
+    if let Some((fence_char, fence_count)) = state.fence {
         if is_closing_fence(line, fence_char, fence_count) {
-            *fence = None;
+            state.fence = None;
             for (i, v) in visitors.iter_mut().enumerate() {
                 if active[i] && v.on_code_fence_close(line_num) == ScanAction::Stop {
                     active[i] = false;
@@ -644,37 +675,47 @@ fn dispatch_body_line(
     }
 
     // Comment blocks — code fences inside comments are ignored.
-    if *in_comment {
+    if state.in_comment {
         if is_comment_fence(line) {
-            *in_comment = false;
+            state.in_comment = false;
         }
         return;
     }
 
-    if let Some((fc, count)) = detect_opening_fence(line) {
-        let lang = extract_fence_language(line, fc, count);
-        *fence = Some((fc, count));
-        for (i, v) in visitors.iter_mut().enumerate() {
-            if active[i] && v.on_code_fence_open(line, &lang, line_num) == ScanAction::Stop {
-                active[i] = false;
+    // A fenced code block or `%%` comment fence only opens when NO inline code
+    // span or HTML comment is currently open across lines — otherwise a ``` or
+    // %% sitting inside a multi-line span/comment would be misread as a
+    // structural delimiter (L-3/L-15).
+    let suppressed = state.open_code_run.is_some() || state.in_html_comment;
+
+    if !suppressed {
+        if let Some((fc, count)) = detect_opening_fence(line) {
+            let lang = extract_fence_language(line, fc, count);
+            state.fence = Some((fc, count));
+            for (i, v) in visitors.iter_mut().enumerate() {
+                if active[i] && v.on_code_fence_open(line, &lang, line_num) == ScanAction::Stop {
+                    active[i] = false;
+                }
             }
+            return;
         }
-        return;
+
+        if is_comment_fence(line) {
+            state.in_comment = true;
+            return;
+        }
     }
 
-    if is_comment_fence(line) {
-        *in_comment = true;
-        return;
-    }
-
-    // Normal body line — strip inline code spans first, then inline comments.
+    // Normal body line — strip inline code spans first (carrying any open
+    // cross-line run), then inline `%%…%%` comments, then HTML comments.
     // Inline code must be removed before comment stripping so that `%%` inside
     // a backtick span is not mistakenly treated as a comment delimiter.
     //
     // `line` (raw) is passed alongside `cleaned` so visitors that parse heading
     // text can use the original content (preserving code spans in headings).
-    let cleaned = strip_inline_code(line);
+    let cleaned = strip_inline_code_stateful(line, &mut state.open_code_run, rest);
     let cleaned = strip_inline_comments(&cleaned);
+    let cleaned = strip_html_comments(&cleaned, &mut state.in_html_comment);
     for (i, v) in visitors.iter_mut().enumerate() {
         if active[i] && v.on_body_line(line, &cleaned, line_num) == ScanAction::Stop {
             active[i] = false;
