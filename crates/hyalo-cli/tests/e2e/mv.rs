@@ -1931,3 +1931,33 @@ fn mv_positional_and_to_flag_conflict() {
         "expected conflict between positional DEST and --to"
     );
 }
+
+#[test]
+fn mv_batch_without_destination_is_user_error() {
+    // Batch mode (selector-driven) with neither --to nor a positional DEST:
+    // clap allows this (DEST requires the positional source, which conflicts
+    // with --glob), so dispatch.rs must reject it itself rather than panicking
+    // or unwrapping a `None` destination.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--glob", "*.md"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "expected a user error, not success"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit 1 (user error)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("destination"),
+        "expected a destination-related error, got: {stderr}"
+    );
+}

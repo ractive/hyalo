@@ -49,7 +49,6 @@ and this project adheres to
   invalid `--property 'title~=('` filter now reports the regex engine's own
   message (with caret/position) as the error `cause`, the way `find -e` does,
   instead of dropping it.
-
 - **Hints preserve the vault context and active filters** (iter-180,
   BUG-7/BUG-8): the `create-index` hint after a slow or large-vault command now
   carries the explicit `--dir` (running it verbatim indexes the right vault, not
