@@ -11,6 +11,18 @@ and this project adheres to
 
 ### Added
 
+- **`HYALO006` / `broken-link` lint rule** (iter-188): `hyalo lint` now flags
+  wikilinks and markdown links that point at a vault file which does not exist.
+  Enabled and `warn` by default; `hyalo lint --strict` promotes it to an error
+  so CI can gate broken links. The vault-wide resolution context (case/stem
+  index) is built **once** per invocation — from the `.hyalo-index` snapshot
+  when `--index` is active, else a single vault walk — and shared across
+  workers, so the rule adds no per-file graph rebuild. Respects
+  `[lint.rules.HYALO006]` enable/severity overrides, `--rule HYALO006` /
+  `--rule-prefix HYALO`, and `--files-from` (resolution stays vault-wide even
+  when the linted set is scoped, so a scoped file linking to an
+  unscoped-but-existing file does not false-positive).
+
 - **Honest partial-failure envelopes for link write paths** (iter-187): when a
   file write fails mid-batch, `hyalo links fix --apply`, `hyalo links auto
   --apply`, and batch `hyalo mv --apply` now emit a complete JSON envelope
@@ -24,6 +36,15 @@ and this project adheres to
 
 ### Fixed
 
+- **Percent-encoded markdown link destinations now resolve** (iter-188, L-23):
+  `[x](my%20dest.md)` previously never resolved (the `%20` was compared
+  literally against the on-disk filename `my dest.md`), so `find --broken-links`
+  false-positived and `backlinks "my dest.md"` missed the linker. The path
+  portion is now percent-decoded during resolution and in the link graph, so
+  encoded and angle-bracket (`[x](<my dest.md>)`) forms resolve to the same
+  file. Malformed (`%2`, `%zz`) or non-UTF-8 (`%FF`) escapes keep the literal
+  text — a filename with a stray `%` still resolves as written. Rewrite keeps
+  the destination as-authored (the `%20` form is preserved on `mv`).
 - **Batch `mv --apply` no longer leaves dangling links after a rolled-back
   rename** (PR #221 review): when a mid-batch write failure rolled back file
   renames, a "self-rewrite" plan — one whose rewritten content was written to
@@ -53,6 +74,14 @@ and this project adheres to
 
 ### Internal
 
+- **Shared link-existence resolver entry point** (iter-188, task 0): the
+  "does this link exist?" resolution that `find --broken-links` /
+  `find --orphan` / `find --dead-end` and the new HYALO006 rule both need is now
+  a single `discovery::resolve_link_from_source` function. It owns the
+  kind-dependent normalization (wikilink vault-relative, markdown
+  site-absolute / path-qualified / bare-basename) and the final
+  `resolve_target` call, so `find/mod.rs` no longer inlines that branching and
+  the lint rule does not reimplement it.
 - **Unified link write path** (iter-187): `auto_link` now builds
   `RewritePlan`s and writes through the shared `execute_plans_partial`
   machinery instead of a hand-rolled line splitter (removed

@@ -933,3 +933,76 @@ their rename), and external files kept. See
 [[iterations/iteration-187-link-writer-unification]] and
 `.claude/agent-memory/rust-developer/pitfall_batch_mv_rename_rollback_dangling_link.md`
 for the confirmed repro that motivated this amendment.
+
+## DEC-057: Percent-decoding scope and malformed-escape policy for link resolution (2026-07-19)
+
+**Decision:** `discovery::resolve_target` and the link graph
+(`insert_file_links`) percent-decode the **path portion** of a link target
+after the existing fragment/query strip, so `[x](my%20dest.md)` resolves to the
+on-disk file `my dest.md`. Decoding is applied uniformly (resolve_target is
+kind-agnostic; in practice only markdown destinations carry `%`-escapes —
+wikilinks never do). A malformed escape (`%` not followed by two hex digits, e.g.
+`%2`, `%zz`, or a stray `%` in `100%done.md`) or an escape sequence that decodes
+to non-UTF-8 bytes (`%FF`) **preserves the literal input** — the decoder returns
+`None` ("nothing safely decodable") rather than corrupt the path. Encoding is
+kept as-written on rewrite (an `mv` of `my dest.md` preserves the `%20` form),
+parity with the angle-bracket handling from PR #220.
+
+**Why:** A tiny hand-rolled decoder (no new dependency, all-Rust per project
+policy) covers the real case — CommonMark/Obsidian-emitted `%20` spaced
+destinations — without pulling `percent-encoding`. Preserving the literal on any
+malformed/non-UTF-8 escape means a filename that genuinely contains a `%` still
+resolves as written, so decoding can never introduce a *new* broken link. See
+[[iterations/iteration-188-link-semantics-completion]].
+
+## DEC-058: HYALO006 broken-link rule — CLI-side, warn-by-default, error-under-strict; anchor validation deferred (2026-07-19)
+
+**Decision:** The broken-link lint rule is **HYALO006** (`HYALO004`/`HYALO005`
+are taken — datetime-format / frontmatter-parse-error). Its catalog entry
+(severity/default-on/description) lives in `hyalo-mdlint`, but the resolution
+logic lives **CLI-side** in `commands/link_lint.rs` because it needs vault-wide
+context (the set of files that exist), which the stateless mdlint engine does
+not have. The rule is **enabled + `warn` by default** and promoted to **error
+under `--strict`** (mirroring the strict-promotion pattern of the other HYALO
+rules), unless the user pins an explicit `[lint.rules.HYALO006] severity`. The
+vault resolution context (`LinkLintContext`: canonical dir + site_prefix +
+case/stem index) is built **once per invocation** in the lint dispatch arm —
+from the `--index` snapshot when active, else a single vault walk — and shared
+by reference across the rayon workers, so the rule never rebuilds the graph per
+file. Broken **anchors** are NOT included in HYALO006 this iteration: anchor
+validation (L-21) is deferred because it requires the `Link` index wire-shape
+bump (a new `fragment` field) plus an anchor-heading matcher, which must land
+together with an index-rebuild note rather than as a half-done shape change.
+
+**Why:** Keeping the catalog entry in mdlint (so `lint-rules list/show`,
+`--rule`/`--rule-prefix`, and `[lint.rules.HYALO006]` overrides all work
+uniformly) while putting the vault-aware logic in the CLI matches the existing
+HYALO005 split and avoids giving `hyalo-mdlint` a link-graph dependency.
+Warn-by-default keeps a broken link from breaking every existing green vault on
+upgrade, while `--strict` (or an explicit `severity = "error"`) lets CI gate on
+it deliberately. Building the context once is essential: a per-file graph
+rebuild would make lint O(files²). See
+[[iterations/iteration-188-link-semantics-completion]].
+
+## DEC-059: `.md` normalization stays split between construction and resolution, not a new as-written Link field (2026-07-19)
+
+**Decision:** For L-19, `.md`-suffix handling is centralized in the two places
+that already own it rather than by adding an as-written field to the serialized
+`Link` type. Wikilink targets are normalized to the extension-less canonical
+form at construction (`strip_wikilink_md_suffix` in `parse_wikilink`); markdown
+targets keep their `.md` (required by the syntax) and the single `.md`-toggle in
+`resolve_target` reconciles both kinds at lookup time. The originally-proposed
+extra `Link` field (preserving the exact user-typed suffix) is **not** added:
+the rewrite side already reconstructs the written form via `WrittenForm` /
+`LinkWriter`, so a second as-written field would be redundant and would force the
+`Link` index wire-shape bump (with old-snapshot fallback handling) for no
+observable benefit.
+
+**Why:** Avoiding the `Link` shape change keeps `.hyalo-index` snapshots
+forward-compatible and sidesteps the whole-codebase update of every `Link {…}`
+literal. The two existing normalization points (`strip_wikilink_md_suffix` at
+construction, the `.md` toggle in `resolve_target`) already give a single,
+audited canonical comparison across link kinds — which is the actual L-19 goal.
+The anchor `fragment` field that L-21 would need is the only thing that truly
+requires the shape bump, so it is deferred as one unit (see DEC-058). See
+[[iterations/iteration-188-link-semantics-completion]].

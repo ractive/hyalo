@@ -42,17 +42,15 @@ that shared scanner over a new hand-rolled loop.
 
 ## Tasks
 
-### 1. Single resolver (L-6 root fix) [2/5]
+### 1. Single resolver (L-6 root fix) [2/2 + carried]
 
-- [ ] Extend iter-150's `LinkResolver` into
-  `resolve_link(ctx, link, mode)` with `ResolveMode::Exists` (used by
-  find --broken-links, backlinks, summary, orphan/dead-end) and
-  `ResolveMode::Classify` (links fix's
-  Broken/CaseMismatch/Ambiguous/ExactHit), sharing one lookup order
-- [ ] Migrate the divergent call sites: find/mod.rs:735-765 inline
-  block, its near-duplicate link_fix.rs:371-391,
-  `resolve_and_classify_link`, backlinks.rs:41-45, find/mod.rs:824-826,
-  summary.rs:293-302
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]: the
+  shared "does this link exist?" resolver entry point
+  (`discovery::resolve_link_from_source`, `ResolveMode::Exists`) landed there;
+  the `find/mod.rs` inline block was migrated onto it.
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]: divergent
+  call sites (find inline block) migrated onto the shared entry point;
+  remaining classify-side collapse tracked on iter-188 task 0.
 - [x] Case-insensitivity via a lowercased-key companion map inside
   `LinkGraph` (populated in `insert_file_links`,
   link_graph.rs:391-458) — O(1) lookups, NOT the O(vault)
@@ -81,23 +79,21 @@ that shared scanner over a new hand-rolled loop.
   incrementally (O(changed keys)); re-measured faster than main
   afterward. See commits 76d1605, and the CLI-arg-resolution fix/test
   correction.
-- [ ] Merge the near-duplicate `detect_broken_links` /
-  `detect_broken_links_from_index` (link_fix.rs:~440/~525) over the new
-  resolver
+- superseded-by [[iterations/iteration-188-link-semantics-completion]]:
+  `detect_broken_links` unification carried onto the shared resolver
+  (remaining classify-side merge tracked on iter-188 task 0).
 
-### 2. Single write path + honest partial failure (L-11) [0/4]
+### 2. Single write path + honest partial failure (L-11) [carried]
 
-- [ ] `auto_link::apply_matches` (auto_link.rs:689-767) unified onto
-  `execute_plans`/`RewritePlan`; keep the stronger content-comparison
-  TOCTOU guard as the shared behavior
-- [ ] Per-file failure handling: a failed write warns, is recorded in
-  the envelope (applied/failed/skipped per file), and does not abort
-  remaining files; exit code reflects partial failure
-- [ ] Batch mv: completed writes are reported (not silently kept) when a
-  mid-batch failure triggers rename rollback (mv.rs:586-599) — decide
-  and document rollback vs report-only semantics
-- [ ] L-25: `links fix` dry-run validates plans against on-disk text the
-  same way apply does (single code path, parity guaranteed)
+- superseded-by [[iterations/iteration-187-link-writer-unification]]:
+  `auto_link` writes through the shared `execute_plans_partial` machinery.
+- superseded-by [[iterations/iteration-187-link-writer-unification]]: per-file
+  partial-failure envelope (applied/failed/skipped), non-aborting, exit code
+  reflects partial failure.
+- superseded-by [[iterations/iteration-187-link-writer-unification]] (PR #221):
+  batch-mv rollback vs report-only semantics decided and documented (DEC-056).
+- superseded-by [[iterations/iteration-187-link-writer-unification]]: L-25
+  dry-run/apply single-path parity.
 
 ### 3. Fuzzy confidence tiers (L-10) [3/3]
 
@@ -170,8 +166,11 @@ L-25 dry-run/apply single-path parity.
 
 ## Acceptance Criteria
 
-- [ ] One resolver entry point: grep-audit shows no independent
-  stem-matching outside `LinkResolver`/`LinkGraph` (deferred to iter-185)
-- [ ] All apply paths emit a complete envelope even on partial failure
-  (deferred to iter-185)
+- One resolver entry point: grep-audit shows no independent stem-matching
+  outside the shared resolver — carried through iter-185 to
+  [[iterations/iteration-188-link-semantics-completion]] (Exists-mode entry
+  point + find migration landed; classify-side collapse tracked on iter-188
+  task 0).
+- All apply paths emit a complete envelope even on partial failure —
+  closed-by [[iterations/iteration-187-link-writer-unification]].
 - [x] `cargo fmt` / `clippy -D warnings` / `cargo test -q` clean

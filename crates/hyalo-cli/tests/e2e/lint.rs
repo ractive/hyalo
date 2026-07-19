@@ -2772,3 +2772,174 @@ fn lint_okf_profile_case_insensitive_false_index_keeps_citations_present() {
         "with case_insensitive=false, INDEX.md must remain an ordinary concept doc: stdout={stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// HYALO006 — broken-link rule (iter-188 / L-22)
+// ---------------------------------------------------------------------------
+
+/// A vault where one file links to a missing target (wikilink) and another to
+/// an existing target. Only the broken one should fire HYALO006.
+#[test]
+fn hyalo006_flags_broken_wikilink() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "---\ntitle: T\n---\nbody\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: S\n---\nSee [[target]] and [[does-not-exist]].\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("does-not-exist"),
+        "expected broken wikilink finding, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("`target`"),
+        "existing target must not fire HYALO006: {stdout}"
+    );
+}
+
+/// A broken markdown link fires HYALO006 too.
+#[test]
+fn hyalo006_flags_broken_markdown_link() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: S\n---\nSee [x](missing.md).\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("missing.md"),
+        "expected broken markdown link finding, got: {stdout}"
+    );
+}
+
+/// A clean vault (all links resolve) exits 0 with HYALO006 selected.
+#[test]
+fn hyalo006_clean_vault_exits_zero() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "---\ntitle: T\n---\nbody\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: S\n---\nSee [[target]].\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006"])
+        .assert()
+        .success()
+        .code(0);
+}
+
+/// `--strict` promotes a broken link to an error and exits 1.
+#[test]
+fn hyalo006_strict_exits_one() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "src.md", "---\ntitle: S\n---\nSee [[nope]].\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006", "--strict"])
+        .assert()
+        .code(1);
+}
+
+/// `[lint.rules.HYALO006] enabled = false` suppresses the rule.
+#[test]
+fn hyalo006_disabled_via_config() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n[lint.rules.HYALO006]\nenabled = false\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "src.md", "---\ntitle: S\n---\nSee [[nope]].\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("nope"),
+        "disabled HYALO006 must not fire: {stdout}"
+    );
+}
+
+/// A percent-encoded markdown destination resolves (L-23), so no HYALO006.
+#[test]
+fn hyalo006_percent_encoded_target_resolves() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "my dest.md", "---\ntitle: D\n---\nbody\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: S\n---\nSee [x](my%20dest.md).\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006"])
+        .assert()
+        .success()
+        .code(0);
+}
+
+/// `--files-from` correctness: the HYALO006 resolution context is vault-wide
+/// even when the linted file set is scoped. A scoped file linking to an
+/// unscoped-but-existing file must NOT fire (the graph sees the whole vault).
+#[test]
+fn hyalo006_files_from_scoped_link_to_unscoped_file() {
+    let tmp = TempDir::new().unwrap();
+    // `other.md` is NOT in the linted set but exists in the vault.
+    write_md(tmp.path(), "other.md", "---\ntitle: O\n---\nbody\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: S\n---\nSee [[other]] and [[gone]].\n",
+    );
+
+    let list = write_list_file(&["src.md"]);
+    let list_path = list.path().to_str().unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--rule",
+            "HYALO006",
+            "--files-from",
+            list_path,
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The link to the unscoped-but-existing file must not fire.
+    assert!(
+        !stdout.contains("`other`"),
+        "link to unscoped-but-existing file must not fire HYALO006: {stdout}"
+    );
+    // The genuinely broken link still fires.
+    assert!(
+        stdout.contains("gone"),
+        "genuinely broken link must still fire under --files-from: {stdout}"
+    );
+}

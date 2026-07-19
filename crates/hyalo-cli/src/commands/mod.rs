@@ -11,6 +11,7 @@ pub mod find;
 pub mod heading_grammar;
 pub mod init;
 pub(crate) mod inputs;
+pub mod link_lint;
 pub mod links;
 pub mod lint;
 pub mod lint_github;

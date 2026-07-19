@@ -795,6 +795,111 @@ impl std::fmt::Display for FileResolveError {
 
 impl std::error::Error for FileResolveError {}
 
+/// Resolve a single parsed link (from `source_rel`) to a vault-relative path,
+/// or `None` when it does not resolve to a known vault file.
+///
+/// This is the shared "does this link exist?" entry point (iter-188 task 0,
+/// `ResolveMode::Exists`): it centralizes the kind-dependent normalization that
+/// `find --broken-links` and the HYALO006 lint rule both need, so neither has
+/// to reimplement the wikilink/markdown/site-absolute branching or call
+/// `resolve_target` directly.
+///
+/// - Wikilinks are vault-relative by definition, resolved as-written.
+/// - Markdown site-absolute (`/site/...`) targets are resolved as-written.
+/// - Markdown path-qualified targets are normalized against the source dir.
+/// - Markdown bare basenames try source-relative first, then fall back to the
+///   raw target (matching the pre-existing `find` behavior).
+#[must_use]
+pub fn resolve_link_from_source(
+    canonical_dir: &Path,
+    source_rel: &str,
+    kind: crate::links::LinkKind,
+    target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Option<String> {
+    use crate::link_graph::normalize_target;
+    use crate::links::LinkKind;
+
+    let resolved = match kind {
+        LinkKind::Wikilink => std::borrow::Cow::Borrowed(target),
+        LinkKind::Markdown => {
+            if target.starts_with('/') {
+                std::borrow::Cow::Borrowed(target)
+            } else if target.contains('/') || target.contains('\\') {
+                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), target))
+            } else {
+                // Bare basename: try source-relative first so same-folder links
+                // resolve correctly, then fall back to the raw target.
+                let src_rel = normalize_target(Path::new(source_rel), target);
+                if resolve_target(canonical_dir, &src_rel, site_prefix, case_index).is_some() {
+                    std::borrow::Cow::Owned(src_rel)
+                } else {
+                    std::borrow::Cow::Borrowed(target)
+                }
+            }
+        }
+    };
+    resolve_target(canonical_dir, resolved.as_ref(), site_prefix, case_index)
+}
+
+/// Percent-decode a URL path component (`%20` → space, `%2F` → `/`, …).
+///
+/// Returns `Some(decoded)` only when the input actually contained a valid,
+/// UTF-8-clean escape sequence; returns `None` when there was nothing to decode
+/// so callers can avoid an allocation on the common no-escape path.
+///
+/// If any escape is malformed (`%` not followed by two hex digits) or the
+/// decoded bytes are not valid UTF-8, the **literal** input is preserved: we
+/// return `None` (treat as "nothing safely decodable") rather than corrupt the
+/// path. This keeps `[x](100%25done.md)` — a literal filename with a stray `%`
+/// — resolving as written.
+#[must_use]
+pub(crate) fn percent_decode_path(input: &str) -> Option<String> {
+    if !input.contains('%') {
+        return None;
+    }
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut decoded_any = false;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            // Need two more hex digits.
+            let hi = bytes.get(i + 1).copied().and_then(hex_val);
+            let lo = bytes.get(i + 2).copied().and_then(hex_val);
+            match (hi, lo) {
+                (Some(h), Some(l)) => {
+                    out.push((h << 4) | l);
+                    i += 3;
+                    decoded_any = true;
+                    continue;
+                }
+                // Malformed escape: bail out, preserve the literal input.
+                _ => return None,
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    if !decoded_any {
+        return None;
+    }
+    // Decoded bytes must be valid UTF-8; otherwise keep the literal text.
+    String::from_utf8(out).ok()
+}
+
+/// Map an ASCII hex digit byte to its 0–15 value.
+#[must_use]
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Resolve a link target to a file path relative to the vault root.
 /// Tries the target as-is, then with `.md` appended.
 /// Returns the relative path if the file exists within the vault, or None.
@@ -828,6 +933,14 @@ pub fn resolve_target(
     }
     if let Some(pos) = target.find('?') {
         target.truncate(pos);
+    }
+    // L-23: percent-decode the path portion so `[x](my%20dest.md)` resolves to
+    // `my dest.md`. Decoding is applied uniformly (resolve_target is
+    // kind-agnostic); wikilinks never contain percent-escapes in practice, so
+    // this only affects markdown-style destinations. Invalid or non-UTF-8
+    // escape sequences keep the literal text (see `percent_decode_path`).
+    if let Some(decoded) = percent_decode_path(&target) {
+        target = decoded;
     }
     // Strip trailing slash (e.g. "docs/page/" → "docs/page")
     while target.ends_with('/') && target.len() > 1 {
@@ -942,6 +1055,58 @@ pub fn resolve_target(
 mod tests {
     use super::*;
     use std::fs;
+
+    // --- L-23: percent-decoding ---
+
+    #[test]
+    fn percent_decode_space() {
+        assert_eq!(
+            percent_decode_path("my%20dest.md").as_deref(),
+            Some("my dest.md")
+        );
+    }
+
+    #[test]
+    fn percent_decode_lowercase_and_uppercase_hex() {
+        assert_eq!(percent_decode_path("a%2fb.md").as_deref(), Some("a/b.md"));
+        assert_eq!(percent_decode_path("a%2Fb.md").as_deref(), Some("a/b.md"));
+    }
+
+    #[test]
+    fn percent_decode_no_escape_returns_none() {
+        assert_eq!(percent_decode_path("plain.md"), None);
+    }
+
+    #[test]
+    fn percent_decode_malformed_keeps_literal() {
+        // `%2` is truncated, `%zz` is non-hex: both preserve the literal input.
+        assert_eq!(percent_decode_path("bad%2.md"), None);
+        assert_eq!(percent_decode_path("bad%zz.md"), None);
+        // A stray `%` with no hex at all (e.g. `100%done`).
+        assert_eq!(percent_decode_path("100%done.md"), None);
+    }
+
+    #[test]
+    fn percent_decode_non_utf8_keeps_literal() {
+        // `%FF` alone is not valid UTF-8 → keep literal (return None).
+        assert_eq!(percent_decode_path("bad%FF.md"), None);
+    }
+
+    #[test]
+    fn resolve_target_percent_encoded_space() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("my dest.md"), "# Dest").unwrap();
+        // Use dunce::canonicalize (via canonicalize_vault_dir), not the raw
+        // std canonicalize: on Windows std's version returns a `\\?\`
+        // extended-length-path prefix, which `ensure_within_vault`'s own
+        // dunce-canonicalized comparison would then fail to prefix-match,
+        // making this test spuriously fail on windows-latest CI.
+        let canon = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canon, "my%20dest.md", None, None).as_deref(),
+            Some("my dest.md")
+        );
+    }
 
     #[test]
     fn discover_finds_md_files() {

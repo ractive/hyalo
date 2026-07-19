@@ -1919,6 +1919,40 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 None => ctx.md_lint.max_files(),
             };
 
+            // HYALO006 (broken-link): build the vault-wide resolution context
+            // ONCE per invocation, but only when the rule will actually run —
+            // i.e. it is enabled (no `[lint.rules.HYALO006] enabled = false`)
+            // AND selected by any `--rule` / `--rule-prefix` filter. Building it
+            // means seeding a case/stem index (from the snapshot when `--index`
+            // is active, else a single disk walk) — never per file.
+            let hyalo006_enabled = ctx
+                .md_lint
+                .rules
+                .get(lint_commands::RULE_ID_BROKEN_LINK)
+                .and_then(hyalo_mdlint::RuleOverride::enabled)
+                .unwrap_or(true);
+            let hyalo006_selected = match (&rule, &rule_prefix) {
+                (Some(r), _) => r == lint_commands::RULE_ID_BROKEN_LINK,
+                (None, Some(p)) => lint_commands::RULE_ID_BROKEN_LINK.starts_with(p.as_str()),
+                (None, None) => true,
+            };
+            let link_lint_ctx = if hyalo006_enabled && hyalo006_selected {
+                let case_index = maybe_case_index(
+                    ctx.case_insensitive_mode,
+                    dir,
+                    true,
+                    (*snapshot_index).as_ref(),
+                )
+                .unwrap_or_default();
+                crate::commands::link_lint::LinkLintContext::new(
+                    dir,
+                    site_prefix.map(str::to_owned),
+                    case_index,
+                )
+            } else {
+                None
+            };
+
             let mut ext_opts = lint_commands::ExtLintOptions {
                 fix: fix_mode,
                 detailed: detailed || github_output,
@@ -1942,6 +1976,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 // `hyalo okf index` treats `INDEX.md` on case-insensitive
                 // filesystems (macOS/Windows default).
                 case_insensitive: mode_enabled(ctx.case_insensitive_mode, dir),
+                link_lint_ctx,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
