@@ -42,7 +42,7 @@ that shared scanner over a new hand-rolled loop.
 
 ## Tasks
 
-### 1. Single resolver (L-6 root fix)
+### 1. Single resolver (L-6 root fix) [2/5]
 
 - [ ] Extend iter-150's `LinkResolver` into
   `resolve_link(ctx, link, mode)` with `ResolveMode::Exists` (used by
@@ -58,13 +58,19 @@ that shared scanner over a new hand-rolled loop.
   link_graph.rs:391-458) — O(1) lookups, NOT the O(vault)
   `backlinks_case_insensitive` helper per call
 - [x] e2e: `backlinks Foo.md` == `backlinks foo.md` on a
-  case-insensitive vault; orphan/dead-end counts casing-independent;
-  perf on MDN unchanged
+  case-insensitive vault; orphan/dead-end counts casing-independent.
+  "Perf on MDN unchanged" was not actually measured against an MDN
+  corpus during implementation — PR review instead measured a synthetic
+  2000-file batch-mv and found rename_path/remove_source/insert_links
+  each called the O(vault) rebuild_lower_index() per call, regressing
+  batch-mv by ~38-44% vs main. Fixed in review by updating lower_index
+  incrementally (O(changed keys)); re-measured faster than main
+  afterward. See commit 76d1605.
 - [ ] Merge the near-duplicate `detect_broken_links` /
   `detect_broken_links_from_index` (link_fix.rs:~440/~525) over the new
   resolver
 
-### 2. Single write path + honest partial failure (L-11)
+### 2. Single write path + honest partial failure (L-11) [0/4]
 
 - [ ] `auto_link::apply_matches` (auto_link.rs:689-767) unified onto
   `execute_plans`/`RewritePlan`; keep the stronger content-comparison
@@ -78,7 +84,7 @@ that shared scanner over a new hand-rolled loop.
 - [ ] L-25: `links fix` dry-run validates plans against on-disk text the
   same way apply does (single code path, parity guaranteed)
 
-### 3. Fuzzy confidence tiers (L-10)
+### 3. Fuzzy confidence tiers (L-10) [3/3]
 
 - [x] `FuzzyMatch` fixes are reported in a separate bucket and excluded
   from `--apply` by default (like ambiguous short-form links); explicit
@@ -88,7 +94,7 @@ that shared scanner over a new hand-rolled loop.
   `[[iteration-132-mv-wikilinks]]` → `iteration-02-links.md` at 0.896)
   is no longer auto-applied
 
-### 4. auto-link correctness (L-12, L-24)
+### 4. auto-link correctness (L-12, L-24) [2/2]
 
 - [x] L-12: word-boundary detection is Unicode-aware (char-class based,
   not per-byte ASCII); tests with CJK adjacency and U+2011
@@ -96,12 +102,12 @@ that shared scanner over a new hand-rolled loop.
   `--exclude-title` (GlobBuilder `.case_insensitive(true)`), or the
   asymmetry is documented deliberately
 
-### 5. Small CLI edge (L-26)
+### 5. Small CLI edge (L-26) [1/1]
 
 - [x] `create-index --index-file idx.bin` (bare relative filename)
   works; fix the `parent() == Some("")` canonicalization edge
 
-### 6. Retrospective
+### 6. Retrospective [1/1]
 
 - [x] Update iteration 185 with anything learned; keep README/help/docs
   in sync with new flags
