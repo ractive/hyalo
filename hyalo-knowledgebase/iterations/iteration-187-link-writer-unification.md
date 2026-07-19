@@ -67,40 +67,14 @@ this plan itself ages.
 
 ## Tasks
 
-### 1. Single resolver entry point (finishes iter-184 item (a)) [0/5]
+### 1. Single resolver entry point (finishes iter-184 item (a))
 
-- [ ] Extend `link_resolve.rs` (currently only the mv-oriented
-  `LinkResolver`, link_resolve.rs:62-180) with a public
-  `resolve_link(ctx, link, mode)` entry point: `ResolveMode::Exists`
-  (find --broken-links, backlinks, summary, orphan/dead-end) and
-  `ResolveMode::Classify` (links fix's
-  Broken/CaseMismatch/Ambiguous/ExactHit). A `ResolveCtx` bundles
-  `canonical_dir`, `site_prefix`, `Option<&CaseInsensitiveIndex>`, and
-  the stem index. Move (or delegate) the policy currently living in
-  `link_fix.rs::classify_link` (:256) and
-  `link_fix.rs::resolve_and_classify_link` (:311) so `link_fix.rs` no
-  longer owns resolution order
-- [ ] Migrate `find/mod.rs`'s inline per-link resolution block
-  (find/mod.rs:723-780: kind-dependent source-relative normalization +
-  direct `discovery::resolve_target` calls at :752 and :767) onto
-  `resolve_link(.., ResolveMode::Exists)`; the broken-links filter
-  (:871-879) and orphan/dead-end filters (:884-899) keep identical
-  observable behavior (lock with e2e before migrating)
-- [ ] Merge the near-duplicates `detect_broken_links` (link_fix.rs:414,
-  test-only) and `detect_broken_links_from_index` (link_fix.rs:526)
-  into one implementation over `resolve_link`; port the ~10 unit tests
-  (link_fix.rs:1431+) onto the surviving entry point
-- [ ] Finish the L-6 tail in `summary.rs`: orphan/dead-end counting
-  (summary.rs:303-326) does manual case-SENSITIVE
-  `targets.contains(rel)/contains(without_md)` membership checks
-  against `all_targets()`/`all_sources()` — route through
-  `LinkGraph`'s `lower_index`-aware lookups so orphan/dead-end counts
-  agree with `backlinks_ci` on case-insensitive vaults; e2e proving
-  `[[foo]]` → `Foo.md` is not counted as orphan
-- [ ] Grep-audit AC (from iter-184): no independent stem-matching or
-  direct `discovery::resolve_target` calls in `hyalo-cli/src/commands/`
-  outside the shared entry point; document the audit command + result
-  in the PR description
+**Moved to [[iterations/iteration-188-link-semantics-completion]]
+(task 0 there)** — the read/resolve-side refactor is independent of
+this PR's write-path work and is safest reviewed on its own. All five
+sub-tasks (resolve_link entry point, find/mod.rs migration,
+detect_broken_links merge, summary.rs L-6 tail, grep-audit) carried
+verbatim; iter-188's anchor validation and HYALO006 rule build on it.
 
 ### 2. Single write path: auto-link onto RewritePlan (iter-184 item (b)) [3/3]
 
@@ -168,37 +142,34 @@ this plan itself ages.
   dry-run "Apply N fixes" hint count matches what `--apply` actually
   writes (iter-184 fuzzy-bucket lesson)
 
-### 5. Perf guard [0/1]
+### 5. Perf guard
 
-- [ ] A/B benchmark main vs branch with `bench-e2e.sh`
-  (HYALO_BENCH_VAULT corpus): `links fix` dry-run scan path,
-  `find --broken-links`, and a synthetic 2000-file batch `mv --apply`
-  (the iter-184 regression scenario). Record before/after numbers in
-  this file before ticking — no unmeasured perf claims (iter-184
-  lesson); budget: within noise on scan paths, no regression >5% on
-  apply paths
+**Moved to [[iterations/iteration-188-link-semantics-completion]]
+(task 0 there)** — the A/B benchmark belongs with the resolver
+migration it was meant to guard; the write path landed here is
+covered by the existing test suite and touches no scan loops.
 
-### 6. Retrospective [1/2]
+### 6. Retrospective [2/2]
 
-- [ ] Update [[iterations/iteration-188-link-semantics-completion]]
-  with anything learned (especially the final `resolve_link` signature
-  it depends on)
+- [x] Update [[iterations/iteration-188-link-semantics-completion]]
+  with anything learned: carried tasks added there as task 0
+  (resolver entry point + perf A/B); its intro no longer assumes
+  `resolve_link` pre-exists
 - [x] README/help/CHANGELOG in sync with the new envelope fields
   (failed buckets, auto per-file records); no release — release is a
   separate user-gated step
 
 ## Acceptance Criteria
 
-- [ ] One resolver entry point: grep-audit shows no independent
-  stem-matching or direct `resolve_target` resolution loops in command
-  code outside `resolve_link`/`LinkGraph` (closes iter-184 AC 1)
+- One resolver entry point — **moved to
+  [[iterations/iteration-188-link-semantics-completion]]** with task 0
 - [x] All apply paths (`links fix --apply`, `links auto --apply`, batch
   `mv --apply`) emit a complete JSON envelope even on partial failure,
   with per-file applied/failed/skipped records and honest exit codes
   (closes iter-184 AC 2)
 - [x] `links fix` dry-run and apply share one plan-validation code path;
   parity e2e green
-- [ ] Perf numbers recorded; scan paths within noise, apply paths not
-  regressed
+- Perf A/B — **moved to
+  [[iterations/iteration-188-link-semantics-completion]]** with task 0
 - [x] `cargo fmt` / `clippy --workspace --all-targets -- -D warnings` /
   `cargo test --workspace -q` clean
