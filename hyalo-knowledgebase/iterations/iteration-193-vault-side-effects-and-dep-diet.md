@@ -35,9 +35,9 @@ Verified at `c42fa6f`:
   creating and deleting a file in the vault root, uncached, at seven call
   sites.
 - `mdbook` v0.4.52 is a hard, unused dependency of `mdbook-lint-core` 0.14.
-  **Upstream already fixed this** — issue #457 closed as completed, and PR
-  #472 ("refactor(core): remove unused mdbook dependency") merged 2026-08-04
-  as commit `74827a7`. Shipped in **mdbook-lint-core 0.15.2**, published
+  **Upstream already fixed this.** Issue #457 closed as completed; PR #472
+  ("refactor(core): remove unused mdbook dependency") merged 2026-08-04 as
+  commit `74827a7`. Shipped in **mdbook-lint-core 0.15.2**, published
   2026-08-04. hyalo pins `"0.14"`, so it does not pick it up.
 - Measured on a scratch bump to `"0.15"` (reverted): dependency tree
   **168 → 135 crates** (-33 unique; the raw mdbook subtree is 82 but most of
