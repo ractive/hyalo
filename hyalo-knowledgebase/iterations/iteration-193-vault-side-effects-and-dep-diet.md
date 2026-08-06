@@ -20,7 +20,9 @@ into the vault, and half the dependency tree exists to satisfy an upstream
 crate's unused import.
 
 Sequenced **after** iter-191 and iter-192 because neither item is a
-correctness bug and the upstream half has a lead time outside our control.
+correctness bug. Both parts are now fully self-contained: the upstream
+dependency fix already shipped in mdbook-lint-core 0.15.2, so Part B is a
+version bump rather than a campaign with external lead time.
 
 **Do NOT release; release is a separate user-gated step.**
 
@@ -32,9 +34,19 @@ Verified at `c42fa6f`:
   mtime. `CaseInsensitiveMode::Auto` is the default; `mode_enabled` probes by
   creating and deleting a file in the vault root, uncached, at seven call
   sites.
-- `mdbook` v0.4.52 is **82 of 168** transitive crates. `mdbook-lint-core`
-  declares it as a hard dependency; grepping that crate's entire source for
-  any reference to it returns nothing.
+- `mdbook` v0.4.52 is a hard, unused dependency of `mdbook-lint-core` 0.14.
+  **Upstream already fixed this** — issue #457 closed as completed, and PR
+  #472 ("refactor(core): remove unused mdbook dependency") merged 2026-08-04
+  as commit `74827a7`. Shipped in **mdbook-lint-core 0.15.2**, published
+  2026-08-04. hyalo pins `"0.14"`, so it does not pick it up.
+- Measured on a scratch bump to `"0.15"` (reverted): dependency tree
+  **168 → 135 crates** (-33 unique; the raw mdbook subtree is 82 but most of
+  it is shared with hyalo's own deps), `mdbook` gone entirely,
+  `cargo check -p hyalo-mdlint` clean with **zero source changes**, and
+  `cargo test --workspace` fully green (3,288 tests, 0 failures).
+- `toml` 0.5 survives the bump — it is a direct dep of `mdbook-lint-core`
+  0.15.2, tracked upstream as open issue #459. The `toml` duplicate in
+  hyalo's tree therefore does **not** clear here.
 
 ## Tasks
 
@@ -55,22 +67,29 @@ Verified at `c42fa6f`:
       case-insensitive link resolution silently turns **off**. That is a
       semantic change, not a perf detail, and it is currently undocumented.
 
-### Part B — dependency diet
+### Part B — dependency diet (upstream already landed; this is a bump)
 
-- [ ] File an upstream issue on `joshrotenberg/mdbook-lint` showing that
-      `mdbook-lint-core` never references the `mdbook` crate, with the
-      82-of-168 number.
-- [ ] Open the upstream PR making the dependency optional (feature-gated
-      behind whatever `MdBookRuleProvider` actually needs) or removing it.
-      hyalo uses `StandardRuleProvider`, not `MdBookRuleProvider`.
-- [ ] Once upstream lands, bump `mdbook-lint-core` / `mdbook-lint-rulesets`,
-      drop the scoped MPL-2.0 exception at `deny.toml:33-38`, and re-run
-      `cargo deny check`.
+- [ ] Bump `mdbook-lint-core` and `mdbook-lint-rulesets` from `"0.14"` to
+      `"0.15"` in `crates/hyalo-mdlint/Cargo.toml`. Verified to need no
+      source changes, but read the 0.15.0/0.15.1/0.15.2 release notes for
+      rule-behaviour changes before assuming the green test run generalises
+      (0.15.0 changed YAML-frontmatter handling in MD041/MD022/MD007 and
+      snake_case config-key parsing).
+- [ ] Remove the scoped MPL-2.0 exception at `deny.toml:33-38` — it exists
+      only for `mdbook` — and re-run `cargo deny check`.
 - [ ] Re-check the two RUSTSEC ignores (`bincode` 1.x RUSTSEC-2025-0141,
-      `yaml-rust` RUSTSEC-2024-0320). Both arrive via `comrak -> syntect`;
-      confirm whether the bump clears them or whether they still need ignoring.
-- [ ] Record the resulting crate count and clean-build time in the iteration
+      `yaml-rust` RUSTSEC-2024-0320). Both arrive via `comrak -> syntect`,
+      which the bump does **not** change, so expect them to stay. Confirm
+      rather than assume, and leave them in place if still reachable.
+- [ ] Record the before/after crate count and clean-build time in this file
       so the win is measured, not asserted.
+- [ ] Comment on upstream issue **#456** ("Make autofix coordinates
+      unambiguous and safe for library embedders", open, priority: high)
+      with hyalo's concrete `convert_fix` workarounds — MD011's inclusive
+      end column, MD034 swallowing Liquid `{%`/`{{`, MD009/HYALO001 needing
+      byte columns while other rules use char columns, MD047's no-op range.
+      hyalo is the best-documented embedder evidence available and those
+      workarounds (`engine.rs:706-889`) are pure upstream-bug tax.
 
 ### Part C — small consistency debts
 
@@ -95,10 +114,10 @@ Verified at `c42fa6f`:
 - [ ] `mode_enabled` resolves at most once per invocation — asserted via a
       counter in a unit test or by construction (single call site after the
       refactor)
-- [ ] upstream issue and PR links recorded in this file
 - [ ] `cargo tree -p hyalo-cli --edges normal --prefix none | sort -u | wc -l`
-      recorded before and after; MPL-2.0 exception removed from `deny.toml`
-      if upstream landed
+      recorded before and after (expect 168 -> 135); MPL-2.0 exception
+      removed from `deny.toml` and `cargo deny check` clean
+- [ ] upstream #456 comment link recorded in this file
 - [ ] `grep -c "unwrap()" crates/hyalo-cli/src/commands/init.rs` returns 0
       outside `#[cfg(test)]`
 - [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
@@ -106,6 +125,8 @@ Verified at `c42fa6f`:
 
 ## Non-goals
 
-- Part B's upstream work must not become a vendored fork. If upstream is
-  unresponsive, record that and close the iteration with Part A and Part C
-  landed — do not vendor `mdbook-lint-core` to force the win.
+- Do not vendor or fork `mdbook-lint-core`. The dependency win is a version
+  bump; there is nothing left to force.
+- Do not attempt to fix upstream #456 (autofix coordinates) here. Comment
+  with evidence and stop — removing hyalo's `convert_fix` workarounds is a
+  separate iteration gated on upstream shipping the fix.
