@@ -70,11 +70,32 @@ Verified at `c42fa6f`:
 ### Part B — dependency diet (upstream already landed; this is a bump)
 
 - [ ] Bump `mdbook-lint-core` and `mdbook-lint-rulesets` from `"0.14"` to
-      `"0.15"` in `crates/hyalo-mdlint/Cargo.toml`. Verified to need no
-      source changes, but read the 0.15.0/0.15.1/0.15.2 release notes for
-      rule-behaviour changes before assuming the green test run generalises
-      (0.15.0 changed YAML-frontmatter handling in MD041/MD022/MD007 and
-      snake_case config-key parsing).
+      `"0.15"` in `crates/hyalo-mdlint/Cargo.toml`. Release notes for
+      0.15.0/0.15.1/0.15.2 were reviewed at plan time — **no API changes**,
+      only rule-behaviour fixes, and the risk is low. Do not re-derive this;
+      the audit is below.
+
+  **0.15.x change audit (done 2026-08-06 — do not repeat):**
+
+  - No-ops for hyalo, because it splits frontmatter itself and passes
+    body-only to the engine: "Standard rules ignore YAML frontmatter
+    (MD041, MD022, MD007)" and "md004: account for frontmatter line offset".
+  - No-ops for hyalo, because it registers only `StandardRuleProvider`:
+    every `MDBOOK*`, `CONTENT*`, and `ADR*` fix in all three releases.
+  - Real but strictly noise-reducing: "md032: use node end lines so code
+    fences in list items don't false-positive" and "md030: do not treat a
+    long emphasis span as a list marker". Both can only *lower* violation
+    counts, so neither can newly fail the KB lint gate.
+  - Additive: `MD013 ignore_reference_definitions` option.
+  - Changes fix output: 0.15.1 "preserve hashes in ATX heading content"
+    (upstream #453) — MD018/MD019 fixes now keep a closing `##`.
+  - **Not in the release notes, found by diffing `md018.rs`:** the violation
+    column changed from `line.len()` (bytes) to `line.chars().count()`
+    (chars). This silently fixes a latent hyalo bug — `rule_uses_byte_columns`
+    (`engine.rs:702`) already classifies MD018 as char-columns, so on a
+    multibyte line hyalo's char walk was being handed a byte column by 0.14.
+    Worth citing verbatim on upstream #456; it is exactly the coordinate
+    ambiguity that issue is about.
 - [ ] Remove the scoped MPL-2.0 exception at `deny.toml:33-38` — it exists
       only for `mdbook` — and re-run `cargo deny check`.
 - [ ] Re-check the two RUSTSEC ignores (`bincode` 1.x RUSTSEC-2025-0141,
@@ -98,6 +119,19 @@ Verified at `c42fa6f`:
       `String` is infallible, but these are the bulk of the project's
       no-unwrap-outside-tests violations and they make the rule
       un-greppable.
+- [ ] File an upstream issue: **MD018 fires on paragraph continuation
+      lines.** A wrapped paragraph whose continuation line begins with `#`
+      (e.g. a bare `#472` issue reference) is flagged "No space after hash on
+      atx style heading" — it is paragraph text, not a heading, and `#472` is
+      not a valid ATX heading under CommonMark anyway (no space after `#`).
+      Verified still present in 0.15.2 by diffing `md018.rs`: only the fix
+      generation and the column unit changed, the detection logic did not.
+      Precedent for the shape: upstream #274 ("MD018: false positive on Rust
+      attributes inside code blocks") was accepted and fixed. Reproduction —
+      `#foo` alone between blank lines correctly fires; `#472` as a
+      continuation line falsely fires; inline `PR #472` mid-line correctly
+      does not. Upstream-only: hyalo can just disable MD018, which would lose
+      the genuine `#Heading` typo detection.
 - [ ] Consider a distinct `out_of_vault` bucket for link targets that resolve
       outside the scanned directory (dogfood UX-1: GitHub Docs reports 6,568
       broken of 14,167, mostly `/src/...` and `../contributing/...` paths that
