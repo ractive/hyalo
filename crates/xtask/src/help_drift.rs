@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::process::Command;
 
-use crate::ac_fidelity::workspace_root;
+use crate::workspace::workspace_root;
 
 /// Commands (and nested sub-actions) whose `--help` must have an EXAMPLES block.
 ///

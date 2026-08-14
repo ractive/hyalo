@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
 
-use crate::ac_fidelity::workspace_root;
+use crate::workspace::workspace_root;
 
 #[derive(Debug, Deserialize)]
 pub struct FeatureMatrix {

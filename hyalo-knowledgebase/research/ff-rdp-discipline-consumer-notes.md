@@ -14,6 +14,19 @@ tags:
 
 # ff-rdp ralph-loop discipline — consumer feature wishlist
 
+> **Partly superseded (2026-08-14).** The two scripts named below,
+> `ac-fidelity-check.sh` and `claims-vs-code.sh`, are being **deleted** in ff-rdp
+> (iter-162a/162b), not re-expressed in hyalo. Any wishlist item motivated by
+> "let hyalo express the AC-evidence rule" is moot: the rule is gone, because a gate
+> that reads a plan and a diff cannot tell whether a test ran, and in practice it
+> produced 28 commits whose only content was rewording an AC to silence it.
+> hyalo's own reimplementation (`crates/xtask/src/ac_fidelity.rs`) was removed in this
+> repo the same day — it keyword-matched AC prose against the whole workspace and
+> passed a ticked AC reading *"zzqqxx_nonexistent_widget_flurb resolves the
+> frobnicator quuxbaz"*, so it had never rejected anything.
+> The frontmatter-schema items (`check_iteration_plan.rs` → `[schema.types.iteration]`)
+> are unaffected and still stand.
+
 ## Context
 
 The [ff-rdp](https://github.com/ractive/ff-rdp) project runs an LLM-driven

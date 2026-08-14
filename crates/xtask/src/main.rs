@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
 
-mod ac_fidelity;
 mod bundled_skills;
 mod feature_fanout;
 mod help_drift;
 mod stubs;
+mod workspace;
 
 #[derive(Parser)]
 #[command(
@@ -19,8 +19,6 @@ struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum Commands {
-    /// Gate 1: verify every ticked AC in an iteration plan has test evidence or a deferral.
-    CheckAcFidelity(ac_fidelity::AcFidelityArgs),
     /// Gate 2: verify cross-command flag consistency per feature-matrix.toml.
     CheckFeatureFanout,
     /// Gate 3: verify help text has EXAMPLES blocks and no stale wording.
@@ -36,7 +34,6 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::CheckAcFidelity(args) => ac_fidelity::run(args),
         Commands::CheckFeatureFanout => feature_fanout::run(),
         Commands::CheckHelpDrift => help_drift::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),

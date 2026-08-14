@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::ac_fidelity::workspace_root;
+use crate::workspace::workspace_root;
 
 /// Run the gate: `Ok(true)` when every bundled skill passes, `Ok(false)` when
 /// at least one violates the skills profile (details printed to stderr).
