@@ -177,96 +177,6 @@ pub struct LintCounts {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Run `hyalo lint` against a list of `(full_path, rel_path)` file pairs.
-///
-/// Returns the formatted output and the set of counts; the caller is
-/// responsible for translating counts into an exit code.
-pub fn lint_files(
-    files: &[(std::path::PathBuf, String)],
-    schema: &SchemaConfig,
-    case_insensitive: bool,
-) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_with_options(
-        files,
-        schema,
-        FixMode::Off,
-        None,
-        &mut None,
-        None,
-        case_insensitive,
-        None,
-    )
-}
-
-/// Prepend an additional `FileLintResult` (e.g. `.hyalo.toml` view violations)
-/// to the outcome produced by [`lint_files_with_options`]. Adjusts the totals
-/// and the `files_with_issues` counter in the serialized payload to stay
-/// consistent with the new entry.
-pub fn prepend_file_result(
-    outcome: CommandOutcome,
-    extra: &FileLintResult,
-) -> Result<CommandOutcome> {
-    let (payload, total) = match outcome {
-        CommandOutcome::Success { output, total } => (output, total),
-        other => return Ok(other),
-    };
-
-    let mut value: serde_json::Value =
-        serde_json::from_str(&payload).context("failed to re-parse lint output JSON")?;
-
-    if let Some(obj) = value.as_object_mut() {
-        let extra_errors = extra
-            .violations
-            .iter()
-            .filter(|v| matches!(v.severity, Severity::Error))
-            .count();
-        let extra_warnings = extra.violations.len() - extra_errors;
-
-        if let Some(files) = obj.get_mut("files").and_then(|f| f.as_array_mut()) {
-            let extra_value = serde_json::to_value(extra)
-                .context("failed to serialize .hyalo.toml lint result")?;
-            files.insert(0, extra_value);
-        }
-        if let Some(n) = obj.get_mut("total").and_then(|v| v.as_u64()) {
-            obj.insert(
-                "total".to_string(),
-                serde_json::Value::from(n + extra.violations.len() as u64),
-            );
-        }
-        if let Some(n) = obj.get_mut("errors").and_then(|v| v.as_u64()) {
-            obj.insert(
-                "errors".to_string(),
-                serde_json::Value::from(n + extra_errors as u64),
-            );
-        }
-        if let Some(n) = obj.get_mut("warnings").and_then(|v| v.as_u64()) {
-            obj.insert(
-                "warnings".to_string(),
-                serde_json::Value::from(n + extra_warnings as u64),
-            );
-        }
-        if let Some(n) = obj.get_mut("files_with_issues").and_then(|v| v.as_u64()) {
-            obj.insert(
-                "files_with_issues".to_string(),
-                serde_json::Value::from(n + 1),
-            );
-        }
-    }
-
-    let new_payload = format_success(Format::Json, &value);
-    // The outcome's `total` (used by `--count`) tracks files-with-issues —
-    // bump it by 1 when the prepended pseudo-file has at least one violation,
-    // so `--count` stays in sync with `files_with_issues` in the JSON payload.
-    let extra_counts_toward_total = !extra.violations.is_empty();
-    Ok(match total {
-        Some(t) => CommandOutcome::success_with_total(
-            new_payload,
-            if extra_counts_toward_total { t + 1 } else { t },
-        ),
-        None => CommandOutcome::success(new_payload),
-    })
-}
-
 /// Validate `.hyalo.toml` view definitions and return a pseudo-file lint
 /// result when at least one view looks suspicious.
 ///
@@ -3659,7 +3569,17 @@ type = \"skill\"
 
         let schema = SchemaConfig::default();
         let files = vec![(path, "note.md".to_owned())];
-        let (_, counts) = lint_files(&files, &schema, false).unwrap();
+        let (_, counts) = lint_files_with_options(
+            &files,
+            &schema,
+            FixMode::Off,
+            None,
+            &mut None,
+            None,
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
     }

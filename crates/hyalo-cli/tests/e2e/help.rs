@@ -99,6 +99,55 @@ fn subcommand_help_unchanged_by_enriched_root() {
     );
 }
 
+#[test]
+fn summary_help_documents_short_n_divergence() {
+    // iter-195: `-n` means `--recent` on summary but `--limit` on find and
+    // backlinks. The semantics stay as-is; the divergence is documented where
+    // it bites, so a reader of `summary --help` cannot be surprised.
+    let output = hyalo_no_hints()
+        .args(["summary", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("FLAG NOTE:"),
+        "summary --help must carry the -n/--recent flag note"
+    );
+    assert!(
+        stdout.contains("--limit"),
+        "summary --help must contrast -n/--recent with --limit"
+    );
+}
+
+#[test]
+fn index_command_help_lists_cross_aliases() {
+    // iter-195: `create-index --path` / `drop-index --output` are visible
+    // aliases, so both spellings are discoverable from --help.
+    let create = hyalo_no_hints()
+        .args(["create-index", "-h"])
+        .output()
+        .unwrap();
+    assert!(create.status.success());
+    let create_help = String::from_utf8(create.stdout).unwrap();
+    assert!(
+        create_help.contains("--path"),
+        "create-index -h must advertise the --path alias, got:\n{create_help}"
+    );
+
+    let drop = hyalo_no_hints()
+        .args(["drop-index", "-h"])
+        .output()
+        .unwrap();
+    assert!(drop.status.success());
+    let drop_help = String::from_utf8(drop.stdout).unwrap();
+    assert!(
+        drop_help.contains("--output"),
+        "drop-index -h must advertise the --output alias, got:\n{drop_help}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Config-aware help: hide flags that are already set in .hyalo.toml
 // ---------------------------------------------------------------------------

@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Added
 
+- **`create-index --path` and `drop-index --output` flag aliases** (iter-195).
+  The two commands name the *same* index file with different flags — `-o/--output`
+  on `create-index`, `-p/--path` on `drop-index` — so each accepts the other's
+  long spelling as a visible alias. Existing spellings and short flags are
+  unchanged, and no second short flag was added.
 - **Out-of-vault link targets are reported separately from broken ones**
   (iter-193). A relative link whose target normalizes to a path *above* the
   scanned vault root (`../../CONTRIBUTING.md`) cannot resolve to a scanned file
@@ -35,6 +40,12 @@ and this project adheres to
 
 ### Changed
 
+- **`summary --help` now documents the `-n` divergence** (iter-195). `-n` means
+  `--recent` on `summary` but `--limit` on `find` and `backlinks`. The semantics
+  are deliberately unchanged — `--recent` caps only the "recently modified" list,
+  never the summary's stats, which always cover every scanned file — so the
+  difference is now stated in a FLAG NOTE and in the flag's own help instead of
+  being left to be discovered.
 - **Read-only commands no longer write into the vault** (iter-193). With the
   default `[links] case_insensitive = "auto"`, hyalo detected the filesystem's
   case behaviour by creating and deleting a `.hyalo-case-probe-*` file in the
@@ -74,6 +85,14 @@ and this project adheres to
   (`toggle_tasks`, `set_tasks_status`) already had. Their behavior is fully
   covered by calling the plural entry points with a one-element line slice.
   Breaking change for any external consumer of the `hyalo-core` library API.
+- **Two zero-caller `pub` wrappers in `hyalo-cli`'s lint module** (iter-195).
+  `commands::lint::lint_files` was a thin `FixMode::Off` wrapper over
+  `lint_files_with_options` whose only caller was one unit test (dispatch has
+  used `lint_files_extended` for several releases), and
+  `commands::lint::prepend_file_result` was superseded by
+  `inject_ext_file_result` when the extended lint path took over — it had no
+  callers at all, not even a test. `FixMode`, `lint_files_with_options`, and
+  `lint_files_extended` are untouched and still live.
 
 ### Fixed
 

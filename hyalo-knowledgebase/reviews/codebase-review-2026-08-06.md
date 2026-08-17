@@ -376,3 +376,48 @@ debugging.
   meanings.
 - `links fix` / `links auto` — a verb and an adjective as sibling
   subcommands.
+
+## Dispositions (closed 2026-08-17, iter-195)
+
+Every finding and observation above is accounted for here. Nothing from this
+review is left unaddressed and undocumented; the review is now historical.
+
+### Round 1 findings
+
+| Finding | Disposition |
+| --- | --- |
+| R1-1 — symlinked note destroyed on mutation | Landed in [[iterations/iteration-191-write-path-integrity]]; policy recorded as DEC-062 (follow the link, still vault-bounded) |
+| R1-2 — `atomic_write` never fsyncs | Landed in [[iterations/iteration-191-write-path-integrity]]; DEC-063 (file fsync + best-effort parent-dir fsync) |
+| R1-3 — dead `pub` task mutators without the mtime guard | Landed in [[iterations/iteration-191-write-path-integrity]] — `tasks::toggle_task` and `tasks::set_task_status` deleted |
+| R1-4 — read-only commands write into the vault | Landed in [[iterations/iteration-193-vault-side-effects-and-dep-diet]] Part A |
+| R1-5 — `mdbook-lint-core` pulls all of `mdbook` | Landed in [[iterations/iteration-193-vault-side-effects-and-dep-diet]] Part B via the upstream 0.15.2 bump |
+| R1-6 — `apply_body_fixes` unvalidated offsets | Landed in [[iterations/iteration-191-write-path-integrity]] — `get(start..end)`, `None` treated as a conflict |
+| R1-7 — dead no-op loop with a self-contradicting comment | Landed in [[iterations/iteration-191-write-path-integrity]] |
+| R1-8 — ~40 `.unwrap()` calls in `init.rs` | Landed in [[iterations/iteration-193-vault-side-effects-and-dep-diet]] Part C |
+
+### Round 1 observations
+
+| Observation | Disposition |
+| --- | --- |
+| `discovery.rs` bare-stem guard tests `'/'` but not `'\\'` | **Won't fix — not reachable.** Verified in iter-195: `resolve_target` normalizes backslashes to `/` before the guard runs, so `note.md\` is already `note.md` and cannot become the mangled stem `note.`. Adding the check would be a permanently-false condition. Recorded as DEC-066, with a comment at the guard and the regression test `resolve_target_backslash_targets_are_normalized_before_stem_resolution` |
+| `ensure_within_vault` uses component-wise `starts_with` | No action — observation confirming correct behaviour |
+| `--fix` convergence loop is bounded *and* breaks on no-progress | No action — observation confirming correct behaviour |
+| `deny.toml`'s two RUSTSEC ignores; re-check after an `mdbook-lint` bump | Re-checked 2026-08-17 after the 0.15.2 bump: `cargo tree -i bincode` still shows `syntect -> comrak`, reached from both `hyalo-mdlint` and `mdbook-lint-core`. Both ignores stay; re-check again on the next bump |
+| Edition 2024: no findings | No action |
+
+### Round 2 findings
+
+All eight (R2-1 … R2-8) landed in
+[[iterations/iteration-192-cli-surface-truth]] (11/11 tasks, 8/8 acceptance
+criteria). R2-5 (`mv`'s opposite safety defaults) was resolved as a
+keep-behaviour-but-make-it-loud decision, recorded as DEC-064. R2-1 also
+gained the `check-command-reference` xtask gate, and R2-6 the
+execution-based hint gate, so neither class of drift can silently return.
+
+### Round 2 observations
+
+| Observation | Disposition |
+| --- | --- |
+| `create-index -o/--output` vs `drop-index -p/--path` for the same file | Fixed in iter-195 by non-breaking long aliases in both directions: `create-index --path` and `drop-index --output`. Both are `visible_alias`es, so `-h` advertises them; no second short flag, no spelling removed |
+| `find -n` is `--limit`, `summary -n` is `--recent` | **Semantics unchanged by design.** Renaming either breaks scripts, and `--recent` is the honest name for what it caps. Documented instead where it bites: a FLAG NOTE in `summary --help` plus the arg doc, contrasting it with `find`/`backlinks` `-n` |
+| `links fix` / `links auto` — verb and adjective as siblings | **Document only**, recorded as DEC-065. An alias would add a second spelling to maintain without removing the inconsistency |

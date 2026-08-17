@@ -1130,3 +1130,45 @@ carry that wrong model into the batch case, where it matters. An explicit
 rejection converts an invisible asymmetry into a one-line lesson at the moment
 the wrong mental model shows up. See
 [[iterations/iteration-192-cli-surface-truth]].
+
+## DEC-065: `links fix` and `links auto` keep their names; no alias (2026-08-17)
+
+**Decision:** The `hyalo links` subcommand pair keeps the verb/adjective mix —
+`links fix` (repair broken links) and `links auto` (auto-link unlinked
+mentions). No `visible_alias` is added in either direction. The inconsistency
+is documented here and nowhere else, because both `--help` texts already state
+what each subcommand does in its first line.
+
+**Why:** The Opus 5 review flagged the pair as grammatically inconsistent: one
+name is an imperative verb, the other an adjective. That is true, and it is also
+the smaller problem. An alias (`links autolink`, or `links fix` gaining
+`links repair`) does not remove the inconsistency — it adds a second spelling
+that must be kept in `--help`, the COMMAND REFERENCE, the feature matrix and
+the completion scripts, while leaving the original name in place forever. Both
+names are already short, unambiguous within `links`, and load-bearing in
+existing scripts and skill files. Renaming would break them for a purely
+cosmetic gain, so the choice is between "inconsistent" and "inconsistent plus
+redundant". See [[iterations/iteration-195-review-drain-cleanups]].
+
+## DEC-066: the `resolve_target` bare-stem guard tests only `/` (2026-08-17)
+
+**Decision:** The bare-stem resolution guard in
+`crates/hyalo-core/src/discovery.rs` stays `!target.contains('/')` and is NOT
+extended to also test `'\\'`, unlike its three sibling separator checks in the
+same file. A comment at the guard records why, and
+`resolve_target_backslash_targets_are_normalized_before_stem_resolution` pins
+the behaviour.
+
+**Why:** The review reported this as a Windows-only correctness gap: a target
+like `note.md\` would, on Windows, be seen by `Path` as having an `.md`
+extension, get truncated to the mangled stem `note.`, and resolve to the wrong
+file. Verification shows the scenario is unreachable. `resolve_target` begins
+with an unconditional `target.replace('\\', "/")`, and everything between that
+and the guard only truncates or trims the string — so `target` provably cannot
+contain a backslash by the time the guard runs. `note.md\` has already become
+`note.md` and resolves as the ordinary bare name. The three sibling guards do
+need both separators because they inspect *raw* link targets that never pass
+through that normalization. Adding `&& !target.contains('\\')` would have been
+a permanently-false condition that reads like a real defence, so the finding is
+dispositioned as won't-fix-with-evidence rather than landed as code. See
+[[iterations/iteration-195-review-drain-cleanups]].
