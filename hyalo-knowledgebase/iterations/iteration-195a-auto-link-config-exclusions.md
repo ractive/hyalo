@@ -2,7 +2,7 @@
 title: Iteration 195a — persistent auto-link exclusions in .hyalo.toml
 type: iteration
 date: 2026-08-17
-status: planned
+status: completed
 branch: iter-195a/auto-link-config-exclusions
 tags:
   - iteration
@@ -10,7 +10,7 @@ tags:
   - auto-link
   - config
 related:
-  - "[[backlog/auto-link-config-exclusions]]"
+  - "[[backlog/done/auto-link-config-exclusions]]"
 ---
 
 # Iteration 195a — persistent auto-link exclusions in .hyalo.toml
@@ -21,7 +21,7 @@ Promote the last open backlog item to done: a `[links.auto]` section in
 `.hyalo.toml` that persists the exclusions and `first_only` preference that
 today must be retyped on every `hyalo links auto` invocation. Full problem
 statement, external-user evidence (~94% noise on a title-heavy vault), and
-prior-art table live in [[backlog/auto-link-config-exclusions]] — read it
+prior-art table live in [[backlog/done/auto-link-config-exclusions]] — read it
 first; this plan only adds the implementation shape.
 
 **Do NOT release; release is a separate user-gated step.**
@@ -44,49 +44,49 @@ Verified at `56480cb`:
   installs. Do NOT add `[links.auto]` to this repo's own `.hyalo.toml`
   until after the next release.
 
-## Tasks
+## Tasks [8/8]
 
-- [ ] Extend `LinksConfig` with an optional `auto` table:
+- [x] Extend `LinksConfig` with an optional `auto` table:
       `exclude_titles: Vec<String>`, `exclude_target_globs: Vec<String>`,
       `first_only: Option<bool>`. Unknown-key warning behaviour must match
       the rest of config parsing.
-- [ ] Merge semantics in the `links auto` command path: config lists and
+- [x] Merge semantics in the `links auto` command path: config lists and
       CLI lists are UNIONED (flags extend, never replace); `--first-only`
       flag overrides config when given, config applies otherwise. Unit
       tests for all four first_only combinations and both list unions.
-- [ ] Surface config-driven exclusions in the output: a `config_excluded`
+- [x] Surface config-driven exclusions in the output: a `config_excluded`
       count (JSON envelope + text renderer) so a bare `links auto` run
       stays explainable. Zero is omitted, matching `links.out_of_vault`
       precedent.
-- [ ] `hyalo config` shows effective `[links.auto]` settings (both
+- [x] `hyalo config` shows effective `[links.auto]` settings (both
       formats; envelope under `results` per iter-192's DEC-064-adjacent
       contract).
-- [ ] Decide and record (decision log entry): whether `links fix
+- [x] Decide and record (decision log entry): whether `links fix
       --ignore-target` gains an `--exclude-target-glob`-style alias for
       naming alignment, or is documented as-is. Alias must be
       non-breaking; default to document-only if in doubt.
-- [ ] e2e: a fixture vault with `[links.auto]` config exercising
+- [x] e2e: a fixture vault with `[links.auto]` config exercising
       config-only, config+flags union, and first_only override; hint
       execution and check-command-reference gates stay green.
-- [ ] Docs in the same PR: `links auto --help`, COMMAND REFERENCE,
+- [x] Docs in the same PR: `links auto --help`, COMMAND REFERENCE,
       configuration docs page, and the knowledgebase rule template if it
       mentions `links auto`. README only if its existing prose becomes
       wrong (README is not a feature list).
-- [ ] Move [[backlog/auto-link-config-exclusions]] to `backlog/done/` with
+- [x] Move [[backlog/done/auto-link-config-exclusions]] to `backlog/done/` with
       its ACs ticked (verify each against the landed behaviour first).
 
-## Acceptance criteria
+## Acceptance criteria [7/7]
 
-- [ ] `[links.auto] exclude_titles` suppresses matches with no CLI flags
-- [ ] CLI `--exclude-title` extends (not replaces) the config list; same
+- [x] `[links.auto] exclude_titles` suppresses matches with no CLI flags
+- [x] CLI `--exclude-title` extends (not replaces) the config list; same
       for `--exclude-target-glob`
-- [ ] `first_only = true` in config behaves like the flag; explicit flag
+- [x] `first_only = true` in config behaves like the flag; explicit flag
       wins per run
-- [ ] `hyalo config` reports the effective `[links.auto]` settings
-- [ ] Bare `links auto` output shows `config_excluded` when config
+- [x] `hyalo config` reports the effective `[links.auto]` settings
+- [x] Bare `links auto` output shows `config_excluded` when config
       exclusions removed candidates
-- [ ] Repo's own `.hyalo.toml` is NOT modified (CI version skew)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Repo's own `.hyalo.toml` is NOT modified (CI version skew)
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

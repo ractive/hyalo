@@ -354,3 +354,106 @@ fn config_text_no_hints_suppresses_arrows() {
         "--no-hints must suppress the arrows; got: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// [links.auto] reporting (iter-195a)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_text_reports_links_auto_defaults() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("links.auto.exclude_titles: (none)"),
+        "expected empty exclude_titles reported as (none); got: {stdout}"
+    );
+    assert!(
+        stdout.contains("links.auto.exclude_target_globs: (none)"),
+        "expected empty exclude_target_globs reported as (none); got: {stdout}"
+    );
+    assert!(
+        stdout.contains("links.auto.first_only: false"),
+        "expected first_only default false; got: {stdout}"
+    );
+}
+
+#[test]
+fn config_text_reports_effective_links_auto() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links.auto]\nexclude_titles = [\"permissions\", \"README\"]\n\
+         exclude_target_globs = [\"templates/*\"]\nfirst_only = true\n",
+    )
+    .unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("links.auto.exclude_titles: permissions, README"),
+        "expected both excluded titles; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("links.auto.exclude_target_globs: templates/*"),
+        "expected the excluded target glob; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("links.auto.first_only: true"),
+        "expected first_only true; got: {stdout}"
+    );
+}
+
+#[test]
+fn config_json_reports_effective_links_auto() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links.auto]\nexclude_titles = [\"permissions\"]\nfirst_only = true\n",
+    )
+    .unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let auto = &json["results"]["links_auto"];
+    assert_eq!(
+        auto["exclude_titles"],
+        serde_json::json!(["permissions"]),
+        "envelope should carry the config's excluded titles: {json}"
+    );
+    assert_eq!(
+        auto["exclude_target_globs"],
+        serde_json::json!([]),
+        "unset list should be an empty array, not null: {json}"
+    );
+    assert_eq!(
+        auto["first_only"],
+        serde_json::json!(true),
+        "envelope should carry first_only: {json}"
+    );
+}

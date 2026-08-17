@@ -286,6 +286,66 @@ fn build_title_inventory(
     Ok((title_map, ambiguous))
 }
 
+/// Auto-link exclusion inputs from one source (CLI flags, or the
+/// `[links.auto]` section of `.hyalo.toml`).
+///
+/// Used by [`count_config_excluded_titles`] to attribute suppressed candidate
+/// titles to the config rather than to the flags.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExclusionSets<'a> {
+    /// Titles never linked (case-insensitive), like `--exclude-title`.
+    pub exclude_titles: &'a [String],
+    /// Vault-relative globs whose pages are never link targets, like
+    /// `--exclude-target-glob`.
+    pub exclude_target_globs: &'a [String],
+}
+
+impl ExclusionSets<'_> {
+    /// `true` when neither list carries an entry (nothing to attribute).
+    pub fn is_empty(&self) -> bool {
+        self.exclude_titles.is_empty() && self.exclude_target_globs.is_empty()
+    }
+}
+
+/// Count the auto-link candidate titles that persisted config exclusions
+/// remove, i.e. the `config_excluded` figure in the `links auto` envelope.
+///
+/// `cli` carries only the exclusions the user typed on this invocation;
+/// `effective` carries the union actually handed to [`auto_link`]. The result
+/// is the number of title keys that are candidates under `cli` alone but not
+/// under `effective` — exactly the candidates the config took away.
+///
+/// Builds the title inventory twice, but only over index metadata (no file
+/// I/O), so callers should still skip the call when the config contributes no
+/// exclusions.
+pub fn count_config_excluded_titles(
+    index: &dyn VaultIndex,
+    min_length: usize,
+    cli: ExclusionSets<'_>,
+    effective: ExclusionSets<'_>,
+) -> Result<usize> {
+    let entries = index.entries();
+    let (cli_titles, _) = build_title_inventory(
+        entries,
+        min_length,
+        cli.exclude_titles,
+        cli.exclude_target_globs,
+    )?;
+    if cli_titles.is_empty() {
+        return Ok(0);
+    }
+    let (effective_titles, _) = build_title_inventory(
+        entries,
+        min_length,
+        effective.exclude_titles,
+        effective.exclude_target_globs,
+    )?;
+    Ok(cli_titles
+        .keys()
+        .filter(|k| !effective_titles.contains_key(*k))
+        .count())
+}
+
 /// Extract the filename stem from a vault-relative path.
 ///
 /// `"notes/sprint-planning.md"` → `"sprint-planning"`.
@@ -1992,6 +2052,146 @@ mod tests {
         assert!(
             format!("{err:?}").contains("absolute"),
             "error should mention 'absolute': {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // count_config_excluded_titles (iter-195a)
+    // -----------------------------------------------------------------------
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// Vault with three candidate pages, one of them under `templates/`.
+    fn attribution_index() -> MockIndex {
+        MockIndex::new(vec![
+            make_entry(
+                "permissions.md",
+                vec![("title", Value::from("Permissions"))],
+            ),
+            make_entry("daily.md", vec![("title", Value::from("Daily"))]),
+            make_entry(
+                "templates/widget.md",
+                vec![("title", Value::from("Widget"))],
+            ),
+        ])
+    }
+
+    #[test]
+    fn config_excluded_counts_titles_only_the_config_removed() {
+        let index = attribution_index();
+        let config_titles = strings(&["permissions"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &config_titles,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        // `permissions.md` contributes the stem and the title, which share one
+        // lowercased key — one candidate title lost.
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn config_excluded_ignores_titles_the_cli_already_excluded() {
+        let index = attribution_index();
+        let cli_titles = strings(&["permissions"]);
+        let effective = strings(&["permissions", "daily"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets {
+                exclude_titles: &cli_titles,
+                exclude_target_globs: &[],
+            },
+            ExclusionSets {
+                exclude_titles: &effective,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 1, "only `daily` is attributable to the config");
+    }
+
+    #[test]
+    fn config_excluded_counts_glob_excluded_target_pages() {
+        let index = attribution_index();
+        let globs = strings(&["templates/*"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &[],
+                exclude_target_globs: &globs,
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 1, "templates/widget.md contributes one title key");
+    }
+
+    #[test]
+    fn config_excluded_is_zero_when_nothing_matches() {
+        let index = attribution_index();
+        let titles = strings(&["nonexistent"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &titles,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn config_excluded_is_zero_for_an_empty_vault() {
+        let index = MockIndex::new(vec![]);
+        let titles = strings(&["permissions"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &titles,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn config_excluded_does_not_count_titles_unambiguated_by_a_glob() {
+        // `a/dup.md` and `b/dup.md` are ambiguous together; excluding one via a
+        // glob makes the other linkable. That is a candidate *gained*, so the
+        // count stays at the pages the glob actually removed.
+        let index = MockIndex::new(vec![
+            make_entry("a/dup.md", vec![("title", Value::from("Dup"))]),
+            make_entry("b/dup.md", vec![("title", Value::from("Dup"))]),
+        ]);
+        let globs = strings(&["b/*"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &[],
+                exclude_target_globs: &globs,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            count, 0,
+            "both `dup` keys were ambiguous (no candidates) before the glob"
         );
     }
 }

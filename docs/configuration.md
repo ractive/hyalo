@@ -14,6 +14,11 @@ default_limit = 100       # max results for list commands (default: 50; 0 = unli
 frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
 case_insensitive = "auto"                             # "auto", "true", or "false"
 
+[links.auto]
+exclude_titles = ["permissions", "README"]            # titles hyalo links auto never links
+exclude_target_globs = ["templates/*"]                # pages hyalo links auto never links to
+first_only = true                                     # link only the first mention per file
+
 [schema.default]
 required = ["title"]
 
@@ -56,6 +61,40 @@ If a process is killed between creating and deleting a fallback probe file,
 the orphan is dot-prefixed and invisible to `hyalo find`; the next
 `hyalo create-index` run sweeps `.hyalo-case-probe-*` files older than a
 minute from the vault root.
+
+## Persistent auto-link exclusions
+
+`hyalo links auto` links unlinked mentions of page titles. On a vault whose
+titles double as common words (`permissions`, `index`, `README`) most
+candidates are noise, and the flags that suppress them had to be retyped on
+every invocation. `[links.auto]` persists them per vault:
+
+```toml
+[links.auto]
+exclude_titles = ["permissions", "README", "index"]   # like --exclude-title (case-insensitive)
+exclude_target_globs = ["templates/*"]                # like --exclude-target-glob
+first_only = true                                     # like --first-only
+```
+
+Merge rules with the CLI flags:
+
+| Setting | With flags |
+| --- | --- |
+| `exclude_titles` | **Unioned** with `--exclude-title` — the flag extends the config list, never replaces it |
+| `exclude_target_globs` | **Unioned** with `--exclude-target-glob` |
+| `first_only` | `--first-only` turns it on for a single run; the config turns it on for every run |
+
+Because config exclusions apply silently, a run whose candidates they removed
+reports how many: `config_excluded` in the JSON envelope (omitted when zero,
+like `links.out_of_vault`) and an `Excluded by [links.auto] config: N titles`
+line in text output. `hyalo config` prints the effective settings as
+`links.auto.exclude_titles` / `links.auto.exclude_target_globs` /
+`links.auto.first_only` (and `results.links_auto` in JSON).
+
+`hyalo links fix` has a similar per-invocation filter spelled
+`--ignore-target <substring>`. It matches link *targets* by substring rather
+than page titles or paths, so it is deliberately not part of `[links.auto]` and
+keeps its own name.
 
 ## Schemas
 

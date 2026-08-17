@@ -31,6 +31,31 @@ struct LinksConfig {
     /// - `"false"` — always disable; exact-match only.
     #[serde(default)]
     case_insensitive: Option<String>,
+    /// Persistent `hyalo links auto` preferences (`[links.auto]`).
+    #[serde(default)]
+    auto: Option<AutoLinksConfig>,
+}
+
+/// Auto-link configuration from `[links.auto]` in `.hyalo.toml` (iter-195a).
+///
+/// Persists the exclusions and `first_only` preference that otherwise have to
+/// be retyped on every `hyalo links auto` invocation. CLI flags are additive
+/// for the two list keys (config ∪ flags) and `--first-only` turns the
+/// behaviour on for a run regardless of the config value.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoLinksConfig {
+    /// Titles never auto-linked (case-insensitive), same semantics as
+    /// `--exclude-title`.
+    #[serde(default)]
+    exclude_titles: Vec<String>,
+    /// Vault-relative globs whose pages are never auto-link *targets*, same
+    /// semantics as `--exclude-target-glob`.
+    #[serde(default)]
+    exclude_target_globs: Vec<String>,
+    /// When `true`, behaves as if `--first-only` had been passed.
+    #[serde(default)]
+    first_only: Option<bool>,
 }
 
 /// Changelog configuration from `[changelog]` in `.hyalo.toml`.
@@ -218,6 +243,16 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) default_limit: Option<usize>,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub(crate) case_insensitive_mode: CaseInsensitiveMode,
+    /// Titles `hyalo links auto` never links, from `[links.auto] exclude_titles`.
+    /// Unioned with `--exclude-title` (flags extend, never replace).
+    pub(crate) auto_link_exclude_titles: Vec<String>,
+    /// Target-page globs `hyalo links auto` never links to, from
+    /// `[links.auto] exclude_target_globs`. Unioned with `--exclude-target-glob`.
+    pub(crate) auto_link_exclude_target_globs: Vec<String>,
+    /// `[links.auto] first_only`. `true` makes `hyalo links auto` behave as if
+    /// `--first-only` had been passed; the flag can still turn it on for a run
+    /// when the config says `false`.
+    pub(crate) auto_link_first_only: bool,
     /// When `true`, "no 'type' property" and "undeclared property in frontmatter"
     /// warnings are promoted to errors.  From `[lint] strict = true` in `.hyalo.toml`.
     /// Can be overridden per-invocation with `hyalo lint --strict`.
@@ -271,6 +306,9 @@ impl ResolvedDefaults {
             schema: SchemaConfig::default(),
             default_limit: None,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
+            auto_link_exclude_titles: Vec::new(),
+            auto_link_exclude_target_globs: Vec::new(),
+            auto_link_first_only: false,
             lint_strict: false,
             loaded_from_file: false,
             lint_profiles: Vec::new(),
@@ -364,7 +402,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         );
     }
 
-    let cfg: ConfigFile = match toml::from_str(&contents) {
+    let mut cfg: ConfigFile = match toml::from_str(&contents) {
         Ok(c) => c,
         Err(e) => {
             crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
@@ -424,6 +462,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         }
     };
 
+    // `[links.auto]` — taken out of `cfg.links` before the struct is moved below.
+    let links_auto = cfg
+        .links
+        .as_mut()
+        .and_then(|l| l.auto.take())
+        .unwrap_or_default();
+
     let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
     // Deprecation: the singular `[lint] profile = "..."` is a compat alias for
     // the `profiles` list. Warn so vaults migrate, but keep honoring it.
@@ -460,6 +505,9 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         schema,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
+        auto_link_exclude_titles: links_auto.exclude_titles,
+        auto_link_exclude_target_globs: links_auto.exclude_target_globs,
+        auto_link_first_only: links_auto.first_only.unwrap_or(false),
         lint_strict,
         loaded_from_file: true,
         lint_profiles,
@@ -936,6 +984,99 @@ site_prefix = "docs"
             resolved.frontmatter_link_props,
             Some(vec!["related".to_owned(), "custom-ref".to_owned()])
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // [links.auto] config (iter-195a)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn links_auto_all_keys_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nexclude_titles = [\"permissions\", \"README\"]\n\
+             exclude_target_globs = [\"templates/*\"]\nfirst_only = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.auto_link_exclude_titles,
+            vec!["permissions".to_owned(), "README".to_owned()]
+        );
+        assert_eq!(
+            resolved.auto_link_exclude_target_globs,
+            vec!["templates/*".to_owned()]
+        );
+        assert!(resolved.auto_link_first_only);
+    }
+
+    #[test]
+    fn links_auto_partial_table_keeps_other_defaults() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nfirst_only = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert!(resolved.auto_link_exclude_target_globs.is_empty());
+        assert!(resolved.auto_link_first_only);
+    }
+
+    #[test]
+    fn links_auto_coexists_with_other_links_keys() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\ncase_insensitive = \"true\"\nfrontmatter_properties = [\"related\"]\n\n\
+             [links.auto]\nexclude_titles = [\"index\"]\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.case_insensitive_mode, CaseInsensitiveMode::On);
+        assert_eq!(
+            resolved.frontmatter_link_props,
+            Some(vec!["related".to_owned()])
+        );
+        assert_eq!(resolved.auto_link_exclude_titles, vec!["index".to_owned()]);
+    }
+
+    #[test]
+    fn links_auto_defaults_when_absent() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "[links]\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert!(resolved.auto_link_exclude_target_globs.is_empty());
+        assert!(!resolved.auto_link_first_only);
+    }
+
+    #[test]
+    fn links_auto_unknown_key_is_warned_and_config_ignored() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \"vault\"\n[links.auto]\nexclude_title = [\"typo\"]\n",
+        )
+        .unwrap();
+
+        // Same behaviour as every other unknown key: warn, then fall back to
+        // hardcoded defaults for the whole file (deny_unknown_fields).
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert_eq!(resolved.dir, PathBuf::from("."));
+        assert!(crate::warn::any_tracked_starts_with(
+            "malformed .hyalo.toml"
+        ));
     }
 
     // ---------------------------------------------------------------------------

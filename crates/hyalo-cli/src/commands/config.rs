@@ -36,6 +36,24 @@ pub(crate) struct ConfigReport {
     pub site_prefix: Option<String>,
     /// Vault-relative exempt globs from `[schema] exempt` (files bound to no schema).
     pub exempt: Vec<String>,
+    /// Effective `[links.auto]` settings (iter-195a).
+    pub links_auto: LinksAutoReport,
+}
+
+/// Effective `[links.auto]` settings, as `hyalo config` reports them.
+///
+/// These are the persisted `hyalo links auto` preferences; CLI flags extend the
+/// two lists per-run and `--first-only` can turn `first_only` on for a run, so
+/// what is reported here is the *baseline* every `links auto` invocation starts
+/// from.
+#[derive(Debug, Default)]
+pub(crate) struct LinksAutoReport {
+    /// `[links.auto] exclude_titles`.
+    pub exclude_titles: Vec<String>,
+    /// `[links.auto] exclude_target_globs`.
+    pub exclude_target_globs: Vec<String>,
+    /// `[links.auto] first_only`.
+    pub first_only: bool,
 }
 
 /// Build and return the config report for `cwd`.
@@ -80,6 +98,11 @@ pub(crate) fn collect_config_report(
         hints: resolved.hints,
         site_prefix: resolved.site_prefix,
         exempt: resolved.schema.exempt.patterns().to_vec(),
+        links_auto: LinksAutoReport {
+            exclude_titles: resolved.auto_link_exclude_titles,
+            exclude_target_globs: resolved.auto_link_exclude_target_globs,
+            first_only: resolved.auto_link_first_only,
+        },
     })
 }
 
@@ -139,6 +162,14 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             "hints_enabled": report.hints,
             "site_prefix": report.site_prefix,
             "exempt": report.exempt,
+            // Effective `[links.auto]` baseline for `hyalo links auto`
+            // (iter-195a). Always present, empty lists / false when unset, so
+            // consumers never have to distinguish "absent" from "off".
+            "links_auto": {
+                "exclude_titles": report.links_auto.exclude_titles,
+                "exclude_target_globs": report.links_auto.exclude_target_globs,
+                "first_only": report.links_auto.first_only,
+            },
         },
         "hints": hints,
         "dir": report.dir.display().to_string(),
@@ -170,6 +201,16 @@ fn run_config_json(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     CommandOutcome::success(format_success(Format::Json, &envelope))
 }
 
+/// Render a list-valued config setting for the text report: comma-joined, or
+/// `(none)` when empty (the convention already used for `exempt`).
+fn list_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "(none)".to_owned()
+    } else {
+        values.join(", ")
+    }
+}
+
 fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let config_path_str = report
         .config_path
@@ -178,11 +219,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
 
     let format_str = report.format.as_deref().unwrap_or("(none)");
     let site_prefix_str = report.site_prefix.as_deref().unwrap_or("(none)");
-    let exempt_str = if report.exempt.is_empty() {
-        "(none)".to_owned()
-    } else {
-        report.exempt.join(", ")
-    };
+    let exempt_str = list_or_none(&report.exempt);
 
     // Annotate the dir line when a `--dir` override is in effect, so the report
     // makes the shadow explicit rather than silently reporting the override.
@@ -193,10 +230,14 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     };
 
     let mut out = format!(
-        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n",
+        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
+        auto_titles = list_or_none(&report.links_auto.exclude_titles),
+        auto_globs = list_or_none(&report.links_auto.exclude_target_globs),
+        auto_first_only = report.links_auto.first_only,
     );
 
     if let Some(ref contents) = report.raw_contents {

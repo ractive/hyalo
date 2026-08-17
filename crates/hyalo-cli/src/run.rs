@@ -1499,6 +1499,9 @@ fn run_inner() -> Result<(), AppError> {
     let okf_ignore = config.okf_ignore;
     let changelog_path = config.changelog_path;
     let case_insensitive_mode = config.case_insensitive_mode;
+    let auto_link_exclude_titles = config.auto_link_exclude_titles;
+    let auto_link_exclude_target_globs = config.auto_link_exclude_target_globs;
+    let auto_link_first_only = config.auto_link_first_only;
     let mut md_lint = config.md_lint;
     let mut lint_strict_from_config = config.lint_strict;
     // Active conformance profiles: from `[lint] profiles` in `.hyalo.toml`, or
@@ -1658,6 +1661,9 @@ fn run_inner() -> Result<(), AppError> {
         changelog_path: changelog_path.as_deref(),
         md_lint: &md_lint,
         case_insensitive_mode,
+        auto_link_exclude_titles: &auto_link_exclude_titles,
+        auto_link_exclude_target_globs: &auto_link_exclude_target_globs,
+        auto_link_first_only,
         exit_code_override: None,
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,

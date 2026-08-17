@@ -1172,3 +1172,34 @@ through that normalization. Adding `&& !target.contains('\\')` would have been
 a permanently-false condition that reads like a real defence, so the finding is
 dispositioned as won't-fix-with-evidence rather than landed as code. See
 [[iterations/iteration-195-review-drain-cleanups]].
+
+## DEC-067: `links fix --ignore-target` keeps its name; only `links auto` gains persistence (2026-08-18)
+
+**Decision:** `links fix --ignore-target <substring>` is **not** given an
+`--exclude-target-glob`-style alias and is **not** added to `[links.auto]`. It
+stays a per-invocation flag with its current name, documented as-is in the
+repository's `docs/configuration.md`. The `[links.auto]` section added by
+[[iterations/iteration-195a-auto-link-config-exclusions]] persists exactly three
+keys — `exclude_titles`, `exclude_target_globs`, `first_only` — all of them
+`links auto` flags.
+
+**Why:** The naming similarity is superficial. `--ignore-target` matches a
+*substring of the link target as written* (`--ignore-target draft` drops
+`[[drafts/x]]` and `[[x-draft]]` alike); `--exclude-target-glob` matches a
+*vault-relative path glob against candidate target pages*. They take different
+pattern languages and operate on different inputs, so an alias would promise
+interchangeability that does not exist, and a shared config key would be worse
+still. Adding `ignore_target` to a `[links.fix]` table is also not justified by
+evidence: the external-user report behind this iteration was entirely about
+`links auto` noise on a title-heavy vault, with no equivalent complaint about
+`links fix`. Non-breaking was a hard requirement, and the cheapest non-breaking
+option that adds no permanent second spelling is documentation — the
+configuration reference now states plainly that the two filters are different
+things and why `--ignore-target` is absent from `[links.auto]`.
+
+**Also considered and deferred:** a `--no-first-only` counter-flag, so a vault
+with `first_only = true` could get an all-mentions run without editing
+`.hyalo.toml`. Out of scope here (the iteration's non-goals fix the surface at
+three keys and no new flags), and the workaround — `hyalo links auto` on a
+narrower `--file`/`--glob` scope, or a temporary config edit — is adequate.
+File a backlog item if a real user hits it.

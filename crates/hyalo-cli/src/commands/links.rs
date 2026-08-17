@@ -299,6 +299,91 @@ pub fn links_fix(
     ))
 }
 
+/// `hyalo links auto` filtering inputs from both sources: the flags typed on
+/// this invocation and the persisted `[links.auto]` section of `.hyalo.toml`
+/// (iter-195a).
+///
+/// Merge semantics:
+/// - the two list keys are **unioned** — flags extend the config, never
+///   replace it, so a vault-wide exclusion cannot be lost by adding one flag
+/// - `first_only` is on when either source asks for it: config turns it on for
+///   every run, `--first-only` turns it on for a single run
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AutoFilters<'a> {
+    /// `--min-length`: shortest title considered a candidate. Source-agnostic —
+    /// it has no `[links.auto]` key (see the iteration's non-goals).
+    pub min_length: usize,
+    /// `--exclude-title` values (repeatable).
+    pub cli_exclude_titles: &'a [String],
+    /// `--exclude-target-glob` values (repeatable).
+    pub cli_exclude_target_globs: &'a [String],
+    /// `--first-only` was passed.
+    pub cli_first_only: bool,
+    /// `[links.auto] exclude_titles`.
+    pub config_exclude_titles: &'a [String],
+    /// `[links.auto] exclude_target_globs`.
+    pub config_exclude_target_globs: &'a [String],
+    /// `[links.auto] first_only`.
+    pub config_first_only: bool,
+}
+
+impl AutoFilters<'_> {
+    /// Union of config and CLI titles, config first, duplicates dropped
+    /// case-insensitively (matching `--exclude-title`'s own comparison).
+    pub fn effective_exclude_titles(&self) -> Vec<String> {
+        let mut out: Vec<String> =
+            Vec::with_capacity(self.config_exclude_titles.len() + self.cli_exclude_titles.len());
+        for title in self
+            .config_exclude_titles
+            .iter()
+            .chain(self.cli_exclude_titles)
+        {
+            if !out.iter().any(|t: &String| t.eq_ignore_ascii_case(title)) {
+                out.push(title.clone());
+            }
+        }
+        out
+    }
+
+    /// Union of config and CLI target globs, config first, exact duplicates
+    /// dropped. Globs are kept verbatim otherwise — near-identical patterns
+    /// are the user's business, and a duplicated pattern in a globset is inert.
+    pub fn effective_exclude_target_globs(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(
+            self.config_exclude_target_globs.len() + self.cli_exclude_target_globs.len(),
+        );
+        for glob in self
+            .config_exclude_target_globs
+            .iter()
+            .chain(self.cli_exclude_target_globs)
+        {
+            if !out.iter().any(|g: &String| g == glob) {
+                out.push(glob.clone());
+            }
+        }
+        out
+    }
+
+    /// `true` when either source asks for first-mention-only linking.
+    pub fn effective_first_only(&self) -> bool {
+        self.cli_first_only || self.config_first_only
+    }
+
+    /// `true` when `[links.auto]` contributes at least one exclusion, i.e. when
+    /// the `config_excluded` attribution pass is worth running.
+    pub fn has_config_exclusions(&self) -> bool {
+        !self.config_exclude_titles.is_empty() || !self.config_exclude_target_globs.is_empty()
+    }
+
+    /// The exclusions typed on this invocation, without the config's.
+    fn cli_exclusions(&self) -> hyalo_core::auto_link::ExclusionSets<'_> {
+        hyalo_core::auto_link::ExclusionSets {
+            exclude_titles: self.cli_exclude_titles,
+            exclude_target_globs: self.cli_exclude_target_globs,
+        }
+    }
+}
+
 /// Run `hyalo links auto` using a pre-built index.
 ///
 /// `apply = false` → preview only (default)
@@ -307,28 +392,43 @@ pub fn links_fix(
 /// Returns `(CommandOutcome, modified_files)` where `modified_files` contains
 /// vault-relative paths of files that were rewritten on disk.  The caller is
 /// responsible for patching the snapshot index with these paths.
-#[allow(clippy::too_many_arguments)]
 pub fn links_auto(
     index: &dyn VaultIndex,
     dir: &Path,
     apply: bool,
-    min_length: usize,
-    exclude_titles: &[String],
-    first_only: bool,
-    exclude_target_globs: &[String],
+    filters: &AutoFilters<'_>,
     file_filter: Option<&str>,
     glob_filter: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Vec<String>, bool)> {
+    let exclude_titles = filters.effective_exclude_titles();
+    let exclude_target_globs = filters.effective_exclude_target_globs();
     let opts = hyalo_core::auto_link::AutoLinkOptions {
         apply,
-        min_length,
-        exclude_titles,
-        first_only,
-        exclude_target_globs,
+        min_length: filters.min_length,
+        exclude_titles: &exclude_titles,
+        first_only: filters.effective_first_only(),
+        exclude_target_globs: &exclude_target_globs,
         file_filter,
         glob_filter,
     };
+
+    // How many candidate titles the persisted config took away — reported as
+    // `config_excluded` so a bare `links auto` run stays explainable.
+    let config_excluded = if filters.has_config_exclusions() {
+        hyalo_core::auto_link::count_config_excluded_titles(
+            index,
+            filters.min_length,
+            filters.cli_exclusions(),
+            hyalo_core::auto_link::ExclusionSets {
+                exclude_titles: &exclude_titles,
+                exclude_target_globs: &exclude_target_globs,
+            },
+        )?
+    } else {
+        0
+    };
+
     let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
 
     // Collect unique modified files for the caller to patch the index. Only
@@ -357,7 +457,7 @@ pub fn links_auto(
                 hyalo_core::auto_link::AutoApplyStatus::Failed => (a, s, f + 1),
             });
 
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "scanned": report.scanned,
         "total": report.total,
         "matches": report.matches,
@@ -371,6 +471,16 @@ pub fn links_auto(
         "files_failed": failed_count,
         "apply_outcomes": report.apply_outcomes,
     });
+    // Omitted when zero, matching the `links.out_of_vault` precedent: the key
+    // only appears when `[links.auto]` config actually removed candidates.
+    if config_excluded > 0
+        && let Some(obj) = output.as_object_mut()
+    {
+        obj.insert(
+            "config_excluded".to_owned(),
+            serde_json::json!(config_excluded),
+        );
+    }
 
     let _ = format;
     Ok((
@@ -383,3 +493,168 @@ pub fn links_auto(
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::AutoFilters;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // first_only: all four (config, flag) combinations
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn first_only_off_in_both_sources_stays_off() {
+        let filters = AutoFilters::default();
+        assert!(!filters.effective_first_only());
+    }
+
+    #[test]
+    fn first_only_from_config_alone_applies() {
+        let filters = AutoFilters {
+            config_first_only: true,
+            ..AutoFilters::default()
+        };
+        assert!(filters.effective_first_only());
+    }
+
+    #[test]
+    fn first_only_from_flag_alone_applies() {
+        let filters = AutoFilters {
+            cli_first_only: true,
+            ..AutoFilters::default()
+        };
+        assert!(filters.effective_first_only());
+    }
+
+    #[test]
+    fn first_only_from_both_sources_applies_once() {
+        let filters = AutoFilters {
+            cli_first_only: true,
+            config_first_only: true,
+            ..AutoFilters::default()
+        };
+        assert!(filters.effective_first_only());
+    }
+
+    // -----------------------------------------------------------------------
+    // list unions: flags extend the config, never replace it
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn exclude_titles_union_keeps_config_entries_and_appends_flags() {
+        let config = strings(&["permissions", "README"]);
+        let cli = strings(&["index"]);
+        let filters = AutoFilters {
+            cli_exclude_titles: &cli,
+            config_exclude_titles: &config,
+            ..AutoFilters::default()
+        };
+        assert_eq!(
+            filters.effective_exclude_titles(),
+            strings(&["permissions", "README", "index"]),
+            "config entries come first, flags extend them"
+        );
+    }
+
+    #[test]
+    fn exclude_titles_union_dedups_case_insensitively() {
+        // `--exclude-title` compares case-insensitively, so "readme" and
+        // "README" are the same exclusion — keep the config spelling.
+        let config = strings(&["README"]);
+        let cli = strings(&["readme", "index"]);
+        let filters = AutoFilters {
+            cli_exclude_titles: &cli,
+            config_exclude_titles: &config,
+            ..AutoFilters::default()
+        };
+        assert_eq!(
+            filters.effective_exclude_titles(),
+            strings(&["README", "index"])
+        );
+    }
+
+    #[test]
+    fn exclude_titles_config_only_is_used_verbatim() {
+        let config = strings(&["permissions"]);
+        let filters = AutoFilters {
+            config_exclude_titles: &config,
+            ..AutoFilters::default()
+        };
+        assert_eq!(
+            filters.effective_exclude_titles(),
+            strings(&["permissions"])
+        );
+    }
+
+    #[test]
+    fn exclude_target_globs_union_keeps_both_sources() {
+        let config = strings(&["templates/*"]);
+        let cli = strings(&["archive/**"]);
+        let filters = AutoFilters {
+            cli_exclude_target_globs: &cli,
+            config_exclude_target_globs: &config,
+            ..AutoFilters::default()
+        };
+        assert_eq!(
+            filters.effective_exclude_target_globs(),
+            strings(&["templates/*", "archive/**"])
+        );
+    }
+
+    #[test]
+    fn exclude_target_globs_union_dedups_exact_repeats() {
+        let config = strings(&["templates/*"]);
+        let cli = strings(&["templates/*"]);
+        let filters = AutoFilters {
+            cli_exclude_target_globs: &cli,
+            config_exclude_target_globs: &config,
+            ..AutoFilters::default()
+        };
+        assert_eq!(
+            filters.effective_exclude_target_globs(),
+            strings(&["templates/*"])
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // config-exclusion attribution gate
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_config_exclusions_is_false_for_cli_only_flags() {
+        let cli = strings(&["permissions"]);
+        let filters = AutoFilters {
+            cli_exclude_titles: &cli,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.has_config_exclusions());
+    }
+
+    #[test]
+    fn has_config_exclusions_is_true_for_either_config_list() {
+        let titles = strings(&["permissions"]);
+        assert!(
+            AutoFilters {
+                config_exclude_titles: &titles,
+                ..AutoFilters::default()
+            }
+            .has_config_exclusions()
+        );
+        let globs = strings(&["templates/*"]);
+        assert!(
+            AutoFilters {
+                config_exclude_target_globs: &globs,
+                ..AutoFilters::default()
+            }
+            .has_config_exclusions()
+        );
+    }
+}

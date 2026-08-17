@@ -7,7 +7,7 @@ tags:
   - links
   - auto-link
   - config
-status: planned
+status: completed
 priority: low
 origin: external-user dogfood 2026-07-04 (third-party vault)
 ---
@@ -72,8 +72,19 @@ aligning (alias, keep backwards compat).
 
 ## Acceptance criteria
 
-- [ ] `[links.auto] exclude_titles` suppresses matches without any CLI flags
-- [ ] CLI `--exclude-title` extends (not replaces) the config list
-- [ ] `first_only = true` in config behaves like the flag; flag still wins per run
-- [ ] `hyalo config` shows the effective `[links.auto]` settings
-- [ ] Help text + README + [[schema-and-lint]]-adjacent docs updated in the same PR
+- [x] `[links.auto] exclude_titles` suppresses matches without any CLI flags
+- [x] CLI `--exclude-title` extends (not replaces) the config list
+- [x] `first_only = true` in config behaves like the flag; flag still wins per run
+- [x] `hyalo config` shows the effective `[links.auto]` settings
+- [x] Help text + README + [[schema-and-lint]]-adjacent docs updated in the same PR
+
+## Resolution
+
+Landed in [[iterations/iteration-195a-auto-link-config-exclusions]]. `[links.auto]`
+takes `exclude_titles`, `exclude_target_globs`, and `first_only`; the two lists are
+unioned with the matching CLI flags and `--first-only` still forces first-mention-only
+for a single run. A `config_excluded` count (JSON envelope, omitted when zero, plus a
+text line) keeps a bare run explainable, and `hyalo config` reports the effective
+settings. The naming nit about `links fix --ignore-target` was dispositioned as
+document-only — see DEC-067 in [[decision-log]]. The stopword/common-word warning
+heuristic from the stretch section was explicitly out of scope and remains unfiled.
