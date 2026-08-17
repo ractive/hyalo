@@ -324,7 +324,7 @@ pub fn probe_case_insensitive_stat(dir: &Path) -> Option<bool> {
 /// are ignored — this is a best-effort sweep. Returns the number of files
 /// removed.
 pub fn sweep_stale_case_probes(dir: &Path) -> usize {
-    sweep_case_probes_older_than(dir, std::time::Duration::from_secs(60))
+    sweep_case_probes_older_than(dir, std::time::Duration::from_mins(1))
 }
 
 /// Implementation of [`sweep_stale_case_probes`] with the age threshold

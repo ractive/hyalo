@@ -32,13 +32,9 @@ confidence-threshold = 0.8
 [licenses.private]
 ignore = true
 
-# mdbook is MPL-2.0 (file-level weak copyleft). We consume it unmodified as a
-# library dependency of mdbook-lint-core; MPL obligations attach to the MPL'd
-# source files themselves, which remain available upstream. Scoped exception
-# instead of a blanket MPL-2.0 allow so new MPL deps still get flagged.
-[[licenses.exceptions]]
-name = "mdbook"
-allow = ["MPL-2.0"]
+# No license exceptions: the only one we ever needed was `mdbook` (MPL-2.0),
+# pulled in as an unused dependency of mdbook-lint-core 0.14. Upstream removed
+# it in 0.15.2, so the whole subtree — and the exception — is gone (iter-193).
 
 [bans]
 multiple-versions = "warn"

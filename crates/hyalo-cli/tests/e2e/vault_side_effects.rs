@@ -15,7 +15,12 @@ use tempfile::TempDir;
 fn entry_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .expect("vault dir should be readable")
-        .map(|e| e.expect("dir entry").file_name().to_string_lossy().into_owned())
+        .map(|e| {
+            e.expect("dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     names.sort();
     names
@@ -203,7 +208,7 @@ fn create_index_sweeps_orphaned_case_probe_files() {
     // An orphan left behind by a probe that was killed mid-flight.
     let stale = dir.join(".hyalo-case-probe-deadbeef");
     let f = fs::File::create(&stale).expect("probe file creation should succeed");
-    f.set_modified(SystemTime::now() - Duration::from_secs(3600))
+    f.set_modified(SystemTime::now() - Duration::from_hours(1))
         .expect("setting mtime should succeed");
     drop(f);
 
